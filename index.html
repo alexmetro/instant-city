@@ -852,9 +852,15 @@ function updateGridSwing(){
   // still updated above every call so labels stay perfectly in sync even
   // between repaints.
   var topologyChanged = streetTopologyMayHaveChanged(LAST_SPLAT_SIMDAY, simDay);
-  if((Math.abs(t-LAST_SPLAT_SWING_T)>0.015 || topologyChanged) && typeof renderGroundSplat==="function"){
+  // WEAR-ON-USE fix (task #28 item 3): also repaint when the spawned-
+  // building count has moved — street wear now reads nearby built density,
+  // which changes continuously as the town grows, not just at the fixed
+  // survey/checkpoint thresholds streetTopologyMayHaveChanged() tracks.
+  var buildingCountChanged = spawnedBuildings.length !== LAST_SPLAT_BUILDING_COUNT;
+  if((Math.abs(t-LAST_SPLAT_SWING_T)>0.015 || topologyChanged || buildingCountChanged) && typeof renderGroundSplat==="function"){
     LAST_SPLAT_SWING_T = t;
     LAST_SPLAT_SIMDAY = simDay;
+    LAST_SPLAT_BUILDING_COUNT = spawnedBuildings.length;
     renderGroundSplat(CURRENT_STREET_SKEW);
   }
 }
@@ -973,6 +979,15 @@ function streetTopologyMayHaveChanged(prevDay, curDay){
   }
   return false;
 }
+// WEAR-ON-USE fix (task #28 item 3): renderGroundSplat()'s street wear now
+// also reads nearby built density off spawnedBuildings (see its own
+// comment further down), which grows continuously as the town fills in —
+// not just at the discrete survey/first-mention/checkpoint dates
+// STREET_REPAINT_THRESHOLDS tracks. LAST_SPLAT_BUILDING_COUNT (checked by
+// updateGridSwing() below) triggers an extra repaint whenever the spawned-
+// building count itself has moved, so a paused jump's synchronous growth
+// catch-up (P0-1) is reflected in the very next repaint, same frame.
+var LAST_SPLAT_BUILDING_COUNT = -1;
 
 var GEO = {
   // Compatibility map for this file's ~80 other GEO.streetsU/V.xxx call
@@ -1079,8 +1094,26 @@ function terrainHeight(x,z){
   var h = sampleTerrainGrid(x,z);
   var dOut = distOutsideBox(x,z,VILLAGE_BOX);
   var villageBlend = smoothstep(0,240,dOut); // 0 inside, 1 far outside
-  h = lerp(VILLAGE_Y, h, villageBlend);
-  return h;
+  /* WATERLINE FIX (task #27, 2026-07-11): this blend used to run
+     unconditionally, lifting anything within 240m of VILLAGE_BOX up toward
+     the dry VILLAGE_Y height regardless of what the real (already
+     historically-corrected) baked sample said — so the whole eastern
+     apron between the plaza and the documented 1846-51 cove waterline
+     (research/geography-shoreline.md §1/§3: "shoreline at Montgomery St.
+     ... through ~1851"; shorelineX(z) below is the exact curve
+     findRealShoreX()/the storeship placement code already treats as
+     ground truth) got raised above sea level into a false wide sand
+     beach, burying the correctly-underwater relief the four named
+     storeships (Niantic, General Harrison, Euphemia, Apollo) sit in.
+     East of that documented natural shoreline the pad must never govern:
+     trust the real sampled height there, full stop. West of it (the town
+     side) the pad blend behaves exactly as before. (The sim never runs
+     past 1849-12-31 — SIM_END_DAY below — so this static per-(x,z)
+     natural-shoreline curve IS the shoreline-by-date truth for every
+     date this app can actually reach; the 1851+ fill progression
+     research describes is out of the sim's own window.) */
+  if(x > shorelineX(z)) return h;
+  return lerp(VILLAGE_Y, h, villageBlend);
 }
 /* alias: pre-rewrite code called the unified sampler groundHeight() */
 function groundHeight(x,z){ return terrainHeight(x,z); }
@@ -1685,9 +1718,19 @@ function renderGroundSplat(skewAngle){
     paintRoad(SPLAT_TARGETS_TOWN_ONLY, [{x:p.x0,z:p.z0},{x:p.x1,z:p.z1}], 2.2, "#6e5b3c", 0.6);
   });
 
-  // Dune-leveling cart track — same waypoints/color/mottle the old
+  // Dune-leveling cart track — same waypoints/mottle the old
   // drapeGroundStrip() mesh used (LEGACY-STREET-MESH fix, 2026-07-10).
-  paintSmoothRoute(SPLAT_TARGETS_TOWN_ONLY, SPLAT_LEVELING_CART_PTS, 2.4, "#c7a973", 1, true);
+  // BRIGHT-DIAGONAL fix (task #28 item 5, 2026-07-11): the old #c7a973 at
+  // full alpha 1 was a golden-tan far brighter than any real street
+  // (STREET_DIRT_COL "#6e5a3c") or the surrounding green — this long haul
+  // route from the leveling mound (well outside the village) to the
+  // wharf fill site read as a glowing dashed diagonal scar across open
+  // hillside (Director's Screening #1 f3d/f4/f5's "floating pale quad
+  // artifact NW of town" / the 2026-07-10 s6-market-1849 framing).
+  // Darkened/desaturated toward a believable trodden-dirt tone and
+  // dropped to partial alpha so it reads as a worn cart track, not a
+  // painted line; width trimmed too (a work path, not a real street).
+  paintSmoothRoute(SPLAT_TARGETS_TOWN_ONLY, SPLAT_LEVELING_CART_PTS, 1.8, "#8f7a54", 0.45, true);
 
   // THE STREET-CHECKPOINT RESET (grounding.md §9): every documented street
   // in STREETS_RUNTIME, era-gated by its own surveyedDay (faint survey
@@ -1703,6 +1746,61 @@ function renderGroundSplat(skewAngle){
   // already covers it, more faithfully than this dataset entry would.
   var DEFAULT_WORN_DELAY = 365; // fill: streets with no corpus firstMentionDay citation read as worn ~1yr after survey (precedent: LANDMARK_DEFAULT_FOUNDED_ISO elsewhere in this file)
   var SURVEY_LINE_COL = "#cbb98f", SURVEY_LINE_ALPHA = 0.38, SURVEY_LINE_W_CAP = 2.6;
+  // WEAR-ON-USE fix (task #28 item 3, 2026-07-11): grounding.md §9's law is
+  // "survey line (faint) -> worn track only with use" — this used to snap
+  // straight from the faint survey line to a FULLY worn dirt track (alpha
+  // 1) the instant a street's firstMentionDay (or the DEFAULT_WORN_DELAY
+  // fallback) arrived, regardless of whether anything had actually been
+  // built along it yet — newly-surveyed streets through still-empty land
+  // (Post/Powell Jan 1848, the numbered streets in 1849) rendered as
+  // heavily-trodden as Kearny/Montgomery. Wear is now a continuous 0..1
+  // factor: a documented first-mention date (or the survey+delay
+  // fallback) still floors it in, graduating over WEAR_MENTION_RAMP days
+  // rather than snapping instantly, and nearby built density — this
+  // street's own frontage actually filling in, read straight off the
+  // growth system's own spawnedBuildings — can push it further/faster, or
+  // hold a surveyed-but-still-empty street near the faint survey-line end.
+  var WEAR_RADIUS = 70;        // ~one block — buildings this close count as "this street is in use"
+  var WEAR_FULL_DENSITY = 6;   // buildings within WEAR_RADIUS for a fully-worn reading
+  var WEAR_MENTION_RAMP = 120; // days from firstMentionDay to fully-worn, once documented in use
+  function nearbyBuiltDensity(x,z){
+    var r2 = WEAR_RADIUS*WEAR_RADIUS, n = 0;
+    for(var i=0;i<spawnedBuildings.length;i++){
+      var b = spawnedBuildings[i], dx=b.x-x, dz=b.z-z;
+      if(dx*dx+dz*dz<=r2){ n++; if(n>=WEAR_FULL_DENSITY) break; }
+    }
+    return n;
+  }
+  var SURVEY_LINE_RGB = {r:0xcb,g:0xb9,b:0x8f}, STREET_DIRT_RGB = {r:0x6e,g:0x5a,b:0x3c}; // == SURVEY_LINE_COL / STREET_DIRT_COL
+  // WATER-LOT STREETS fix (task #28 item 4): a platted line whose ground is
+  // still open water/tideflat at the current date (item 1's corrected
+  // terrainHeight()) must never render as a normal worn/surveyed street
+  // over the bay — Sansome/Battery/Front's own two-track-model checkpoints
+  // (data/streets-geometry.json) are platted 1847 but real dry land lags
+  // far behind (Sansome ~1848 real pile-supported tenants; Battery/Front
+  // not clearly dry until 1851+/1856-60 — i.e. after this sim's own
+  // Dec-1849 SIM_END_DAY). Checked generically per-segment against the
+  // baked terrain (not hardcoded to those 3 street ids) so it applies to
+  // any street crossing water. A wet segment paints nothing until the
+  // street's own gate day, then a faint dashed pier-line hint (piles/
+  // stakes over the tideflat) instead of a real worn/surveyed street.
+  var PIER_HINT_COL = "#7c8a86";
+  function paintPierHint(targets, pts, widthM){
+    targets.forEach(function(t){
+      t.ctx.save();
+      t.ctx.globalAlpha = 0.24;
+      t.ctx.strokeStyle = PIER_HINT_COL;
+      t.ctx.lineWidth = Math.max(1, t.pxLenFn(Math.min(widthM,3)));
+      t.ctx.lineCap = "round";
+      t.ctx.setLineDash([t.pxLenFn(3), t.pxLenFn(5)]);
+      t.ctx.beginPath();
+      var p0 = t.pxFn(pts[0].x, pts[0].z); t.ctx.moveTo(p0.x,p0.y);
+      for(var i=1;i<pts.length;i++){ var p=t.pxFn(pts[i].x,pts[i].z); t.ctx.lineTo(p.x,p.y); }
+      t.ctx.stroke();
+      t.ctx.setLineDash([]);
+      t.ctx.restore();
+    });
+  }
   STREETS_RUNTIME.forEach(function(s){
     // A few "gap streets" (Shubrick, Water, Portsmouth, Commercial) carry
     // ONLY a corpus firstMentionDay, no independent survey date
@@ -1718,15 +1816,32 @@ function renderGroundSplat(skewAngle){
     var pathPts=[];
     for(var pi=i0; pi<=i1; pi++) pathPts.push(gridToWorldAt(s.polyline[pi].u, s.polyline[pi].v, angle));
     if(pathPts.length<2) return;
-    var isWorn = s.firstMentionDay!=null ? simDay>=s.firstMentionDay : simDay>=s.surveyedDay+DEFAULT_WORN_DELAY;
-    if(isWorn) paintRoad(SPLAT_TARGETS_BOTH, pathPts, s.widthM, STREET_DIRT_COL, 1);
-    else paintRoad(SPLAT_TARGETS_BOTH, pathPts, Math.min(s.widthM, SURVEY_LINE_W_CAP), SURVEY_LINE_COL, SURVEY_LINE_ALPHA);
+
+    var mentionFactor = s.firstMentionDay!=null
+      ? smoothstep(s.firstMentionDay, s.firstMentionDay+WEAR_MENTION_RAMP, simDay)
+      : smoothstep(s.surveyedDay, s.surveyedDay+DEFAULT_WORN_DELAY, simDay);
+    var anyWorn = false;
+
+    for(var segI=0; segI<pathPts.length-1; segI++){
+      var segPts = [pathPts[segI], pathPts[segI+1]];
+      var segWet = terrainHeight(segPts[0].x,segPts[0].z)<=0 && terrainHeight(segPts[1].x,segPts[1].z)<=0;
+      if(segWet){ paintPierHint(SPLAT_TARGETS_BOTH, segPts, s.widthM); continue; }
+      var mid = { x:(segPts[0].x+segPts[1].x)/2, z:(segPts[0].z+segPts[1].z)/2 };
+      var densityFactor = clamp01(nearbyBuiltDensity(mid.x,mid.z)/WEAR_FULL_DENSITY);
+      var wear = Math.max(densityFactor, mentionFactor);
+      if(wear>0.5) anyWorn = true;
+      var col = lerpHexColor(SURVEY_LINE_RGB, STREET_DIRT_RGB, wear);
+      var alpha = lerp(SURVEY_LINE_ALPHA, 1, wear);
+      var w = lerp(Math.min(s.widthM, SURVEY_LINE_W_CAP), s.widthM, wear);
+      paintRoad(SPLAT_TARGETS_BOTH, segPts, w, col, alpha);
+    }
+
     // Fading sandy stub past the surveyed edge — kept only for the
     // original 10 cardinal streets, whose extent ends really are
     // "unsurveyed ground beyond this point"; every O'Farrell-era
     // addition's polyline extent IS its documented real end (a block
     // count, a franchise length), not a survey edge needing a fade.
-    if(s.swings && isWorn){
+    if(s.swings && anyWorn){
       var a0=s.polyline[i0], a1=s.polyline[i1], aNext=s.polyline[Math.min(i0+1,i1)], aPrev=s.polyline[Math.max(i1-1,i0)];
       var d0u=a0.u-aNext.u, d0v=a0.v-aNext.v, d0len=Math.hypot(d0u,d0v)||1;
       var d1u=a1.u-aPrev.u, d1v=a1.v-aPrev.v, d1len=Math.hypot(d1u,d1v)||1;
@@ -3304,6 +3419,32 @@ var STORESHIP_INFO = (function(){
     "Apollo":           { pos: pos(128, sacramento+6),  list: 0.14, groundedNote:"beached between Central Wharf and Howison's Pier" }
   };
 })();
+// PRE-RUSH SHIP CURVE fix (task #28, 2026-07-11): "anchored forever once a
+// departure is never mentioned again" is the correct reading of the record
+// ONLY once desertion is actually the documented norm — timeline-spine.md:
+// "1848-10 (~) — the reflux: ... ship arrivals resume (crews still desert
+// wholesale — the ghost fleet begins)". Before that, the corpus is full of
+// ordinary Mexican-American-War-era naval/coastal-packet traffic (Congress,
+// Cyane, Savannah, Dale, Lexington, "Commodore Stockton"/"Commodore
+// Shubrick", etc. — repeat callers on routine patrol/mail runs) whose
+// LAST recorded mention in this thin pre-Dec-1849 corpus is often an
+// arrival simply because no follow-up departure notice survived — not
+// because the vessel was abandoned. Applying the ghost-fleet assumption
+// that far back inflated the anchored count to ~94-95 ships by Jan 1848
+// (verified against app/events-1846-49.js's own baked ship events), vs.
+// the documented reality of a pre-rush cove holding a handful (research/
+// timeline-spine.md's own baseline: a ~200-person trading village) and
+// rush arrivals only beginning ~Feb 1849, ~200 by June/July 1849 ("By June,
+// ~200 ships stand abandoned in Yerba Buena Cove" — timeline-spine.md
+// 1849-06), ramping toward the ~566 Dec-1849 peak the fill-traffic system
+// below already targets. Fix: a visit with no recorded departure gets a
+// bounded, plausible turnaround (same distribution style fillShipVisits()
+// uses) instead of "anchored forever" UNLESS its arrival falls at/after
+// GHOST_FLEET_START — the one exception is a visit's OWN later re-arrival
+// (the consecutive-arrival branch below), which is always bounded: the
+// ship logically must have left to come back, ghost-fleet era or not.
+var GHOST_FLEET_START = eventDateToSimDay("1848-10-01");
+function boundedShipStay(arriveDay){ return arriveDay + 20 + rngBuild()*50; }
 var shipVisits = (function buildShipVisits(){
   var DEDUP_DAYS = 21;
   var byShip = {};
@@ -3323,7 +3464,9 @@ var shipVisits = (function buildShipVisits(){
     var pendingArrive = null;
     seq.forEach(function(e){
       if(e.type==="ship_arrival"){
-        if(pendingArrive!==null) visits.push({ ship:name, arrive:pendingArrive, depart:null });
+        // a second arrival with no departure in between: the ship
+        // necessarily left and came back — always bounded, any era.
+        if(pendingArrive!==null) visits.push({ ship:name, arrive:pendingArrive, depart:boundedShipStay(pendingArrive) });
         pendingArrive = e.simDay;
       } else {
         // BUG FIX (2026-07-10, ghost-fleet P0): a documented departure with
@@ -3344,7 +3487,13 @@ var shipVisits = (function buildShipVisits(){
         pendingArrive = null;
       }
     });
-    if(pendingArrive!==null) visits.push({ ship:name, arrive:pendingArrive, depart:null });
+    if(pendingArrive!==null){
+      // PRE-RUSH SHIP CURVE fix: only pre-ghost-fleet-era leftover arrivals
+      // get bounded; from GHOST_FLEET_START on, "no departure ever
+      // recorded" really does mean the documented desertion pattern —
+      // stays anchored, same as before this fix.
+      visits.push({ ship:name, arrive:pendingArrive, depart: pendingArrive<GHOST_FLEET_START ? boundedShipStay(pendingArrive) : null });
+    }
   });
   visits.forEach(function(v){
     v.pathJitter = rngBuild();
