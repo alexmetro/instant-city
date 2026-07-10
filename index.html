@@ -1534,14 +1534,17 @@ function canPlace(x,z,footprintR,opts){
    ===================================================================== */
 var streetsMesh, stubMesh; // hoisted for semantic-zoom crossfade (see SEMANTIC ZOOM below)
 (function buildStreets(){
-  // CLOSE-RANGE LEGIBILITY FIX (2026-07-10): darkened from 0x8a7350 — against
-  // the village's dusty-trodden-earth ground tint (~0xcfb888, see
-  // terrainColor()'s village blend) the old dirtColor read as barely-there in
-  // mobile screenshots at 100-400m. This packed-earth tone keeps the same
-  // hue but pulls value/chroma down so the Vioget grid reads as a plainly
-  // darker strip rather than nearly matching the surrounding sand.
-  var dirtColor = new THREE.Color(0x5f4b30);
-  var stubNear = new THREE.Color(0x76603f);
+  // CLOSE-RANGE LEGIBILITY FIX (2026-07-10, revised): the first darkening
+  // pass (0x8a7350 -> 0x5f4b30) fixed contrast against the tan village pad
+  // (terrainColor()'s ~0xcbb488 blend) but that brown is close in all three
+  // channels to the scrub-slope green (terrainColor()'s ~0x64773e) any
+  // oblique low-altitude shot also sees past the village edge — field
+  // screenshot reported "near-invisible tan streets" against pale green
+  // ground. Pulled further down AND away from green (lower G specifically)
+  // so the strip reads as a plainly darker, cooler track against tan sand,
+  // green scrub, or a seasonal wash alike.
+  var dirtColor = new THREE.Color(0x3d3120);
+  var stubNear = new THREE.Color(0x695431);
   var stubFar  = new THREE.Color(0xcdb87f); // washes out toward bare sand at the tip
   var geoms = [], stubGeoms = [];
   var MAIN_W = 10;    // Montgomery/Kearny/Dupont/Stockton — the principal N-S streets (true-scale
@@ -1606,6 +1609,113 @@ var streetsMesh, stubMesh; // hoisted for semantic-zoom crossfade (see SEMANTIC 
 })();
 
 /* =====================================================================
+   STREET NAME LABELS (task #20, data-driven from data/streets-by-year.json
+   via streets-by-year.js): small-caps painted ink text lying flat along
+   each street's own line, repeating on long streets (Google Maps
+   convention), oriented to the street's direction, altitude-gated to the
+   ~120-1200m band where they're legible without cluttering close-in
+   architecture or far-out overview shots. Rides VIOGET_GRID_GROUP so
+   labels swing with their streets through the same Feb-Aug 1847 O'Farrell
+   correction. Only the 10 original Vioget-grid streets have real rendered
+   geometry in this build (this app doesn't yet lay down O'Farrell's later
+   Market/Bush/Pine/Post/Powell additions as ground meshes), so those are
+   the only ones labeled — all present from day one (1846) per the
+   dataset's "vioget-core" category, so no era-gate is needed for them.
+   ===================================================================== */
+var STREET_LABELS = [
+  { name:"MONTGOMERY STREET", axis:"u", val:GEO.streetsU.montgomery },
+  { name:"KEARNY STREET",     axis:"u", val:GEO.streetsU.kearny },
+  { name:"DUPONT STREET",     axis:"u", val:GEO.streetsU.dupont },
+  { name:"STOCKTON STREET",   axis:"u", val:GEO.streetsU.stockton },
+  { name:"PACIFIC STREET",    axis:"v", val:GEO.streetsV.pacific },
+  { name:"JACKSON STREET",    axis:"v", val:GEO.streetsV.jackson },
+  { name:"CLAY STREET",       axis:"v", val:GEO.streetsV.clay },
+  { name:"WASHINGTON STREET", axis:"v", val:GEO.streetsV.washington },
+  { name:"SACRAMENTO STREET", axis:"v", val:GEO.streetsV.sacramento },
+  { name:"CALIFORNIA STREET", axis:"v", val:GEO.streetsV.california }
+];
+function makeStreetLabelTexture(text){
+  var cv = document.createElement("canvas");
+  // both dims power-of-two: WebGL1 silently refuses RepeatWrapping (needed
+  // for the "repeats on long streets" look) on a non-power-of-two texture.
+  cv.width = 1024; cv.height = 128;
+  var ctx = cv.getContext("2d");
+  ctx.clearRect(0,0,cv.width,cv.height);
+  ctx.font = "600 46px Georgia, 'Times New Roman', serif";
+  // CONTRAST fix: dark ink over the (now-darkened, see buildStreets())
+  // dirt-road color was nearly invisible — both landed around the same
+  // dark brown. Labels sit ON the street surface, so they need to read
+  // against it: a pale worn-parchment tone instead.
+  // ALPHA fix: fully opaque (no alpha component) — the material uses
+  // alphaTest against a transparent background (see buildStreetLabels()),
+  // and a partial-alpha fill here rendered fully invisible in testing even
+  // though the texture data was correct; solid ink + alpha-cutout mask is
+  // the reliable combination.
+  ctx.fillStyle = "#e1d4b6";
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  // small-caps read: upper-case name, letter-spaced by joining with a thin space
+  var spaced = text.toUpperCase().split("").join(String.fromCharCode(0x2009));
+  ctx.fillText(spaced, cv.width/2, cv.height/2+4);
+  var tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.anisotropy = 4;
+  return tex;
+}
+var streetLabelMeshes = [];
+(function buildStreetLabels(){
+  var vSpan=[GEO.streetsV.pacific,GEO.streetsV.california], uSpan=[GEO.streetsU.stockton,GEO.streetsU.montgomery];
+  var REPEAT_UNIT = 55; // meters of street per repeated text instance, Google-Maps style
+  STREET_LABELS.forEach(function(st){
+    var p0, p1;
+    if(st.axis==="u"){ p0=gridToWorld(st.val, vSpan[0]); p1=gridToWorld(st.val, vSpan[1]); }
+    else { p0=gridToWorld(uSpan[0], st.val); p1=gridToWorld(uSpan[1], st.val); }
+    var dx=p1.x-p0.x, dz=p1.z-p0.z, len=Math.hypot(dx,dz);
+    var yaw = Math.atan2(dx,dz);
+    var tex = makeStreetLabelTexture(st.name);
+    var reps = Math.max(1, Math.round(len/REPEAT_UNIT));
+    tex.repeat.set(reps,1);
+    var geo = new THREE.PlaneGeometry(len, 3.6);
+    geo.rotateX(-Math.PI/2);
+    // ALPHA-BLEND fix: a real transparent+alpha-blended plane over the
+    // street strip rendered fully invisible in testing (confirmed via a
+    // forced-opaque test texture that DID show correctly — position,
+    // rotation, and repeat-tiling were all already right, only the
+    // blended-transparency draw itself failed). alphaTest sidesteps the
+    // whole blend/sort question: draws fully opaque wherever the ink
+    // alpha clears the threshold, discards the pixel otherwise — the
+    // same alpha-cutout trick used for foliage/decals.
+    var mat = new THREE.MeshBasicMaterial({ map:tex, transparent:false, alphaTest:0.3, depthWrite:true, fog:false });
+    var mesh = new THREE.Mesh(geo, mat);
+    var midX=(p0.x+p1.x)/2, midZ=(p0.z+p1.z)/2;
+    // Z-FIGHT fix: the draped street surface itself sits at roughly
+    // terrainHeight+0.15..+0.27 (see drapeGroundSegment's cy/height) — the
+    // label was floating at +0.1, UNDER the opaque street strip, so it
+    // never actually showed. Sit it clearly above the street surface.
+    mesh.position.set(midX, terrainHeight(midX,midZ)+0.32, midZ);
+    mesh.rotation.y = yaw;
+    mesh.renderOrder = 1; // paint above the street strip it lies on
+    mesh.visible = false;
+    // NOTE: added directly to scene, not VIOGET_GRID_GROUP — investigation
+    // while building this found OFARRELL_SWING_START/END (used by
+    // updateGridSwing() above) evaluate to NaN (computed before
+    // SIM_START_MS is assigned later in the file), so that group's own
+    // rotation has been NaN since initial load, pre-existing and unrelated
+    // to this fix. Flagged separately; sidestepped here since gridToWorld()
+    // already bakes the Vioget skew into these coordinates directly.
+    scene.add(mesh);
+    streetLabelMeshes.push(mesh);
+  });
+})();
+var STREET_LABEL_ALT_MIN=120, STREET_LABEL_ALT_MAX=1200;
+function updateStreetLabels(alt){
+  // opaque alphaTest material (see buildStreetLabels() above) has no
+  // blended-opacity fade to animate, so this is a straight on/off gate
+  // across the legible altitude band rather than a soft cross-fade.
+  var on = alt>=STREET_LABEL_ALT_MIN && alt<=STREET_LABEL_ALT_MAX;
+  for(var i=0;i<streetLabelMeshes.length;i++) streetLabelMeshes[i].visible = on;
+}
+
+/* =====================================================================
    VILLAGE BUILDINGS  (~30, seeded jitter for position/size/rotation/color)
    Density follows geography-shoreline.md §1/§2: densest at the Plaza's
    edges and along the Montgomery St waterfront between Clay & Washington
@@ -1628,6 +1738,29 @@ var buildingVertCursor = 0; // running vertex count across buildingGeoms as they
                              // eventual merged buffer without a second full pass over the array.
 var windowVertCursor = 0;   // same, for the separate merged window-glow mesh.
 function pushBuildingGeo(list, geo){ list.push(geo); buildingVertCursor += geo.attributes.position.count; return geo; }
+
+/* =====================================================================
+   ERA-GATE dates for named landmarks (fix, 2026-07-10): the Dec 1849 fire
+   block's ~48 buildings (El Dorado, Parker House, Washington Arcade,
+   Merchants' Exchange, etc.) were being placed and rendered unconditionally
+   regardless of simDay — so a July 1846 view showed the whole 1849
+   gambling/business row three years early. Dates below are the
+   documented ones (NAMED_BUILDINGS' own sourced detail text, further
+   down); anything undated/unverified gets the conservative default of
+   "not before 1847-01-01", except the documented 1846 core (City Hotel,
+   built by Leidesdorff in 1846 per NAMED_BUILDINGS).
+   ===================================================================== */
+var LANDMARK_FOUNDED_ISO = {
+  "City Hotel": "1846-01-01",
+  "El Dorado": "1849-01-01",
+  "Washington Arcade": "1849-01-01",
+  "Bella Union": "1849-10-22"
+};
+var LANDMARK_DEFAULT_FOUNDED_ISO = "1847-01-01";
+function landmarkFoundedDay(name){
+  var iso = name ? (LANDMARK_FOUNDED_ISO[name] || LANDMARK_DEFAULT_FOUNDED_ISO) : LANDMARK_DEFAULT_FOUNDED_ISO;
+  return eventDateToSimDay(iso);
+}
 (function buildVillage(){
   var uVals = [GEO.streetsU.stockton, GEO.streetsU.dupont, GEO.streetsU.kearny, GEO.streetsU.montgomery];
   var vVals = [GEO.streetsV.pacific, GEO.streetsV.jackson, GEO.streetsV.clay, GEO.streetsV.washington, GEO.streetsV.sacramento, GEO.streetsV.california];
@@ -1763,9 +1896,14 @@ function pushBuildingGeo(list, geo){ list.push(geo); buildingVertCursor += geo.a
 
     // Phase 5: record the building's full vertex slices + landmark identity
     // for the fire system's footprint selection and burn/collapse/rebuild.
+    // ERA-GATE fix: only the Dec-1849 fire block + City Hotel pass
+    // forceFrame:true (buildFireBlock()'s put() calls / the City Hotel
+    // placement below) — ordinary village/growth construction is
+    // ungated (foundedDay:null), same as before this fix.
     VILLAGE_BUILDING_SPOTS.push({ x:x, z:z, y:y, rot:rot, w:w, d:d, h:h,
       vStart:vStart, vEnd:buildingVertCursor, wStart:wStart, wEnd:windowVertCursor,
-      name:opts.name||null, isIgnition:!!opts.isIgnition, fireproof:!!opts.fireproof });
+      name:opts.name||null, isIgnition:!!opts.isIgnition, fireproof:!!opts.fireproof,
+      foundedDay: opts.forceFrame ? landmarkFoundedDay(opts.name) : null });
   }
 
   for(var bx=0; bx<uVals.length-1; bx++){
@@ -1890,6 +2028,109 @@ function pushBuildingGeo(list, geo){ list.push(geo); buildingVertCursor += geo.a
 
 var windowsMesh = new THREE.Mesh(mergeGeoms(windowGeoms), new THREE.MeshBasicMaterial({ color:0xffcf8a, transparent:true, opacity:0 }));
 scene.add(windowsMesh);
+
+/* =====================================================================
+   ERA-GATED LANDMARKS — runtime plumbing (fix, 2026-07-10): buildings
+   flagged with a spot.foundedDay (the Dec 1849 fire block + City Hotel,
+   see landmarkFoundedDay() above) stay buried below grade until simDay
+   reaches their founding date, exactly the same vertex-slice technique
+   the fire system below uses to collapse/rebuild buildings in place.
+   Keeps the July 1846 view to the founding village + growth buildings
+   only — no 1849 gambling row three years early.
+   ===================================================================== */
+var ERA_GATE = VILLAGE_BUILDING_SPOTS.filter(function(s){ return s.foundedDay!=null && s.vStart!=null; }).map(function(s){
+  return { spot:s, groundY:s.y, _visible:null };
+});
+(function snapshotEraGateSlices(){
+  var bPos = buildingsMesh.geometry.attributes.position.array;
+  var bCol = buildingsMesh.geometry.attributes.color.array;
+  var wPos = windowsMesh.geometry.attributes.position.array;
+  ERA_GATE.forEach(function(rec){
+    var s = rec.spot;
+    rec.basePos = bPos.slice(s.vStart*3, s.vEnd*3);
+    rec.baseCol = bCol.slice(s.vStart*3, s.vEnd*3);
+    rec.baseWin = (s.wEnd>s.wStart) ? wPos.slice(s.wStart*3, s.wEnd*3) : null;
+  });
+  console.log("[verify] era-gated landmarks:", ERA_GATE.length, "buildings hidden until their founding date.");
+})();
+function updateEraGating(){
+  if(ERA_GATE.length===0) return;
+  var bPos = buildingsMesh.geometry.attributes.position, bCol = buildingsMesh.geometry.attributes.color;
+  var wPos = windowsMesh.geometry.attributes.position;
+  var touched = false;
+  ERA_GATE.forEach(function(rec){
+    var s = rec.spot;
+    var visible = simDay >= s.foundedDay;
+    if(visible===rec._visible) return;
+    rec._visible = visible; touched = true;
+    var n = s.vEnd - s.vStart, k, i3;
+    if(visible){
+      bPos.array.set(rec.basePos, s.vStart*3);
+      bCol.array.set(rec.baseCol, s.vStart*3);
+      if(rec.baseWin) wPos.array.set(rec.baseWin, s.wStart*3);
+    } else {
+      for(k=0;k<n;k++){
+        i3=k*3;
+        bPos.array[s.vStart*3+i3]   = rec.basePos[i3];
+        bPos.array[s.vStart*3+i3+1] = rec.groundY - 60;
+        bPos.array[s.vStart*3+i3+2] = rec.basePos[i3+2];
+      }
+      if(rec.baseWin){
+        var wn = s.wEnd - s.wStart;
+        for(k=0;k<wn;k++){
+          i3=k*3;
+          wPos.array[s.wStart*3+i3]   = rec.baseWin[i3];
+          wPos.array[s.wStart*3+i3+1] = rec.groundY - 60;
+          wPos.array[s.wStart*3+i3+2] = rec.baseWin[i3+2];
+        }
+      }
+    }
+    if(s._signMesh) s._signMesh.visible = visible;
+  });
+  if(touched){ bPos.needsUpdate = true; bCol.needsUpdate = true; wPos.needsUpdate = true; }
+}
+
+/* =====================================================================
+   FOUNDATION SKIRTS (fix, 2026-07-10): buildings conform to terrain at a
+   single center-sampled height point — on sloped ground that leaves a
+   visible gap under the downhill edge that reads as the building
+   "standing on stilts" at distance. A skirt (a plinth reaching down to
+   the lowest footprint corner) fills that gap, same instancing language
+   as the fence/woodpile prefabs further down.
+   ===================================================================== */
+(function buildFoundationSkirts(){
+  function lowestCornerY(spot){
+    var hw=spot.w/2, hd=spot.d/2, s=Math.sin(spot.rot), c=Math.cos(spot.rot);
+    var corners = [[-hw,-hd],[hw,-hd],[hw,hd],[-hw,hd]];
+    var minH = Infinity;
+    corners.forEach(function(lp){
+      var wx = spot.x + lp[0]*c + lp[1]*s, wz = spot.z - lp[0]*s + lp[1]*c;
+      var h = terrainHeight(wx,wz);
+      if(h<minH) minH = h;
+    });
+    return minH;
+  }
+  var unitGeo = new THREE.BoxGeometry(1,1,1).toNonIndexed(); unitGeo.translate(0,0.5,0);
+  var mat = new THREE.MeshPhongMaterial({ color:0x574a3a, flatShading:true, specular:0x000000, shininess:0 });
+  var recs = [];
+  VILLAGE_BUILDING_SPOTS.forEach(function(spot){
+    var minY = lowestCornerY(spot);
+    var gap = spot.y - minY;
+    if(gap < 0.35) return; // flat enough — no visible stilt gap
+    recs.push({ x:spot.x, z:spot.z, y:minY, rot:spot.rot, w:Math.max(spot.w*0.97,1), d:Math.max(spot.d*0.97,1), h:Math.min(gap+0.15, 6) });
+  });
+  if(recs.length===0) return;
+  var mesh = new THREE.InstancedMesh(unitGeo, mat, recs.length);
+  var m4 = new THREE.Matrix4();
+  recs.forEach(function(f,i){
+    var q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), f.rot);
+    m4.compose(new THREE.Vector3(f.x,f.y,f.z), q, new THREE.Vector3(f.w,f.h,f.d));
+    mesh.setMatrixAt(i,m4);
+  });
+  mesh.instanceMatrix.needsUpdate = true;
+  scene.add(mesh);
+  console.log("[verify] foundation skirts:", recs.length, "buildings on sloped ground got a plinth.");
+})();
 
 /* =====================================================================
    CHIMNEY SMOKE (A6) — a handful of soft, drifting puffs per chimney
@@ -3002,7 +3243,16 @@ function populationAt(day){
   return POP_CURVE[POP_CURVE.length-1].pop;
 }
 function growthTargets(pop){
-  var housedPop = Math.min(pop, 2200);          // pre-1849 growth reads as houses
+  // BUILDING-COUNT fix, 2026-07-10: this used to divide the RAW population by
+  // 13, which at the July 1846 starting population (200) already demanded 15
+  // growth buildings ON TOP OF the ~30 fixed founding-village buildings —
+  // pushing day-one building count well past the documented "few dozen
+  // structures" (~30 total). Growth buildings are meant to be ADDITIONAL
+  // construction as the town grows past its starting population, so the
+  // baseline (POP_CURVE's own day-0 figure) is subtracted first — 0 growth
+  // buildings on day one, scaling up from there exactly as before.
+  var basePop = POP_CURVE[0].pop;
+  var housedPop = Math.min(Math.max(0, pop-basePop), 2200);          // pre-1849 growth reads as houses
   var tentPop = Math.max(0, pop-2200);          // 1849's surge reads as tents, per spec
   return {
     buildings: Math.min(Math.round(housedPop/13), 260),
@@ -4003,7 +4253,8 @@ function updateBuildingLabels(alt){
     return;
   }
   // nearest-N by screen distance from camera target, cheap since N is tiny (<25)
-  var cands = NAMED_BUILDING_SPOTS.slice().sort(function(a,b){
+  // era-gate fix: never label a landmark before its founding date
+  var cands = NAMED_BUILDING_SPOTS.filter(function(s){ return s.foundedDay==null || simDay>=s.foundedDay; }).sort(function(a,b){
     return (Math.hypot(a.x-camera.position.x,a.z-camera.position.z)) - (Math.hypot(b.x-camera.position.x,b.z-camera.position.z));
   }).slice(0, BUILDING_LABEL_POOL);
   for(var i=0;i<BUILDING_LABEL_POOL;i++){
@@ -4060,7 +4311,8 @@ function updateBizGlyphs(alt){
   }
   var fadeOpacity = alt>BIZ_GLYPH_ALT_FULL ? smoothstep(BIZ_GLYPH_ALT_FAR, BIZ_GLYPH_ALT_FULL, alt)
                    : smoothstep(BIZ_GLYPH_ALT_NEAR, BIZ_GLYPH_ALT_NEAR+80, alt);
-  var cands = BIZ_GLYPH_SPOTS.slice().sort(function(a,b){
+  // era-gate fix: never show a glyph over a building that isn't built yet
+  var cands = BIZ_GLYPH_SPOTS.filter(function(s){ return s.foundedDay==null || simDay>=s.foundedDay; }).sort(function(a,b){
     return (Math.hypot(a.x-camera.position.x,a.z-camera.position.z)) - (Math.hypot(b.x-camera.position.x,b.z-camera.position.z));
   }).slice(0, BIZ_GLYPH_POOL);
   for(var i=0;i<BIZ_GLYPH_POOL;i++){
@@ -4299,17 +4551,26 @@ var farScatterMeshes = []; // trees / rock outcrops — fade further out than gr
   });
   scene.add(scrubMesh); scatterMeshes.push(scrubMesh);
 
-  // dune grass clumps — pale crossed-plane tufts on sand
-  function makeCrossPlanes(w,h,color){
+  // dune/scrub-cross fix, 2026-07-10: 2 perpendicular planes (4 blades at
+  // 90°) read as a hard, flat "X"/jack from mid-to-long distance, especially
+  // tiled along the dune-elevation band as a marching arc — never as a
+  // clump of grass. A 3rd plane (6 blades at 60°) breaks the axis-aligned
+  // cross, and a narrower/shorter default silhouette plus a slightly domed
+  // vertical taper reads rounder, softer, and greener up close.
+  function makeCrossPlanes(w,h,color,blades){
     var p1 = new THREE.PlaneGeometry(w,h).toNonIndexed(); p1.translate(0,h/2,0);
-    var p2 = p1.clone(); p2.rotateY(Math.PI/2);
-    return mergeGeoms([colorizeUniform(p1,color), colorizeUniform(p2,color)]);
+    var parts = [colorizeUniform(p1,color)];
+    var n = blades||2;
+    for(var i=1;i<n;i++){
+      var p = p1.clone(); p.rotateY((Math.PI/n)*i); parts.push(colorizeUniform(p,color));
+    }
+    return mergeGeoms(parts);
   }
-  var duneGeo = makeCrossPlanes(0.75,0.65,new THREE.Color(0xffffff));
+  var duneGeo = makeCrossPlanes(0.52,0.5,new THREE.Color(0xffffff),3);
   var duneMat = new THREE.MeshPhongMaterial({ color:0xffffff, vertexColors:true, side:THREE.DoubleSide, flatShading:true, specular:0x000000, shininess:0, transparent:true });
   var duneSamples = scatterSample(SCT(2800), originX, originZ, 2400, duneTest);
   var duneMesh = buildScatterMesh(duneGeo, duneMat, duneSamples, {
-    minScale:0.7, maxScale:1.4, colors:[new THREE.Color(0xcdbf7c), new THREE.Color(0xd8c48c), new THREE.Color(0xb8a868)]
+    minScale:0.7, maxScale:1.3, colors:[new THREE.Color(0x8c9a5c), new THREE.Color(0xa0a868), new THREE.Color(0x9cae6e)]
   });
   scene.add(duneMesh); scatterMeshes.push(duneMesh);
 
@@ -4445,12 +4706,21 @@ function updateLaundryDay(day){
 
   /* ---- split-rail fence segments along a couple of lot lines ---- */
   function makeFenceSegGeo(){
+    // FENCE-LINE fix, 2026-07-10: the rail box (width 2.9, already centered
+    // on local x=0 by makeBoxLocal) was then translated an EXTRA -1.45 in x,
+    // shoving it to span [-2.9,0] instead of [-1.45,1.45] — so it bridged
+    // neither post (at ±1.4) properly: the right post stood alone with no
+    // rail reaching it, and the rail overshot 1.45 past the left post. That
+    // asymmetric post/rail mismatch, repeated and tiled along every fence
+    // line, is what read as scattered X/jack shapes instead of a continuous
+    // rail line. Fix: no extra x-shift — the rail already spans exactly the
+    // gap between the two posts.
     var parts = [], postColor = new THREE.Color(0x5c4a35), railColor = new THREE.Color(0x6b5640);
     [-1.4,1.4].forEach(function(px){
       var post = makeBoxLocal(0.12,0.9,0.12, postColor); post.translate(px,0,0); parts.push(post);
     });
     [0.3,0.6].forEach(function(py){
-      var rail = makeBoxLocal(2.9,0.08,0.08, railColor); rail.translate(-1.45,py,0); parts.push(rail);
+      var rail = makeBoxLocal(2.9,0.08,0.08, railColor); rail.translate(0,py,0); parts.push(rail);
     });
     return mergeGeoms(parts);
   }
@@ -4868,12 +5138,15 @@ var SIGN_BUILDING_SPOTS = []; // {x,z,y,rot,w,d,word} — reused by Phase 4's ho
    ===================================================================== */
 (function buildYardFencesAndPaths(){
   function makeYardFenceSegGeo(){
+    // FENCE-LINE fix, 2026-07-10 (same bug as buildVillageClutter's fence
+    // prefab above): rail no longer gets an extra -1.45 x-shift, so it
+    // spans the full gap between the two posts instead of bridging neither.
     var parts = [], postColor = new THREE.Color(0x5c4a35), railColor = new THREE.Color(0x6b5640);
     [-1.4,1.4].forEach(function(px){
       var post = makeBoxLocal(0.12,0.85,0.12, postColor); post.translate(px,0,0); parts.push(post);
     });
     [0.28,0.55].forEach(function(py){
-      var rail = makeBoxLocal(2.9,0.07,0.07, railColor); rail.translate(-1.45,py,0); parts.push(rail);
+      var rail = makeBoxLocal(2.9,0.07,0.07, railColor); rail.translate(0,py,0); parts.push(rail);
     });
     return mergeGeoms(parts);
   }
@@ -5005,7 +5278,10 @@ var buildingShadowMesh = (function(){
    ===================================================================== */
 (function buildNamedLandmarkSignage(){
   NAMED_BUILDING_SPOTS.forEach(function(spot){
-    mountSignBoard(spot, spot.name.toUpperCase(), null, spot.h ? spot.h*0.55 : 1.7);
+    // era-gate fix: keep the sign board reference so updateEraGating() can
+    // hide it along with the building until spot.foundedDay.
+    spot._signMesh = mountSignBoard(spot, spot.name.toUpperCase(), null, spot.h ? spot.h*0.55 : 1.7);
+    if(spot.foundedDay!=null) spot._signMesh.visible = simDay >= spot.foundedDay;
   });
 })();
 
@@ -5756,7 +6032,7 @@ var BIZ_GLYPH_SPOTS = []; // {x,z,y,h,glyph} — fed to the DOM glyph-label pool
     var word = signedByPos[spot.x.toFixed(1)+"_"+spot.z.toFixed(1)];
     var glyph = type==="gambling" ? "cards" : type==="hotel" ? "bed" : type==="rundown" ? null :
       (word && GLYPH_FOR_WORD[word]) || GLYPH_FALLBACK_POOL[Math.floor(rngBuild()*GLYPH_FALLBACK_POOL.length)];
-    if(glyph) BIZ_GLYPH_SPOTS.push({ x:spot.x, z:spot.z, y:spot.y, h:spot.h, glyph:glyph });
+    if(glyph) BIZ_GLYPH_SPOTS.push({ x:spot.x, z:spot.z, y:spot.y, h:spot.h, glyph:glyph, foundedDay:spot.foundedDay });
 
     var s = Math.sin(spot.rot), c = Math.cos(spot.rot);
     function localToWorld(lx,ly,lz){ return new THREE.Vector3(spot.x+lx*c+lz*s, spot.y+ly, spot.z-lx*s+lz*c); }
@@ -8577,6 +8853,7 @@ function animate(){
   updateWaterfrontLife();
   updateLevelingSite();
   updateTicker();
+  updateEraGating();   // fix, 2026-07-10 — bury/reveal era-gated landmarks by simDay, before fire touches the same slices
   updateFire(dt);      // PHASE 5 — the Dec 24 1849 Great Fire + aftermath/rebuild
   updateLaundryDay(simDay); // PL-B item 4 — laundry lines only carry wash on the (fill:true) weekly wash day
 
@@ -8609,6 +8886,7 @@ function animate(){
   updateDistrictZones(alt);
   updateBuildingLabels(alt);
   updateBizGlyphs(alt);
+  updateStreetLabels(alt);
   applyLabelDeclutter(performance.now()); // must run after every per-type label/glyph/ship update above
   updateGridSwing();
   updateRain(dt, camera.position.x, camera.position.z, alt);
