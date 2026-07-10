@@ -8120,10 +8120,21 @@ function ratTargetCount(day){
   return Math.round(eraF*(2 + 8*nightFactor)); // night-biased
 }
 var RAT_ANCHORS = (function(){
+  // Anchors must be on VISIBLY dry ground — terrainHeight() includes the
+  // village-pad blend, so a bare height check can land on the tideline
+  // flats that render as shallow water. The waterfront beach lines are the
+  // same visually-dry band the waterfront-life props already use: for each
+  // storeship, take the beach line nearest its z row, a step up the beach.
   var out = [];
-  function landward(x,z){ for(var k=0;k<50;k++){ if(terrainHeight(x,z)>0.25) return {x:x,z:z}; x-=3; } return null; }
-  Object.keys(STORESHIP_INFO).forEach(function(k){ var a=landward(STORESHIP_INFO[k].pos.x, STORESHIP_INFO[k].pos.z); if(a) out.push(a); });
-  out.push({x:WORKSITE_WHARF.x-6, z:WORKSITE_WHARF.z+3});
+  Object.keys(STORESHIP_INFO).forEach(function(k){
+    var sz = STORESHIP_INFO[k].pos.z, best=null, bd=1e18;
+    for(var i=0;i<waterfrontBeachLines.length;i++){
+      var ln = waterfrontBeachLines[i], d = Math.abs(ln.z-sz);
+      if(d<bd){ bd=d; best=ln; }
+    }
+    if(best) out.push({ x:lerp(best.landX, best.waterX, 0.35), z:best.z });
+  });
+  out.push({x:WORKSITE_WHARF.x-8, z:WORKSITE_WHARF.z+3});
   var ch = pickShopSite("SHIP CHANDLERY"); if(ch) out.push({x:ch.x, z:ch.z});
   return out.length ? out : [{x:PLAZA_CENTER.x, z:PLAZA_CENTER.z}];
 })();
@@ -8160,7 +8171,7 @@ var CATS = (function(){
   var out = [];
   for(var i=0;i<CAT_CAP;i++){
     var a = RAT_ANCHORS[(i*2+1) % RAT_ANCHORS.length]; // cats sit where the rats are
-    out.push({ hx:a.x+(rngBuild()-0.5)*8, hz:a.z+(rngBuild()-0.5)*8, x:0, z:0, tx:0, tz:0,
+    out.push({ hx:a.x-rngBuild()*6, hz:a.z+(rngBuild()-0.5)*8, // landward bias — never seaward of the anchor band x:0, z:0, tx:0, tz:0,
       yaw:rngBuild()*Math.PI*2, sitting:true, until:rngBuild()*40, phase:rngBuild()*Math.PI*2 });
   }
   out.forEach(function(c){ c.x=c.hx; c.z=c.hz; c.tx=c.hx; c.tz=c.hz; });
@@ -8370,7 +8381,7 @@ function updateFauna(dt){
     if(rat.pausing){
       if(faunaClock > rat.until){
         rat.pausing = false;
-        var rtx = rat.anchor.x + (hash2(ri2*4.1, faunaClock)*16-8);
+        var rtx = Math.min(rat.anchor.x + 3, rat.anchor.x + (hash2(ri2*4.1, faunaClock)*16-8)); // never dart seaward past the anchor band
         var rtz = rat.anchor.z + (hash2(ri2*2.9, faunaClock)*16-8);
         if(terrainHeight(rtx,rtz) > 0.15){ rat.tx = rtx; rat.tz = rtz; }
         else { rat.tx = rat.anchor.x; rat.tz = rat.anchor.z; }
@@ -8393,7 +8404,7 @@ function updateFauna(dt){
     if(cat.sitting){
       if(faunaClock > cat.until){
         cat.sitting = false;
-        cat.tx = cat.hx + (hash2(kci*5.3, faunaClock)*12-6);
+        cat.tx = Math.min(cat.hx + 3, cat.hx + (hash2(kci*5.3, faunaClock)*12-6)); // stay on the dry side of the home band
         cat.tz = cat.hz + (hash2(kci*3.9, faunaClock)*12-6);
         if(terrainHeight(cat.tx,cat.tz) <= 0.15){ cat.tx = cat.hx; cat.tz = cat.hz; }
       }
@@ -10633,6 +10644,7 @@ window.__P1850 = {
       cats:catMesh.count, catTarget:catTargetCount(simDay), dogs:dogMesh.count, dogTarget:dogTargetCount(simDay),
       heronSite:HERON_SPOTS.length?{x:Math.round(HERON_SPOTS[0].x), z:Math.round(HERON_SPOTS[0].z)}:null,
       ratAnchors:RAT_ANCHORS.map(function(a){ return {x:Math.round(a.x), z:Math.round(a.z)}; }),
+      pelicanPos:(function(){ var p=pointOnPolyline(PELICAN_PATH, clamp(PELICANS.s,0,PELICAN_PATH.total)); return {x:Math.round(p.x), z:Math.round(p.z)}; })(),
       wharf:{x:Math.round(WORKSITE_WHARF.x), z:Math.round(WORKSITE_WHARF.z)} };
   },
   get ranch(){
