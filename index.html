@@ -993,6 +993,21 @@ terrainGeo.rotateX(-Math.PI/2);
 (function buildTerrain(){
   var pos = terrainGeo.attributes.position;
   var colors = new Float32Array(pos.count*3);
+  // WORLD-P0 fix (2026-07-09, fix 5 — relief shading): slope/aspect
+  // hillshading baked directly into vertex colors on top of terrainColor()'s
+  // lithograph palette — NW-light convention (light source to the upper-
+  // left), AO-darkened valleys, cooler-shaded / warmer-lit faces, so the
+  // terrain reads with cartographic depth at altitude. Skipped on the
+  // flattened village pad (no real slope there) and underwater (shading a
+  // seabed makes no visual sense).
+  var cellSize = CFG.worldSize/(TERRAIN.n-1);
+  var LIGHT = new THREE.Vector3(-0.55, 0.62, -0.55).normalize();
+  var shadeCool = new THREE.Color(0x1c2a34), shadeWarm = new THREE.Color(0x3a2a14);
+  function gridH(gi,gj){
+    gi = gi<0?0:(gi>TERRAIN.n-1?TERRAIN.n-1:gi);
+    gj = gj<0?0:(gj>TERRAIN.n-1?TERRAIN.n-1:gj);
+    return TERRAIN.heights[gj*TERRAIN.n+gi];
+  }
   for(var i=0;i<pos.count;i++){
     var x = pos.getX(i), z = pos.getZ(i);
     // direct 1:1 lookup (mesh resolution matches the baked grid exactly)
@@ -1002,9 +1017,30 @@ terrainGeo.rotateX(-Math.PI/2);
     var h = TERRAIN.heights[gj*TERRAIN.n+gi];
     // blend the village pad in (same rule as terrainHeight())
     var dOut = distOutsideBox(x,z,VILLAGE_BOX);
-    h = lerp(VILLAGE_Y, h, smoothstep(0,240,dOut));
+    var villageBlend = smoothstep(0,240,dOut);
+    h = lerp(VILLAGE_Y, h, villageBlend);
     pos.setY(i,h);
     var col = terrainColor(x,z,h);
+
+    if(villageBlend>0.15 && h>0.2){
+      var hE = gridH(gi+1,gj), hW = gridH(gi-1,gj);
+      var hS = gridH(gi,gj+1), hN = gridH(gi,gj-1);
+      var dhdx = (hE-hW)/(2*cellSize), dhdz = (hS-hN)/(2*cellSize);
+      var nx=-dhdx, ny=1, nz=-dhdz;
+      var nlen = Math.sqrt(nx*nx+ny*ny+nz*nz);
+      nx/=nlen; ny/=nlen; nz/=nlen;
+      var ndotl = nx*LIGHT.x+ny*LIGHT.y+nz*LIGHT.z;
+      var shadeT = clamp01(1-(ndotl+0.15)/1.15); // 0 = fully lit (NW-facing), 1 = fully shaded
+      var liftT = villageBlend; // fade out near the village-pad edge
+      col.lerp(shadeCool, shadeT*0.30*liftT);
+      col.lerp(shadeWarm, (1-shadeT)*0.12*liftT);
+      // valley AO: a low point ringed by higher ground 2 cells out reads as
+      // a shaded hollow, independent of the directional term above.
+      var ringAvg = (gridH(gi+2,gj)+gridH(gi-2,gj)+gridH(gi,gj+2)+gridH(gi,gj-2))/4;
+      var aoT = clamp01((ringAvg-h)/14);
+      col.lerp(shadeCool, aoT*0.22*liftT);
+    }
+
     colors[i*3]=col.r; colors[i*3+1]=col.g; colors[i*3+2]=col.b;
   }
   terrainGeo.setAttribute("color", new THREE.BufferAttribute(colors,3));
@@ -1173,6 +1209,108 @@ var foamMesh = null;
    tools/debug-region.js's scan around x=-560,z=-560 — so it's dropped
    rather than floating a disc of water on a slope. */
 
+/* Hoisted early (was previously declared alongside buildOutposts() much
+   further down) so the shared placement engine below — and every spawner
+   that follows it in file order — can consult real outpost coordinates
+   (e.g. the Mission Road corridor approximation) before it's built. */
+var OUTPOSTS = {
+  mission:  { x:-1997, z:3462, n:7 },
+  presidio: { x:-4776, z:-234, n:6 }
+};
+
+/* =========================================================================
+   SHARED PLACEMENT ENGINE — canPlace(x,z,footprintR,opts)  (WORLD-P0 fix
+   2026-07-09, AUDIT-2026-07-09.md §7 "Placement Collision Sweep")
+   Previously each spawner (village buildings, growth buildings, tents,
+   outposts) rejection-sampled independently against its own narrow
+   criteria only — no spawner checked the street grid, the Mission Road,
+   slope, or any other spawner's already-accepted footprints, which is
+   exactly how the audit found buildings straddling streets/intersections.
+   This is the one service every spawner now consults before accepting a
+   candidate position:
+     1. distance to the nearest street/Mission-road centerline >=
+        (half-width + margin)
+     2. terrain slope <= ~20 degrees, above the water line
+     3. bounding-circle overlap against every already-accepted placement
+        across ALL classes (buildings, outposts, tents, growth buildings)
+   Spawners that accept a candidate MUST call registerPlacement() so later
+   spawners see it — this is what actually closes the "class-blind"
+   collision gap the audit flagged (buildings not aware of tents, tents
+   not aware of outposts, etc).
+   ========================================================================= */
+var PLACEMENT_INDEX = []; // {x,z,r} — every accepted footprint, any class, any spawner
+function registerPlacement(x,z,r){ PLACEMENT_INDEX.push({x:x,z:z,r:r||3}); }
+
+function distToSegXZ(x,z,x0,z0,x1,z1){
+  var dx=x1-x0, dz=z1-z0, len2=dx*dx+dz*dz;
+  var t = len2>0 ? ((x-x0)*dx+(z-z0)*dz)/len2 : 0;
+  t = clamp(t,0,1);
+  return Math.hypot(x-(x0+dx*t), z-(z0+dz*t));
+}
+var PLACEMENT_STREET_HALF_MAIN = 5, PLACEMENT_STREET_HALF_CROSS = 3.5; // half of buildStreets()' MAIN_W=10/CROSS_W=7
+var PLACEMENT_STREET_SEGS = (function(){
+  var uVals=[GEO.streetsU.stockton,GEO.streetsU.dupont,GEO.streetsU.kearny,GEO.streetsU.montgomery];
+  var vVals=[GEO.streetsV.pacific,GEO.streetsV.jackson,GEO.streetsV.clay,GEO.streetsV.washington,GEO.streetsV.sacramento,GEO.streetsV.california];
+  var vSpan=[vVals[0],vVals[vVals.length-1]], uSpan=[uVals[0],uVals[uVals.length-1]];
+  var segs=[];
+  uVals.forEach(function(u){ var a=gridToWorld(u,vSpan[0]), b=gridToWorld(u,vSpan[1]); segs.push({x0:a.x,z0:a.z,x1:b.x,z1:b.z,halfW:PLACEMENT_STREET_HALF_MAIN}); });
+  vVals.forEach(function(v){ var a=gridToWorld(uSpan[0],v), b=gridToWorld(uSpan[1],v); segs.push({x0:a.x,z0:a.z,x1:b.x,z1:b.z,halfW:PLACEMENT_STREET_HALF_CROSS}); });
+  return segs;
+})();
+/* Rough Mission Road corridor (village edge -> Mission Dolores) for early
+   collision purposes; the exact curved path is pathfound/rendered later
+   (MISSION_ROAD_PTS, much further down) but this straight-ish 2-segment
+   approximation is enough to keep every spawner off its general line. */
+var PLACEMENT_MISSION_SEGS = (function(){
+  var start = gridToWorld(GEO.streetsU.stockton-40, GEO.streetsV.california+40);
+  var mid = { x:(start.x+OUTPOSTS.mission.x)/2 - 220, z:(start.z+OUTPOSTS.mission.z)/2 };
+  var end = { x:OUTPOSTS.mission.x, z:OUTPOSTS.mission.z };
+  return [
+    { x0:start.x, z0:start.z, x1:mid.x, z1:mid.z, halfW:9 },
+    { x0:mid.x, z0:mid.z, x1:end.x, z1:end.z, halfW:9 }
+  ];
+})();
+function nearAnyRoad(x,z,margin){
+  var i;
+  for(i=0;i<PLACEMENT_STREET_SEGS.length;i++){
+    var s = PLACEMENT_STREET_SEGS[i];
+    if(distToSegXZ(x,z,s.x0,s.z0,s.x1,s.z1) < s.halfW+margin) return true;
+  }
+  for(i=0;i<PLACEMENT_MISSION_SEGS.length;i++){
+    var m = PLACEMENT_MISSION_SEGS[i];
+    if(distToSegXZ(x,z,m.x0,m.z0,m.x1,m.z1) < m.halfW+margin) return true;
+  }
+  return false;
+}
+function terrainSlopeDeg(x,z){
+  var d=6;
+  var hE=terrainHeight(x+d,z), hW=terrainHeight(x-d,z), hN=terrainHeight(x,z-d), hS=terrainHeight(x,z+d);
+  var dzdx=(hE-hW)/(2*d), dzdz=(hS-hN)/(2*d);
+  return Math.atan(Math.sqrt(dzdx*dzdx+dzdz*dzdz))*180/Math.PI;
+}
+/* footprintR: the candidate's own bounding-circle radius (half its
+   longest footprint dimension is a safe estimate). opts: {minY, streetMargin,
+   skipSlope, skipOverlap} for spawners with looser/tighter needs. */
+function canPlace(x,z,footprintR,opts){
+  opts = opts||{};
+  var minY = opts.minY!=null ? opts.minY : 1;
+  var y = terrainHeight(x,z);
+  if(y<=minY) return false;
+  if(!opts.skipSlope && terrainSlopeDeg(x,z) > 20) return false;
+  if(!opts.skipStreet){
+    var margin = opts.streetMargin!=null ? opts.streetMargin : 3;
+    if(nearAnyRoad(x,z,footprintR+margin)) return false;
+  }
+  if(!opts.skipOverlap){
+    for(var i=0;i<PLACEMENT_INDEX.length;i++){
+      var p = PLACEMENT_INDEX[i];
+      var dx=x-p.x, dz=z-p.z, minDist=footprintR+p.r;
+      if(dx*dx+dz*dz < minDist*minDist) return false;
+    }
+  }
+  return true;
+}
+
 /* =====================================================================
    STREETS  (Vioget grid: flattened dirt strips, skewed ~2.5° per
    "Vioget's error" — see gridToWorld() — and fading to narrower, paler
@@ -1298,8 +1436,24 @@ function pushBuildingGeo(list, geo){ list.push(geo); buildingVertCursor += geo.a
 
   function placeBuilding(x,z,rotBase,opts){
     opts = opts || {};
+    // WORLD-P0 fix (canPlace engine): was only a below-land height check —
+    // buildings could and did straddle streets/intersections (AUDIT §7).
+    // Conservative footprint radius (worst-case half-diagonal at max
+    // sizeMul, incl. named plaza landmarks) checked BEFORE any rngBuild()
+    // call below so the seeded procedural sequence is undisturbed for
+    // accepted placements. opts.denseRow (buildFireBlock's documented
+    // continuous street-frontage row — the Alta's own account, not scale
+    // inflation) uses a tight street margin and skips the cross-building
+    // overlap test, since adjacent-frontage buildings are the documented
+    // arrangement there, not a collision to avoid.
+    var footprintR = 9 * (opts.sizeMul || 1);
+    // denseRow (buildFireBlock's documented street-frontage row): the
+    // exact lot position comes straight from the primary source, so skip
+    // the street-proximity heuristic entirely rather than guess a margin
+    // that would reject some hand-placed, historically-correct lots.
+    var placeOpts = opts.denseRow ? {skipStreet:true, skipOverlap:true} : {streetMargin:3};
+    if(!canPlace(x,z,footprintR,placeOpts)) return;
     var y = terrainHeight(x,z);
-    if(y<=1){ console.warn("[verify] village building below land threshold (h="+y.toFixed(2)+") at", x.toFixed(0), z.toFixed(0)); return; }
 
     var vStart = buildingVertCursor;         // Phase 5: this building's slice of the merged buffer
     var wStart = windowVertCursor;           // ...and its window-glow slice (flattened with it on burn)
@@ -1313,6 +1467,7 @@ function pushBuildingGeo(list, geo){ list.push(geo); buildingVertCursor += geo.a
     // town's grandest — still honest-scale, never inflated for visibility.
     var sizeMul = opts.sizeMul || 1;
     var w = (4.5+rngBuild()*3.5)*sizeMul, d = (3.8+rngBuild()*3)*sizeMul, h = (2.6+rngBuild()*1.6)*Math.min(sizeMul*(opts.tall?1.6:1), 2.4);
+    registerPlacement(x,z, Math.hypot(w,d)/2); // shared placement index — later spawners (tents/growth/outposts) now see this footprint
     var rot = rotBase + (rngBuild()-0.5)*0.12 + VIOGET_SKEW; // aligned to the tilted grid, not true north
     var isAdobe = opts.forceFrame ? false : rngBuild()<0.55;
     var bodyColor = new THREE.Color(isAdobe? adobeColors[Math.floor(rngBuild()*adobeColors.length)] : frameColors[Math.floor(rngBuild()*frameColors.length)]);
@@ -1421,7 +1576,11 @@ function pushBuildingGeo(list, geo){ list.push(geo); buildingVertCursor += geo.a
   (function buildFireBlock(){
     var kU = uVals[2], mU = uVals[3];            // kearny, montgomery
     var cV = vVals[2], wV = vVals[3];            // clay, washington
-    function put(u,v,rot,opts){ var p = gridToWorld(u,v); placeBuilding(p.x,p.z,rot,opts); }
+    function put(u,v,rot,opts){
+      opts = opts||{};
+      opts.denseRow = true; // documented continuous frontage row (Alta account) — see placeBuilding()
+      var p = gridToWorld(u,v); placeBuilding(p.x,p.z,rot,opts);
+    }
 
     // Kearny frontage, plaza-facing row — order per the Alta's loss list
     put(kU+8,  wV-9,  Math.PI/2, { name:"El Dorado",            sizeMul:1.45, tall:true, forceFrame:true });
@@ -1574,33 +1733,231 @@ function updateSmoke(dt){
    122.4272W (≈3.85km). Verified against the baked grid (both land, 25-33m
    elevation — see tools/debug-region.js) rather than the old procedural
    ring's hand-picked, unverified coordinates. */
-var OUTPOSTS = {
-  mission:  { x:-1997, z:3462, n:7 },
-  presidio: { x:-4776, z:-234, n:6 }
-};
-(function buildOutposts(){
+/* WORLD-P0 fix (2026-07-09, AUDIT H3/H4 + GAPS item 7): both clusters
+ * previously rendered as empty fields — the audit's hypothesis (a
+ * height-gate rejecting most/all jittered attempts) turned out to be
+ * only half the story: once the shoreline-truth terrain fix above ran,
+ * both real-world-sourced centers sample comfortably above the old y<1
+ * gate (Mission ~25m, Presidio ~32m). Rebuilt as two dedicated,
+ * content-specific builders (not 7/6 identical generic boxes) routed
+ * through the shared canPlace() engine, with the documented buildings
+ * peninsula-1846.md actually names, plus a handful of catalog-
+ * appropriate static figures so neither site reads as an empty stage set.
+ */
+var _outpostSkin = new THREE.Color(0xc79a72);
+function makeOutpostPersonGeo(coatColor,hatColor,isFemale){
+  var coat = new THREE.CylinderGeometry(0.20,0.27,1.15,6).toNonIndexed();
+  coat.translate(0,0.575,0); colorizeUniform(coat, coatColor);
+  var head = new THREE.SphereGeometry(0.15,7,5).toNonIndexed();
+  head.translate(0,1.28,0); colorizeUniform(head, _outpostSkin);
+  var parts=[coat,head];
+  if(isFemale){
+    var bonnet = new THREE.SphereGeometry(0.19,7,5,0,Math.PI*2,0,Math.PI*0.62).toNonIndexed();
+    bonnet.translate(0,1.34,0); colorizeUniform(bonnet,hatColor); parts.push(bonnet);
+  } else {
+    var crown = new THREE.CylinderGeometry(0.13,0.13,0.14,7).toNonIndexed();
+    crown.translate(0,1.44,0); colorizeUniform(crown,hatColor);
+    var brim = new THREE.CylinderGeometry(0.24,0.24,0.03,9).toNonIndexed();
+    brim.translate(0,1.38,0); colorizeUniform(brim,hatColor);
+    parts.push(crown,brim);
+  }
+  return mergeGeoms(parts);
+}
+function placeOutpostPerson(geoms,x,z,rot,coatColor,hatColor,isFemale){
+  var y = terrainHeight(x,z);
+  var g = makeOutpostPersonGeo(new THREE.Color(coatColor), new THREE.Color(hatColor), !!isFemale);
+  bake(g, new THREE.Vector3(x,y,z), rot||0);
+  geoms.push(g);
+}
+function makeOrchardTreeGeo(){
+  var trunk = new THREE.CylinderGeometry(0.12,0.16,1.1,5).toNonIndexed();
+  trunk.translate(0,0.55,0); colorizeUniform(trunk, new THREE.Color(0x5a4632));
+  var canopy = new THREE.SphereGeometry(1.0,6,5).toNonIndexed();
+  canopy.translate(0,1.7,0); colorizeUniform(canopy, new THREE.Color(0x5c6e3a));
+  return mergeGeoms([trunk,canopy]);
+}
+
+(function buildMissionDolores(){
+  var o = OUTPOSTS.mission;
   var geoms = [];
-  var wall = new THREE.Color(0xd9cba4);
-  var roof = new THREE.Color(0x8a5a3c);
-  Object.keys(OUTPOSTS).forEach(function(k){
-    var o = OUTPOSTS[k];
-    for(var i=0;i<o.n;i++){
-      var x = o.x + (rngBuild()-0.5)*220;
-      var z = o.z + (rngBuild()-0.5)*220;
-      var y = terrainHeight(x,z);
-      if(y<1) continue;
-      var w = 16+rngBuild()*10, d = 12+rngBuild()*8, h = 6+rngBuild()*3;
-      var rot = (rngBuild()-0.5)*0.6;
-      var body = makeBoxLocal(w,h,d,wall);
-      bake(body, new THREE.Vector3(x,y-0.5,z), rot);
-      geoms.push(body);
-      var r = makeGableRoof(w,d,0.8, 2.4+rngBuild()*1.4, roof);
-      bake(r, new THREE.Vector3(x,y-0.5+h,z), rot);
-      geoms.push(r);
+  var adobe = new THREE.Color(0xcda86e), adobeDark = new THREE.Color(0xb08a52);
+  var roofTile = new THREE.Color(0x7a4a34);
+  var hutColor = new THREE.Color(0xb99a6e), hutRoof = new THREE.Color(0x8c7a52);
+
+  // (1) THE CHURCH — 114x22 ft = 34.7m x 6.7m, 4ft-thick adobe walls, ~21ft
+  // (6.4m) to the ceiling; still standing unchanged since 1791
+  // (peninsula-1846.md §2.1). True scale — the era's best-documented
+  // standing building, deliberately NOT inflated.
+  var churchW=34.7, churchD=6.7, churchH=6.4, churchRot=0.2;
+  var churchX=o.x, churchZ=o.z, churchY=terrainHeight(churchX,churchZ);
+  registerPlacement(churchX, churchZ, Math.hypot(churchW,churchD)/2);
+  var churchBody = makeBoxLocal(churchW,churchH,churchD,adobe);
+  bake(churchBody, new THREE.Vector3(churchX,churchY,churchZ), churchRot);
+  geoms.push(churchBody);
+  var churchRoof = makeGableRoof(churchW,churchD,0.7,2.6,roofTile);
+  bake(churchRoof, new THREE.Vector3(churchX,churchY+churchH,churchZ), churchRot);
+  geoms.push(churchRoof);
+  var belfry = makeBoxLocal(2.2,3.0,1.0,adobeDark);
+  var belfryPos = new THREE.Vector3(-churchW*0.4,0,0);
+  belfryPos.applyAxisAngle(new THREE.Vector3(0,1,0), churchRot);
+  bake(belfry, new THREE.Vector3(churchX+belfryPos.x, churchY+churchH, churchZ+belfryPos.z), churchRot);
+  geoms.push(belfry);
+
+  // (2) CEMETERY — immediately adjacent to the church, "facing the
+  // garden" (peninsula-1846.md §2.5): a small fenced plot of grave
+  // markers on the church's south flank.
+  (function(){
+    var offs = new THREE.Vector3(0,0, churchD*1.6+8);
+    offs.applyAxisAngle(new THREE.Vector3(0,1,0), churchRot);
+    var cx=churchX+offs.x, cz=churchZ+offs.z;
+    for(var i=0;i<9;i++){
+      var mx=cx+(rngBuild()-0.5)*16, mz=cz+(rngBuild()-0.5)*10, my=terrainHeight(mx,mz);
+      if(my<=1) continue;
+      var marker = makeBoxLocal(0.26,0.5+rngBuild()*0.35,0.1, new THREE.Color(0x8f8a78));
+      bake(marker, new THREE.Vector3(mx,my,mz), rngBuild()*Math.PI);
+      geoms.push(marker);
     }
+  })();
+
+  // (3) CALIFORNIO ADOBES — Bernal, de Haro, Guerrero, Valencia families,
+  // living in adobes at Dolores (peninsula-1846.md §2.2). Small
+  // residential scale, ringed around the church/cemetery core.
+  ["Bernal","de Haro","Guerrero","Valencia"].forEach(function(name,i){
+    var ang = (i/4)*Math.PI*2 + 0.9, dist = 60+rngBuild()*35;
+    var x = churchX+Math.cos(ang)*dist, z = churchZ+Math.sin(ang)*dist;
+    if(!canPlace(x,z,7,{streetMargin:2})) return;
+    var y = terrainHeight(x,z);
+    var w=6.5+rngBuild()*2.5, d=5.5+rngBuild()*2, h=3+rngBuild(), rot=rngBuild()*Math.PI;
+    registerPlacement(x,z,Math.hypot(w,d)/2);
+    var body = makeBoxLocal(w,h,d, adobe.clone().lerp(adobeDark, rngBuild()*0.5));
+    bake(body, new THREE.Vector3(x,y,z), rot);
+    geoms.push(body);
+    var roofG = makeGableRoof(w,d,0.5,1.1+rngBuild()*0.5,roofTile);
+    bake(roofG, new THREE.Vector3(x,y+h,z), rot);
+    geoms.push(roofG);
+    placeOutpostPerson(geoms, x+w*0.7, z, rngBuild()*Math.PI*2, 0x3a332c, 0xcabf98, i%2===0);
   });
+
+  // (4) THE RANCHERIA — the former Indian rancheria, "occupied by
+  // remaining Indians" through this period, a distinct residential zone
+  // physically separate from the Californio-occupied quadrangle
+  // buildings (peninsula-1846.md §2.2) — simple huts, not adobes.
+  (function(){
+    var ang = 4.0, dist = 130;
+    var rx = churchX+Math.cos(ang)*dist, rz = churchZ+Math.sin(ang)*dist;
+    for(var i=0;i<6;i++){
+      var x = rx+(rngBuild()-0.5)*60, z = rz+(rngBuild()-0.5)*60;
+      if(!canPlace(x,z,3,{streetMargin:2})) continue;
+      var y = terrainHeight(x,z);
+      registerPlacement(x,z,3);
+      var hut = makeBoxLocal(2.6+rngBuild(),1.8,2.4+rngBuild(), hutColor);
+      var rot = rngBuild()*Math.PI;
+      bake(hut, new THREE.Vector3(x,y,z), rot);
+      geoms.push(hut);
+      var hutRoofG = makeGableRoof(2.6,2.4,0.3,0.9,hutRoof);
+      bake(hutRoofG, new THREE.Vector3(x,y+1.8,z), rot);
+      geoms.push(hutRoofG);
+    }
+    placeOutpostPerson(geoms, rx, rz+8, rngBuild()*Math.PI*2, 0x36402e, 0x262c1e, false);
+  })();
+
+  // (5) THE ORCHARD — west of the mission complex, separated from it by
+  // El Camino Real (peninsula-1846.md §2.5): a loose orchard grid.
+  (function(){
+    var treeGeo = makeOrchardTreeGeo();
+    var samples = [];
+    var ox = churchX-160, oz = churchZ;
+    for(var row=0; row<5; row++){
+      for(var col=0; col<6; col++){
+        var x = ox+(row-2)*14+(rngBuild()-0.5)*4, z = oz+(col-2.5)*13+(rngBuild()-0.5)*4;
+        var y = terrainHeight(x,z);
+        if(y<=1) continue;
+        samples.push({x:x,z:z,h:y});
+      }
+    }
+    var orchardMesh = buildScatterMesh(treeGeo, new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), samples, {minScale:0.8,maxScale:1.2});
+    scene.add(orchardMesh);
+  })();
+
   var m = new THREE.Mesh(mergeGeoms(geoms), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, side:THREE.DoubleSide, specular:0x000000, shininess:0}));
   scene.add(m);
+  console.log("[verify] Mission Dolores: "+geoms.length+" parts merged, church at ("+churchX.toFixed(0)+","+churchZ.toFixed(0)+") y="+churchY.toFixed(1)+" size="+churchW+"x"+churchD+"x"+churchH);
+})();
+
+(function buildPresidio(){
+  var o = OUTPOSTS.presidio;
+  var geoms = [];
+  var wall = new THREE.Color(0xcabb95), wallRuin = new THREE.Color(0xa89670);
+  var roof = new THREE.Color(0x7a5238);
+  var cx=o.x, cz=o.z, cy=terrainHeight(cx,cz);
+  registerPlacement(cx,cz,95);
+
+  // (1) THE ADOBE QUADRANGLE — ~200 yards (183m) per side, adobe
+  // perimeter wall ~4 yards (3.66m) high, dilapidated: barracks "fallen
+  // into ruins," walls "badly dilapidated," leaky roofs (peninsula-
+  // 1846.md §1.1). Built as a wall OUTLINE (not a solid block) with
+  // randomized gaps/height loss so it silhouettes as a ruin, not a fort.
+  var half = 183/2;
+  var corners = [[-half,-half],[half,-half],[half,half],[-half,half]];
+  for(var side=0; side<4; side++){
+    var a = corners[side], b = corners[(side+1)%4];
+    var segCount = 10;
+    for(var s=0; s<segCount; s++){
+      var t0=s/segCount, t1=(s+1)/segCount;
+      var lx0=a[0]+(b[0]-a[0])*t0, lz0=a[1]+(b[1]-a[1])*t0;
+      var lx1=a[0]+(b[0]-a[0])*t1, lz1=a[1]+(b[1]-a[1])*t1;
+      if(rngBuild()<0.22) continue; // gap — collapsed section
+      var mx=cx+(lx0+lx1)/2, mz=cz+(lz0+lz1)/2, my=terrainHeight(mx,mz);
+      if(my<=1) continue;
+      var segLen = Math.hypot(lx1-lx0, lz1-lz0);
+      var yaw = Math.atan2(lx1-lx0, lz1-lz0);
+      var hgt = 1.2+rngBuild()*2.4; // ruined -> a couple of intact yards
+      var seg = makeBoxLocal(segLen*1.02, hgt, 0.9, rngBuild()<0.5?wall:wallRuin);
+      var q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), yaw);
+      seg.applyMatrix4(new THREE.Matrix4().makeRotationFromQuaternion(q));
+      bake(seg, new THREE.Vector3(mx,my,mz), 0);
+      geoms.push(seg);
+    }
+  }
+
+  // (2) INTERIOR STRUCTURES — chapel, storehouses, commandant/officers'
+  // quarters, a guardhouse at the entrance (peninsula-1846.md §1.1) —
+  // roofed (some "adapted to new uses" per era pattern), smaller and less
+  // ruined than the perimeter wall since these were still occupied.
+  var interiors = [
+    { u:0,   v:-half*0.55, w:14, d:9,  h:4.2, name:"chapel" },
+    { u:-40, v:-half*0.4,  w:18, d:8,  h:3.6, name:"storehouse" },
+    { u:35,  v:-half*0.3,  w:16, d:8,  h:3.8, name:"officers' quarters" },
+    { u:0,   v:half*0.85,  w:8,  d:6,  h:3.0, name:"guardhouse" }
+  ];
+  interiors.forEach(function(bldg){
+    // interior of the quadrangle's own already-registered footprint — no
+    // canPlace() overlap check here (it would trivially fail against the
+    // wall-circle registration just above); still gated on slope/height.
+    var x=cx+bldg.u, z=cz+bldg.v;
+    var y=terrainHeight(x,z);
+    if(y<=1 || terrainSlopeDeg(x,z)>20) return;
+    registerPlacement(x,z,Math.hypot(bldg.w,bldg.d)/2);
+    var rot = rngBuild()*0.3;
+    var body = makeBoxLocal(bldg.w,bldg.h,bldg.d, wall.clone().lerp(wallRuin,0.3));
+    bake(body, new THREE.Vector3(x,y,z), rot);
+    geoms.push(body);
+    var roofG = makeGableRoof(bldg.w,bldg.d,0.5,1.0+rngBuild()*0.6, roof);
+    bake(roofG, new THREE.Vector3(x,y+bldg.h,z), rot);
+    geoms.push(roofG);
+  });
+
+  // (3) SKELETON GARRISON — "inhabited by only a sub-lieutenant and 5
+  // soldiers-rancheros with their families" (Mofras 1841, bracketed to
+  // 1846 per the research file) — a few static figures near the
+  // guardhouse/quarters, not a full company.
+  placeOutpostPerson(geoms, cx+2, cz+half*0.8, Math.PI, 0x2c2a28, 0x1e1c1a, false);
+  placeOutpostPerson(geoms, cx-6, cz+half*0.75, Math.PI*0.8, 0x36402e, 0x262c1e, false);
+  placeOutpostPerson(geoms, cx-38, cz-half*0.35, 0, 0x3a332c, 0xcabf98, true);
+
+  var m = new THREE.Mesh(mergeGeoms(geoms), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, side:THREE.DoubleSide, specular:0x000000, shininess:0}));
+  scene.add(m);
+  console.log("[verify] Presidio: "+geoms.length+" parts merged, quadrangle center ("+cx.toFixed(0)+","+cz.toFixed(0)+") y="+cy.toFixed(1));
 })();
 
 /* =========================================================================
@@ -1708,6 +2065,30 @@ EVENTS_RAW.forEach(function(e){
    departure stays anchored through the end of the extracted era — exactly
    the "forest of masts" the brief describes.
    ========================================================================= */
+/* WORLD-P0 fix (2026-07-09, AUDIT H2 / GAPS item 6): the four
+ * best-documented storeships — Niantic, Apollo, Euphemia, General
+ * Harrison — now have explicit ship_arrival events (data/events.jsonl,
+ * baked via tools/build-events.js) and get a distinguishing "derelict/
+ * converted" treatment here: a fixed real-world grounding position near
+ * their documented cross-streets (clm:shore:8 — afloat/aground amid open
+ * water/mud within the cove, NEVER on filled land pre-1851) instead of
+ * the generic offshore anchorage arc, a permanent list/heel angle (they
+ * were deserted, not actively worked), and an always-on name label.
+ * Positions are approximate (only cross-street names survive, not exact
+ * lot coordinates) — placed just bayward of Montgomery (the 1846
+ * shoreline) at their documented cross streets, verified against the
+ * baked heightmap to land in shallow water/mudflat, not on dry land.
+ */
+var STORESHIP_INFO = (function(){
+  var clay = GEO.streetsV.clay, sacramento = GEO.streetsV.sacramento;
+  function pos(u,v){ return gridToWorld(u,v); }
+  return {
+    "Niantic":          { pos: pos(70,  clay-4),        list: 0.16, groundedNote:"grounded at Clay & Sansome" },
+    "General Harrison": { pos: pos(112, clay-2),        list: 0.11, groundedNote:"grounded near Battery St, by the Niantic" },
+    "Euphemia":         { pos: pos(85,  sacramento+4),  list: 0.09, groundedNote:"berthed near Central Wharf, converted to the town jail" },
+    "Apollo":           { pos: pos(128, sacramento+6),  list: 0.14, groundedNote:"beached between Central Wharf and Howison's Pier" }
+  };
+})();
 var shipVisits = (function buildShipVisits(){
   var DEDUP_DAYS = 21;
   var byShip = {};
@@ -1745,6 +2126,11 @@ var shipVisits = (function buildShipVisits(){
     // same silhouette across arrivals/departures.
     v.shipType = cyrb128("shiptype-"+v.ship)[0] % 3;
     v._state = "future"; v._anchorPos = null; v._anchorIdx = -1; v._anchorYaw = rngBuild()*Math.PI*2;
+    // WORLD-P0 fix: named storeships get a fixed documented grounding spot
+    // + permanent list angle instead of the generic anchorage arc/slot —
+    // only applies to the specific visit that never departs (the real
+    // ship's earlier ordinary trading visits, if any, are unaffected).
+    if(STORESHIP_INFO[v.ship] && v.depart===null) v.storeship = STORESHIP_INFO[v.ship];
   });
   visits.sort(function(a,b){ return (a.arrive!==null?a.arrive:-1) - (b.arrive!==null?b.arrive:-1); });
   return visits;
@@ -1791,8 +2177,12 @@ function findRealShoreX(z){
 }
 var ANCHOR_SLOTS = (function(){
   var zMin = -800, zMax = 880;              // Clark's Point down toward Rincon Point
-  var nAlong = 96, bits = 7;                // 2^7=128 >= nAlong, for the spread order
-  var rings = [110, 190, 265, 340, 420];    // offshore-distance centers, 80-400m band + a sparse outermost ring for "a few singles further out"
+  // WORLD-P0 fix (AUDIT S1): hulls are now true-scale (up to ~35m, was
+  // 17m) — nAlong reduced and ring spacing widened a bit so hulls don't
+  // clip through their along-shore neighbors; still dense enough for the
+  // documented "forest of masts" crowding at peak 1849 anchorage.
+  var nAlong = 80, bits = 7;                // 2^7=128 >= nAlong, for the spread order
+  var rings = [130, 215, 295, 375, 460];    // offshore-distance centers, widened for true-scale beams
   var spreadK = [];
   for(var idx=0; idx<(1<<bits) && spreadK.length<nAlong; idx++){
     var k = bitReverse(idx, bits);
@@ -1849,6 +2239,19 @@ function shipDesiredState(v, day){
    rather than one repeated box. Furled (anchored) vs set (sailing) is
    still the existing non-uniform-Y-scale trick in updateShips().
    ===================================================================== */
+/* WORLD-P0 fix (2026-07-09, AUDIT S1): all three hull types were built
+ * 40-60% undersized vs documented real dimensions (a full-rigged
+ * merchantman like the General Harrison, 126 ft = 38.4m, vs. the old
+ * 17m hull). Rather than re-tune every internal dimension by hand, each
+ * type's finished hull+sail geometry is scaled up uniformly to a true-
+ * scale target length — masts/yards/bowsprit/sails all scale together
+ * since they're baked in the hull's own local space, so proportions are
+ * preserved exactly, nothing is redrawn "bigger to be visible" (grounding.md
+ * scale rule — this corrects an UNDER-scale bug, not an inflation). Targets:
+ * full ship ~35m (documented range 30-46m), brig ~26m (24-30m), schooner
+ * ~20m (18-27m) — geography-shoreline.md's ship-dimension citations.
+ */
+var SHIP_TRUE_SCALE = { full: 35/17, brig: 26/13.5, schooner: 20/11.5 };
 function makeHullPartsGeo(length, beam, height, hullColor, deckColor){
   var half = length/2;
   var hull = makeBoxLocal(beam, height, length, hullColor); bake(hull, new THREE.Vector3(0,-height*0.42,0));
@@ -1895,14 +2298,18 @@ function makeFullShipHullGeo(){
   var yFore = makeBoxLocal(4.2,0.16,0.16,mastColor); bake(yFore,new THREE.Vector3(0,6.2,5.2));
   var yMain = makeBoxLocal(5.2,0.18,0.18,mastColor); bake(yMain,new THREE.Vector3(0,7.8,0));
   var yMizzen = makeBoxLocal(3.4,0.14,0.14,mastColor); bake(yMizzen,new THREE.Vector3(0,5.4,-5.2));
-  return mergeGeoms(parts.concat([bowsprit,mFore,mMain,mMizzen,yFore,yMain,yMizzen]));
+  var fullGeo = mergeGeoms(parts.concat([bowsprit,mFore,mMain,mMizzen,yFore,yMain,yMizzen]));
+  fullGeo.scale(SHIP_TRUE_SCALE.full, SHIP_TRUE_SCALE.full, SHIP_TRUE_SCALE.full);
+  return fullGeo;
 }
 function makeFullShipSailGeo(){
   var sailColor = new THREE.Color(0xe6dcc0); // cream — "weathered sail tones" vary by type
   var sFore = makeSquareSailGeo(4.0,4.6,sailColor); bake(sFore,new THREE.Vector3(0,4.4,5.2));
   var sMain = makeSquareSailGeo(4.9,5.4,sailColor); bake(sMain,new THREE.Vector3(0,5.6,0));
   var sMizzen = makeSquareSailGeo(3.2,3.6,sailColor); bake(sMizzen,new THREE.Vector3(0,4.0,-5.2));
-  return mergeGeoms([sFore,sMain,sMizzen]);
+  var g = mergeGeoms([sFore,sMain,sMizzen]);
+  g.scale(SHIP_TRUE_SCALE.full, SHIP_TRUE_SCALE.full, SHIP_TRUE_SCALE.full);
+  return g;
 }
 
 // ---- type 1: BRIG — 2 masts, square-rigged, prominent bowsprit ----
@@ -1914,13 +2321,17 @@ function makeBrigHullGeo(){
   var mMain = makeBoxLocal(0.32,8.6,0.32,mastColor); bake(mMain,new THREE.Vector3(0,0.5,-3.0));
   var yFore = makeBoxLocal(4.4,0.17,0.17,mastColor); bake(yFore,new THREE.Vector3(0,6.0,3.6));
   var yMain = makeBoxLocal(4.8,0.17,0.17,mastColor); bake(yMain,new THREE.Vector3(0,6.6,-3.0));
-  return mergeGeoms(parts.concat([bowsprit,mFore,mMain,yFore,yMain]));
+  var brigGeo = mergeGeoms(parts.concat([bowsprit,mFore,mMain,yFore,yMain]));
+  brigGeo.scale(SHIP_TRUE_SCALE.brig, SHIP_TRUE_SCALE.brig, SHIP_TRUE_SCALE.brig);
+  return brigGeo;
 }
 function makeBrigSailGeo(){
   var sailColor = new THREE.Color(0xd6c9a6); // grey-tan, weathered
   var sFore = makeSquareSailGeo(4.2,4.6,sailColor); bake(sFore,new THREE.Vector3(0,4.0,3.6));
   var sMain = makeSquareSailGeo(4.6,5.0,sailColor); bake(sMain,new THREE.Vector3(0,4.4,-3.0));
-  return mergeGeoms([sFore,sMain]);
+  var g = mergeGeoms([sFore,sMain]);
+  g.scale(SHIP_TRUE_SCALE.brig, SHIP_TRUE_SCALE.brig, SHIP_TRUE_SCALE.brig);
+  return g;
 }
 
 // ---- type 2: SCHOONER — 2 masts, fore-and-aft (gaff) rig, lower/rakish ----
@@ -1932,13 +2343,17 @@ function makeSchoonerHullGeo(){
   var mMain = makeBoxLocal(0.26,7.8,0.26,mastColor); bake(mMain,new THREE.Vector3(0,0.45,-2.4));
   var boomFore = makeBoxLocal(0.14,0.14,3.4,mastColor); bake(boomFore,new THREE.Vector3(0,1.6,1.0));
   var boomMain = makeBoxLocal(0.14,0.14,3.8,mastColor); bake(boomMain,new THREE.Vector3(0,1.6,-4.1));
-  return mergeGeoms(parts.concat([bowsprit,mFore,mMain,boomFore,boomMain]));
+  var schoonerGeo = mergeGeoms(parts.concat([bowsprit,mFore,mMain,boomFore,boomMain]));
+  schoonerGeo.scale(SHIP_TRUE_SCALE.schooner, SHIP_TRUE_SCALE.schooner, SHIP_TRUE_SCALE.schooner);
+  return schoonerGeo;
 }
 function makeSchoonerSailGeo(){
   var sailColor = new THREE.Color(0xc7b48d); // darker, sun-browned canvas
   var gFore = makeGaffSailGeo(3.2,5.8,1.7,sailColor); bake(gFore,new THREE.Vector3(0,1.7,2.6));
   var gMain = makeGaffSailGeo(3.6,6.2,1.7,sailColor); bake(gMain,new THREE.Vector3(0,1.7,-2.4));
-  return mergeGeoms([gFore,gMain]);
+  var g = mergeGeoms([gFore,gMain]);
+  g.scale(SHIP_TRUE_SCALE.schooner, SHIP_TRUE_SCALE.schooner, SHIP_TRUE_SCALE.schooner);
+  return g;
 }
 
 function makeMastClusterGeo(){
@@ -1978,11 +2393,50 @@ var shipLabelPool = [];
   }
 })();
 
+/* =========================================================================
+   COVERAGE-GAP FILL TRAFFIC (WORLD-P0 fix 2026-07-09, grounding.md's
+   COVERAGE-GAP RULE + fix list item 6). data/GAPS-2026-07-09.md's "1849
+   spine cliff" finding: the newspaper record genuinely goes quiet for
+   most of 1849 (the Californian/Star merged paper ended 1848; the Daily
+   Alta doesn't begin until Dec 1849), so almost no NAMED ship arrivals
+   survive for that stretch — but ~700+ vessels documented in aggregate
+   actually arrived that year. Per the rule: the PAPER stays honestly
+   silent for the gap; the WORLD stays alive. These are simulated,
+   unnamed arrivals at the documented aggregate rate, rendered with the
+   exact same hull/sail visuals as real ships (no badge, no distinct
+   color — grounding.md's VOICE RULE: provenance stays quiet function,
+   never on-screen editorializing) but entirely excluded whenever the P
+   (provenance/"the record only") toggle is on, same as simulated people.
+   ========================================================================= */
+var FILL_GAP_START_DAY = eventDateToSimDay("1849-01-01");
+var FILL_GAP_END_DAY = eventDateToSimDay("1849-11-30");
+var FILL_SHIPS_PER_WEEK = 12; // "several per week" per ~700+/year documented aggregate
+var fillShipVisits = (function(){
+  var out = [];
+  var totalWeeks = Math.max(0, FILL_GAP_END_DAY-FILL_GAP_START_DAY)/7;
+  var n = Math.round(totalWeeks*FILL_SHIPS_PER_WEEK);
+  for(var i=0;i<n;i++){
+    var arrive = FILL_GAP_START_DAY + ((i+rngBuild())/n)*(FILL_GAP_END_DAY-FILL_GAP_START_DAY);
+    var stay = 20+rngBuild()*150; // many lingered/deserted for the diggings (the historical pattern); some moved on
+    out.push({
+      ship: "fill-"+i, arrive: arrive, depart: (rngBuild()<0.4 ? arrive+stay : null),
+      pathJitter: rngBuild(), exitNorth: rngBuild()<0.5,
+      shipType: Math.floor(rngBuild()*3),
+      _state:"future", _anchorPos:null, _anchorIdx:-1, _anchorYaw: rngBuild()*Math.PI*2,
+      isFill: true
+    });
+  }
+  out.sort(function(a,b){ return a.arrive-b.arrive; });
+  return out;
+})();
+
 var _UP = new THREE.Vector3(0,1,0);
 var _shipM4 = new THREE.Matrix4(), _shipQ = new THREE.Quaternion(), _shipV = new THREE.Vector3(), _shipS = new THREE.Vector3();
 var _shipLabelV = new THREE.Vector3();
-function setShipInstance(mesh, idx, x, y, z, yaw, scale){
+var _shipListQ = new THREE.Quaternion(), _shipListAxis = new THREE.Vector3(0,0,1);
+function setShipInstance(mesh, idx, x, y, z, yaw, scale, list){
   _shipQ.setFromAxisAngle(_UP, yaw);
+  if(list){ _shipListQ.setFromAxisAngle(_shipListAxis, list); _shipQ.multiply(_shipListQ); } // permanent heel/list — grounded storeships
   _shipV.set(x,y,z); _shipS.set(scale,scale,scale);
   _shipM4.compose(_shipV,_shipQ,_shipS);
   mesh.setMatrixAt(idx, _shipM4);
@@ -1990,7 +2444,10 @@ function setShipInstance(mesh, idx, x, y, z, yaw, scale){
 
 function updateShips(dt){
   var activeList = [], anchoredCandidates = [];
-  shipVisits.forEach(function(v){
+  // WORLD-P0 fix (coverage-gap fill traffic): merge in the simulated
+  // 1849 fill arrivals unless the provenance ("record only") toggle is on.
+  var allVisits = provenanceOnly ? shipVisits : shipVisits.concat(fillShipVisits);
+  allVisits.forEach(function(v){
     var st = shipDesiredState(v, simDay);
     if(st==="future"){ v._state = st; return; }
     if(st==="done"){
@@ -1998,6 +2455,12 @@ function updateShips(dt){
       v._state = st; return;
     }
     if((st==="sailing_in" || st==="anchored" || st==="sailing_out") && !v._anchorPos){
+      if(v.storeship){
+        // WORLD-P0 fix: named storeships ground at their own documented
+        // spot, not a generic anchorage slot — never allocated/freed from
+        // the shared slot pool.
+        v._anchorPos = v.storeship.pos; v._anchorYaw = 0.3; v._anchorIdx = -2;
+      } else {
       // covers a pre-existing edge case: jumping straight to a URL date (&d=...)
       // that's already past a visit's departure can hit "sailing_out" on its very
       // first-ever evaluation, skipping the "anchored" phase that normally
@@ -2006,15 +2469,25 @@ function updateShips(dt){
       v._anchorIdx = allocAnchorSlot();
       var slot = anchorSlotPos(v._anchorIdx);
       v._anchorPos = slot; v._anchorYaw = slot.yaw; // dispersed-arc slot supplies its own NW-ish jittered heading
+      }
     }
-    if(st==="sailing_out" && v._anchorPos && !v._released){
+    if(st==="sailing_out" && v._anchorPos && !v._released && v._anchorIdx>=0){
       freeAnchorSlot(v._anchorIdx); v._released = true; // slot's free for a new arrival; this visit keeps its own anchorPos to sail from
     }
     v._state = st;
     if(st==="sailing_in" || st==="sailing_out") activeList.push(v);
     else anchoredCandidates.push(v);
   });
-  anchoredCandidates.sort(function(a,b){ return (b.arrive||0)-(a.arrive||0); }); // most recently arrived first
+  // most recently arrived first, but named storeships always sort to the
+  // front so they never fall into the mast-cluster overflow tier — they're
+  // the era's best-documented hulls and must always render as full ships.
+  anchoredCandidates.sort(function(a,b){ return ((b.storeship?1e9:0)+(b.arrive||0)) - ((a.storeship?1e9:0)+(a.arrive||0)); });
+  // hard cap: SHIP_CAP+MAST_CAP is the total instance capacity actually
+  // allocated below (mastClusterMesh has room for MAST_CAP, not
+  // "however many are anchored") — coverage-gap fill traffic can push
+  // anchored count well past that at the 1849 peak, so anything beyond
+  // the cap is dropped here rather than overrunning setMatrixAt().
+  if(anchoredCandidates.length > SHIP_CAP+MAST_CAP) anchoredCandidates.length = SHIP_CAP+MAST_CAP;
   var freeCap = Math.max(0, SHIP_CAP-activeList.length);
   var activeAnchored = anchoredCandidates.slice(0, freeCap);
   var overflow = anchoredCandidates.slice(freeCap);
@@ -2030,7 +2503,7 @@ function updateShips(dt){
       var ahead = shipPathPoint(v, clamp(t+0.02,0,1), true);
       v._yaw = Math.atan2(ahead.x-pos.x, ahead.z-pos.z) || v._anchorYaw;
       sailScale = 1; y = 0.25;
-      labelCandidates.push(v);
+      if(!v.isFill) labelCandidates.push(v); // fill traffic is anonymous — no name/date label, per the coverage-gap voice rule
     } else if(v._state==="sailing_out"){
       var t2 = clamp((simDay-v.depart)/SAIL_OUT_DAYS, 0, 1);
       pos = shipPathPoint(v,t2,false);
@@ -2039,12 +2512,15 @@ function updateShips(dt){
       sailScale = 1; y = 0.25;
     } else { // anchored (active tier)
       pos = v._anchorPos; v._yaw = v._anchorYaw;
-      sailScale = 0.02; y = 0.2+Math.sin(simDay*2+v._anchorIdx)*0.05;
-      if(v.arrive!==null && (simDay-v.arrive)<1) labelCandidates.push(v);
+      // storeships are grounded/deserted, not gently riding at anchor —
+      // near-zero bob, permanent list angle applied below.
+      sailScale = v.storeship ? 0.02 : 0.02;
+      y = v.storeship ? 0.05 : (0.2+Math.sin(simDay*2+v._anchorIdx)*0.05);
+      if(!v.isFill && (v.storeship || (v.arrive!==null && (simDay-v.arrive)<1))) labelCandidates.push(v);
     }
     // route this vessel's instance into its own type-pool (full ship/brig/schooner)
     var ty = v.shipType, idx = typeCounts[ty]++;
-    setShipInstance(shipHullMeshes[ty], idx, pos.x, y, pos.z, v._yaw, 1);
+    setShipInstance(shipHullMeshes[ty], idx, pos.x, y, pos.z, v._yaw, 1, v.storeship && v._state==="anchored" ? v.storeship.list : 0);
     // sail uses a non-uniform Y scale (furled flat when anchored) instead of
     // going through setShipInstance's uniform scale
     _shipQ.setFromAxisAngle(_UP, v._yaw);
@@ -2140,6 +2616,12 @@ var growthBuildingCandidates = (function(){
     // contradict the documented footprint.
     if(u>GEO.streetsU.kearny-8 && u<GEO.streetsU.montgomery+8 &&
        v>GEO.streetsV.clay-8 && v<GEO.streetsV.washington+8) continue;
+    // WORLD-P0 fix (canPlace engine): growth cottages previously only
+    // checked height — now also avoid streets/Mission Road and overlap
+    // with every already-accepted footprint (village buildings, other
+    // growth lots, tents, outposts).
+    if(!canPlace(p.x,p.z,4,{streetMargin:2})) continue;
+    registerPlacement(p.x,p.z,4);
     out.push({ x:p.x, z:p.z, rot:rngBuild()*Math.PI*2, priority: dPlaza+rngBuild()*70 });
   }
   out.sort(function(a,b){ return a.priority-b.priority; });
@@ -2150,7 +2632,15 @@ var growthBuildingCandidates = (function(){
    terrain with the same scatterSample() helper the ground-detail scatter
    above already uses. */
 var tentCandidates = (function(){
-  function tentBiome(x,z,h){ return h>2 && h<78 && farFromVillage(x,z,35); }
+  // WORLD-P0 fix (canPlace engine): tentBiome previously only tested
+  // height/village-distance — now also routes through the shared
+  // canPlace() so tents avoid streets/Mission Road, overlap with village
+  // buildings/outposts, and overlap each other (footprint radius ~2.2m,
+  // matching makeTentGeo()'s ~1.7m cone radius + guy-rope margin).
+  function tentBiome(x,z,h){
+    if(!(h>2 && h<78 && farFromVillage(x,z,35))) return false;
+    return canPlace(x,z,2.2,{streetMargin:2});
+  }
   var clusters = [
     { cx:900, cz:950, r:650, label:"Happy Valley" },                                  // Happy Valley, south of the cove
     { cx:PLAZA_CENTER.x-260, cz:PLAZA_CENTER.z+220, r:380, label:"the town's edge camps" },     // immediate village overflow
@@ -2158,7 +2648,10 @@ var tentCandidates = (function(){
   ];
   var out = [];
   clusters.forEach(function(c){
-    scatterSample(480, c.cx, c.cz, c.r, tentBiome).forEach(function(p){
+    var accepted = scatterSample(480, c.cx, c.cz, c.r, tentBiome);
+    console.log("[verify] tentCandidates cluster '"+c.label+"' accepted "+accepted.length+"/480 at ("+c.cx+","+c.cz+") r="+c.r);
+    accepted.forEach(function(p){
+      registerPlacement(p.x,p.z,2.2);
       out.push({ x:p.x, z:p.z, rot:rngBuild()*Math.PI*2, priority:rngBuild(), label:c.label });
     });
   });
@@ -3258,68 +3751,124 @@ function updateFarScatter(alt){
     scene.add(pathMesh);
   }
 
-  /* ---- wharf-stub + 2 rowboats at the Montgomery St beach ---- */
-  (function buildWharf(){
-    var wharfV = (GEO.streetsV.clay+GEO.streetsV.washington)/2;
-    var landPt = gridToWorld(GEO.streetsU.montgomery, wharfV);
-    // walk east until the ground actually goes underwater — the true shoreline here
-    var lastLandX = landPt.x, x = landPt.x;
-    for(var step=0; step<80; step++){
-      x += 3;
-      if(terrainHeight(x, landPt.z) < 0) break;
-      lastLandX = x;
-    }
-    var waterY = 0.25;
+  /* ---- WHARF GROWTH (WORLD-P0 fix 2026-07-09, AUDIT H1 / GAPS item 5) ----
+     Previously one static mesh, visible unchanged from July 1846 — 18
+     months before any wharf existed (clm:shore:4: Clark's Point wharf,
+     1847, was the first). Rebuilt as a date-gated, growing system:
+       - nothing before fall 1847 (both stub landings + Central Wharf
+         hidden pre-1847-09-01)
+       - small plank landing stages, 1847-48 (the two stub meshes below,
+         now toggled by date instead of always-on)
+       - Central/Long Wharf begins growing May 1849 (corrections.md
+         hedges the exact incorporation date; May 1849 per this file's
+         own comment elsewhere) toward ~800 ft (244m) by late 1849
+         (geography-shoreline.md §4), with a couple of tiny worker
+         figures at the growing tip while under construction (behavior
+         catalog wharf_builder, cheap: reuses makeOutpostPersonGeo-style
+         static figures baked fresh each growth step). */
+  var WHARF_LANDING_START_DAY = eventDateToSimDay("1847-09-01");
+  var CENTRAL_WHARF_START_DAY = eventDateToSimDay("1849-05-01");
+  var CENTRAL_WHARF_FULL_LEN = 244; // ~800 ft
+  var waterY = 0.25;
+  var deckColor = new THREE.Color(0x6e5a3f), pileColor = new THREE.Color(0x4a3c2c);
+
+  /* ---- small landing stages (1847-48): built once, whole-mesh visibility
+     toggled by date rather than geometry regen since they don't grow. ---- */
+  var landingGeoms = [];
+  var wharfV = (GEO.streetsV.clay+GEO.streetsV.washington)/2;
+  var landPt = gridToWorld(GEO.streetsU.montgomery, wharfV);
+  var lastLandX = landPt.x, x = landPt.x;
+  for(var step=0; step<80; step++){ x += 3; if(terrainHeight(x, landPt.z) < 0) break; lastLandX = x; }
+  var deckLen = 16, deckW = 3.2;
+  var deck = makeBoxLocal(deckW, 0.18, deckLen, deckColor);
+  bake(deck, new THREE.Vector3(lastLandX+deckLen/2-1, waterY, landPt.z), Math.PI/2);
+  landingGeoms.push(deck);
+  for(var pi=0;pi<4;pi++){
+    var pile = makeBoxLocal(0.3,1.4,0.3, pileColor);
+    var px = lastLandX + 2 + pi*4.5;
+    bake(pile, new THREE.Vector3(px, waterY-1.2, landPt.z + (pi%2===0?-1.4:1.4)), 0);
+    landingGeoms.push(pile);
+  }
+  var hullColor = new THREE.Color(0x5c4530);
+  [[-6,-3.5,0.3],[-9,3.2,-0.4]].forEach(function(b){
+    var boat = makeBoxLocal(3.2,0.5,1.3, hullColor);
+    bake(boat, new THREE.Vector3(lastLandX+b[0], terrainHeight(lastLandX+b[0], landPt.z+b[1])+0.25, landPt.z+b[1]), b[2]);
+    landingGeoms.push(boat);
+  });
+  var landPt2 = gridToWorld(GEO.streetsU.montgomery, GEO.streetsV.washington);
+  var lastLandX2 = landPt2.x, x2 = landPt2.x;
+  for(var step2=0; step2<80; step2++){ x2 += 3; if(terrainHeight(x2, landPt2.z) < 0) break; lastLandX2 = x2; }
+  var deck2Len = 13, deck2W = 2.6;
+  var deck2 = makeBoxLocal(deck2W, 0.16, deck2Len, deckColor);
+  bake(deck2, new THREE.Vector3(lastLandX2+deck2Len/2-1, waterY, landPt2.z), Math.PI/2);
+  landingGeoms.push(deck2);
+  for(var pj=0;pj<3;pj++){
+    var pile2 = makeBoxLocal(0.28,1.3,0.28, pileColor);
+    var px2 = lastLandX2 + 2 + pj*4.2;
+    bake(pile2, new THREE.Vector3(px2, waterY-1.1, landPt2.z + (pj%2===0?-1.2:1.2)), 0);
+    landingGeoms.push(pile2);
+  }
+  var scowColor = new THREE.Color(0x554330);
+  var scowHull = makeBoxLocal(2.6,0.7,6.5, scowColor);
+  var scowX = lastLandX2-7, scowZ = landPt2.z+6;
+  bake(scowHull, new THREE.Vector3(scowX, terrainHeight(scowX,scowZ)+0.35, scowZ), 0.35);
+  landingGeoms.push(scowHull);
+  window._wharfLandingMesh = new THREE.Mesh(mergeGeoms(landingGeoms), new THREE.MeshPhongMaterial({ vertexColors:true, flatShading:true, specular:0x000000, shininess:0 }));
+  window._wharfLandingMesh.visible = false;
+  scene.add(window._wharfLandingMesh);
+
+  /* ---- Central/Long Wharf: a growing deck, foot of Clay St (corrections.md
+     places this stretch's fill/wharf activity between Sacramento and Clay).
+     Rebuilt (cheap: one thin box + piles + a couple of worker figures)
+     only when the visible length actually changes, not every frame. ---- */
+  var cwZ = gridToWorld(GEO.streetsU.montgomery, GEO.streetsV.clay).z;
+  var cwStartPt = gridToWorld(GEO.streetsU.montgomery, GEO.streetsV.clay);
+  var cwStartX = cwStartPt.x, cwx = cwStartPt.x;
+  for(var cws=0; cws<80; cws++){ cwx += 3; if(terrainHeight(cwx, cwZ) < 0) break; cwStartX = cwx; }
+  window._centralWharfGroup = new THREE.Group();
+  scene.add(window._centralWharfGroup);
+  window._centralWharfLastLen = -1;
+  window._buildCentralWharf = function(lenM){
+    var g = window._centralWharfGroup;
+    while(g.children.length){ g.remove(g.children[0]); }
+    if(lenM<=0) return;
     var geoms = [];
-    var deckColor = new THREE.Color(0x6e5a3f), pileColor = new THREE.Color(0x4a3c2c);
-    var deckLen = 16, deckW = 3.2;
-    var deck = makeBoxLocal(deckW, 0.18, deckLen, deckColor);
-    bake(deck, new THREE.Vector3(lastLandX+deckLen/2-1, waterY, landPt.z), Math.PI/2);
-    geoms.push(deck);
-    for(var pi=0;pi<4;pi++){
-      var pile = makeBoxLocal(0.3,1.4,0.3, pileColor);
-      var px = lastLandX + 2 + pi*4.5;
-      bake(pile, new THREE.Vector3(px, waterY-1.2, landPt.z + (pi%2===0?-1.4:1.4)), 0);
-      geoms.push(pile);
+    var deckW3 = 6.5;
+    var deckMain = makeBoxLocal(deckW3, 0.22, lenM, deckColor);
+    bake(deckMain, new THREE.Vector3(cwStartX+lenM/2, waterY, cwZ), Math.PI/2);
+    geoms.push(deckMain);
+    var pileN = Math.max(2, Math.round(lenM/9));
+    for(var wp=0; wp<pileN; wp++){
+      var wx = cwStartX + 3 + wp*(lenM/pileN);
+      var pileG = makeBoxLocal(0.36,1.7,0.36, pileColor);
+      bake(pileG, new THREE.Vector3(wx, waterY-1.4, cwZ+(wp%2===0?-2.6:2.6)), 0);
+      geoms.push(pileG);
     }
-    // two small rowboats pulled up on the sand just short of the wharf
-    var hullColor = new THREE.Color(0x5c4530);
-    [[-6,-3.5,0.3],[-9,3.2,-0.4]].forEach(function(b){
-      var boat = makeBoxLocal(3.2,0.5,1.3, hullColor);
-      bake(boat, new THREE.Vector3(lastLandX+b[0], terrainHeight(lastLandX+b[0], landPt.z+b[1])+0.25, landPt.z+b[1]), b[2]);
-      geoms.push(boat);
-    });
-
-    /* ---- second landing-stage, foot of Washington St, + a beached scow
-       hauled up hard by it (brief: "a couple of plank landing-stages ...
-       near the foot of Clay/Washington streets" — folded into this same
-       merged mesh, so it costs zero extra draw calls) ---- */
-    var landPt2 = gridToWorld(GEO.streetsU.montgomery, GEO.streetsV.washington);
-    var lastLandX2 = landPt2.x, x2 = landPt2.x;
-    for(var step2=0; step2<80; step2++){
-      x2 += 3;
-      if(terrainHeight(x2, landPt2.z) < 0) break;
-      lastLandX2 = x2;
+    var m = new THREE.Mesh(mergeGeoms(geoms), new THREE.MeshPhongMaterial({ vertexColors:true, flatShading:true, specular:0x000000, shininess:0 }));
+    g.add(m);
+    // a couple of worker figures at the growing tip while under construction
+    // (behavior catalog wharf_builder — cheap static figures, not full sim actors)
+    if(lenM < CENTRAL_WHARF_FULL_LEN*0.98){
+      var wpg = [];
+      placeOutpostPerson(wpg, cwStartX+lenM-3, cwZ-1.6, Math.PI*0.5, 0x3a3226, 0x2a2420, false);
+      placeOutpostPerson(wpg, cwStartX+lenM-6, cwZ+1.8, Math.PI*1.5, 0x36402e, 0x262c1e, false);
+      var wm = new THREE.Mesh(mergeGeoms(wpg), new THREE.MeshPhongMaterial({ vertexColors:true, flatShading:true, specular:0x000000, shininess:0 }));
+      // workers stand ON the deck, not on the (underwater) terrain height placeOutpostPerson used
+      wm.position.y = waterY - terrainHeight(cwStartX+lenM-3, cwZ-1.6);
+      g.add(wm);
     }
-    var deck2Len = 13, deck2W = 2.6;
-    var deck2 = makeBoxLocal(deck2W, 0.16, deck2Len, deckColor);
-    bake(deck2, new THREE.Vector3(lastLandX2+deck2Len/2-1, waterY, landPt2.z), Math.PI/2);
-    geoms.push(deck2);
-    for(var pj=0;pj<3;pj++){
-      var pile2 = makeBoxLocal(0.28,1.3,0.28, pileColor);
-      var px2 = lastLandX2 + 2 + pj*4.2;
-      bake(pile2, new THREE.Vector3(px2, waterY-1.1, landPt2.z + (pj%2===0?-1.2:1.2)), 0);
-      geoms.push(pile2);
+  };
+  window.updateWharfGrowth = function(){
+    window._wharfLandingMesh.visible = simDay >= WHARF_LANDING_START_DAY;
+    var t = clamp((simDay-CENTRAL_WHARF_START_DAY)/(SIM_END_DAY-CENTRAL_WHARF_START_DAY), 0, 1);
+    var lenM = t>0 ? Math.max(6, CENTRAL_WHARF_FULL_LEN*t) : 0;
+    var rounded = Math.round(lenM/2)*2;
+    if(rounded !== window._centralWharfLastLen){
+      window._buildCentralWharf(simDay>=CENTRAL_WHARF_START_DAY ? rounded : 0);
+      window._centralWharfLastLen = rounded;
     }
-    var scowColor = new THREE.Color(0x554330);
-    var scowHull = makeBoxLocal(2.6,0.7,6.5, scowColor);
-    var scowX = lastLandX2-7, scowZ = landPt2.z+6;
-    bake(scowHull, new THREE.Vector3(scowX, terrainHeight(scowX,scowZ)+0.35, scowZ), 0.35);
-    geoms.push(scowHull);
-
-    var wharfMesh = new THREE.Mesh(mergeGeoms(geoms), new THREE.MeshPhongMaterial({ vertexColors:true, flatShading:true, specular:0x000000, shininess:0 }));
-    scene.add(wharfMesh);
-  })();
+  };
+  window.updateWharfGrowth();
 })();
 
 /* =====================================================================
@@ -6050,6 +6599,7 @@ function animate(){
   updateWeather();
   updateWetTint();
   updateShips(dt);
+  updateWharfGrowth();
   updateGrowth();
   updateWaterfrontLife();
   updateTicker();
