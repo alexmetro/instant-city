@@ -1526,10 +1526,13 @@ var ROAD_EDGE_COL = "#cdb87f", ROAD_RUT_COL = "#241a0f";
    edge than the flat-alpha main stroke without the halo dominating the
    intersection; alpha trimmed slightly too so stacked halos at a 4-way
    crossing don't compound into a bright smudge. */
-function paintRoad(targets, pts, widthM, color, alpha){
+function paintRoad(targets, pts, widthM, color, alpha, skipUnderlay){
   alpha = alpha==null?1:alpha;
   targets.forEach(function(t){
-    splatStroke(t.ctx, t.pxFn, t.pxLenFn, pts, widthM*1.22, ROAD_EDGE_COL, alpha*0.34);
+    // SURVEY-GHOST fix (item 7): callers may suppress the pale edge-wear
+    // underlay — a lightening halo is only honest on genuinely worn streets
+    // (paint must never read LIGHTER than the ground on faint tracks).
+    if(!skipUnderlay) splatStroke(t.ctx, t.pxFn, t.pxLenFn, pts, widthM*1.22, ROAD_EDGE_COL, alpha*0.34);
     splatStroke(t.ctx, t.pxFn, t.pxLenFn, pts, widthM, color, alpha);
     if(widthM>=4){ // ruts read as noise on the already-narrow stubs/door-paths; skip those
       var rutOff = widthM*0.19;
@@ -1626,7 +1629,12 @@ var SPLAT_CLUTTER_PATHS = [], SPLAT_LEVELING_CART_PTS = [];
 // ground. Lightened to a legible packed-earth tone (paired with the wider
 // wear underlay above) rather than a flat near-black fill.
 var STREET_DIRT_COL = "#6e5a3c";
-var STREET_STUB_NEAR = {r:0x6e,g:0x5a,b:0x3c}, STREET_STUB_FAR = {r:0x9c,g:0x8c,b:0x63}; // NEAR matches STREET_DIRT_COL
+// SW-BLUR fix (screening #5 item b, 2026-07-10): FAR tone darkened toward
+// ground (0x9c8c63 was a pale lift — item 7's never-lighter rule applies to
+// stubs too), and paintStub below starts at partial alpha + no underlay so
+// the SW corner's converging stub cluster no longer compounds into a
+// dark smear mass at 500-600m.
+var STREET_STUB_NEAR = {r:0x6e,g:0x5a,b:0x3c}, STREET_STUB_FAR = {r:0x7c,g:0x6a,b:0x4a}; // NEAR matches STREET_DIRT_COL
 function lerpHexColor(a,b,t){
   return "rgb("+Math.round(a.r+(b.r-a.r)*t)+","+Math.round(a.g+(b.g-a.g)*t)+","+Math.round(a.b+(b.b-a.b)*t)+")";
 }
@@ -1649,9 +1657,9 @@ function paintStub(targets, uEdge, vEdge, du, dv, width, skewAngle){
     var ub = uEdge+du*STREET_STUB_LEN*((k+1)/STUB_STEPS), vb = vEdge+dv*STREET_STUB_LEN*((k+1)/STUB_STEPS);
     var a = gridToWorldAt(ua,va,skewAngle), b = gridToWorldAt(ub,vb,skewAngle);
     if(terrainHeight(a.x,a.z)<=1.5 || terrainHeight(b.x,b.z)<=1.5) break; // don't run stubs into the bay
-    var w = lerp(width, width*0.35, (k+1)/STUB_STEPS);
+    var w = lerp(width*0.8, width*0.3, (k+1)/STUB_STEPS);
     var col = lerpHexColor(STREET_STUB_NEAR, STREET_STUB_FAR, (k+1)/STUB_STEPS);
-    paintRoad(targets, [a,b], w, col, lerp(1,0,(k+1)/STUB_STEPS));
+    paintRoad(targets, [a,b], w, col, lerp(0.55,0,(k+1)/STUB_STEPS), true); // partial start alpha, no pale underlay (SW-BLUR fix)
   }
 }
 
@@ -1730,7 +1738,10 @@ function renderGroundSplat(skewAngle){
   // Darkened/desaturated toward a believable trodden-dirt tone and
   // dropped to partial alpha so it reads as a worn cart track, not a
   // painted line; width trimmed too (a work path, not a real street).
-  paintSmoothRoute(SPLAT_TARGETS_TOWN_ONLY, SPLAT_LEVELING_CART_PTS, 1.8, "#8f7a54", 0.45, true);
+  // SW-BLUR fix (screening #5 item b): mottle blotches off + alpha trimmed —
+  // the near-black hoofprint dots along this diagonal were half of the
+  // "dark blur-smear mass" read at 500-600m over the SW dune-leveling site.
+  paintSmoothRoute(SPLAT_TARGETS_TOWN_ONLY, SPLAT_LEVELING_CART_PTS, 1.6, "#8f7a54", 0.32, false);
 
   // THE STREET-CHECKPOINT RESET (grounding.md §9): every documented street
   // in STREETS_RUNTIME, era-gated by its own surveyedDay (faint survey
@@ -1745,7 +1756,19 @@ function renderGroundSplat(skewAngle){
   // own comment — its existing curved MISSION_ROAD_PTS handling above
   // already covers it, more faithfully than this dataset entry would.
   var DEFAULT_WORN_DELAY = 365; // fill: streets with no corpus firstMentionDay citation read as worn ~1yr after survey (precedent: LANDMARK_DEFAULT_FOUNDED_ISO elsewhere in this file)
-  var SURVEY_LINE_COL = "#cbb98f", SURVEY_LINE_ALPHA = 0.38, SURVEY_LINE_W_CAP = 2.6;
+  /* SURVEY-GHOST fix (item 7, user report 2026-07-10, s10-default-load):
+     platted-but-unused streets used to paint as crisp uniform CREAM lines
+     BRIGHTER than the sand — reading as a modern GPS/road-map overlay on
+     the 1846 landscape. Rule now encoded: a street's paint may never be
+     LIGHTER than the terrain it sits on (unless it's a documented
+     plank/boardwalk, which none of these are). An unused plat line is a
+     hand-surveyed scratch: narrow (≤~1.5m regardless of the street's real
+     width), slightly DARKER than ground tone, with irregular hashed alpha
+     and gaps along its length, and so faint it nearly vanishes at
+     altitude — grid legibility at 1450m comes from the street labels,
+     not bright lines. Applies equally to the Vioget plat at 1846 and the
+     O'Farrell/Eddy-era plats at their own dates. */
+  var SURVEY_GHOST_COL = "#8f7c55"; // darker than the pale village sand, never lighter
   // WEAR-ON-USE fix (task #28 item 3, 2026-07-11): grounding.md §9's law is
   // "survey line (faint) -> worn track only with use" — this used to snap
   // straight from the faint survey line to a FULLY worn dirt track (alpha
@@ -1771,7 +1794,24 @@ function renderGroundSplat(skewAngle){
     }
     return n;
   }
-  var SURVEY_LINE_RGB = {r:0xcb,g:0xb9,b:0x8f}, STREET_DIRT_RGB = {r:0x6e,g:0x5a,b:0x3c}; // == SURVEY_LINE_COL / STREET_DIRT_COL
+  var SURVEY_GHOST_RGB = {r:0x8f,g:0x7c,b:0x55}, STREET_DIRT_RGB = {r:0x6e,g:0x5a,b:0x3c}; // == SURVEY_GHOST_COL / STREET_DIRT_COL
+  function paintSurveyGhost(targets, pts, widthM, wear){
+    // broken, hand-drawn read: short pieces, hashed alpha, some gaps — no
+    // pale underlay, ever (see SURVEY-GHOST fix comment above)
+    var w = Math.min(widthM*0.35, 1.5);
+    var dx = pts[1].x-pts[0].x, dz = pts[1].z-pts[0].z;
+    var len = Math.hypot(dx,dz);
+    var pieces = Math.max(1, Math.round(len/12));
+    for(var pi=0; pi<pieces; pi++){
+      var t0 = pi/pieces, t1 = (pi+1)/pieces;
+      var mx = pts[0].x+dx*(t0+t1)/2, mz = pts[0].z+dz*(t0+t1)/2;
+      var hh = hash2(mx*0.021, mz*0.021);
+      if(hh > 0.82) continue; // gap — the line is scratched, not vector-drawn
+      var a = (0.06 + hh*0.15) * (0.6 + wear*1.6);
+      var seg = [ {x:pts[0].x+dx*t0, z:pts[0].z+dz*t0}, {x:pts[0].x+dx*t1, z:pts[0].z+dz*t1} ];
+      targets.forEach(function(tg){ splatStroke(tg.ctx, tg.pxFn, tg.pxLenFn, seg, w*(0.7+hh*0.6), SURVEY_GHOST_COL, Math.min(a,0.30)); });
+    }
+  }
   // WATER-LOT STREETS fix (task #28 item 4): a platted line whose ground is
   // still open water/tideflat at the current date (item 1's corrected
   // terrainHeight()) must never render as a normal worn/surveyed street
@@ -1828,12 +1868,19 @@ function renderGroundSplat(skewAngle){
       if(segWet){ paintPierHint(SPLAT_TARGETS_BOTH, segPts, s.widthM); continue; }
       var mid = { x:(segPts[0].x+segPts[1].x)/2, z:(segPts[0].z+segPts[1].z)/2 };
       var densityFactor = clamp01(nearbyBuiltDensity(mid.x,mid.z)/WEAR_FULL_DENSITY);
-      var wear = Math.max(densityFactor, mentionFactor);
+      // SURVEY-GHOST fix (item 7): a corpus mention alone can no longer push
+      // a street through EMPTY land to fully-worn — real wear needs real
+      // frontage. A mentioned-but-unbuilt street tops out as a faint track.
+      var wear = Math.max(densityFactor, mentionFactor * lerp(0.30, 1, densityFactor));
       if(wear>0.5) anyWorn = true;
-      var col = lerpHexColor(SURVEY_LINE_RGB, STREET_DIRT_RGB, wear);
-      var alpha = lerp(SURVEY_LINE_ALPHA, 1, wear);
-      var w = lerp(Math.min(s.widthM, SURVEY_LINE_W_CAP), s.widthM, wear);
-      paintRoad(SPLAT_TARGETS_BOTH, segPts, w, col, alpha);
+      if(wear < 0.30){
+        paintSurveyGhost(SPLAT_TARGETS_BOTH, segPts, s.widthM, wear);
+      } else {
+        var col = lerpHexColor(SURVEY_GHOST_RGB, STREET_DIRT_RGB, wear);
+        var alpha = lerp(0.30, 1, wear);
+        var w = lerp(Math.min(s.widthM*0.5, 3), s.widthM, wear);
+        paintRoad(SPLAT_TARGETS_BOTH, segPts, w, col, alpha, wear<0.6); // pale edge-wear underlay only once genuinely worn
+      }
     }
 
     // Fading sandy stub past the surveyed edge — kept only for the
@@ -2322,6 +2369,15 @@ function updateStreetLabels(alt){
     var ahead = pointAlongWorldPts(pts, Math.min(0.98, slot.t+0.05));
     if(!here || !ahead){ el.style.opacity=0; continue; }
     var wx=here.x, wz=here.z, wy=terrainHeight(wx,wz)+0.3;
+    // WATER-LOT LABEL fix (screening #5 item a, 2026-07-10): a platted
+    // water-lot street whose ground is still open water/tideflat paints
+    // only a dashed pier-hint (see paintPierHint) — its NAME must not
+    // float over open water either. Suppressed while the label's own
+    // anchor point is wet; since the natural-shoreline terrain is the
+    // per-date truth for this sim's whole 1846-49 window (the real fill
+    // is 1851+, past SIM_END_DAY), wet here means wet at every reachable
+    // date — the label simply waits for dry land that never comes in-sim.
+    if(wy-0.3 <= 0){ el.style.opacity=0; continue; }
     _slPos.set(wx,wy,wz).applyMatrix4(camera.matrixWorldInverse);
     if(_slPos.z>-1){ el.style.opacity=0; continue; } // behind the camera
     _slPos.set(wx,wy,wz).project(camera);
@@ -3412,11 +3468,14 @@ function rollTraits(rng){
 var STORESHIP_INFO = (function(){
   var clay = GEO.streetsV.clay, sacramento = GEO.streetsV.sacramento;
   function pos(u,v){ return gridToWorld(u,v); }
+  // chipRank: fixed per-ship vertical stagger step for the always-on name
+  // chips — the four hulks sit within a block of each other, so their
+  // labels stacked/overlapped at most view angles (screening #5 item c).
   return {
-    "Niantic":          { pos: pos(70,  clay-4),        list: 0.16, groundedNote:"grounded at Clay & Sansome" },
-    "General Harrison": { pos: pos(112, clay-2),        list: 0.11, groundedNote:"grounded near Battery St, by the Niantic" },
-    "Euphemia":         { pos: pos(85,  sacramento+4),  list: 0.09, groundedNote:"berthed near Central Wharf, converted to the town jail" },
-    "Apollo":           { pos: pos(128, sacramento+6),  list: 0.14, groundedNote:"beached between Central Wharf and Howison's Pier" }
+    "Niantic":          { pos: pos(70,  clay-4),        list: 0.16, chipRank:0, groundedNote:"grounded at Clay & Sansome" },
+    "General Harrison": { pos: pos(112, clay-2),        list: 0.11, chipRank:1, groundedNote:"grounded near Battery St, by the Niantic" },
+    "Euphemia":         { pos: pos(85,  sacramento+4),  list: 0.09, chipRank:2, groundedNote:"berthed near Central Wharf, converted to the town jail" },
+    "Apollo":           { pos: pos(128, sacramento+6),  list: 0.14, chipRank:3, groundedNote:"beached between Central Wharf and Howison's Pier" }
   };
 })();
 // PRE-RUSH SHIP CURVE fix (task #28, 2026-07-11): "anchored forever once a
@@ -3912,6 +3971,7 @@ function updateShips(dt){
 
   var labelCandidates = [];
   var typeCounts = [0,0,0];
+  var gullTargets = []; // §10.2 gulls: up to 3 ships in camera range (sailing ships sort first in activeList); deserted storeships draw no working-harbor birds
   activeList.forEach(function(v){
     var pos, sailScale, y;
     if(v._state==="sailing_in"){
@@ -3935,6 +3995,10 @@ function updateShips(dt){
       y = v.storeship ? 0.05 : (0.2+Math.sin(simDay*2+v._anchorIdx)*0.05);
       if(!v.isFill && (v.storeship || (v.arrive!==null && (simDay-v.arrive)<1))) labelCandidates.push(v);
     }
+    if(!v.storeship && gullTargets.length<3){
+      var gdx = pos.x-camera.position.x, gdz = pos.z-camera.position.z;
+      if(gdx*gdx+gdz*gdz < 900*900) gullTargets.push({ x:pos.x, z:pos.z, yaw:v._yaw, moving:v._state!=="anchored" });
+    }
     // route this vessel's instance into its own type-pool (full ship/brig/schooner)
     var ty = v.shipType, idx = typeCounts[ty]++;
     setShipInstance(shipHullMeshes[ty], idx, pos.x, y, pos.z, v._yaw, 1, v.storeship && v._state==="anchored" ? v.storeship.list : 0);
@@ -3953,6 +4017,7 @@ function updateShips(dt){
     setShipInstance(mastClusterMesh, i, v._anchorPos.x, 0.2, v._anchorPos.z, v._anchorYaw, 1);
   });
   mastClusterMesh.instanceMatrix.needsUpdate = true;
+  window._gullShips = gullTargets; // read by updateFauna's §10.2 gull flock
 
   // label chips: ship name + date, while sailing and for a day after anchoring (spec §2)
   for(var li=0; li<SHIP_LABEL_POOL; li++){
@@ -3970,7 +4035,10 @@ function updateShips(dt){
     el.textContent = v2.ship.toUpperCase() + (dateStr?(" · "+dateStr):"");
     el.style.opacity = 0.95;
     el.style.left = ((_shipLabelV.x*0.5+0.5)*window.innerWidth)+"px";
-    el.style.top = ((-_shipLabelV.y*0.5+0.5)*window.innerHeight)+"px";
+    // storeship chips get a fixed per-ship vertical stagger so the four
+    // named hulks' always-on labels never stack (screening #5 item c)
+    var chipYOff = (v2.storeship && v2.storeship.chipRank!=null) ? v2.storeship.chipRank*17 : 0;
+    el.style.top = ((-_shipLabelV.y*0.5+0.5)*window.innerHeight + chipYOff)+"px";
     el._visit = v2;
   }
 }
@@ -5320,6 +5388,10 @@ var _declutterSuppressed = new WeakSet();
 var _lastDeclutterRun = 0;
 function _labelHalfSize(el, kind){
   if(kind==="glyph") return { hw:13, hh:13 };
+  // prefer the element's real rendered box (screening #5 item c: the
+  // character-count estimate under-measured wide chips, letting "slight"
+  // overlaps through the declutter); fall back to the estimate pre-layout.
+  if(el.offsetWidth) return { hw: el.offsetWidth/2 + 2, hh: Math.max(11, el.offsetHeight/2 + 2) };
   var len = (el.textContent||"").length;
   return { hw: Math.min(120, 20+len*3.1), hh:11 };
 }
@@ -5732,6 +5804,17 @@ function updateLaundryDay(day){
       if(rh>1) railMatrices.push({x:rx,z:rz,h:rh,rotY:ang});
     }
   });
+  // §10.3 support: the seeded roll above can leave as few as one rail —
+  // top up to 3 with hash2-jittered plaza-front spots (deterministic, and
+  // crucially NOT rngBuild, so the seeded world stream downstream of this
+  // block is byte-identical to before this addition).
+  for(var ri=0; railMatrices.length<3 && ri<clutterAnchors.length; ri++){
+    var ra = clutterAnchors[ri];
+    var hx = ra.x + (hash2(ri*7.1, 3.3)-0.5)*8, hz = ra.z + (hash2(ri*2.9, 8.7)-0.5)*8;
+    var hh2 = terrainHeight(hx,hz);
+    if(hh2>1) railMatrices.push({x:hx, z:hz, h:hh2, rotY: hash2(ri*5.3, 1.9)*Math.PI*2});
+  }
+  window.HITCHING_RAILS = railMatrices; // read by the §10.3 hitching-post horses (fauna layer)
   if(railMatrices.length>0){
     var railGeo = makeHitchingRailGeo();
     var railMesh = new THREE.InstancedMesh(railGeo, new THREE.MeshPhongMaterial({ color:0xffffff, vertexColors:true, flatShading:true, specular:0x000000, shininess:0 }), railMatrices.length);
@@ -5876,24 +5959,68 @@ function updateLaundryDay(day){
   window._centralWharfGroup = new THREE.Group();
   scene.add(window._centralWharfGroup);
   window._centralWharfLastLen = -1;
+  /* TECHNIQUES §4.1 — instanced piles along both deck edges at the
+     historical ~3.5m bay spacing, per-pile rotation/offset/height jitter
+     (deterministic per pile index — hash2, not rng — so a growth rebuild
+     never reshuffles the existing bays), with every ~7th pile standing
+     proud of the deck as a bollard. One InstancedMesh, one draw call. */
+  var CW_PILE_CAP = 200;
+  var cwPileMesh = new THREE.InstancedMesh(makeBoxLocal(0.34,1,0.34, pileColor),
+    new THREE.MeshPhongMaterial({ vertexColors:true, flatShading:true, specular:0x000000, shininess:0 }), CW_PILE_CAP);
+  cwPileMesh.count = 0; scene.add(cwPileMesh);
+  window._cwPileMesh = cwPileMesh; // __P1850.wharf verification hook
+  var _cwM4 = new THREE.Matrix4(), _cwQ = new THREE.Quaternion(), _cwV = new THREE.Vector3(), _cwS = new THREE.Vector3();
+  /* TECHNIQUES §4.2 — plank-age wear gradient "for free": the wharf grew
+     seaward over sim-time, so constructionDay(distanceAlongDeck) is known
+     exactly (the same linear growth updateWharfGrowth drives). Deck planks
+     tint from weathered gray at the shore end (built first) to fresh-cut
+     tan at the working end (built last month) — a wharf that visibly
+     records its own growth history. */
+  var CW_FRESH = new THREE.Color(0xa07f4e), CW_WEATHERED = new THREE.Color(0x777263);
+  function cwConstructionDay(dist){
+    return CENTRAL_WHARF_START_DAY + (dist/CENTRAL_WHARF_FULL_LEN)*(SIM_END_DAY-CENTRAL_WHARF_START_DAY);
+  }
   window._buildCentralWharf = function(lenM){
     var g = window._centralWharfGroup;
     while(g.children.length){ g.remove(g.children[0]); }
-    if(lenM<=0) return;
+    var pileIdx = 0;
+    if(lenM<=0){ cwPileMesh.count = 0; window._centralWharfTip = null; return; }
     var geoms = [];
     var deckW3 = 6.5;
-    var deckMain = makeBoxLocal(deckW3, 0.22, lenM, deckColor);
-    bake(deckMain, new THREE.Vector3(cwStartX+lenM/2, waterY, cwZ), Math.PI/2);
-    geoms.push(deckMain);
-    var pileN = Math.max(2, Math.round(lenM/9));
-    for(var wp=0; wp<pileN; wp++){
-      var wx = cwStartX + 3 + wp*(lenM/pileN);
-      var pileG = makeBoxLocal(0.36,1.7,0.36, pileColor);
-      bake(pileG, new THREE.Vector3(wx, waterY-1.4, cwZ+(wp%2===0?-2.6:2.6)), 0);
-      geoms.push(pileG);
+    var DECK_SEG = 4; // one "plank run" per historical bay-ish module
+    var nSeg = Math.max(1, Math.ceil(lenM/DECK_SEG));
+    for(var si=0; si<nSeg; si++){
+      var segLen = Math.min(DECK_SEG, lenM - si*DECK_SEG);
+      if(segLen<=0) break;
+      var ageT = clamp((simDay - cwConstructionDay(si*DECK_SEG))/150, 0, 1);
+      var segCol = CW_FRESH.clone().lerp(CW_WEATHERED, ageT);
+      // slight per-plank-run value jitter so the gradient reads as planks, not a ramp
+      segCol.multiplyScalar(0.96 + hash2(si*3.7, 1.3)*0.08);
+      var deckSeg = makeBoxLocal(deckW3, 0.22, segLen, segCol);
+      bake(deckSeg, new THREE.Vector3(cwStartX + si*DECK_SEG + segLen/2, waterY, cwZ), Math.PI/2);
+      geoms.push(deckSeg);
     }
     var m = new THREE.Mesh(mergeGeoms(geoms), new THREE.MeshPhongMaterial({ vertexColors:true, flatShading:true, specular:0x000000, shininess:0 }));
     g.add(m);
+    // piles: ~3.5m bays down both edges
+    var BAY = 3.5;
+    for(var bx=1.2; bx<lenM && pileIdx<CW_PILE_CAP-1; bx+=BAY){
+      for(var side=-1; side<=1; side+=2){
+        if(pileIdx>=CW_PILE_CAP) break;
+        var pj = hash2(bx*1.31, side*2.17), pj2 = hash2(bx*2.71, side*0.53);
+        var bollard = (Math.floor(bx/BAY)+ (side>0?3:0)) % 7 === 0;
+        var px = cwStartX + bx + (pj-0.5)*0.5;
+        var pz = cwZ + side*(deckW3/2 - 0.12) + (pj2-0.5)*0.3;
+        _cwQ.setFromAxisAngle(_UP, (pj-0.5)*0.1); // ±3° rotation jitter
+        _cwV.set(px, waterY-2.3, pz);
+        _cwS.set(1, 2.35 + pj2*0.25 + (bollard?0.75:0), 1); // bollards stand proud of the deck
+        _cwM4.compose(_cwV,_cwQ,_cwS);
+        cwPileMesh.setMatrixAt(pileIdx++, _cwM4);
+      }
+    }
+    cwPileMesh.count = pileIdx;
+    cwPileMesh.instanceMatrix.needsUpdate = true;
+    window._centralWharfTip = { x:cwStartX+lenM, z:cwZ, len:lenM, deckW:deckW3 };
     // a couple of worker figures at the growing tip while under construction
     // (behavior catalog wharf_builder — cheap static figures, not full sim actors)
     if(lenM < CENTRAL_WHARF_FULL_LEN*0.98){
@@ -5906,15 +6033,20 @@ function updateLaundryDay(day){
       g.add(wm);
     }
   };
+  window._cwTintEpoch = -1;
   window.updateWharfGrowth = function(){
     window._wharfLandingMesh.visible = simDay >= WHARF_LANDING_START_DAY;
     if(window._townChapelMesh) window._townChapelMesh.visible = simDay >= CHURCH_REVEAL_DAY;
     var t = clamp((simDay-CENTRAL_WHARF_START_DAY)/(SIM_END_DAY-CENTRAL_WHARF_START_DAY), 0, 1);
     var lenM = t>0 ? Math.max(6, CENTRAL_WHARF_FULL_LEN*t) : 0;
     var rounded = Math.round(lenM/2)*2;
-    if(rounded !== window._centralWharfLastLen){
+    // rebuild on growth AND every ~15 sim-days so the §4.2 age gradient
+    // keeps weathering even once a stretch has stopped growing
+    var tintEpoch = Math.floor(simDay/15);
+    if(rounded !== window._centralWharfLastLen || tintEpoch !== window._cwTintEpoch){
       window._buildCentralWharf(simDay>=CENTRAL_WHARF_START_DAY ? rounded : 0);
       window._centralWharfLastLen = rounded;
+      window._cwTintEpoch = tintEpoch;
     }
   };
   window.updateWharfGrowth();
@@ -6439,6 +6571,30 @@ cargoPileMesh.count = 0; scene.add(cargoPileMesh);
 var timberStackMesh = new THREE.InstancedMesh(makeTimberStackGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), Math.max(timberCandidates.length,1));
 timberStackMesh.count = 0; scene.add(timberStackMesh);
 
+/* TECHNIQUES §4.3 — moored-boat variety at the Central Wharf head: 2-3
+   small craft clustered off the working end, believability from parameter
+   noise (per-instance yaw jitter, a slight permanent heel, independent
+   bob phase) rather than hull count. One InstancedMesh; positions ride
+   window._centralWharfTip so the cluster follows the deck as it grows. */
+var WHARF_BOAT_N = 3;
+var wharfBoatMesh = new THREE.InstancedMesh(makeRowboatGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), WHARF_BOAT_N);
+wharfBoatMesh.count = 0; scene.add(wharfBoatMesh);
+var WHARF_BOAT_JIT = [ {dx:-2.5, side:1,  yaw:0.35, heel:0.05, phase:0.0},
+                       {dx:-6.8, side:1,  yaw:-0.5, heel:0.08, phase:2.1},
+                       {dx:-4.2, side:-1, yaw:0.9,  heel:0.04, phase:4.4} ];
+function updateWharfBoats(tSec){
+  var tip = window._centralWharfTip;
+  if(!tip || tip.len<24){ wharfBoatMesh.count = 0; return; }
+  for(var i=0;i<WHARF_BOAT_N;i++){
+    var b = WHARF_BOAT_JIT[i];
+    var bx = tip.x + b.dx, bz = tip.z + b.side*(tip.deckW/2 + 2.6);
+    var by = 0.10 + Math.sin(tSec*0.9 + b.phase)*0.06; // independent bob phase
+    setShipInstance(wharfBoatMesh, i, bx, by, bz, b.yaw, 1, b.heel);
+  }
+  wharfBoatMesh.count = WHARF_BOAT_N;
+  wharfBoatMesh.instanceMatrix.needsUpdate = true;
+}
+
 var spawnedBoats = [], spawnedCargo = [], spawnedTimber = [];
 function waterfrontTargets(pop){
   return {
@@ -6902,6 +7058,59 @@ function nearestSleeperSpot(x,z){
   }
   return best || { x:PLAZA_CENTER.x, z:PLAZA_CENTER.z };
 }
+
+/* =========================================================================
+   TECHNIQUES §7 — SOCIAL CLUSTERS (facing-circle conversation groups).
+   The Sims-style placement rule, no social AI: idle-eligible walkers
+   join/found a cluster at an existing graph anchor (Plaza corners, shop
+   doorways, the wharf head), stand on a jittered circle r = 0.9+0.3·rand,
+   bodies oriented at the group centroid ±20° (never exactly at it), hold
+   20-90 sim-minutes, disperse. Every roll is the counter-based dice
+   (hash(seed, person, day, slot) — behavior-spec.md §3), so cluster
+   membership is identical after any rewind/date-jump; the shared centroid
+   jitter hashes on (anchor, day), not the person, so members of the same
+   day's group agree on where it stands. Voice rule: the only narrative
+   surface is the inspector's _now field ("talking at ..."), never on-
+   screen narration.
+   ========================================================================= */
+var CLUSTER_ANCHORS = (function(){
+  var out = [];
+  ["kearny_clay","kearny_washington","dupont_clay","dupont_washington"].forEach(function(k){
+    var ni = STREET_GRAPH.idx[k];
+    if(ni==null) return;
+    var n = STREET_GRAPH.nodes[ni];
+    out.push({ x:n.x, z:n.z, label:"the "+nearestStreetPair(n.x,n.z)+" corner of the Plaza" });
+  });
+  var wi = STREET_GRAPH.idx.wharf;
+  if(wi!=null){ var wn = STREET_GRAPH.nodes[wi]; out.push({ x:wn.x, z:wn.z, label:"the wharf head" }); }
+  // shop doorways — a step out from the signed storefronts' own facing side
+  SIGN_BUILDING_SPOTS.slice(0,4).forEach(function(s){
+    var fd = (s.d||3)*0.5 + 1.8;
+    out.push({ x:s.x+Math.sin(s.rot)*fd, z:s.z+Math.cos(s.rot)*fd,
+      label:"the "+(s.word ? s.word.toLowerCase() : "shop")+" doorway" });
+  });
+  return out;
+})();
+var CLUSTER_START_HOURS = [8.5, 10, 11.5, 13, 14.5, 16, 17.5]; // quantized so the dice actually co-locate people
+function resolveClusterPlan(slot, day){
+  var dayKey = Math.floor(day);
+  if(slot._clusterDay === dayKey) return;
+  slot._clusterDay = dayKey;
+  var rng = diceRng(slot.id, day, "cluster");
+  if(rng() < 0.60){ slot._cluster = null; return; } // ~40% of ambient walkers pause to talk at some point today
+  var anchorI = Math.floor(rng()*CLUSTER_ANCHORS.length);
+  var anchor = CLUSTER_ANCHORS[anchorI];
+  var h0 = CLUSTER_START_HOURS[Math.floor(rng()*CLUSTER_START_HOURS.length)];
+  var durH = (20 + rng()*70)/60; // 20-90 sim-minutes
+  var r = 0.9 + 0.3*rng();
+  var ang = rng()*Math.PI*2;
+  var faceJit = (rng()-0.5)*(Math.PI/4.5); // ±20° off the centroid — perfect facing reads robotic
+  var carry = !slot.isChild && rng()<0.15; // one mid-errand member stopped to chat, crate still shouldered
+  var ch = cyrb128(seedHashValue()+"|cluster|"+anchorI+"|"+dayKey);
+  var crng = sfc32(ch[0],ch[1],ch[2],ch[3]);
+  slot._cluster = { anchor:anchor, h0:h0, h1:h0+durH, r:r, ang:ang, faceJit:faceJit, carry:carry,
+    cx: anchor.x + (crng()-0.5)*3.0, cz: anchor.z + (crng()-0.5)*3.0 };
+}
 var CONSTRUCTION_SITES = growthBuildingCandidates.slice(0, Math.min(30, growthBuildingCandidates.length))
   .map(function(c,i){ return { key:"construction_"+i, label:"a house going up nearby", x:c.x, z:c.z, activity:"construction" }; });
 function pickConstructionSite(rng){
@@ -7321,6 +7530,266 @@ function updateArrivals(){
   arrivalBoatMesh.count = boatN; arrivalBoatMesh.instanceMatrix.needsUpdate = true;
   arrivalPassengerMesh.count = passN; arrivalPassengerMesh.instanceMatrix.needsUpdate = true;
 }
+/* =========================================================================
+   TECHNIQUES §10 — FAUNA (polish tranche 1). Gated on data/catalog-fauna.json
+   presence verdicts (CANON rider 2): every species below is documented or
+   likely; NO elk (verdict: absent from the peninsula tip), NO whales
+   (verdict: documented absence as a routine sight). Ambient wildlife is
+   steering-behavior instances + spawn gates, never "AI":
+   1. HOGS in the streets — documented (catalog feral_hog, rarity 1; the
+      corpus holds the receipts: CS18470116.1.3 "keep them penned up",
+      CS18470123.1.4 "ANY HOGS found in the streets... TAKEN UP... fined
+      five dollars"). A town-street nuisance from the window's start; the
+      herd THINS after Alcalde Hyde's Jan 24 1847 ordinance takes force —
+      the sim reacting to a documented civic act (behavior-spec §6),
+      approved fill per the CANON riders.
+   2. GULLS — documented presence (catalog gulls, rarity 1); the specific
+      trailing-ships behavior is flagged fill:true in the catalog and is
+      used exactly as approved: a small flock whose target is
+      shipPos + trailing offset, active only when ships are in range.
+   3. HITCHING-POST HORSES — documented (catalog horse_mule_ox, rarity 1);
+      static instances at the existing hitching rails, two-part sine
+      (slow large head-nod + fast small tail-swish) in a vertex-shader
+      patch — no per-frame JS beyond the time uniform.
+   4. QUAIL COVEYS — documented (catalog california_quail, rarity 1, "the
+      best-attested wild bird in the frame"); small ground flocks in the
+      dune-scrub belt that flush when a walker/camera-focus approaches
+      (peck-idle + startle-flee, the standard state pair).
+   True scale: hogs ~1.2m, horses ~2.2m body. All instanced; no labels, no
+   narration (voice rule).
+   ========================================================================= */
+var faunaClock = 0;
+var faunaTimeUniform = { value: 0 };
+var HOG_ORDINANCE_DAY = eventDateToSimDay("1847-01-24"); // CS18470123.1.4
+function makeHogGeo(){
+  var hide = new THREE.Color(0x8a6e55), dark = new THREE.Color(0x5d4a3a);
+  var legs = makeBoxLocal(0.30,0.24,0.72, dark);
+  var body = makeBoxLocal(0.42,0.44,1.0, hide); body.translate(0,0.20,0);
+  var head = makeBoxLocal(0.28,0.30,0.28, hide); head.translate(0,0.26,0.58);
+  var snout = makeBoxLocal(0.13,0.12,0.14, dark); snout.translate(0,0.24,0.74);
+  return mergeGeoms([legs,body,head,snout]); // 4-box hog, ~1.2m nose-to-rump
+}
+var HOG_CAP = 8;
+var hogMesh = new THREE.InstancedMesh(makeHogGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), HOG_CAP);
+hogMesh.count = 0; scene.add(hogMesh);
+// street muck patches the hogs root between — jittered off real street-graph
+// nodes within a couple blocks of the Plaza (seeded, stable per world seed)
+var HOG_MUCK_PATCHES = (function(){
+  var pts = [];
+  for(var i=0;i<STREET_GRAPH.nodes.length && pts.length<7;i++){
+    var n = STREET_GRAPH.nodes[i];
+    if(n.key.indexOf("camp_")===0 || n.key==="mission" || n.key.indexOf("mroad_")===0 || n.key==="wharf") continue;
+    var d = Math.hypot(n.x-PLAZA_CENTER.x, n.z-PLAZA_CENTER.z);
+    if(d>35 && d<210 && rngBuild()<0.4 && terrainHeight(n.x,n.z)>1)
+      pts.push({ x:n.x+(rngBuild()-0.5)*6, z:n.z+(rngBuild()-0.5)*6 });
+  }
+  while(pts.length<4){ // fallback if the node sweep came up short
+    pts.push({ x:PLAZA_CENTER.x+(rngBuild()-0.5)*120, z:PLAZA_CENTER.z+(rngBuild()-0.5)*120 });
+  }
+  return pts;
+})();
+var HOGS = (function(){
+  var out = [];
+  for(var i=0;i<HOG_CAP;i++){
+    var p0 = HOG_MUCK_PATCHES[i % HOG_MUCK_PATCHES.length];
+    out.push({ x:p0.x+(rngBuild()-0.5)*4, z:p0.z+(rngBuild()-0.5)*4,
+      tx:p0.x, tz:p0.z, phase:rngBuild()*Math.PI*2, speed:0.30+rngBuild()*0.12,
+      rooting:true, until: rngBuild()*40 });
+  }
+  return out;
+})();
+// hog head-count: common from the sim's 1846 start; thins (never quite to
+// zero — enforcement was legal, not instantly practical) after the Jan 24
+// 1847 ordinance takes force.
+function hogTargetCount(day){
+  if(day < HOG_ORDINANCE_DAY) return 7;
+  return Math.max(2, 7 - Math.floor((day-HOG_ORDINANCE_DAY)/12));
+}
+function makeGullGeo(){
+  var white = new THREE.Color(0xe9e7df), gray = new THREE.Color(0x9aa0a3);
+  var body = makeBoxLocal(0.10,0.09,0.32, white);
+  function wingTri(sign){
+    var pos = new Float32Array([ 0,0.06,0.10,  sign*0.52,0.10,-0.04,  0,0.06,-0.10 ]);
+    var g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.BufferAttribute(pos,3));
+    return colorizeUniform(g, gray);
+  }
+  return mergeGeoms([body, wingTri(1), wingTri(-1)]); // triangle-wing bird, ~1m span
+}
+var GULL_CAP = 20;
+var gullMesh = new THREE.InstancedMesh(makeGullGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0, side:THREE.DoubleSide}), GULL_CAP);
+gullMesh.count = 0; scene.add(gullMesh);
+function makeHorseGeo(){
+  var bay = new THREE.Color(0x5a3d28), darkBay = new THREE.Color(0x3c2a1c);
+  function part(g){ return g; }
+  var parts = [];
+  [[-0.15,-0.48],[0.15,-0.48],[-0.15,0.42],[0.15,0.42]].forEach(function(o){
+    var leg = makeBoxLocal(0.09,0.84,0.09, darkBay); leg.translate(o[0],0,o[1]);
+    parts.push({g:leg,p:0});
+  });
+  var body = makeBoxLocal(0.44,0.52,1.35, bay); body.translate(0,0.80,0);
+  parts.push({g:body,p:0});
+  var neck = makeBoxLocal(0.16,0.52,0.22, bay); neck.rotateX(-0.5); neck.translate(0,1.18,0.62);
+  parts.push({g:neck,p:1});
+  var head = makeBoxLocal(0.13,0.36,0.18, darkBay); head.rotateX(0.35); head.translate(0,1.38,0.88);
+  parts.push({g:head,p:1});
+  var tail = makeBoxLocal(0.07,0.52,0.09, darkBay); tail.translate(0,0.62,-0.74);
+  parts.push({g:tail,p:2});
+  return mergeGeomsParts(parts); // ~2.2m nose-to-tail, ~1.5m withers (true scale)
+}
+// §10.3: whole animation lives in the vertex shader off one time uniform —
+// aPart 1 = head/neck (slow large nod), aPart 2 = tail (fast small swish),
+// per-instance phase so no two horses sync.
+var hitchedHorseMesh = (function(){
+  var rails = window.HITCHING_RAILS || [];
+  var spots = [];
+  rails.forEach(function(r){
+    if(rngBuild()<0.8){
+      var a = r.rotY;
+      spots.push({ x:r.x+Math.sin(a)*1.0, z:r.z+Math.cos(a)*1.0, yaw:a+Math.PI+(rngBuild()-0.5)*0.4, phase:rngBuild()*Math.PI*2 });
+    }
+  });
+  var n = Math.max(spots.length,1);
+  var geo = makeHorseGeo();
+  var phaseArr = new Float32Array(n);
+  var mat = new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0});
+  mat.onBeforeCompile = function(shader){
+    shader.uniforms.uFaunaTime = faunaTimeUniform;
+    shader.vertexShader = shader.vertexShader
+      .replace("#include <common>", "#include <common>\nattribute float aPart;\nattribute float instancePhase;\nuniform float uFaunaTime;")
+      .replace("#include <begin_vertex>", "#include <begin_vertex>\nfloat headMask = step(0.5,aPart)*(1.0-step(1.5,aPart));\nfloat tailMask = step(1.5,aPart);\ntransformed.y -= headMask*(0.5+0.5*sin(uFaunaTime*0.6+instancePhase))*0.12;\ntransformed.x += tailMask*sin(uFaunaTime*2.8+instancePhase*1.7)*0.09;");
+  };
+  var mesh = new THREE.InstancedMesh(geo, mat, n);
+  var m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), v = new THREE.Vector3(), s = new THREE.Vector3(1,1,1);
+  spots.forEach(function(sp,i){
+    phaseArr[i] = sp.phase;
+    q.setFromAxisAngle(_UP, sp.yaw);
+    v.set(sp.x, terrainHeight(sp.x,sp.z), sp.z);
+    var sc = 0.94+rngBuild()*0.12; s.set(sc,sc,sc);
+    m4.compose(v,q,s);
+    mesh.setMatrixAt(i,m4);
+  });
+  geo.setAttribute("instancePhase", new THREE.InstancedBufferAttribute(phaseArr,1));
+  mesh.count = spots.length;
+  mesh.instanceMatrix.needsUpdate = true;
+  scene.add(mesh);
+  return mesh;
+})();
+function makeQuailGeo(){
+  var brown = new THREE.Color(0x6b5a44), dark = new THREE.Color(0x3a3128);
+  var body = makeBoxLocal(0.12,0.11,0.20, brown);
+  var head = makeBoxLocal(0.06,0.08,0.07, dark); head.translate(0,0.09,0.10);
+  return mergeGeoms([body,head]); // ~0.25m — true quail scale
+}
+var QUAIL_PER_COVEY = 6, QUAIL_COVEYS = 2;
+var quailMesh = new THREE.InstancedMesh(makeQuailGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), QUAIL_PER_COVEY*QUAIL_COVEYS);
+quailMesh.count = 0; scene.add(quailMesh);
+var QUAIL_SITES = (function(){
+  var sites = scatterSample(QUAIL_COVEYS, PLAZA_CENTER.x-750, PLAZA_CENTER.z+120, 520,
+    function(x,z,h){ return h>8 && h<50 && farFromVillage(x,z,60); }, 400);
+  while(sites.length<QUAIL_COVEYS){ var fx=PLAZA_CENTER.x-600-sites.length*90, fz=PLAZA_CENTER.z+220; sites.push({x:fx,z:fz,h:terrainHeight(fx,fz)}); }
+  return sites.map(function(s){ return { x:s.x, z:s.z, flushT:-1, hidden:false, hideUntil:0 }; });
+})();
+var _faunaM4 = new THREE.Matrix4(); // scratch
+function updateFauna(dt){
+  faunaClock += dt;
+  faunaTimeUniform.value = faunaClock;
+  var alt = lastKnownAlt;
+  var nearGround = alt <= 600;
+
+  // ---- hogs (documented; thin after the Jan 1847 ordinance) ----
+  var hogN = nearGround ? Math.min(hogTargetCount(simDay), HOG_CAP) : 0;
+  for(var i=0;i<hogN;i++){
+    var hog = HOGS[i];
+    if(hog.rooting){
+      if(faunaClock > hog.until){
+        hog.rooting = false;
+        var pick = HOG_MUCK_PATCHES[Math.floor(hash2(i*3.3, Math.floor(faunaClock*0.11))*HOG_MUCK_PATCHES.length) % HOG_MUCK_PATCHES.length];
+        hog.tx = pick.x + (hash2(i*1.7, faunaClock)*4-2);
+        hog.tz = pick.z + (hash2(i*2.9, faunaClock)*4-2);
+      }
+    } else {
+      var ddx = hog.tx-hog.x, ddz = hog.tz-hog.z, dd = Math.hypot(ddx,ddz);
+      if(dd < 0.5){ hog.rooting = true; hog.until = faunaClock + 25 + hash2(i, faunaClock)*55; }
+      else { hog.x += (ddx/dd)*hog.speed*dt; hog.z += (ddz/dd)*hog.speed*dt; }
+    }
+    var hy = terrainHeight(hog.x,hog.z);
+    var hyaw = hog.rooting ? (Math.atan2(hog.tx-hog.x||0.1, hog.tz-hog.z||0.1) + Math.sin(faunaClock*0.9+hog.phase)*0.35)
+                           : Math.atan2(hog.tx-hog.x, hog.tz-hog.z);
+    // snout-down rooting bob (per-instance phase, never lockstep) vs level trot
+    var hlean = hog.rooting ? 0.34 + Math.sin(faunaClock*2.2+hog.phase)*0.16 : Math.sin(faunaClock*4.5+hog.phase)*0.04;
+    setPersonInstance(hogMesh, i, hog.x, hy, hog.z, hyaw, hlean, 0, 1);
+  }
+  hogMesh.count = hogN;
+  hogMesh.instanceMatrix.needsUpdate = true;
+
+  // ---- gulls trailing ships (fill:true behavior detail, per catalog note) ----
+  var gShips = window._gullShips || [];
+  var gullN = (alt<=900 && gShips.length>0) ? GULL_CAP : 0;
+  for(var gi=0;gi<gullN;gi++){
+    var tgt = gShips[gi % gShips.length];
+    var gx, gz, gyaw;
+    if(tgt.moving){
+      // trail astern: target = shipPos + trailing offset (+ lateral weave)
+      var trail = 6 + (gi%7)*2.2;
+      var latW = Math.sin(faunaClock*0.8 + gi*1.7)*3.5;
+      gx = tgt.x - Math.sin(tgt.yaw)*trail + Math.cos(tgt.yaw)*latW;
+      gz = tgt.z - Math.cos(tgt.yaw)*trail - Math.sin(tgt.yaw)*latW;
+      gyaw = tgt.yaw + Math.sin(faunaClock*1.3+gi)*0.3;
+    } else {
+      // anchored ship: wheel above it
+      var oa = faunaClock*0.35 + gi*(Math.PI*2/GULL_CAP)*3.7;
+      var orad = 8 + (gi%5)*2.2;
+      gx = tgt.x + Math.cos(oa)*orad;
+      gz = tgt.z + Math.sin(oa)*orad;
+      gyaw = Math.atan2(-Math.sin(oa), Math.cos(oa)); // tangent heading
+    }
+    var gy = 4.5 + 2.2*Math.sin(faunaClock*1.1 + gi*0.9);
+    var flap = Math.sin(faunaClock*5.5 + gi*2.3)*0.45; // wing-rock reads as flapping at distance
+    setPersonInstance(gullMesh, gi, gx, gy, gz, gyaw, 0, flap, 0.9+((gi*37)%10)*0.02);
+  }
+  gullMesh.count = gullN;
+  gullMesh.instanceMatrix.needsUpdate = true;
+
+  // ---- quail coveys in the dune scrub (peck-idle; flush on approach) ----
+  var qIdx = 0;
+  if(nearGround){
+    for(var qc=0; qc<QUAIL_SITES.length; qc++){
+      var site = QUAIL_SITES[qc];
+      var fdx = (CAM.focus.x-site.x), fdz = (CAM.focus.z-site.z);
+      var fd2 = fdx*fdx+fdz*fdz;
+      if(site.hidden){
+        if(fd2 > 50*50 && faunaClock > site.hideUntil){ site.hidden=false; site.flushT=-1; }
+        else continue;
+      }
+      if(site.flushT<0 && fd2 < 22*22) site.flushT = faunaClock; // startle
+      var ft = site.flushT>=0 ? (faunaClock-site.flushT) : -1;
+      if(ft > 1.6){ site.hidden = true; site.hideUntil = faunaClock+30; continue; }
+      for(var qb=0; qb<QUAIL_PER_COVEY; qb++){
+        var qa = qb*(Math.PI*2/QUAIL_PER_COVEY) + qc*1.3;
+        var qx, qz, qy2, qyaw2;
+        if(ft>=0){ // flush: covey explodes outward, low arcing burst
+          var spd = 7;
+          qx = site.x + Math.cos(qa)*(1.2 + ft*spd);
+          qz = site.z + Math.sin(qa)*(1.2 + ft*spd);
+          qy2 = terrainHeight(qx,qz) + ft*3.2*(1.6-ft);
+          qyaw2 = Math.atan2(Math.cos(qa), Math.sin(qa));
+        } else { // mill + peck
+          var mr = 1.0 + ((qb*29)%10)*0.22 + Math.sin(faunaClock*0.13+qb)*0.4;
+          qx = site.x + Math.cos(qa + Math.sin(faunaClock*0.07+qc)*0.5)*mr;
+          qz = site.z + Math.sin(qa + Math.sin(faunaClock*0.07+qc)*0.5)*mr;
+          qy2 = terrainHeight(qx,qz);
+          qyaw2 = qa + Math.sin(faunaClock*0.5+qb)*0.8;
+        }
+        var peck = ft>=0 ? 0 : Math.max(0, Math.sin(faunaClock*3.1+qb*2.2))*0.35;
+        setPersonInstance(quailMesh, qIdx++, qx, qy2, qz, qyaw2, peck, 0, 1);
+      }
+    }
+  }
+  quailMesh.count = qIdx;
+  quailMesh.instanceMatrix.needsUpdate = true;
+}
+
 var HOME_BUILDING_SPOTS = VILLAGE_BUILDING_SPOTS.map(function(spot){
   var boarding = rngBuild()<0.18;
   return { x:spot.x, z:spot.z, y:spot.y, rot:spot.rot, w:spot.w, d:spot.d,
@@ -7365,6 +7834,67 @@ function homeLabelFor(home){
 var ALL_ORIGIN_KEYS = ORIGINS.map(function(o){ return o.key; });
 var ROUTINE_CAP = IS_TOUCH ? 60 : 100;
 var PEOPLE_CAP = IS_TOUCH ? 110 : 180;
+/* Wardrobe palettes (coat, hat) — TECHNIQUES §1.1: ~20 combos crossed from
+   occupation/era cohorts. Era gating rides the population itself: 1849-rush
+   arrival cohorts (origin.earliestDay >= ERA_1849_DAY) draw from the
+   flannel table (red shirts are period-documented; miners' red/blue
+   flannel + drab canvas), merchants/professionals wear black broadcloth,
+   Californios dark jackets (sash noted in research; palette-only here —
+   no new geometry), sailors short dark jackets. Weights fill:true —
+   design judgment from the ledger's cited pattern, not a sourced census.
+   (Defined HERE, above ALL_PEOPLE_SLOTS, because slot generation below
+   consumes these tables at load time.) */
+var WARDROBE = {
+  miner49: [ [0x8a2f23,0x2a241f],[0x2f4468,0x241f1a],[0x8a2f23,0x3a3226],[0x9c8a5e,0x2a2420],[0x2f4468,0x4a3c2c],[0x6e5a3f,0x241f1a] ],
+  merchant:[ [0x1d1b19,0x141210],[0x2c2a28,0x1e1c1a],[0x3b3630,0x201d19] ],
+  californio:[ [0x33261c,0x1c150f],[0x24303a,0x18120d] ],
+  sailor:  [ [0x263043,0x1a1f2c],[0x323c48,0x22262e] ],
+  everyday:[ [0x2c2a28,0x1e1c1a],[0x3a3226,0x2a2420],[0x36402e,0x262c1e],[0x4a4034,0x2a2420],[0x5a4632,0x241f1a] ],
+  female:  [ [0x3a332c,0xcabf98],[0x4a3b33,0xd8cfae],[0x2f3a33,0xc4b691] ]
+};
+var _MERCHANT_CATS = { commerce:1, professional:1, civic:1, press:1, clergy:1, vice_economy:1 };
+function pickWardrobe(occ, origin, isMale, rng){
+  var table;
+  if(!isMale) table = WARDROBE.female;
+  else if(origin && origin.key==="californio" && origin.earliestDay<ERA_1849_DAY) table = WARDROBE.californio;
+  else if(occ && _MERCHANT_CATS[occ.category]) table = WARDROBE.merchant;
+  else if(occ && occ.category==="maritime") table = WARDROBE.sailor;
+  else if(origin && origin.earliestDay>=ERA_1849_DAY) table = rng()<0.75 ? WARDROBE.miner49 : WARDROBE.everyday;
+  else table = WARDROBE.everyday;
+  var pick = table[Math.floor(rng()*table.length)];
+  return { coat:new THREE.Color(pick[0]), hat:new THREE.Color(pick[1]) };
+}
+/* Skin-tone palette — TECHNIQUES §1.2, approved exactly as written (CANON
+   rider 3): a DISCRETE 6-swatch array, tonal variation only, identical
+   mesh. Per-origin weights below are fill:true — shaped from
+   demographics-society.md's documented origin mix (Californio, Anglo,
+   Hawaiian "Kanaka", African American, Chilean, French, Chinese from
+   1848), but the exact tone distributions within each cohort are design
+   assumptions, not sourced statistics. No caricature geometry, ever. */
+var SKIN_TONES = [
+  new THREE.Color(0xe8c39e), new THREE.Color(0xd9b088), new THREE.Color(0xc79a72),
+  new THREE.Color(0xb5825f), new THREE.Color(0x8d6144), new THREE.Color(0x5f4130)
+];
+var SKIN_WEIGHTS_BY_ORIGIN = { /* fill:true (see comment above) */
+  american:  [0.30,0.38,0.24,0.06,0.015,0.005],
+  californio:[0.04,0.18,0.34,0.32,0.10,0.02],
+  black:     [0.00,0.02,0.08,0.20,0.42,0.28],
+  hawaiian:  [0.00,0.06,0.24,0.44,0.22,0.04],
+  french:    [0.34,0.40,0.20,0.05,0.008,0.002],
+  chilean:   [0.03,0.16,0.36,0.32,0.11,0.02],
+  australian:[0.30,0.40,0.22,0.06,0.015,0.005],
+  chinese:   [0.10,0.38,0.38,0.12,0.02,0.00]
+};
+function pickSkinTone(originKey, rng){
+  var w = SKIN_WEIGHTS_BY_ORIGIN[originKey] || SKIN_WEIGHTS_BY_ORIGIN.american;
+  var total=0, i; for(i=0;i<w.length;i++) total+=w[i];
+  var r = rng()*total;
+  for(i=0;i<w.length;i++){ r-=w[i]; if(r<=0) return SKIN_TONES[i]; }
+  return SKIN_TONES[2];
+}
+// pool indices — 0..2 are silhouettes (slot.sil routes there while
+// walking/standing); 3..5 are the pose-library pools (§6).
+var POOL_M=0, POOL_F=1, POOL_CHILD=2, POOL_SEATED=3, POOL_STOOPED=4, POOL_CARRY=5;
 var ALL_PEOPLE_SLOTS = (function(){
   var slots = [], id = 0, missionAssigned = 0, MISSION_TARGET = 5;
 
@@ -7379,7 +7909,11 @@ var ALL_PEOPLE_SLOTS = (function(){
     var occ = (rosterPerson && rosterPerson.occ) ? CATALOG_OCC_BY_ID[rosterPerson.occ] : pickCatalogOccupation(era, origin.key, rngBuild);
     var isMale = isMaleForOccupation(occ, genderMaleFrac(origin.earliestDay), rngBuild);
     if(rosterPerson && rosterPerson.gender==="f") isMale = false;
-    var variant = isMale ? Math.floor(rngBuild()*3) : 3;
+    // TECHNIQUES §1: silhouette + wardrobe palette + discrete skin tone +
+    // ±6% height jitter, all dealt once at slot build (rngBuild, seeded).
+    var sil = isMale ? POOL_M : POOL_F;
+    var wardrobe = pickWardrobe(occ, origin, isMale, rngBuild);
+    var skinC = pickSkinTone(origin.key, rngBuild);
     var traits = rollTraits(rngBuild);
 
     var home = nextHome();
@@ -7436,7 +7970,8 @@ var ALL_PEOPLE_SLOTS = (function(){
     var rosterLastDay  = (rosterPerson && rosterPerson.last)  ? eventDateToSimDay(rosterPerson.last)  : null;
 
     slots.push({
-      id:id++, kind:"routine", origin:origin, gender:isMale?"male":"female", variant:variant,
+      id:id++, kind:"routine", origin:origin, gender:isMale?"male":"female", variant:sil,
+      sil:sil, coatC:wardrobe.coat, hatC:wardrobe.hat, skinC:skinC, _scale:0.94+rngBuild()*0.12,
       occ:occ, roster:rosterPerson, traits:traits, needs:needs, family:family, originTint:originTint,
       sundayGoesToChurch:sundayGoesToChurch, churchPoly:churchPoly,
       lateralJitter:(rngBuild()-0.5)*2.2, clusterOffset:{ x:(rngBuild()-0.5)*3.6, z:(rngBuild()-0.5)*3.6 },
@@ -7446,7 +7981,20 @@ var ALL_PEOPLE_SLOTS = (function(){
       commutePoly:commutePoly, errandPoly:errandPoly, sundayPoly:sundayPoly,
       _midday:null, _doEvening:false, _evening:null, _scheduleDay:-1,
       notBeforeDay: Math.max(rosterFirstDay!=null?rosterFirstDay:0, origin.earliestDay, home.revealDay||0),
-      notAfterDay: rosterLastDay,
+      /* BUGFIX completion (2026-07-10, §6 pose-library verification): the
+         close-range legibility pass's own comment (see the extras loop
+         below) diagnosed that BOTH populations hard-expired at their
+         roster figure's last-documented-mention (~Jan 1849 at the
+         latest), but only extras were fixed. Routine slots kept
+         notAfterDay:rosterLastDay — so the ENTIRE routine cast (the only
+         people with workplaces, schedules, and therefore work/evening
+         poses) vanished before the gold rush: Sept 1849 had zero
+         at-work/seated/stooped figures, only ambient wanderers. Same
+         rationale as the extras fix: the roster name is cosmetic flavor
+         for the inspector card, not the simulated person's sole identity
+         — the LIFE persists; only the name's documented presence window
+         belongs to the record. notBeforeDay (arrival floor) untouched. */
+      notAfterDay: null,
       bio:null, _x:homePos.x, _z:homePos.z, _distSq:1e18, _now:"", _pose:"idle"
     });
   }
@@ -7458,7 +8006,14 @@ var ALL_PEOPLE_SLOTS = (function(){
     var rosterPerson2 = nextRosterPerson(); // real names keep filling density-fill slots after the routine cast (§0: "invented people only beyond the roster")
     var isMale2 = rngBuild() < genderMaleFrac(origin2.earliestDay);
     if(rosterPerson2 && rosterPerson2.gender==="f") isMale2 = false;
-    var variant2 = isMale2 ? Math.floor(rngBuild()*3) : 3;
+    // TECHNIQUES §1.3 child silhouette: a small, era-honest fraction of the
+    // ambient extras are children — weighted toward the more-family-mixed
+    // 1846-48 cohorts, near-absent in the bachelor-dominated 1849 rush
+    // (demographics-society.md gender/household mix; exact rates fill:true).
+    var isChild = rngBuild() < (origin2.earliestDay < ERA_1849_DAY ? 0.06 : 0.015);
+    var sil2 = isChild ? POOL_CHILD : (isMale2 ? POOL_M : POOL_F);
+    var wardrobe2 = pickWardrobe(null, origin2, isMale2, rngBuild);
+    var skinC2 = pickSkinTone(origin2.key, rngBuild);
     // behavior-spec.md item 5: a handful of extras are dedicated Mission
     // Road foot traffic — the "travelers both directions daily" ask —
     // instead of the generic in-town street-graph wander, so the road to
@@ -7474,11 +8029,12 @@ var ALL_PEOPLE_SLOTS = (function(){
     // young-single-men-broke-on-arrival profile); idle/restless poles raise
     // the odds further (fill:true shape — no census of WHO slept rough,
     // only that large numbers did, economy-daily-life.md §1.5).
-    var roughEligible = origin2.earliestDay >= ERA_1849_DAY;
+    var roughEligible = origin2.earliestDay >= ERA_1849_DAY && !isChild;
     var roughChance = roughEligible ? (0.05 + (traits2.work==="idler"?0.10:0) + (traits2.temperament==="restless"?0.08:0)) : 0;
     var sleepsRough = rngBuild() < roughChance;
     slots.push({
-      id:id++, kind:"extra", origin:origin2, gender:isMale2?"male":"female", variant:variant2,
+      id:id++, kind:"extra", origin:origin2, gender:isMale2?"male":"female", variant:sil2,
+      sil:sil2, isChild:isChild, coatC:wardrobe2.coat, hatC:wardrobe2.hat, skinC:skinC2, _scale:0.94+rngBuild()*0.12,
       occ:null, roster:rosterPerson2, traits:traits2, originTint: ORIGIN_TINT[origin2.key]||ORIGIN_TINT.american,
       speed:0.8+rngBuild()*0.7, phaseOffset: rngBuild()*wanderPoly.total*2, lateralJitter:(rngBuild()-0.5)*2.0,
       isLanternCandidate: rngBuild()<0.32, sleepsRough:sleepsRough, _sleepYaw:rngBuild()*Math.PI*2,
@@ -7534,48 +8090,152 @@ function makePersonGeo(coatColor, hatColor, isFemale){
   }
   return mergeGeoms(parts);
 }
-var PERSON_VARIANTS = [
-  { coat:0x2c2a28, hat:0x1e1c1a, female:false },
-  { coat:0x3a3226, hat:0x2a2420, female:false },
-  { coat:0x36402e, hat:0x262c1e, female:false },
-  { coat:0x3a332c, hat:0xcabf98, female:true  }
+
+/* =========================================================================
+   TECHNIQUES §1 (CHARACTER VARIETY) + §6 (POSE LIBRARY), polish tranche 1,
+   2026-07-10. Palette-swap instancing per the ledger: color is applied
+   PER-INSTANCE (three instanced vec3 attributes: coat, skin, hat) against
+   silhouette geometries whose tintable parts are baked WHITE and tagged
+   with an aPart vertex attribute (0=coat, 1=skin/head, 2=hat, 3=fixed
+   baked color, e.g. the carried crate). So ~20 wardrobe palettes x 6
+   discrete skin tones ride on just SIX InstancedMesh pools:
+     0 standing/walking male · 1 standing/walking female · 2 child
+     3 seated · 4 stooped-working · 5 carrying
+   (streetSleeperMesh remains the 7th, pre-existing pose-pool entry.)
+   The child silhouette is the classic read: 0.6 height, proportionally
+   BIGGER head. Pose geos route through the same pool-swap updatePeople()
+   already does for sleepers. NOTHING here is skeletal/VAT (ratified
+   rejection, TECHNIQUES rider 4). ---- */
+var PART_COAT=0, PART_SKIN=1, PART_HAT=2, PART_FIXED=3;
+var _PART_WHITE = new THREE.Color(0xffffff);
+function mergeGeomsParts(parts){ // parts: [{g:geometry, p:partId}] — colors pre-baked (white for tintable parts)
+  var merged = mergeGeoms(parts.map(function(p){ return p.g; }));
+  var arr = new Float32Array(merged.attributes.position.count);
+  var off=0;
+  parts.forEach(function(p){
+    var n = p.g.attributes.position.count;
+    for(var i=0;i<n;i++) arr[off+i]=p.p;
+    off+=n;
+  });
+  merged.setAttribute("aPart", new THREE.BufferAttribute(arr,1));
+  return merged;
+}
+function wp(geo){ return colorizeUniform(geo, _PART_WHITE); } // white tintable part
+function makeStandingMaskedGeo(isFemale){
+  var coat = wp(new THREE.CylinderGeometry(0.20, isFemale?0.30:0.27, 1.15, 6).toNonIndexed());
+  coat.translate(0,0.575,0);
+  var head = wp(new THREE.SphereGeometry(0.15,7,5).toNonIndexed());
+  head.translate(0,1.28,0);
+  var parts = [{g:coat,p:PART_COAT},{g:head,p:PART_SKIN}];
+  if(isFemale){
+    var bonnet = wp(new THREE.SphereGeometry(0.19,7,5,0,Math.PI*2,0,Math.PI*0.62).toNonIndexed());
+    bonnet.translate(0,1.34,0);
+    parts.push({g:bonnet,p:PART_HAT});
+  } else {
+    var crown = wp(new THREE.CylinderGeometry(0.13,0.13,0.14,7).toNonIndexed());
+    crown.translate(0,1.44,0);
+    var brim = wp(new THREE.CylinderGeometry(0.24,0.24,0.03,9).toNonIndexed());
+    brim.translate(0,1.38,0);
+    parts.push({g:crown,p:PART_HAT},{g:brim,p:PART_HAT});
+  }
+  return mergeGeomsParts(parts);
+}
+function makeChildMaskedGeo(){ // ~0.6 adult height, proportionally bigger head (the classic child silhouette)
+  var coat = wp(new THREE.CylinderGeometry(0.12,0.17,0.62,6).toNonIndexed());
+  coat.translate(0,0.31,0);
+  var head = wp(new THREE.SphereGeometry(0.135,7,5).toNonIndexed());
+  head.translate(0,0.79,0);
+  var cap = wp(new THREE.CylinderGeometry(0.15,0.15,0.03,8).toNonIndexed());
+  cap.translate(0,0.90,0);
+  return mergeGeomsParts([{g:coat,p:PART_COAT},{g:head,p:PART_SKIN},{g:cap,p:PART_HAT}]);
+}
+function makeSeatedMaskedGeo(){ // shortened torso + knee box (saloons / shore sitting)
+  var knees = wp(new THREE.BoxGeometry(0.34,0.16,0.44).toNonIndexed());
+  knees.translate(0,0.30,0.22);
+  var torso = wp(new THREE.CylinderGeometry(0.20,0.27,0.66,6).toNonIndexed());
+  torso.translate(0,0.68,0);
+  var head = wp(new THREE.SphereGeometry(0.15,7,5).toNonIndexed());
+  head.translate(0,1.12,0);
+  var crown = wp(new THREE.CylinderGeometry(0.13,0.13,0.13,7).toNonIndexed());
+  crown.translate(0,1.27,0);
+  var brim = wp(new THREE.CylinderGeometry(0.23,0.23,0.03,9).toNonIndexed());
+  brim.translate(0,1.22,0);
+  return mergeGeomsParts([{g:knees,p:PART_COAT},{g:torso,p:PART_COAT},{g:head,p:PART_SKIN},{g:crown,p:PART_HAT},{g:brim,p:PART_HAT}]);
+}
+function makeStoopedMaskedGeo(){ // coat tilted ~35° + forward arm hint — digging/washing/loading
+  var coat = wp(new THREE.CylinderGeometry(0.19,0.27,1.05,6).toNonIndexed());
+  coat.translate(0,0.525,0);
+  coat.rotateX(0.62);
+  var arms = wp(new THREE.BoxGeometry(0.34,0.46,0.12).toNonIndexed());
+  arms.translate(0,0.42,0.52);
+  var head = wp(new THREE.SphereGeometry(0.15,7,5).toNonIndexed());
+  head.translate(0,0.96,0.60);
+  var brim = wp(new THREE.CylinderGeometry(0.23,0.23,0.03,9).toNonIndexed());
+  brim.translate(0,1.08,0.62);
+  return mergeGeomsParts([{g:coat,p:PART_COAT},{g:arms,p:PART_COAT},{g:head,p:PART_SKIN},{g:brim,p:PART_HAT}]);
+}
+function makeCarryMaskedGeo(){ // upright + shoulder crate — occupational storytelling for free
+  var coat = wp(new THREE.CylinderGeometry(0.20,0.27,1.15,6).toNonIndexed());
+  coat.translate(0,0.575,0);
+  var head = wp(new THREE.SphereGeometry(0.15,7,5).toNonIndexed());
+  head.translate(0,1.28,0);
+  var crown = wp(new THREE.CylinderGeometry(0.13,0.13,0.14,7).toNonIndexed());
+  crown.translate(0,1.44,0);
+  var crate = colorizeUniform(new THREE.BoxGeometry(0.34,0.30,0.36).toNonIndexed(), new THREE.Color(0x8a6f47));
+  crate.translate(0.26,1.22,0);
+  return mergeGeomsParts([{g:coat,p:PART_COAT},{g:head,p:PART_SKIN},{g:crown,p:PART_HAT},{g:crate,p:PART_FIXED}]);
+}
+var PERSON_POOL_GEOS = [
+  makeStandingMaskedGeo(false), makeStandingMaskedGeo(true), makeChildMaskedGeo(),
+  makeSeatedMaskedGeo(), makeStoopedMaskedGeo(), makeCarryMaskedGeo()
 ];
-/* PL-B items 3 (subtle origin tint) + 4 (wet-season mud on the lower body):
-   r128 (this app's pinned three.js) predates InstancedMesh.setColorAt
-   (added r131), so both per-instance origin tint AND the mud band are done
-   by hand: a manually-authored InstancedBufferAttribute (instanceTint,
-   written per-frame in updatePeople like every other per-instance value in
-   this file) plus a small onBeforeCompile shader patch that (a) multiplies
-   the baked vertex color by that per-instance tint and (b) darkens/browns
-   any vertex below a local-Y "hem" threshold by uMud — driven straight off
-   the SAME weatherState.wet signal that already tints terrain/streets, so
-   people visibly muddy in the exact rainy stretches the ground already does. */
+// pose -> pose-pool routing (assigned from catalog-activities/worksites:
+// construction & leveling -> stooped; wharf "carry" -> carrying; saloons/
+// evening venues & shore fishing -> seated; everything else stands/walks
+// in its silhouette pool).
+function poolIndexFor(slot){
+  var p = slot._pose;
+  if(p==="carry") return POOL_CARRY;
+  if(p==="construction") return POOL_STOOPED;
+  if(p==="evening" || p==="fish") return POOL_SEATED;
+  return slot.sil || 0;
+}
+/* PL-B item 4 (wet-season mud on the lower body), retained through the §1
+   rework: r128 predates InstancedMesh.setColorAt (r131), so per-instance
+   color rides hand-authored InstancedBufferAttributes (coat/skin/hat,
+   written per-frame in updatePeople) + an onBeforeCompile patch that (a)
+   selects the per-part tint by aPart and (b) muddies hems by uMud — the
+   SAME weatherState.wet signal terrain/streets already tint on. */
 var personMudUniform = { value: 0 };
 function patchPersonMaterial(mesh){
   mesh.material.onBeforeCompile = function(shader){
     shader.uniforms.uMud = personMudUniform;
     shader.vertexShader = shader.vertexShader
-      .replace("#include <common>", "#include <common>\nattribute vec3 instanceTint;\nvarying vec3 vInstanceTint;\nvarying float vLocalY;")
-      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvInstanceTint = instanceTint;\nvLocalY = position.y;");
+      .replace("#include <common>", "#include <common>\nattribute vec3 instanceTint;\nattribute vec3 instanceSkin;\nattribute vec3 instanceHat;\nattribute float aPart;\nvarying vec3 vInstanceTint;\nvarying vec3 vInstanceSkin;\nvarying vec3 vInstanceHat;\nvarying float vPart;\nvarying float vLocalY;")
+      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvInstanceTint = instanceTint;\nvInstanceSkin = instanceSkin;\nvInstanceHat = instanceHat;\nvPart = aPart;\nvLocalY = position.y;");
     shader.fragmentShader = shader.fragmentShader
-      .replace("#include <common>", "#include <common>\nuniform float uMud;\nvarying vec3 vInstanceTint;\nvarying float vLocalY;")
-      .replace("#include <color_fragment>", "#include <color_fragment>\ndiffuseColor.rgb *= vInstanceTint;\n{ float band = 1.0 - smoothstep(0.0, 0.55, vLocalY); float m = band*uMud; diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.30,0.24,0.16), m*0.55); }");
+      .replace("#include <common>", "#include <common>\nuniform float uMud;\nvarying vec3 vInstanceTint;\nvarying vec3 vInstanceSkin;\nvarying vec3 vInstanceHat;\nvarying float vPart;\nvarying float vLocalY;")
+      .replace("#include <color_fragment>", "#include <color_fragment>\n{ vec3 partTint = vPart<0.5 ? vInstanceTint : (vPart<1.5 ? vInstanceSkin : (vPart<2.5 ? vInstanceHat : vec3(1.0)));\ndiffuseColor.rgb *= partTint;\nfloat band = 1.0 - smoothstep(0.0, 0.55, vLocalY); float m = band*uMud; diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.30,0.24,0.16), m*0.55); }");
   };
   mesh.material.needsUpdate = true;
 }
-var personMeshes = PERSON_VARIANTS.map(function(v){
-  var geo = makePersonGeo(new THREE.Color(v.coat), new THREE.Color(v.hat), v.female);
-  var tintArr = new Float32Array(PEOPLE_CAP*3);
-  for(var i=0;i<tintArr.length;i++) tintArr[i] = 1; // default: no tint until updatePeople writes this frame's active instances
-  var tintAttr = new THREE.InstancedBufferAttribute(tintArr, 3);
-  if(tintAttr.setUsage) tintAttr.setUsage(THREE.DynamicDrawUsage); else tintAttr.dynamic = true;
-  geo.setAttribute("instanceTint", tintAttr);
+function makeInstColorAttr(geo, name){
+  var arr = new Float32Array(PEOPLE_CAP*3);
+  for(var i=0;i<arr.length;i++) arr[i]=1;
+  var attr = new THREE.InstancedBufferAttribute(arr, 3);
+  if(attr.setUsage) attr.setUsage(THREE.DynamicDrawUsage); else attr.dynamic = true;
+  geo.setAttribute(name, attr);
+  return attr;
+}
+var personMeshes = PERSON_POOL_GEOS.map(function(geo){
   var mesh = new THREE.InstancedMesh(geo, new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), PEOPLE_CAP);
-  mesh._tintAttr = tintAttr;
+  mesh._coatAttr = makeInstColorAttr(geo, "instanceTint");
+  mesh._skinAttr = makeInstColorAttr(geo, "instanceSkin");
+  mesh._hatAttr  = makeInstColorAttr(geo, "instanceHat");
   patchPersonMaterial(mesh);
   mesh.count = 0; scene.add(mesh); return mesh;
 });
-var personMeshSlots = [[],[],[],[]]; // instanceId -> slot, rebuilt every frame in updatePeople()
+var personMeshSlots = personMeshes.map(function(){ return []; }); // instanceId -> slot, rebuilt every frame in updatePeople()
 var LANTERN_CAP = Math.max(1, Math.round(PEOPLE_CAP*0.3));
 var lanternGlowMesh = new THREE.InstancedMesh(
   colorizeUniform(new THREE.BoxGeometry(0.09,0.13,0.09).toNonIndexed(), new THREE.Color(0xffd27a)),
@@ -7725,6 +8385,19 @@ var POSE_BOB = {
   idle:         { freq:0.8, amp:0.02,  yOff:0 },
   sleep:        { freq:0.3, amp:0.01,  yOff:0 }
 };
+/* TECHNIQUES §6.2 — matrix-compose-only gait: yaw + forward lean (about
+   local X, speed-proportional) + roll sway (about local Z, ±3°) + uniform
+   scale (the §1.3 ±6% height jitter / any future size class). */
+var _pQ = new THREE.Quaternion(), _pQ2 = new THREE.Quaternion(), _pM4 = new THREE.Matrix4(), _pV = new THREE.Vector3(), _pS = new THREE.Vector3();
+var _AXIS_X = new THREE.Vector3(1,0,0), _AXIS_Z = new THREE.Vector3(0,0,1);
+function setPersonInstance(mesh, idx, x, y, z, yaw, lean, roll, scale){
+  _pQ.setFromAxisAngle(_UP, yaw);
+  if(lean){ _pQ2.setFromAxisAngle(_AXIS_X, lean); _pQ.multiply(_pQ2); }
+  if(roll){ _pQ2.setFromAxisAngle(_AXIS_Z, roll); _pQ.multiply(_pQ2); }
+  _pV.set(x,y,z); _pS.set(scale,scale,scale);
+  _pM4.compose(_pV,_pQ,_pS);
+  mesh.setMatrixAt(idx, _pM4);
+}
 function isSundayForDay(day){ return dateFromSimDay(Math.floor(day)).getUTCDay()===0; }
 function sampleWithJitter(poly, t01, lateralJitter){
   var p = pointOnPolyline(poly, clamp(t01,0,1)*poly.total);
@@ -7855,6 +8528,19 @@ function computeExtraPosition(slot, day){
     slot._now = "sleeping rough near "+nearestStreetPair(slot._x,slot._z)+" Streets";
     return;
   }
+  // TECHNIQUES §7: today's dice-planned conversation window (see
+  // resolveClusterPlan above) — a terminal state in the wander machine.
+  resolveClusterPlan(slot, day);
+  var cl = slot._cluster;
+  if(cl && h>=cl.h0 && h<cl.h1){
+    var px = cl.cx + Math.cos(cl.ang)*cl.r, pz = cl.cz + Math.sin(cl.ang)*cl.r;
+    slot._x = px; slot._z = pz;
+    var fd = Math.atan2(cl.cx-px, cl.cz-pz) + cl.faceJit;
+    slot._dx = Math.sin(fd); slot._dz = Math.cos(fd);
+    slot._pose = cl.carry ? "carry" : "idle";
+    slot._now = "talking at "+cl.anchor.label;
+    return;
+  }
   var poly = slot.wanderPoly;
   var dist = peopleClock*slot.speed + slot.phaseOffset;
   var period=poly.total*2, m=((dist%period)+period)%period;
@@ -7911,7 +8597,10 @@ function updatePeople(dt, camX, camZ, alt){
   var active = eligible.slice(0, targetN);
   if(followedSlot && day>=followedSlot.notBeforeDay && active.indexOf(followedSlot)===-1) active.push(followedSlot);
 
-  var counts=[0,0,0,0], slotArrays=[[],[],[],[]], lanternCount=0, sleeperCount=0, shadowCount=0;
+  var NP = personMeshes.length;
+  var counts=[], slotArrays=[];
+  for(var ci=0;ci<NP;ci++){ counts.push(0); slotArrays.push([]); }
+  var lanternCount=0, sleeperCount=0, shadowCount=0;
   var showLanterns = nightFactor>0.5;
   active.forEach(function(s){
     var h = terrainHeight(s._x,s._z);
@@ -7932,19 +8621,34 @@ function updatePeople(dt, camX, camZ, alt){
       sleeperCount++;
       return;
     }
-    var vi = s.variant, idx = counts[vi]++;
+    var vi = poolIndexFor(s), idx = counts[vi];
+    if(idx>=PEOPLE_CAP) return;
+    counts[vi]++;
     var pb = POSE_BOB[s._pose] || POSE_BOB.walk;
     var bob = Math.sin(peopleClock*pb.freq + s.id*0.7)*pb.amp + pb.yOff;
-    setShipInstance(personMeshes[vi], idx, s._x, h+bob, s._z, yaw, 1);
+    // TECHNIQUES §6.2 walk-cycle flavor: per-instance phase (s.id) + ±3°
+    // roll sway + a forward lean proportional to speed — matrix compose
+    // only, no shader work. Non-walkers keep a faint idle sway.
+    var walking = s._pose==="walk";
+    var spd = walking ? (s.kind==="extra" ? 1.2*(s.speed||1) : PERSON_WALK_MPS) : 0;
+    var lean = walking ? clamp(0.03+spd*0.022, 0, 0.09) : 0;
+    var roll = walking ? Math.sin(peopleClock*pb.freq*0.55 + s.id*1.31)*0.052
+                       : Math.sin(peopleClock*0.7 + s.id)*0.012;
+    setPersonInstance(personMeshes[vi], idx, s._x, h+bob, s._z, yaw, lean, roll, s._scale||1);
     slotArrays[vi][idx] = s;
-    var tint = s.originTint || ORIGIN_TINT.american, ta = personMeshes[vi]._tintAttr.array;
-    ta[idx*3]=tint.r; ta[idx*3+1]=tint.g; ta[idx*3+2]=tint.b;
+    var pm = personMeshes[vi];
+    var cc = s.coatC || _PART_WHITE, sc = s.skinC || SKIN_TONE, hc = s.hatC || _PART_WHITE;
+    var ca = pm._coatAttr.array, sa = pm._skinAttr.array, ha = pm._hatAttr.array;
+    ca[idx*3]=cc.r; ca[idx*3+1]=cc.g; ca[idx*3+2]=cc.b;
+    sa[idx*3]=sc.r; sa[idx*3+1]=sc.g; sa[idx*3+2]=sc.b;
+    ha[idx*3]=hc.r; ha[idx*3+1]=hc.g; ha[idx*3+2]=hc.b;
     if(showLanterns && s.isLanternCandidate && lanternCount<LANTERN_CAP){
       setShipInstance(lanternGlowMesh, lanternCount, s._x+Math.sin(yaw+1.4)*0.26, h+0.78, s._z+Math.cos(yaw+1.4)*0.26, 0, 1);
       lanternCount++;
     }
   });
-  personMeshes.forEach(function(m,vi){ m.count=counts[vi]; m.instanceMatrix.needsUpdate=true; m._tintAttr.needsUpdate=true; });
+  personMeshes.forEach(function(m,vi){ m.count=counts[vi]; m.instanceMatrix.needsUpdate=true;
+    m._coatAttr.needsUpdate=true; m._skinAttr.needsUpdate=true; m._hatAttr.needsUpdate=true; });
   personMeshSlots = slotArrays;
   lanternGlowMesh.count = lanternCount;
   lanternGlowMesh.instanceMatrix.needsUpdate = true;
@@ -9245,6 +9949,42 @@ window.__P1850 = {
       boundingSphere: m.boundingSphere ? {x:m.boundingSphere.center.x,y:m.boundingSphere.center.y,z:m.boundingSphere.center.z,r:m.boundingSphere.radius} : null };
   },
   get plazaCenter(){ return { x:PLAZA_CENTER.x, z:PLAZA_CENTER.z }; },
+  get fauna(){
+    return { hogs:hogMesh.count, hogTarget:hogTargetCount(simDay), gulls:gullMesh.count,
+      gullShipsInRange:(window._gullShips||[]).length, horses:hitchedHorseMesh.count,
+      quail:quailMesh.count, muckPatches:HOG_MUCK_PATCHES.length,
+      hogPos:HOGS.slice(0,3).map(function(hg){ return {x:Math.round(hg.x), z:Math.round(hg.z)}; }),
+      horsePos:(window.HITCHING_RAILS||[]).slice(0,3).map(function(r){ return {x:Math.round(r.x), z:Math.round(r.z)}; }),
+      quailSite:QUAIL_SITES.length?{x:Math.round(QUAIL_SITES[0].x), z:Math.round(QUAIL_SITES[0].z)}:null };
+  },
+  get clusters(){
+    var n=0, anchors={};
+    ALL_PEOPLE_SLOTS.forEach(function(s){
+      if(s._now && s._now.indexOf("talking at ")===0){ n++; anchors[s._now.slice(11)]=(anchors[s._now.slice(11)]||0)+1; }
+    });
+    return { talking:n, anchors:anchors, anchorCount:CLUSTER_ANCHORS.length };
+  },
+  get poseHistogram(){
+    var h={}, byKind={routine:{}, extra:{}}, nows={};
+    ALL_PEOPLE_SLOTS.forEach(function(s){
+      if(simDay<s.notBeforeDay) return;
+      h[s._pose]=(h[s._pose]||0)+1;
+      byKind[s.kind][s._pose]=(byKind[s.kind][s._pose]||0)+1;
+      if(s._pose==="idle"){ var k=(s._now||"").slice(0,26); nows[k]=(nows[k]||0)+1; }
+    });
+    return { all:h, byKind:byKind, idleNows:nows };
+  },
+  setHour: function(hFrac){ jumpToDate(Math.floor(simDay)+clamp(hFrac,0,23.9)/24); },
+  get poseCounts(){
+    return { walkM:personMeshes[POOL_M].count, walkF:personMeshes[POOL_F].count,
+      child:personMeshes[POOL_CHILD].count, seated:personMeshes[POOL_SEATED].count,
+      stooped:personMeshes[POOL_STOOPED].count, carrying:personMeshes[POOL_CARRY].count,
+      sleepers:streetSleeperMesh.count };
+  },
+  get wharf(){
+    return { tip:window._centralWharfTip, piles:window._cwPileMesh?window._cwPileMesh.count:0,
+      boats:wharfBoatMesh.count, lastLen:window._centralWharfLastLen };
+  },
   probeTerrain: function(x,z){
     return { h:terrainHeight(x,z), raw:sampleTerrainGrid(x,z), villageY:VILLAGE_Y,
       dOut:distOutsideBox(x,z,VILLAGE_BOX), villageBox:VILLAGE_BOX };
@@ -9785,6 +10525,8 @@ function animate(){
   updateFarScatter(alt);
   updatePeople(dt, camera.position.x, camera.position.z, alt);
   updateArrivals();
+  updateFauna(dt);   // TECHNIQUES §10 — hogs / gulls / hitched horses / quail (era- and verdict-gated)
+  updateWharfBoats(waterUniforms.uTime.value); // TECHNIQUES §4.3 — moored craft bobbing at the wharf head
   updateSmoke(dt);
   updateDistrictZones(alt);
   updateBuildingLabels(alt);
