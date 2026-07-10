@@ -126,6 +126,20 @@
     pointer-events:none;
   }
   .biz-glyph svg{ width:100%; height:100%; display:block; }
+  /* STREET NAME LABELS (rebuilt 2026-07-10 as a DOM/CSS billboard pool —
+     see updateStreetLabels()): constant screen-space size at every
+     altitude, unlike the ground-decal plane it replaces. No chip/background
+     — reads as ink lying on the street itself, via a dark drop-shadow for
+     contrast against both the (now-lighter) daytime dirt tone and the
+     near-black night terrain. */
+  .street-label{
+    position:absolute; transform:translate(-50%,-50%);
+    color:#efe2c4; font-family:'Fraunces', Georgia, serif;
+    font-size:0.62rem; font-weight:600; letter-spacing:2.5px; white-space:nowrap;
+    text-shadow:0 1px 2px rgba(0,0,0,0.85), 0 0 6px rgba(0,0,0,0.55);
+    opacity:0; transition:opacity .25s ease;
+    pointer-events:none;
+  }
   #hud-loading{
     position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
     background:#101418; color:#e8dcb8; font-family:'Fraunces',Georgia,serif;
@@ -527,7 +541,7 @@
     <span class="tdate" id="ticker-date"></span><span id="ticker-text"></span>
   </div>
   <div class="panel" id="hud-hint">
-    drag &mdash; orbit &nbsp;&middot;&nbsp; right-drag / shift-drag &mdash; pan the ground<br>
+    drag &mdash; pan the ground &nbsp;&middot;&nbsp; right-drag &mdash; orbit<br>
     <b>WASD</b> / arrows &mdash; fly (hold <b>Shift</b> to sprint) &nbsp;&middot;&nbsp; <b>Q</b> / <b>E</b> &mdash; rotate &nbsp;&middot;&nbsp; <b>R</b> / <b>F</b> &mdash; altitude<br>
     scroll / pinch &mdash; zoom &nbsp;&middot;&nbsp; tap/click &mdash; inspect &nbsp;&middot;&nbsp; double-tap/dblclick &mdash; fly to &nbsp;&middot;&nbsp; <b>Esc</b> &mdash; release follow<br>
     <b>G</b> &mdash; then/now ghost &nbsp;&middot;&nbsp; <b>T</b> &mdash; sunrise/sunset &nbsp;&middot;&nbsp; <b>P</b> &mdash; documented-only<br>
@@ -774,7 +788,10 @@ var BLOCK_W = 3*LOT_M;                   // ~125.7 m — along Montgomery/Kearny
 var BLOCK_D = 2*LOT_M;                   // ~83.8 m — along the E-W cross streets
 var VIOGET_SKEW_DEG = 2.5;               // "Vioget's error" (geography-shoreline.md §2)
 var VIOGET_SKEW = VIOGET_SKEW_DEG*Math.PI/180;
-var STREET_STUB_LEN = 180;               // sandy-track fade-out length beyond the grid edge
+var STREET_STUB_LEN = 100;               // sandy-track fade-out length beyond the grid edge
+                                          // (shortened 2026-07-10, night-glow fix: the old 180m
+                                          // reach + a color that paled toward bright tan read as
+                                          // radiating bright scratches spiking off the grid edge)
 
 /* Rotates an "ideal" square-grid coordinate (u = ideal east/west, v = ideal
    north/south) into world (x,z) at a GIVEN skew angle. Every street, block
@@ -806,17 +823,28 @@ function gridToWorld(u,v){ return gridToWorldAt(u,v,VIOGET_SKEW); }
    skew angle instead of rotating a mesh group, which sidesteps the whole
    rotation-convention question the old comment worked around. */
 var LAST_SPLAT_SWING_T = -1;
+// LABEL-SKEW-MATCH fix (2026-07-10, iPad field-test defect #5): the current
+// street-grid skew angle, read by updateStreetLabels() every frame so DOM
+// street labels always track the SAME angle renderGroundSplat() just
+// painted the streets at — previously labels were seated once at the fixed
+// VIOGET_SKEW and never updated, visibly diverging from the street paint
+// during the Feb-Aug 1847 grid swing.
+var CURRENT_STREET_SKEW = VIOGET_SKEW;
 function updateGridSwing(){
   var t = clamp((simDay-OFARRELL_SWING_START)/(OFARRELL_SWING_END-OFARRELL_SWING_START), 0, 1);
   // t=0 (pre-Feb 1847): full as-built Vioget skew, same as the buildings.
   // t=1 (post-Aug 1847): skew eased to 0 — the street grid reads
   // true/square while buildings (never re-baked) stay tilted, same as
   // the historical record describes for existing structures versus new
-  // post-survey construction. Re-paints the splat canvases only when t
-  // has actually moved (cheap 2D redraw, but no need to redo it 60x/sec).
+  // post-survey construction.
+  CURRENT_STREET_SKEW = VIOGET_SKEW*(1-t);
+  // Re-paints the splat canvases only when t has actually moved (cheap 2D
+  // redraw, but no need to redo it 60x/sec); CURRENT_STREET_SKEW itself is
+  // still updated above every call so labels stay perfectly in sync even
+  // between repaints.
   if(Math.abs(t-LAST_SPLAT_SWING_T)>0.015 && typeof renderGroundSplat==="function"){
     LAST_SPLAT_SWING_T = t;
-    renderGroundSplat(VIOGET_SKEW*(1-t));
+    renderGroundSplat(CURRENT_STREET_SKEW);
   }
 }
 
@@ -1134,78 +1162,18 @@ function buildScatterMesh(geo, mat, samples, opts){
 }
 function farFromVillage(x,z,margin){ return distOutsideBox(x,z,VILLAGE_BOX) > margin; }
 
-/* Road-surface micro-treatment (A4): paints wheel-rut twin grooves down
-   the center and ragged, noise-broken edge wear directly into a road
-   strip's per-vertex colors, in LOCAL space (before the segment is baked/
-   rotated into the world) so it's cheap and orientation-independent.
-   `mottle` adds extra dark hoofprint-style blotches (used for the Mission
-   Road, per the task brief) on top of the universal rut/edge treatment. */
-function paintRoadVariation(geo, width, len, seed, mottle){
-  var pos = geo.attributes.position, col = geo.attributes.color;
-  var rutCol = new THREE.Color(0x241a0f), wearCol = new THREE.Color(0xdccb98), hoofCol = new THREE.Color(0x241a10);
-  // CLOSE-RANGE LEGIBILITY FIX (2026-07-10): a crisp dark rim right at the
-  // true edge (where the strip meets sand) so the Vioget grid reads as a
-  // distinct shape in mobile screenshots at 100-400m, on top of the
-  // existing worn-lighter band just inboard of it.
-  var edgeRimCol = new THREE.Color(0x2a1d10);
-  var c = new THREE.Color();
-  for(var i=0;i<pos.count;i++){
-    var lx = pos.getX(i), lz = pos.getZ(i);
-    var uAcross = lx/((width||1)/2);
-    c.setRGB(col.getX(i), col.getY(i), col.getZ(i));
-    var rutDist = Math.min(Math.abs(uAcross-0.38), Math.abs(uAcross+0.38));
-    c.lerp(rutCol, (1-smoothstep(0,0.13,rutDist))*0.4); // was 0.11/0.24 — wider + darker so ruts survive altitude/JPEG compression
-    var edgeDist = 1-Math.abs(uAcross);
-    var edgeNoise = hash2(lz*0.6+seed, uAcross*4.3+seed*1.7);
-    c.lerp(wearCol, (1-smoothstep(0,0.24,edgeDist))*(0.35+edgeNoise*0.55)*0.3);
-    c.lerp(edgeRimCol, (1-smoothstep(0,0.05,edgeDist))*0.6);
-    if(mottle){
-      var blotch = hash2(Math.floor(lz*0.18+seed*11), Math.floor(uAcross*5+seed*7));
-      if(blotch>0.7) c.lerp(hoofCol, (blotch-0.7)*2.0);
-    }
-    col.setXYZ(i, c.r, c.g, c.b);
-  }
-  col.needsUpdate = true;
-}
-/* Drapes a single ground-hugging box between two world points, pitched to
-   the local terrain slope and yawed to the segment's heading. Shared by
-   the street grid, its fade-out stubs, and the Mission Road. */
-function drapeGroundSegment(x0,z0,x1,z1,width,color,mottle){
-  var dx=x1-x0, dz=z1-z0;
-  var len = Math.hypot(dx,dz);
-  if(len<0.01) return null;
-  var yaw = Math.atan2(dx,dz);
-  var h0 = terrainHeight(x0,z0), h1 = terrainHeight(x1,z1);
-  if(h0<=1 || h1<=1) console.warn("[verify] road/street segment below land threshold (h0="+h0.toFixed(2)+" h1="+h1.toFixed(2)+")", x0.toFixed(0), z0.toFixed(0), "->", x1.toFixed(0), z1.toFixed(0));
-  var pitch = Math.atan2(h1-h0, len);
-  var cx=(x0+x1)/2, cz=(z0+z1)/2, cy=(h0+h1)/2+0.15;
-  var g = makeBoxLocal(width, 0.12, len, color);
-  paintRoadVariation(g, width, len, hash2(x0*0.013,z0*0.013)*997, mottle);
-  var qPitch = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1,0,0), -pitch);
-  var qYaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), yaw);
-  var q = qYaw.multiply(qPitch); // pitch applied first (local tilt), then yaw (heading)
-  var m = new THREE.Matrix4().compose(new THREE.Vector3(cx,cy,cz), q, new THREE.Vector3(1,1,1));
-  g.applyMatrix4(m);
-  return g;
-}
-/* Subdivides a straight run into ~segLen-long draped pieces so it conforms
-   to the real terrain instead of floating/clipping as one rigid strip,
-   pushing the resulting geometries onto `geoms`. Stops early (returns the
-   point it reached) if the ground drops underwater — used so fade-out
-   stubs and the Mission Road never run off into the bay. `mottle` passes
-   through to paintRoadVariation() for the hoofprint-mottled Mission Road. */
-function drapeGroundStrip(x0,z0,x1,z1,width,color,segLen,geoms,mottle){
-  var dx=x1-x0, dz=z1-z0, len=Math.hypot(dx,dz);
-  var n = Math.max(1, Math.round(len/segLen));
-  for(var s=0;s<n;s++){
-    var t0=s/n, t1=(s+1)/n;
-    var sx0=x0+dx*t0, sz0=z0+dz*t0, sx1=x0+dx*t1, sz1=z0+dz*t1;
-    if(terrainHeight(sx0,sz0)<=1.5 || terrainHeight(sx1,sz1)<=1.5) return false;
-    var g = drapeGroundSegment(sx0,sz0,sx1,sz1,width,color,mottle);
-    if(g) geoms.push(g);
-  }
-  return true;
-}
+/* LEGACY-STREET-MESH fix (2026-07-10): paintRoadVariation()/
+   drapeGroundSegment()/drapeGroundStrip() — the old per-segment raised-box
+   street-mesh pipeline (chained ~30m draped boxes with hand-rolled rut/edge
+   vertex-color variation) — used to be the entire street/road rendering
+   system. The GROUND SPLAT-MAP rebuild below replaced grid streets, their
+   fade-out stubs, and the Mission Road with painted canvas decals; the last
+   two callers (yard-clutter "worn dirt paths" and the dune-leveling cart
+   track) were migrated to SPLAT_CLUTTER_PATHS/SPLAT_LEVELING_CART_PTS
+   (see GROUND SPLAT-MAP, renderGroundSplat()) leaving these three functions
+   with zero callers. Deleted outright rather than left as dead code —
+   grounding.md §9: one street/ground-marking system only, competing logic
+   is deleted, not reconciled. */
 
 /* =====================================================================
    TERRAIN — ONE mesh built directly from the baked 1846 heightmap grid
@@ -1304,9 +1272,22 @@ scene.add(terrainMesh);
    1847 grid-swing progress changes — see updateGridSwing() above, which
    now actually runs (its NaN bug is fixed alongside SIM_START_MS below).
    ===================================================================== */
-var SPLAT_WORLD_RES = 3072, SPLAT_TOWN_RES = 2048;
+var SPLAT_WORLD_RES = 3072, SPLAT_TOWN_RES = 4096;
+// BLUR fix (2026-07-10, iPad field test defect #4): the old pad
+// (STREET_STUB_LEN+80 ≈ 180m) sized the crisp town-tier canvas just barely
+// past the grid's own outer streets. But the "maps-like" mid-zoom camera
+// (300-500m altitude) keeps a mostly-top-down pitch with enough tilt that
+// its ground-plane view frustum reaches 600-700m+ from the plaza at typical
+// yaw/pitch — measured directly by ray-casting the on-screen frustum
+// corners against the ground plane at 500m altitude. That view routinely
+// extended past the old TOWN_BOX edge into the coarse WORLD tier
+// (3072px/12000m ≈ 1 texel/3.9m vs the town tier's ≈1 texel/0.4m — a >9x
+// resolution cliff right at the boundary), reading as a sudden blur exactly
+// where the crisp tier should still cover. Padded out to comfortably clear
+// that measured worst case with margin, and SPLAT_TOWN_RES raised so texel
+// density at the new, larger extent stays close to the original (crisp).
 var TOWN_BOX = (function(){
-  var pad = STREET_STUB_LEN + 80;
+  var pad = 600;
   return { xMin:VILLAGE_BOX.xMin-pad, xMax:VILLAGE_BOX.xMax+pad, zMin:VILLAGE_BOX.zMin-pad, zMax:VILLAGE_BOX.zMax+pad };
 })();
 var TOWN_W = TOWN_BOX.xMax-TOWN_BOX.xMin, TOWN_H = TOWN_BOX.zMax-TOWN_BOX.zMin;
@@ -1364,11 +1345,21 @@ var ROAD_EDGE_COL = "#cdb87f", ROAD_RUT_COL = "#241a0f";
 /* Full straight-run road treatment: pale wide edge-wear underlay, the
    main dirt stroke, then thin dark wheel-rut grooves on top — same
    palette/ratios as the old per-vertex paintRoadVariation(), just
-   painted in 2D. `targets` is a list of {ctx,pxFn,pxLenFn}. */
+   painted in 2D. `targets` is a list of {ctx,pxFn,pxLenFn}.
+   DAYTIME-CONTRAST fix (2026-07-10, iPad field test defect #4): the old
+   per-vertex paintRoadVariation() graduated its pale wearCol in via a wide
+   smoothstep band covering a large fraction of the strip's half-width, so
+   most of a strip actually read as lightened wear, with only a narrow
+   rut/rim staying near-black. This 2D version's pale underlay was only
+   ~15% wider than the solid-alpha main stroke on each side, so the main
+   stroke's flat, fully-opaque fill covered nearly the whole width and the
+   graduated wear look was lost — reading as a solid dark band rather than
+   worn earth. Widened + strengthened the underlay so more of the width
+   shows the lighter wear tone (closer to the old proportions). */
 function paintRoad(targets, pts, widthM, color, alpha){
   alpha = alpha==null?1:alpha;
   targets.forEach(function(t){
-    splatStroke(t.ctx, t.pxFn, t.pxLenFn, pts, widthM*1.3, ROAD_EDGE_COL, alpha*0.28);
+    splatStroke(t.ctx, t.pxFn, t.pxLenFn, pts, widthM*1.6, ROAD_EDGE_COL, alpha*0.42);
     splatStroke(t.ctx, t.pxFn, t.pxLenFn, pts, widthM, color, alpha);
     if(widthM>=4){ // ruts read as noise on the already-narrow stubs/door-paths; skip those
       var rutOff = widthM*0.19;
@@ -1436,19 +1427,46 @@ var SPLAT_TARGETS_TOWN_ONLY = [ { ctx:splatTownCtx, pxFn:townPx, pxLenFn:townPxL
    top-level setup runs. renderGroundSplat() just reads whatever's
    populated at call time; the swing-driven first call (see
    updateGridSwing()) only happens on the first animate() frame, by which
-   point every section below has already run, so nothing is missed. */
+   point every section below has already run, so nothing is missed.
+   SPLAT_CLUTTER_PATHS (yard-clutter -> plaza worn paths) and
+   SPLAT_LEVELING_CART_PTS (dune-leveling cart track) were added 2026-07-10
+   — LEGACY-STREET-MESH fix: these two were the last remaining callers of
+   drapeGroundStrip(), still building raised 3D box-strip meshes after the
+   splat rebuild had already replaced every other ground marking (grid
+   streets, stubs, Mission Road, door-paths) with painted decals. Migrated
+   here rather than deleted outright so the worn-path *feature* survives,
+   just through the one surviving rendering system (grounding.md §9: one
+   street/ground-marking system only). */
 var SPLAT_MISSION_PTS = [], SPLAT_ELCAMINO_PTS = [], SPLAT_DOOR_PATHS = [];
+var SPLAT_CLUTTER_PATHS = [], SPLAT_LEVELING_CART_PTS = [];
 
 var STREET_MAIN_W = 10, STREET_CROSS_W = 7; // Montgomery/Kearny/Dupont/Stockton vs the E-W cross streets
-var STREET_DIRT_COL = "#3d3120";
-var STREET_STUB_NEAR = {r:0x69,g:0x54,b:0x31}, STREET_STUB_FAR = {r:0xcd,g:0xb8,b:0x7f};
+// DAYTIME-CONTRAST fix (2026-07-10, iPad field test defect #4): 0x3d3120
+// was inherited verbatim from the old drapeGroundStrip()-based streets
+// (git history: buildStreets()'s dirtColor was already 0x3d3120 pre-rebuild)
+// — the old strips didn't actually read lighter because of this value, but
+// because paintRoadVariation() graduated a pale wear tone across most of
+// their width (see paintRoad()'s comment above). In isolation, without that
+// wide wear-band, 0x3d3120 reads as near-black against pale sand/village
+// ground. Lightened to a legible packed-earth tone (paired with the wider
+// wear underlay above) rather than a flat near-black fill.
+var STREET_DIRT_COL = "#6e5a3c";
+var STREET_STUB_NEAR = {r:0x6e,g:0x5a,b:0x3c}, STREET_STUB_FAR = {r:0x9c,g:0x8c,b:0x63}; // NEAR matches STREET_DIRT_COL
 function lerpHexColor(a,b,t){
   return "rgb("+Math.round(a.r+(b.r-a.r)*t)+","+Math.round(a.g+(b.g-a.g)*t)+","+Math.round(a.b+(b.b-a.b)*t)+")";
 }
 /* Fading stub past a grid street's surveyed end — same taper as the old
    fadeStub() (STUB_STEPS pieces, narrowing + paling outward), painted as
    canvas strokes at the CURRENT swing skew angle. `du,dv` is a unit
-   direction in grid space. */
+   direction in grid space.
+   NIGHT-GLOW fix (2026-07-10): the far end used to both pale toward a
+   bright tan AND floor out at 50% opacity instead of finishing at zero —
+   so every stub kept a visible bright fleck at its tip no matter how far
+   it faded, which read as radiating scratches spiking off the grid edge
+   at any distance/altitude. STREET_STUB_FAR is now a duller, closer-to-
+   ground tone (not a pale highlight), and alpha now tapers all the way
+   to fully transparent so the stub actually disappears rather than
+   holding at a visible floor. */
 function paintStub(targets, uEdge, vEdge, du, dv, width, skewAngle){
   var STUB_STEPS = 4;
   for(var k=0;k<STUB_STEPS;k++){
@@ -1458,7 +1476,7 @@ function paintStub(targets, uEdge, vEdge, du, dv, width, skewAngle){
     if(terrainHeight(a.x,a.z)<=1.5 || terrainHeight(b.x,b.z)<=1.5) break; // don't run stubs into the bay
     var w = lerp(width, width*0.35, (k+1)/STUB_STEPS);
     var col = lerpHexColor(STREET_STUB_NEAR, STREET_STUB_FAR, (k+1)/STUB_STEPS);
-    paintRoad(targets, [a,b], w, col, lerp(1,0.5,(k+1)/STUB_STEPS));
+    paintRoad(targets, [a,b], w, col, lerp(1,0,(k+1)/STUB_STEPS));
   }
 }
 
@@ -1491,6 +1509,17 @@ function renderGroundSplat(skewAngle){
     paintRoad(SPLAT_TARGETS_TOWN_ONLY, [{x:p.doorX,z:p.doorZ},{x:p.tx,z:p.tz}], 1.1, "#6e5b3c", 0.75);
   });
 
+  // Worn yard-clutter paths toward the plaza — same treatment/color as the
+  // old drapeGroundStrip() mesh they replace (LEGACY-STREET-MESH fix,
+  // 2026-07-10), just painted instead of built as raised boxes.
+  SPLAT_CLUTTER_PATHS.forEach(function(p){
+    paintRoad(SPLAT_TARGETS_TOWN_ONLY, [{x:p.x0,z:p.z0},{x:p.x1,z:p.z1}], 2.2, "#6e5b3c", 0.6);
+  });
+
+  // Dune-leveling cart track — same waypoints/color/mottle the old
+  // drapeGroundStrip() mesh used (LEGACY-STREET-MESH fix, 2026-07-10).
+  paintSmoothRoute(SPLAT_TARGETS_TOWN_ONLY, SPLAT_LEVELING_CART_PTS, 2.4, "#c7a973", 1, true);
+
   // The Vioget/O'Farrell street grid + fading stubs.
   var uVals=[GEO.streetsU.stockton,GEO.streetsU.dupont,GEO.streetsU.kearny,GEO.streetsU.montgomery];
   var vVals=[GEO.streetsV.pacific,GEO.streetsV.jackson,GEO.streetsV.clay,GEO.streetsV.washington,GEO.streetsV.sacramento,GEO.streetsV.california];
@@ -1513,6 +1542,18 @@ function renderGroundSplat(skewAngle){
 
 var splatWorldTex = new THREE.CanvasTexture(splatWorldCanvas); splatWorldTex.flipY=false; splatWorldTex.wrapS=splatWorldTex.wrapT=THREE.ClampToEdgeWrapping;
 var splatTownTex  = new THREE.CanvasTexture(splatTownCanvas);  splatTownTex.flipY=false;  splatTownTex.wrapS=splatTownTex.wrapT=THREE.ClampToEdgeWrapping;
+// NIGHT-GLOW fix, part A (2026-07-10): these canvases are almost entirely
+// transparent (clearRect'd to 0,0,0,0) with small opaque-ish painted
+// street/plaza shapes. Mipmapping a non-premultiplied-alpha texture like
+// this box-filters color and alpha independently, so far-zoomed-out views
+// (which sample deep mip levels) show the painted color bleeding out across
+// the WHOLE transparent canvas as a faint wash — reading as a big halo/disc
+// the size of the canvas itself once contrasted against a near-black night
+// terrain. Decals don't need mip levels (they're single flat overlays, never
+// minified enough within one frame to alias); disabling mipmaps entirely
+// removes the bleed and guarantees the untouched canvas stays truly
+// invisible all the way to its own edge, at every zoom level.
+[splatWorldTex, splatTownTex].forEach(function(t){ t.generateMipmaps = false; t.minFilter = THREE.LinearFilter; });
 
 // World overlay: shares terrainGeo's OWN position/normal buffers (so it
 // is exactly coincident with the terrain, no seam possible) with its own
@@ -1533,7 +1574,7 @@ if(terrainGeo.index) splatWorldGeo.setIndex(terrainGeo.index);
 
 // Town overlay: its own smaller draped grid, real terrainHeight() at
 // each vertex (same sampler as everything else), high effective res.
-var TOWN_SEG = 96;
+var TOWN_SEG = 176; // scaled up with TOWN_BOX's larger pad (2026-07-10) to hold roughly the same per-cell size as before
 var splatTownGeo = new THREE.PlaneGeometry(TOWN_W, TOWN_H, TOWN_SEG, TOWN_SEG);
 splatTownGeo.rotateX(-Math.PI/2);
 splatTownGeo.translate((TOWN_BOX.xMin+TOWN_BOX.xMax)/2, 0, (TOWN_BOX.zMin+TOWN_BOX.zMax)/2);
@@ -1550,13 +1591,40 @@ splatTownGeo.translate((TOWN_BOX.xMin+TOWN_BOX.xMax)/2, 0, (TOWN_BOX.zMin+TOWN_B
   splatTownGeo.computeVertexNormals();
 })();
 
+/* NIGHT-GLOW fix, part B (2026-07-10): the splat decals used to be
+   MeshBasicMaterial, which is unlit — it renders the painted texture at a
+   constant brightness regardless of sun/hemi/ambient intensity, so at night
+   (when updateDayNight() drops those lights toward ~0) the terrain beneath
+   went near-black while the streets kept rendering at full daytime
+   brightness: a glowing tan lattice on a dark field. terrainMat gets its
+   day/night darkening "for free" purely because MeshPhongMaterial responds
+   to scene lighting — there's no separate night-tint uniform or vertex-color
+   bake to replicate. So the fix is the same mechanism, not a parallel one:
+   switch the splat decals to a lit material (Lambert; terrain's Phong runs
+   with specular pinned to black/shininess 0, i.e. already Lambert-equivalent)
+   sharing the exact same sun/hemi/ambient lights terrainMesh uses. Now both
+   surfaces dim together automatically, every frame, with zero drift risk. */
 function makeSplatMaterial(tex, offsetAmt){
-  return new THREE.MeshBasicMaterial({ map:tex, transparent:true, depthWrite:false, polygonOffset:true, polygonOffsetFactor:offsetAmt, polygonOffsetUnits:offsetAmt });
+  return new THREE.MeshLambertMaterial({ map:tex, transparent:true, depthWrite:false, polygonOffset:true, polygonOffsetFactor:offsetAmt, polygonOffsetUnits:offsetAmt });
 }
 var splatWorldMat = makeSplatMaterial(splatWorldTex, -2);
 var splatTownMat  = makeSplatMaterial(splatTownTex, -4); // wins over the world layer where they overlap
 var splatWorldMesh = new THREE.Mesh(splatWorldGeo, splatWorldMat);
 var splatTownMesh  = new THREE.Mesh(splatTownGeo, splatTownMat);
+// TOWN-SQUARE FLICKER fix (2026-07-10): both meshes paint the plaza/street
+// crossing in the SAME place (the grid streets are painted onto BOTH the
+// world and town canvases via SPLAT_TARGETS_BOTH) with nearly coincident
+// geometry (splatTownMesh's flat-pad vertices land on the exact same
+// terrainHeight() as splatWorldMesh's shared terrain vertices there).
+// Three.js sorts transparent objects back-to-front by camera distance, and
+// two near-coincident transparent meshes are a textbook tie: which one
+// resolves "closer" can flip frame-to-frame as the camera moves, and that
+// flip — not just the static polygonOffset bias — is what reads as flicker.
+// Explicit renderOrder makes the draw order deterministic (world always
+// first, town always second) regardless of any per-frame distance tie,
+// so the depth-bias tiering documented above (-2 vs -4) actually holds.
+splatWorldMesh.renderOrder = 1;
+splatTownMesh.renderOrder = 2;
 scene.add(splatWorldMesh);
 scene.add(splatTownMesh);
 
@@ -1835,20 +1903,37 @@ function canPlace(x,z,footprintR,opts){
 
 /* =====================================================================
    STREET NAME LABELS (task #20, data-driven from data/streets-by-year.json
-   via streets-by-year.js): small-caps painted ink text lying flat along
-   each street's own line, repeating on long streets (Google Maps
-   convention), oriented to the street's direction, altitude-gated to the
-   ~120-1200m band where they're legible without cluttering close-in
-   architecture or far-out overview shots. Added directly to the scene at
-   the fixed (never-swinging) Vioget-skew position — like the streets
-   themselves before this rebuild, labels don't yet re-seat through the
-   O'Farrell grid-swing; only the ground-splat street paint does. Only
-   the 10 original Vioget-grid streets have real rendered geometry in
-   this build (this app doesn't yet lay down O'Farrell's later
-   Market/Bush/Pine/Post/Powell additions), so those are the only ones
-   labeled — all present from day one (1846) per the dataset's
-   "vioget-core" category, so no era-gate is needed for them.
-   ===================================================================== */
+   via streets-by-year.js): small-caps text lying along each street's own
+   line, repeating on long streets (Google Maps convention), altitude-gated
+   to the ~120-1200m band where they're legible without cluttering close-in
+   architecture or far-out overview shots. Only the 10 original Vioget-grid
+   streets have real rendered geometry in this build (this app doesn't yet
+   lay down O'Farrell's later Market/Bush/Pine/Post/Powell additions), so
+   those are the only ones labeled — all present from day one (1846) per
+   the dataset's "vioget-core" category, so no era-gate is needed for them.
+
+   REBUILT 2026-07-10 (iPad field-test defect #5) from a world-space
+   ground-decal PlaneGeometry+CanvasTexture per street to a DOM/CSS
+   billboard pool — the same screen-space-constant-size technique this
+   file already uses for building-name labels (updateBuildingLabels) and
+   biz glyphs (updateBizGlyphs), reprojected every frame via
+   camera.project(). That one change fixes BOTH reported problems at once:
+     - GARBLED MICRO-TEXT: a world-space label's on-screen size shrinks
+       with distance/altitude like any other ground decal; across the full
+       120-1200m legible band its real glyph height (a few meters) read as
+       a handful of screen pixels at anything past the near end — tiny,
+       aliased, illegible "micro-text". A DOM label has a fixed CSS font
+       size regardless of altitude, so it's exactly as readable at 1200m as
+       at 120m.
+     - MISALIGNMENT: the old mesh was seated with gridToWorld(), which
+       always bakes in the fixed, never-swinging VIOGET_SKEW — while the
+       street paint itself (renderGroundSplat(), driven by
+       updateGridSwing()) eases that skew down to 0 through 1847. Before
+       the swing completes, the label sat at a visibly different angle
+       than the street it was supposed to name. Recomputing position AND
+       on-screen angle every frame from CURRENT_STREET_SKEW (the same
+       value updateGridSwing() just fed renderGroundSplat()) keeps the
+       label glued to the actual painted street at every date. */
 var STREET_LABELS = [
   { name:"MONTGOMERY STREET", axis:"u", val:GEO.streetsU.montgomery },
   { name:"KEARNY STREET",     axis:"u", val:GEO.streetsU.kearny },
@@ -1861,86 +1946,67 @@ var STREET_LABELS = [
   { name:"SACRAMENTO STREET", axis:"v", val:GEO.streetsV.sacramento },
   { name:"CALIFORNIA STREET", axis:"v", val:GEO.streetsV.california }
 ];
-function makeStreetLabelTexture(text){
-  var cv = document.createElement("canvas");
-  // both dims power-of-two: WebGL1 silently refuses RepeatWrapping (needed
-  // for the "repeats on long streets" look) on a non-power-of-two texture.
-  cv.width = 1024; cv.height = 128;
-  var ctx = cv.getContext("2d");
-  ctx.clearRect(0,0,cv.width,cv.height);
-  ctx.font = "600 46px Georgia, 'Times New Roman', serif";
-  // CONTRAST fix: dark ink over the (now-darkened, see buildStreets())
-  // dirt-road color was nearly invisible — both landed around the same
-  // dark brown. Labels sit ON the street surface, so they need to read
-  // against it: a pale worn-parchment tone instead.
-  // ALPHA fix: fully opaque (no alpha component) — the material uses
-  // alphaTest against a transparent background (see buildStreetLabels()),
-  // and a partial-alpha fill here rendered fully invisible in testing even
-  // though the texture data was correct; solid ink + alpha-cutout mask is
-  // the reliable combination.
-  ctx.fillStyle = "#e1d4b6";
-  ctx.textAlign = "center"; ctx.textBaseline = "middle";
-  // small-caps read: upper-case name, letter-spaced by joining with a thin space
-  var spaced = text.toUpperCase().split("").join(String.fromCharCode(0x2009));
-  ctx.fillText(spaced, cv.width/2, cv.height/2+4);
-  var tex = new THREE.CanvasTexture(cv);
-  tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.ClampToEdgeWrapping;
-  tex.anisotropy = 4;
-  return tex;
-}
-var streetLabelMeshes = [];
-(function buildStreetLabels(){
-  var vSpan=[GEO.streetsV.pacific,GEO.streetsV.california], uSpan=[GEO.streetsU.stockton,GEO.streetsU.montgomery];
-  var REPEAT_UNIT = 55; // meters of street per repeated text instance, Google-Maps style
+var STREET_LABEL_VSPAN = [GEO.streetsV.pacific, GEO.streetsV.california];
+var STREET_LABEL_USPAN = [GEO.streetsU.stockton, GEO.streetsU.montgomery];
+var streetLabelSlots = []; // {el, axis, val, t} — t is the fractional 0..1 position along the run
+(function buildStreetLabelPool(){
+  var hudEl = document.getElementById("hud");
+  var REPEAT_SPACING = 200; // meters between repeated name instances along a long street
+  var MAX_REPS = 3; // bounded DOM pool — plenty for these ~380-420m runs
   STREET_LABELS.forEach(function(st){
     var p0, p1;
-    if(st.axis==="u"){ p0=gridToWorld(st.val, vSpan[0]); p1=gridToWorld(st.val, vSpan[1]); }
-    else { p0=gridToWorld(uSpan[0], st.val); p1=gridToWorld(uSpan[1], st.val); }
-    var dx=p1.x-p0.x, dz=p1.z-p0.z, len=Math.hypot(dx,dz);
-    var yaw = Math.atan2(dx,dz);
-    var tex = makeStreetLabelTexture(st.name);
-    var reps = Math.max(1, Math.round(len/REPEAT_UNIT));
-    tex.repeat.set(reps,1);
-    var geo = new THREE.PlaneGeometry(len, 3.6);
-    geo.rotateX(-Math.PI/2);
-    // ALPHA-BLEND fix: a real transparent+alpha-blended plane over the
-    // street strip rendered fully invisible in testing (confirmed via a
-    // forced-opaque test texture that DID show correctly — position,
-    // rotation, and repeat-tiling were all already right, only the
-    // blended-transparency draw itself failed). alphaTest sidesteps the
-    // whole blend/sort question: draws fully opaque wherever the ink
-    // alpha clears the threshold, discards the pixel otherwise — the
-    // same alpha-cutout trick used for foliage/decals.
-    var mat = new THREE.MeshBasicMaterial({ map:tex, transparent:false, alphaTest:0.3, depthWrite:true, fog:false });
-    var mesh = new THREE.Mesh(geo, mat);
-    var midX=(p0.x+p1.x)/2, midZ=(p0.z+p1.z)/2;
-    // RE-SEAT (2026-07-10, STREET RENDERING REBUILD): the ground-splat
-    // street paint sits at the terrain's own height (no raised drape box
-    // anymore, unlike the old per-segment mesh) — a small fixed lift is
-    // enough to clear it, no more +0.32 fudge needed for a box that no
-    // longer exists.
-    mesh.position.set(midX, terrainHeight(midX,midZ)+0.15, midZ);
-    mesh.rotation.y = yaw;
-    mesh.renderOrder = 1; // paint above the street splat it lies on
-    mesh.visible = false;
-    // NOTE: added directly to scene at the fixed (never-swinging)
-    // Vioget-skew position — gridToWorld() bakes that skew into these
-    // coordinates directly, same as buildings/lots. (The OFARRELL_SWING
-    // NaN bug this comment used to flag is now fixed — see
-    // OFARRELL_SWING_START/END's real definition near SIM_START_MS — but
-    // labels still don't swing with the street paint; a further increment
-    // if that mismatch proves visible after Aug 1847.)
-    scene.add(mesh);
-    streetLabelMeshes.push(mesh);
+    // gridToWorldAt() is a pure rotation (see its own comment) — distance
+    // between two grid points is skew-invariant, so any fixed angle here
+    // gives the same real-world length used only to size the repeat count.
+    if(st.axis==="u"){ p0=gridToWorldAt(st.val,STREET_LABEL_VSPAN[0],VIOGET_SKEW); p1=gridToWorldAt(st.val,STREET_LABEL_VSPAN[1],VIOGET_SKEW); }
+    else { p0=gridToWorldAt(STREET_LABEL_USPAN[0],st.val,VIOGET_SKEW); p1=gridToWorldAt(STREET_LABEL_USPAN[1],st.val,VIOGET_SKEW); }
+    var len = Math.hypot(p1.x-p0.x, p1.z-p0.z);
+    var reps = Math.min(MAX_REPS, Math.max(1, Math.round(len/REPEAT_SPACING)));
+    for(var i=0;i<reps;i++){
+      var el = document.createElement("div");
+      el.className = "street-label";
+      el.textContent = st.name;
+      hudEl.appendChild(el);
+      streetLabelSlots.push({ el:el, axis:st.axis, val:st.val, t:(i+0.5)/reps });
+    }
   });
 })();
 var STREET_LABEL_ALT_MIN=120, STREET_LABEL_ALT_MAX=1200;
+var _slPos = new THREE.Vector3(), _slFwd = new THREE.Vector3();
 function updateStreetLabels(alt){
-  // opaque alphaTest material (see buildStreetLabels() above) has no
-  // blended-opacity fade to animate, so this is a straight on/off gate
-  // across the legible altitude band rather than a soft cross-fade.
   var on = alt>=STREET_LABEL_ALT_MIN && alt<=STREET_LABEL_ALT_MAX;
-  for(var i=0;i<streetLabelMeshes.length;i++) streetLabelMeshes[i].visible = on;
+  if(!on){
+    for(var i=0;i<streetLabelSlots.length;i++) streetLabelSlots[i].el.style.opacity = 0;
+    return;
+  }
+  var skew = CURRENT_STREET_SKEW;
+  for(var j=0;j<streetLabelSlots.length;j++){
+    var s = streetLabelSlots[j], el = s.el;
+    var p0, p1;
+    if(s.axis==="u"){ p0=gridToWorldAt(s.val,STREET_LABEL_VSPAN[0],skew); p1=gridToWorldAt(s.val,STREET_LABEL_VSPAN[1],skew); }
+    else { p0=gridToWorldAt(STREET_LABEL_USPAN[0],s.val,skew); p1=gridToWorldAt(STREET_LABEL_USPAN[1],s.val,skew); }
+    var wx=lerp(p0.x,p1.x,s.t), wz=lerp(p0.z,p1.z,s.t), wy=terrainHeight(wx,wz)+0.3;
+    _slPos.set(wx,wy,wz).applyMatrix4(camera.matrixWorldInverse);
+    if(_slPos.z>-1){ el.style.opacity=0; continue; } // behind the camera
+    _slPos.set(wx,wy,wz).project(camera);
+    if(_slPos.x<-1.05||_slPos.x>1.05||_slPos.y<-1.05||_slPos.y>1.05){ el.style.opacity=0; continue; }
+    var sx=(_slPos.x*0.5+0.5)*window.innerWidth, sy=(-_slPos.y*0.5+0.5)*window.innerHeight;
+    // a second point a short way further along the SAME current-skew run
+    // gives the true on-screen (perspective-correct) angle to rotate the
+    // DOM label by, so it visually lies along the street as drawn, not
+    // just its flat world-space yaw.
+    var tf = Math.min(0.98, s.t+0.05);
+    var fx=lerp(p0.x,p1.x,tf), fz=lerp(p0.z,p1.z,tf), fy=terrainHeight(fx,fz)+0.3;
+    _slFwd.set(fx,fy,fz).project(camera);
+    var fsx=(_slFwd.x*0.5+0.5)*window.innerWidth, fsy=(-_slFwd.y*0.5+0.5)*window.innerHeight;
+    var screenAngle = Math.atan2(fsy-sy, fsx-sx)*180/Math.PI;
+    // keep text upright (never upside-down) regardless of view direction
+    if(screenAngle>90) screenAngle-=180; else if(screenAngle<-90) screenAngle+=180;
+    el.style.opacity = 0.92;
+    el.style.left = sx+"px";
+    el.style.top = sy+"px";
+    el.style.transform = "translate(-50%,-50%) rotate("+screenAngle.toFixed(2)+"deg)";
+  }
 }
 
 /* =====================================================================
@@ -3142,7 +3208,7 @@ function shipDesiredState(v, day){
 /* =====================================================================
    SHIP HULL/SAIL PREFABS (QA-GATE ships rebuild, 2026-07): length runs
    along local Z, bow at +Z, to match this file's existing
-   yaw=atan2(dx,dz) convention (see drapeGroundSegment above). Each of the
+   yaw=atan2(dx,dz) convention used throughout this file. Each of the
    3 vessel types gets its own hull (with a sheer line — raised bow block,
    lower raised stern block, instead of a flat box — plus a raked
    bowsprit) and its own sail rig, so the fleet reads as mixed shipping
@@ -3950,11 +4016,13 @@ var zoneFrag = [
   "uniform vec3 uColor;",
   "uniform vec3 uRim;",
   "uniform float uOpacity;",
+  "uniform float uNightFactor;", // NIGHT-GLOW fix (2026-07-10): see updateDistrictZones()
   "varying float vMask;",
   "void main(){",
   "  #include <logdepthbuf_fragment>",
   "  float edge = clamp(fwidth(vMask)*4.0, 0.0, 1.0);", // steep-gradient rim (real coastline/radial edge)
   "  vec3 col = mix(uColor, uRim, edge*0.85);",
+  "  col *= mix(1.0, 0.14, uNightFactor);", // same order of magnitude as terrain's night ambient/hemi falloff
   "  gl_FragColor = vec4(col, vMask*uOpacity);",
   "}"
 ].join("\n");
@@ -3993,7 +4061,7 @@ function buildZoneGeometry(z){
     var col = new THREE.Color(z.color);
     var rim = col.clone().lerp(new THREE.Color(0x2b1d0e), 0.55);
     var mat = new THREE.ShaderMaterial({
-      uniforms:{ uColor:{value:col}, uRim:{value:rim}, uOpacity:{value:0} },
+      uniforms:{ uColor:{value:col}, uRim:{value:rim}, uOpacity:{value:0}, uNightFactor:{value:0} },
       vertexShader:zoneVert, fragmentShader:zoneFrag,
       transparent:true, depthWrite:false,
       extensions:{ derivatives:true }
@@ -4012,6 +4080,7 @@ function updateDistrictZones(alt){
     var revealed = z.revealDay<0 || simDay>=z.revealDay;
     var op = revealed ? cartoT : 0;
     z.tintMesh.material.uniforms.uOpacity.value = op*0.42;
+    z.tintMesh.material.uniforms.uNightFactor.value = nightFactor; // NIGHT-GLOW fix (2026-07-10): these were a raw unlit ShaderMaterial — full brightness at any hour, reading as a glowing halo/disc at night. nightFactor is the same day/night global updateDayNight() already drives terrain/splat dimming from.
     z.tintMesh.visible = op>0.01;
     if(op<0.01){ z.el.style.opacity=0; return; }
     _zoneV.copy(z.pos).applyMatrix4(camera.matrixWorldInverse);
@@ -5109,17 +5178,17 @@ function updateLaundryDay(day){
     scene.add(laundryClothMesh);
   }
 
-  /* ---- worn dirt paths: darker decal strips from yards toward the plaza ---- */
-  var pathGeoms = [];
-  var pathColor = new THREE.Color(0x6e5b3c);
+  /* ---- worn dirt paths: darker decal strips from yards toward the plaza.
+     LEGACY-STREET-MESH fix (2026-07-10): this used to build its own raised
+     drapeGroundStrip() box mesh — one of the last survivors of the old
+     per-segment street technique the splat rebuild was supposed to fully
+     replace. Now just collects the same two endpoints per anchor into
+     SPLAT_CLUTTER_PATHS; renderGroundSplat() (GROUND SPLAT-MAP, near the
+     terrain build) paints them with the same color/width as before. ---- */
   clutterAnchors.forEach(function(a){
     var toward = { x: lerp(a.x, PLAZA_CENTER.x, 0.32), z: lerp(a.z, PLAZA_CENTER.z, 0.32) };
-    drapeGroundStrip(a.x, a.z, toward.x, toward.z, 2.2, pathColor, 12, pathGeoms);
+    SPLAT_CLUTTER_PATHS.push({ x0:a.x, z0:a.z, x1:toward.x, z1:toward.z });
   });
-  if(pathGeoms.length>0){
-    var pathMesh = new THREE.Mesh(mergeGeoms(pathGeoms), new THREE.MeshPhongMaterial({ vertexColors:true, flatShading:true, transparent:true, opacity:0.7, specular:0x000000, shininess:0 }));
-    scene.add(pathMesh);
-  }
 
   /* ---- WHARF GROWTH (WORLD-P0 fix 2026-07-09, AUDIT H1 / GAPS item 5) ----
      Previously one static mesh, visible unchanged from July 1846 — 18
@@ -5604,10 +5673,13 @@ var LEVELING_SITE = (function buildDuneLevelingSite(){
   fillMesh.scale.y = 0.001;
   scene.add(fillMesh);
 
-  var pathGeoms = [], pathPts = [], hops=10;
+  // Cart track from the mound to the fill site — LEGACY-STREET-MESH fix
+  // (2026-07-10): used to build its own raised drapeGroundStrip() box mesh;
+  // now just hands the same waypoints to SPLAT_LEVELING_CART_PTS, painted
+  // by renderGroundSplat() with the same color/width/mottle as before.
+  var pathPts = [], hops=10;
   for(var i=0;i<=hops;i++){ var t=i/hops; pathPts.push({x:lerp(best.x,wharfPt.x,t), z:lerp(best.z,wharfPt.z,t)}); }
-  for(i=0;i<pathPts.length-1;i++){ drapeGroundStrip(pathPts[i].x,pathPts[i].z,pathPts[i+1].x,pathPts[i+1].z, 2.4, new THREE.Color(0xc7a973), 20, pathGeoms, true); }
-  if(pathGeoms.length) scene.add(new THREE.Mesh(mergeGeoms(pathGeoms), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0})));
+  SPLAT_LEVELING_CART_PTS = pathPts;
 
   var workerGeoms = [];
   for(var wI=0; wI<2; wI++){
@@ -8764,8 +8836,13 @@ canvas.addEventListener("pointerdown", function(e){
   if(ptrs.size>2) return; // ignore a 3rd+ pointer
 
   tapState.downX=e.clientX; tapState.downY=e.clientY; tapState.downTime=performance.now(); tapState.moved=0;
-  if(e.button===0){ orbitActive = true; panActive = false; }
-  else { panActive = true; orbitActive = false; }
+  // DRAG-CONVENTION SWAP (2026-07-10, user directive overriding the Annals
+  // default): primary drag (left mouse button / one-finger touch) now PANS
+  // — Apple Maps muscle memory — secondary (right mouse button) orbits.
+  // Q/E keyboard rotate remains the orbit alternative. Two-finger
+  // pinch+centroid-pan (the `pinch` branch above) is untouched.
+  if(e.button===0){ panActive = true; orbitActive = false; }
+  else { orbitActive = true; panActive = false; }
 });
 canvas.addEventListener("pointermove", function(e){
   if(!ptrs.has(e.pointerId)) return;
@@ -8802,7 +8879,7 @@ function ptrEnd(e){
     if(remaining.length===1){
       var p = ptrs.get(remaining[0]);
       tapState.downX=p.x; tapState.downY=p.y; tapState.downTime=performance.now(); tapState.moved=999;
-      orbitActive = (p.button===0); panActive = !orbitActive;
+      panActive = (p.button===0); orbitActive = !panActive; // same swapped convention as pointerdown above
     } else { orbitActive = false; panActive = false; }
     return;
   }
@@ -9012,9 +9089,9 @@ function animate(){
   updateDistrictZones(alt);
   updateBuildingLabels(alt);
   updateBizGlyphs(alt);
+  updateGridSwing(); // refreshes CURRENT_STREET_SKEW before updateStreetLabels() reads it, so labels never lag a frame behind the street paint
   updateStreetLabels(alt);
   applyLabelDeclutter(performance.now()); // must run after every per-type label/glyph/ship update above
-  updateGridSwing();
   updateRain(dt, camera.position.x, camera.position.z, alt);
   updateFogBanks(dt);
   updatePaper();
