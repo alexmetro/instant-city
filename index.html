@@ -2855,7 +2855,9 @@ var simSpeedKey = 0;
 var lastActiveSpeed = 1;
 (function initSimClockFromHash(){
   var m = location.hash.match(/d=(\d{4}-\d{2}-\d{2})/);
-  if(m) simDay = clamp(eventDateToSimDay(m[1]), 0, SIM_END_DAY);
+  // P0-3 fix (2026-07-10): +0.5 lands a bare calendar-date URL at noon, not
+  // midnight — see jumpToDate()'s comment for why.
+  if(m) simDay = clamp(eventDateToSimDay(m[1])+0.5, 0, SIM_END_DAY);
 })();
 function simDateISO(d){ return d.toISOString().slice(0,10); }
 function updateHashDate(){
@@ -3109,8 +3111,21 @@ var shipVisits = (function buildShipVisits(){
   return visits;
 })();
 
-var SHIP_CAP = 40;          // full-hull rendered ships, per spec
-var MAST_CAP = 220;         // simplified mast-cluster overflow ("the forest of masts")
+// P0-2 fix (2026-07-10, Director's screening): __P1850.ships reports 497
+// anchored by Sept 1849, climbing to a documented peak of 566 (Dec 1 1849,
+// the sim's own data — buildShipVisits()+fillShipVisits against the real
+// 1849 aggregate arrival rate) — but the old SHIP_CAP+MAST_CAP total
+// (260) silently dropped everything past that cap in updateShips()'s
+// hard-cap truncation, so the cove's single most famous historical sight
+// ("~200 ships stand abandoned in Yerba Buena Cove... by June" 1849, per
+// timeline-spine.md, ballooning through the rest of the year) rendered as
+// ~25 hulls. Raised to a combined 800 (SHIP_CAP+MAST_CAP), comfortably
+// above the documented in-sim peak with headroom to spare; ANCHOR_SLOTS
+// below is widened to match so 800 ships get 800+ distinct moorings
+// (period imagery's dense, varied-yaw crescent) rather than wrapping onto
+// the same handful of slots.
+var SHIP_CAP = 130;         // full-hull rendered ships, per spec
+var MAST_CAP = 670;         // simplified mast-cluster overflow ("the forest of masts")
 var SAIL_IN_DAYS = 2;       // "enters ... ~2 sim-days before its date"
 var SAIL_OUT_DAYS = 1.5;
 var SHIP_GATE = { x:-4000, z:-3450 };       // the Golden Gate label position
@@ -3150,12 +3165,14 @@ function findRealShoreX(z){
 }
 var ANCHOR_SLOTS = (function(){
   var zMin = -800, zMax = 880;              // Clark's Point down toward Rincon Point
-  // WORLD-P0 fix (AUDIT S1): hulls are now true-scale (up to ~35m, was
-  // 17m) — nAlong reduced and ring spacing widened a bit so hulls don't
-  // clip through their along-shore neighbors; still dense enough for the
-  // documented "forest of masts" crowding at peak 1849 anchorage.
-  var nAlong = 80, bits = 7;                // 2^7=128 >= nAlong, for the spread order
-  var rings = [130, 215, 295, 375, 460];    // offshore-distance centers, widened for true-scale beams
+  // P0-2 fix (2026-07-10): SHIP_CAP+MAST_CAP raised to 800 (documented
+  // in-sim peak 566, Dec 1 1849) — nAlong and ring count widened to match
+  // so 800 ships get 800+ distinct moorings instead of wrapping onto a
+  // shared handful of slots (allocAnchorSlot's `i % ANCHOR_SLOTS.length`).
+  // Two new outer rings continue the existing "outermost ring is
+  // deliberately the sparsest, a few singles further out" spacing.
+  var nAlong = 150, bits = 8;                // 2^8=256 >= nAlong, for the spread order
+  var rings = [130, 215, 295, 375, 460, 610, 770];    // offshore-distance centers, widened for true-scale beams
   var spreadK = [];
   for(var idx=0; idx<(1<<bits) && spreadK.length<nAlong; idx++){
     var k = bitReverse(idx, bits);
@@ -3562,32 +3579,81 @@ function populationAt(day){
   }
   return POP_CURVE[POP_CURVE.length-1].pop;
 }
+// P0-4 DENSITY fix (2026-07-10, Director's screening): the pre-fix curve
+// froze buildings entirely at pop>2200 (~late 1848) — everany 1849 growth
+// read as tents ONLY, so the record's "hundreds of structures spilling past
+// the grid" (real 1849 SF: signed shops, hotels, gambling houses, a
+// chapel — see cast/economy research) never rendered; Sept 1849 capped out
+// at ~169 growth buildings (+~30 founding = ~199 total) regardless of the
+// town's real size. Documented anchors calibrated against: 1846-07 baseline
+// ~50 buildings, 1847-04-01 79 structures (22 shanties/31 frame/26 adobes),
+// 1847-09 ~157 total (~78 new since April), 1848-03 ~200 buildings
+// (school-trustee census) — all timeline-spine.md. No source gives an exact
+// town-wide tally for Sept/Dec 1849 (the record jumps straight to fire-loss
+// figures), so late-1849 is an explicit INTERPOLATION: the 1850-05-04 and
+// 1850-06-14 fires each destroyed 150-300+ buildings in a PARTIAL district
+// without leveling the town, implying total stock was already in the
+// several-hundred range by early 1850 — so Sept 1849 ~500-600 total
+// structures and Dec 1849 ~700-750 total (both founding+fire-block+growth)
+// is a reasoned mid-point, not a hard count (flagged in the build report).
 function growthTargets(pop){
-  // BUILDING-COUNT fix, 2026-07-10: this used to divide the RAW population by
-  // 13, which at the July 1846 starting population (200) already demanded 15
-  // growth buildings ON TOP OF the ~30 fixed founding-village buildings —
-  // pushing day-one building count well past the documented "few dozen
-  // structures" (~30 total). Growth buildings are meant to be ADDITIONAL
-  // construction as the town grows past its starting population, so the
-  // baseline (POP_CURVE's own day-0 figure) is subtracted first — 0 growth
-  // buildings on day one, scaling up from there exactly as before.
   var basePop = POP_CURVE[0].pop;
   var housedPop = Math.min(Math.max(0, pop-basePop), 2200);          // pre-1849 growth reads as houses
-  var tentPop = Math.max(0, pop-2200);          // 1849's surge reads as tents, per spec
+  var surgePop = Math.max(0, pop-2200);         // 1849 surge: mostly tents, but NOT exclusively —
+                                                 // real construction (signage, hotels, chapel) continued
+                                                 // alongside the tent camps, so a slower-but-nonzero
+                                                 // building rate keeps pace with it (BUILDING_SURGE_DIV).
+  var tentPop = surgePop;
   return {
-    buildings: Math.min(Math.round(housedPop/13), 260),
+    buildings: Math.min(Math.round(housedPop/13 + surgePop/BUILDING_SURGE_DIV), BUILDING_CAP),
     tents: Math.min(Math.round(tentPop/7), 1450)
   };
 }
+var BUILDING_SURGE_DIV = 45, BUILDING_CAP = 650;
 var RAISE_DAYS = 7; // "a small raising animation (scale-in over a sim-week)"
+
+/* P0-1 TIME-JUMP fix (2026-07-10, Director's screening): growReveal()/
+   growRevealStaged() stamp each newly-caught-up entry's spawnDay at the
+   moment they're first pushed into the `spawned` array. That's correct
+   while the sim runs continuously (spawned.length only ever trails
+   targetCount by a sliver of a day), but a PAUSED time-jump (URL &d=,
+   notch click, [ / ], __P1850.jump) can push simDay forward by months in
+   one frame — growReveal's while-loop instantly catches `spawned.length`
+   up to the new targetCount (that part already works: __P1850.tents
+   reports the right count immediately), but every entry added in that
+   single catch-up gets spawnDay=simDay (i.e. "built RIGHT NOW"), so its
+   RAISE_DAYS/CONSTRUCTION_DAYS scale-in animation starts from age=0 and,
+   since the sim is paused, never advances — every tent/building that
+   should already have stood for weeks renders at ~5% scale (effectively
+   invisible) until the user unpauses and lets real simDay catch the
+   animation up. FIX: these systems are counter-based/seeded precisely so
+   "the day this candidate #i should first exist" is directly computable
+   (invert growthTargets() against the same POP_CURVE) — backdate spawnDay
+   to that computed reveal day instead of "now", so a paused jump shows
+   already-standing stock at full scale on the very next frame, with no
+   frame-stepping/replay. */
+function dayForTentIndex(i){
+  return dayForPopulationAtLeast(2200 + (i+1)*7);
+}
+function dayForBuildingIndex(i){
+  var n = i+1, housedCapCount = Math.floor(2200/13); // buildings obtainable from the housed-pop term alone
+  if(n<=housedCapCount) return dayForPopulationAtLeast(POP_CURVE[0].pop + n*13);
+  return dayForPopulationAtLeast(2200 + (n-housedCapCount)*BUILDING_SURGE_DIV);
+}
 
 /* candidate lots for growth buildings: same grid the Phase 1 village used,
    spilling a little past its surveyed edge (town filling out) since new
    streets are this brief's explicitly optional/skippable stretch goal. */
 var growthBuildingCandidates = (function(){
   var uVals=[GEO.streetsU.stockton,GEO.streetsU.montgomery], vVals=[GEO.streetsV.pacific,GEO.streetsV.california];
-  var pad=110, out=[];
-  for(var i=0;i<420;i++){
+  // P0-4 fix (2026-07-10): pad widened (110->200) and attempts raised
+  // (420->1500) so the candidate pool can actually supply BUILDING_CAP's
+  // new 650 (up from 260) — "ragged expansion... spilling past the
+  // surveyed grid" per the Director's screening, without touching street
+  // layout itself (still the same placeBuilding/canPlace engine, just more
+  // lots offered to it further from the grid).
+  var pad=200, out=[];
+  for(var i=0;i<1500;i++){
     var u = lerp(uVals[0]-pad, uVals[1]+pad, rngBuild());
     var v = lerp(vVals[0]-pad, vVals[1]+pad, rngBuild());
     var p = gridToWorld(u,v);
@@ -3767,10 +3833,12 @@ var campfireMesh = new THREE.InstancedMesh(makeCampfireGeo(), new THREE.MeshBasi
 campfireMesh.count = 0; scene.add(campfireMesh);
 
 var spawnedBuildings = [], spawnedTents = [];
-function growReveal(pool, spawned, targetCount, mesh){
+function growReveal(pool, spawned, targetCount, mesh, revealDayFn){
   while(spawned.length<targetCount && spawned.length<pool.length){
-    var c = pool[spawned.length];
-    spawned.push({ x:c.x, z:c.z, h:terrainHeight(c.x,c.z), rot:c.rot, spawnDay:simDay, settled:false });
+    var idx = spawned.length;
+    var c = pool[idx];
+    var rDay = revealDayFn ? Math.min(simDay, revealDayFn(idx)) : simDay; // P0-1: backdate to when this candidate should truly have appeared
+    spawned.push({ x:c.x, z:c.z, h:terrainHeight(c.x,c.z), rot:c.rot, spawnDay:rDay, settled:false });
   }
   mesh.count = spawned.length;
   for(var i=0;i<spawned.length;i++){
@@ -3791,10 +3859,12 @@ function growReveal(pool, spawned, targetCount, mesh){
    itself is still paced by the population-curve growthTargets() above —
    only WHAT renders during that window changes, not WHEN a site starts). */
 var CONSTRUCTION_DAYS = 14;
-function growRevealStaged(pool, spawned, targetCount){
+function growRevealStaged(pool, spawned, targetCount, revealDayFn){
   while(spawned.length<targetCount && spawned.length<pool.length){
-    var c = pool[spawned.length];
-    spawned.push({ x:c.x, z:c.z, h:terrainHeight(c.x,c.z), rot:c.rot, spawnDay:simDay, settled:false });
+    var idx = spawned.length;
+    var c = pool[idx];
+    var rDay = revealDayFn ? Math.min(simDay, revealDayFn(idx)) : simDay; // P0-1: backdate to when this site should truly have broken ground
+    spawned.push({ x:c.x, z:c.z, h:terrainHeight(c.x,c.z), rot:c.rot, spawnDay:rDay, settled:false });
   }
   var matN=0, frameN=0, wallN=0, doneN=0, workerN=0;
   var dayHour = (simDay-Math.floor(simDay))*24;
@@ -3855,8 +3925,8 @@ function updateCampfires(){
 function updateGrowth(){
   var pop = populationAt(simDay);
   var t = growthTargets(pop);
-  growRevealStaged(growthBuildingCandidates, spawnedBuildings, t.buildings);
-  growReveal(tentCandidates, spawnedTents, t.tents, tentMesh);
+  growRevealStaged(growthBuildingCandidates, spawnedBuildings, t.buildings, dayForBuildingIndex);
+  growReveal(tentCandidates, spawnedTents, t.tents, tentMesh, dayForTentIndex);
   updateCampfires();
 }
 
@@ -8260,8 +8330,21 @@ var DIRECTOR_BEATS = (function(){
    so this already IS the "fresh telling of fixed history" reconstruction
    — no fast-forward, no re-seed. lifeVariant (see personRng) is untouched
    by ordinary jumps in either direction, per TIME-JUMP SEMANTICS. ---- */
+/* P0-3 fix (2026-07-10, Director's screening): every caller here (notch
+   click, [ / ], __P1850.jump, the initial URL &d=) passes a bare whole
+   calendar day (eventDateToSimDay's integer-midnight semantics) — landing
+   there put updatePeople()'s peopleTargetCount() straight into its
+   deep-night 0.06 multiplier (h<5.5), so ANY discrete jump-then-pause
+   showed the town's near-empty midnight population (~6-11 of up to 180
+   slots) regardless of the real daytime figure, reading as a ghost town
+   exactly when the user is looking closest. The scrubber DRAG path never
+   calls jumpToDate() (it sets simDay from continuous pixel position and
+   commits via updateHashDate() directly), so dragging to an intentional
+   night hour is untouched and still legitimately shows a sleepy town —
+   this fix only defaults bare-date jumps to local noon. */
 function jumpToDate(day){
-  simDay = clamp(day, 0, SIM_END_DAY);
+  var wholeDay = Math.floor(day)===day;
+  simDay = clamp(wholeDay ? day+0.5 : day, 0, SIM_END_DAY);
   updateHashDate();
 }
 /* top ~10 spine beats by narrative/director priority, hand-picked from the
@@ -8533,7 +8616,7 @@ function updateDirector(dt){
 
 /* debug/verification handle (used by the Phase-5 QA pass; harmless in prod) */
 window.__P1850 = {
-  jump: function(iso){ simDay = clamp(eventDateToSimDay(iso), 0, SIM_END_DAY); },
+  jump: function(iso){ jumpToDate(eventDateToSimDay(iso)); }, // P0-3: routes through jumpToDate's noon-default fix
   get date(){ return simDateISO(dateFromSimDay(simDay)); },
   get simDay(){ return simDay; },
   get calls(){ return renderer.info.render.calls; },
