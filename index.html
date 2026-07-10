@@ -266,10 +266,18 @@
   body.touch-device #hud-hint-toggle{ display:flex; }
 
   @media (max-width:520px){
-    #hud-title{ padding:0.32em 1em; max-width:78vw; }
-    #hud-title h1{ font-size:0.92rem; letter-spacing:1.2px; }
-    #hud-title .sub{ font-size:0.5rem; letter-spacing:1.5px; }
-    #hud-clock{ min-width:0; font-size:0.7rem; }
+    /* narrow-screen HUD: the desktop layout puts seed/title/clock all in
+       the top ~16-56px band, which collides once the title's centered box
+       and the right-aligned clock both need real width on a ~390px phone.
+       Re-stack into two rows instead of shrinking text until it's unusable. */
+    #hud-title{ padding:0.28em 0.8em; max-width:54vw; top:8px; }
+    #hud-title h1{ font-size:0.8rem; letter-spacing:1px; }
+    #hud-title .sub{ font-size:0.44rem; letter-spacing:1px; margin-top:1px; }
+    #hud-seed{ top:8px; font-size:0.55rem; padding:0.25em 0.55em; }
+    #hud-clock{ top:56px; min-width:0; font-size:0.62rem; }
+    #hud-ghost{ top:56px; }
+    #paper-toggle{ top:100px; }
+    #hud-provenance{ top:100px; max-width:60vw; font-size:0.52rem; letter-spacing:1px; white-space:normal; }
     #hud-altitude{ min-width:0; font-size:0.7rem; }
     #paper-pane{ width:100vw; }
     #ship-inspector, #person-inspector{ width:min(260px,72vw); }
@@ -4183,6 +4191,16 @@ function springVec(state, key, velKey, target, stiffness, damping, dt){
 }
 
 function applyCameraRig(dt){
+  // Apple-Maps-feel touch/mouse recipe: pan/pinch/rotate gestures (and the
+  // post-release pan/zoom momentum coast) write DIRECTLY into both rig.* and
+  // desired.* every frame (see updateGestureMomentum() + the pointer/touch
+  // handlers below) — so by the time the springs below run, rig already
+  // equals desired for whichever axis is gesture-driven and the spring
+  // contributes exactly nothing (no fighting the drag, no rubber-band lag).
+  // Programmatic moves (WASD fly, Follow mode, flyTo(), keyboard Q/E/R/F)
+  // never touch rig.* directly, so they still get the full smoothing.
+  updateGestureMomentum(dt);
+
   springScalar(rig,"distance","distanceVel", desired.distance, 10, 7, dt);
   springScalar(rig,"azimuth","azimuthVel", desired.azimuth, 12, 8, dt);
   springScalar(rig,"pitchOffset","pitchOffsetVel", desired.pitchOffset, 6, 6, dt);
@@ -4238,37 +4256,191 @@ function applyCameraRig(dt){
    flying). A small movement threshold on pointerdown->pointerup
    distinguishes a genuine click (select a person/ship) from a drag.
    ===================================================================== */
-var input = { dragging:false, panning:false, lastX:0, lastY:0, downX:0, downY:0, moved:0 };
-var CLICK_MOVE_THRESHOLD = 6; // px — below this, a pointerup is treated as a select-click, not a drag
+var TAP_MAX_MOVE = 10;   // px — tap/select vs. drag threshold (mouse + touch)
+var TAP_MAX_MS = 300;    // ms
+var PAN_SAMPLE_WINDOW_MS = 80;   // velocity is sampled over this trailing window
+var PAN_STOP_SPEED = 5;          // m/s — coast stops below this ("5 m/s equivalent")
+var ZOOM_STOP_SPEED = 2;         // distance-units/s — pinch-zoom coast stop floor
+var input = { dragging:false, panning:false, lastX:0, lastY:0, downX:0, downY:0, moved:0, downTime:0 };
 canvas.addEventListener("contextmenu", function(e){ e.preventDefault(); });
 
-function screenDeltaToPan(dx,dy){
-  var az = rig.azimuth;
-  var right = new THREE.Vector3(Math.cos(az),0,-Math.sin(az));
-  var fwd = new THREE.Vector3(Math.sin(az),0,Math.cos(az));
-  var scale = rig.distance*0.0016;
-  desired.target = desired.target.clone()
-    .addScaledVector(right, -dx*scale)
-    .addScaledVector(fwd, dy*scale);
+/* Ray-casts a screen point to the horizontal plane through rig.target —
+   exact regardless of camera tilt (unlike a flat meters-per-pixel
+   approximation, which undershoots once the rig is pitched down, since a
+   screen-vertical drag then corresponds to a world-space direction that
+   is NOT purely horizontal). Basis for both 1:1 pan and the pinch-anchor
+   correction below (touch-feel refinement, 2026-07). */
+function screenPointToGround(sx,sy){
+  var ndcX = (sx/window.innerWidth)*2-1, ndcY = -(sy/window.innerHeight)*2+1;
+  var ray = new THREE.Raycaster();
+  ray.setFromCamera({x:ndcX,y:ndcY}, camera);
+  var planeY = rig.target.y, oy = ray.ray.origin.y, dyDir = ray.ray.direction.y;
+  if(Math.abs(dyDir) < 1e-6) return null;
+  var t = (planeY-oy)/dyDir;
+  if(t<0) return null;
+  return { x: ray.ray.origin.x + ray.ray.direction.x*t, z: ray.ray.origin.z + ray.ray.direction.z*t };
+}
+/* "Grab the ground" — exact version: the world point that projected to
+   (prevX,prevY) is moved so it now projects to (curX,curY), by shifting
+   rig.target/desired.target (both, no spring) by (worldAt(prev)-worldAt(cur)).
+   Falls back to a no-op if either ray misses the ground plane (looking at
+   open sky) rather than flinging the camera off an undefined intersection. */
+function applyPanPixels(prevX, prevY, curX, curY){
+  var before = screenPointToGround(prevX, prevY);
+  var after = screenPointToGround(curX, curY);
+  if(!before || !after) return;
+  rig.target.x += (before.x-after.x);
+  rig.target.z += (before.z-after.z);
+  desired.target.copy(rig.target);
+}
+
+/* ---- pan gesture state (mouse left-drag + touch 1-finger) — shared by
+   both input paths so they feel identical, per the touch-feel directive. ---- */
+var panGesture = { active:false, samples:[] };
+var panCoast = { active:false, vx:0, vz:0 };
+function panGestureStart(){
+  panGesture.active = true;
+  panGesture.samples = [{ t:performance.now(), x:rig.target.x, z:rig.target.z }];
+  panCoast.active = false; // grabbing again always cancels any running glide
+}
+function panGestureSample(){
+  var now = performance.now();
+  panGesture.samples.push({ t:now, x:rig.target.x, z:rig.target.z });
+  while(panGesture.samples.length>2 && now-panGesture.samples[0].t>PAN_SAMPLE_WINDOW_MS) panGesture.samples.shift();
+}
+function panGestureEnd(){
+  panGesture.active = false;
+  var s = panGesture.samples;
+  if(s.length>=2){
+    var a=s[0], b=s[s.length-1], dtS=(b.t-a.t)/1000;
+    if(dtS>0.008){
+      panCoast.vx = clamp((b.x-a.x)/dtS, -4000, 4000);
+      panCoast.vz = clamp((b.z-a.z)/dtS, -4000, 4000);
+      panCoast.active = Math.hypot(panCoast.vx,panCoast.vz) > PAN_STOP_SPEED;
+    }
+  }
+}
+
+/* ---- pinch gesture state (touch 2-finger: zoom + rotate, with an
+   engage threshold on rotation and an anchored zoom focal point) ---- */
+var pinchGesture = { active:false, anchorWorld:null, midX:0, midY:0, startDist:0, startRigDistance:0,
+  rotAccum:0, rotEngaged:false, lastAngle:0, samples:[] };
+var zoomCoast = { active:false, vDist:0 };
+function pinchGestureStart(t0,t1){
+  pinchGesture.active = true;
+  zoomCoast.active = false;
+  var mid = touchMid(t0,t1);
+  pinchGesture.midX=mid.x; pinchGesture.midY=mid.y;
+  pinchGesture.startDist = Math.max(1, touchDist(t0,t1));
+  pinchGesture.startRigDistance = rig.distance;
+  pinchGesture.rotAccum = 0; pinchGesture.rotEngaged = false;
+  pinchGesture.lastAngle = touchAngle(t0,t1);
+  pinchGesture.anchorWorld = screenPointToGround(mid.x, mid.y);
+  pinchGesture.samples = [{ t:performance.now(), dist:rig.distance }];
+}
+function pinchGestureMove(t0,t1){
+  var mid = touchMid(t0,t1);
+  var dist = touchDist(t0,t1);
+  var ang = touchAngle(t0,t1);
+
+  // PINCH -> ZOOM: log-space ratio of current/initial finger distance, 1:1
+  var ratio = dist/pinchGesture.startDist;
+  var newDistance = clamp(pinchGesture.startRigDistance/ratio, CFG.minAltitude, CFG.maxAltitude);
+  rig.distance = newDistance; desired.distance = newDistance;
+
+  // TWIST -> ROTATE: only engages past ~10° accumulated (avoids accidental
+  // spin while a pinch/pan is underway); 1:1 once engaged
+  var dAng = ang-pinchGesture.lastAngle;
+  while(dAng>Math.PI) dAng -= Math.PI*2; while(dAng<-Math.PI) dAng += Math.PI*2;
+  if(!pinchGesture.rotEngaged){
+    pinchGesture.rotAccum += Math.abs(dAng);
+    if(pinchGesture.rotAccum > 10*Math.PI/180) pinchGesture.rotEngaged = true;
+  } else {
+    rig.azimuth += dAng; desired.azimuth = rig.azimuth;
+  }
+  pinchGesture.lastAngle = ang;
+
+  // ANCHOR CORRECTION: after the zoom/rotate above, re-project the world
+  // point that was under the initial pinch midpoint and nudge the target
+  // (same applyPanPixels helper pan uses) so it lands back under the
+  // CURRENT midpoint — keeps the pinch focal point fixed under the fingers.
+  if(pinchGesture.anchorWorld){
+    var elevNow = clamp(elevationForDistance(rig.distance)+rig.pitchOffset, 8*Math.PI/180, 85*Math.PI/180);
+    var horizR = rig.distance*Math.cos(elevNow);
+    var camX = rig.target.x + horizR*Math.sin(rig.azimuth);
+    var camZ = rig.target.z + horizR*Math.cos(rig.azimuth);
+    var camY = rig.target.y + rig.distance*Math.sin(elevNow);
+    camera.position.set(camX,camY,camZ);
+    camera.lookAt(rig.target.x, rig.target.y, rig.target.z);
+    camera.updateMatrixWorld(true);
+    var aw = pinchGesture.anchorWorld;
+    var proj = new THREE.Vector3(aw.x, Math.max(terrainHeight(aw.x,aw.z),rig.target.y-50), aw.z).project(camera);
+    var curSX = (proj.x*0.5+0.5)*window.innerWidth, curSY = (-proj.y*0.5+0.5)*window.innerHeight;
+    applyPanPixels(curSX, curSY, mid.x, mid.y); // "what's now at curSX,curSY should end up at the midpoint"
+  }
+
+  var now = performance.now();
+  pinchGesture.samples.push({ t:now, dist:rig.distance });
+  while(pinchGesture.samples.length>2 && now-pinchGesture.samples[0].t>PAN_SAMPLE_WINDOW_MS) pinchGesture.samples.shift();
+}
+function pinchGestureEnd(){
+  pinchGesture.active = false;
+  var s = pinchGesture.samples;
+  if(s.length>=2){
+    var a=s[0], b=s[s.length-1], dtS=(b.t-a.t)/1000;
+    if(dtS>0.008){
+      zoomCoast.vDist = clamp((b.dist-a.dist)/dtS, -6000, 6000);
+      zoomCoast.active = Math.abs(zoomCoast.vDist) > ZOOM_STOP_SPEED;
+    }
+  }
+}
+
+/* called once/frame from applyCameraRig(), BEFORE the springs: advances any
+   active pan/zoom momentum glide, writing rig.target/rig.distance and
+   desired.target/desired.distance together so the springs downstream see
+   zero error and stay out of the way. */
+function updateGestureMomentum(dt){
+  if(panCoast.active){
+    var dtMs = dt*1000;
+    panCoast.vx *= Math.pow(0.9985, dtMs);
+    panCoast.vz *= Math.pow(0.9985, dtMs);
+    rig.target.x += panCoast.vx*dt; rig.target.z += panCoast.vz*dt;
+    desired.target.x = rig.target.x; desired.target.z = rig.target.z;
+    if(Math.hypot(panCoast.vx,panCoast.vz) < PAN_STOP_SPEED) panCoast.active = false;
+  }
+  if(zoomCoast.active){
+    var dtMs2 = dt*1000;
+    zoomCoast.vDist *= Math.pow(0.997, dtMs2);
+    rig.distance = clamp(rig.distance + zoomCoast.vDist*dt, CFG.minAltitude, CFG.maxAltitude);
+    desired.distance = rig.distance;
+    if(Math.abs(zoomCoast.vDist) < ZOOM_STOP_SPEED) zoomCoast.active = false;
+  }
 }
 
 canvas.addEventListener("pointerdown", function(e){
   input.lastX=e.clientX; input.lastY=e.clientY;
-  input.downX=e.clientX; input.downY=e.clientY; input.moved=0;
-  if(e.button===2 || e.shiftKey) input.dragging = true; else input.panning = true; // left=pan (primary), right/shift=orbit (secondary)
+  input.downX=e.clientX; input.downY=e.clientY; input.moved=0; input.downTime=performance.now();
+  if(e.button===2 || e.shiftKey){ input.dragging = true; }
+  else { input.panning = true; panGestureStart(); } // left=pan (primary, 1:1+momentum), right/shift=orbit (secondary)
   canvas.setPointerCapture(e.pointerId);
 });
 canvas.addEventListener("pointerup", function(e){
+  if(input.panning) panGestureEnd();
   input.dragging=false; input.panning=false;
-  if(input.moved < CLICK_MOVE_THRESHOLD) trySelectAtScreenXY(e.clientX, e.clientY);
+  if(input.moved<=TAP_MAX_MOVE && (performance.now()-input.downTime)<TAP_MAX_MS) trySelectAtScreenXY(e.clientX, e.clientY);
 });
-canvas.addEventListener("pointercancel", function(e){ input.dragging=false; input.panning=false; });
+canvas.addEventListener("pointercancel", function(e){
+  if(input.panning) panGestureEnd();
+  input.dragging=false; input.panning=false;
+});
 canvas.addEventListener("pointermove", function(e){
+  var prevX = input.lastX, prevY = input.lastY;
   var dx = e.clientX-input.lastX, dy = e.clientY-input.lastY;
   input.lastX=e.clientX; input.lastY=e.clientY;
   input.moved = Math.hypot(e.clientX-input.downX, e.clientY-input.downY);
   if(input.panning){
-    screenDeltaToPan(dx,dy);
+    applyPanPixels(prevX, prevY, e.clientX, e.clientY);
+    panGestureSample();
   } else if(input.dragging){
     desired.azimuth -= dx*0.0045;
     desired.pitchOffset = clamp(desired.pitchOffset - dy*0.0022, -0.35, 0.35);
@@ -4280,11 +4452,11 @@ canvas.addEventListener("wheel", function(e){
   desired.distance = clamp(desired.distance*factor, CFG.minAltitude, CFG.maxAltitude);
 }, { passive:false });
 
-/* ---- touch: 1-finger drag = pan; 2-finger pinch = zoom, twist = rotate
-   azimuth, vertical drag (non-pinching) = tilt; tap = select (same
-   movement threshold as the mouse path above). No hover dependency
-   anywhere — everything above is reachable by tap. ---- */
-var touchState = { mode:null, lastX:0,lastY:0, lastDist:0, lastAngle:0, downX:0, downY:0, moved:0, downTime:0 };
+/* ---- touch: 1-finger drag = pan (identical 1:1+momentum convention as
+   mouse left-drag above); 2-finger pinch = zoom (anchored) + twist = rotate
+   (10° engage threshold) + vertical drag = tilt; tap = select. No hover
+   dependency anywhere — everything above is reachable by tap. ---- */
+var touchState = { mode:null, lastX:0,lastY:0, lastMidY:0, downX:0, downY:0, moved:0, downTime:0 };
 function touchMid(t0,t1){ return { x:(t0.clientX+t1.clientX)/2, y:(t0.clientY+t1.clientY)/2 }; }
 function touchDist(t0,t1){ return Math.hypot(t0.clientX-t1.clientX, t0.clientY-t1.clientY); }
 function touchAngle(t0,t1){ return Math.atan2(t1.clientY-t0.clientY, t1.clientX-t0.clientX); }
@@ -4294,41 +4466,39 @@ canvas.addEventListener("touchstart", function(e){
     touchState.lastX=e.touches[0].clientX; touchState.lastY=e.touches[0].clientY;
     touchState.downX=touchState.lastX; touchState.downY=touchState.lastY; touchState.moved=0;
     touchState.downTime = performance.now();
+    panGestureStart();
   } else if(e.touches.length>=2){
     touchState.mode="gesture"; touchState.moved=999; // a 2nd finger joining cancels any pending tap
-    var mid = touchMid(e.touches[0],e.touches[1]);
-    touchState.lastX=mid.x; touchState.lastY=mid.y;
-    touchState.lastDist = touchDist(e.touches[0],e.touches[1]);
-    touchState.lastAngle = touchAngle(e.touches[0],e.touches[1]);
+    if(panGesture.active) panGestureEnd(); // hand off cleanly from a 1-finger pan that just gained a 2nd finger
+    pinchGestureStart(e.touches[0], e.touches[1]);
+    touchState.lastMidY = pinchGesture.midY;
   }
 }, {passive:true});
 canvas.addEventListener("touchmove", function(e){
   if(touchState.mode==="pan" && e.touches.length===1){
-    var dx = e.touches[0].clientX-touchState.lastX, dy = e.touches[0].clientY-touchState.lastY;
+    var prevTX = touchState.lastX, prevTY = touchState.lastY;
     touchState.lastX=e.touches[0].clientX; touchState.lastY=e.touches[0].clientY;
     touchState.moved = Math.hypot(e.touches[0].clientX-touchState.downX, e.touches[0].clientY-touchState.downY);
-    screenDeltaToPan(dx,dy); // one-finger drag = pan, same grab-the-ground feel as left-drag
+    applyPanPixels(prevTX, prevTY, e.touches[0].clientX, e.touches[0].clientY);
+    panGestureSample();
   } else if(touchState.mode==="gesture" && e.touches.length>=2){
-    var mid = touchMid(e.touches[0],e.touches[1]);
-    var dist = touchDist(e.touches[0],e.touches[1]);
-    var ang = touchAngle(e.touches[0],e.touches[1]);
-    // pinch -> zoom
-    var factor = Math.exp((touchState.lastDist-dist)*0.01);
-    desired.distance = clamp(desired.distance*factor, CFG.minAltitude, CFG.maxAltitude);
-    // twist -> rotate azimuth
-    var dAng = ang-touchState.lastAngle;
-    while(dAng>Math.PI) dAng -= Math.PI*2; while(dAng<-Math.PI) dAng += Math.PI*2;
-    desired.azimuth += dAng;
-    // two-finger vertical drag (midpoint), independent of pinch/twist -> tilt (cheap, so kept)
-    var dy2 = mid.y-touchState.lastY;
+    pinchGestureMove(e.touches[0], e.touches[1]);
+    // two-finger vertical drag (midpoint), independent of pinch/twist -> tilt (cheap, kept from the original pass)
+    var midYNow = touchMid(e.touches[0],e.touches[1]).y;
+    var dy2 = midYNow-touchState.lastMidY;
     desired.pitchOffset = clamp(desired.pitchOffset - dy2*0.0018, -0.35, 0.35);
-    touchState.lastX=mid.x; touchState.lastY=mid.y; touchState.lastDist=dist; touchState.lastAngle=ang;
+    touchState.lastMidY = midYNow;
   }
   e.preventDefault();
 }, {passive:false});
 canvas.addEventListener("touchend", function(e){
-  if(touchState.mode==="pan" && touchState.moved<CLICK_MOVE_THRESHOLD && (performance.now()-touchState.downTime)<600){
-    trySelectAtScreenXY(touchState.lastX, touchState.lastY); // tap = select, same threshold as mouse click
+  if(touchState.mode==="pan"){
+    panGestureEnd();
+    if(touchState.moved<=TAP_MAX_MOVE && (performance.now()-touchState.downTime)<TAP_MAX_MS){
+      trySelectAtScreenXY(touchState.lastX, touchState.lastY); // tap = select, same threshold as mouse click
+    }
+  } else if(touchState.mode==="gesture"){
+    pinchGestureEnd();
   }
   if(e.touches.length===0) touchState.mode=null;
 }, {passive:true});
