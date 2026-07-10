@@ -3004,7 +3004,21 @@ var shipVisits = (function buildShipVisits(){
         if(pendingArrive!==null) visits.push({ ship:name, arrive:pendingArrive, depart:null });
         pendingArrive = e.simDay;
       } else {
-        visits.push({ ship:name, arrive:pendingArrive, depart:e.simDay });
+        // BUG FIX (2026-07-10, ghost-fleet P0): a documented departure with
+        // no matching prior arrival (very plausible — the corpus's coverage
+        // is thin pre-Dec-1849, grounding.md's own COVERAGE-GAP RULE) used
+        // to be stored as arrive:null, and shipDesiredState() read that as
+        // "pre-existing at window open" — rendering the ship anchored from
+        // day one of the sim (Jul 1846), regardless of how late its real
+        // departure actually was. The record's silence is about *when* it
+        // arrived, not *whether* it did, so per the coverage-gap rule this
+        // fills the silence with a plausible recent arrival instead of
+        // reading it as "since the beginning of recorded time": inferred
+        // as departure minus a typical stay (same 20-170 day distribution
+        // fillShipVisits() below already uses for simulated traffic),
+        // floored at 0 so it can never predate the sim's own start.
+        var inferredArrive = pendingArrive===null ? Math.max(0, e.simDay - (20+rngBuild()*150)) : pendingArrive;
+        visits.push({ ship:name, arrive:inferredArrive, depart:e.simDay, arriveInferred:pendingArrive===null });
         pendingArrive = null;
       }
     });
@@ -3116,7 +3130,10 @@ function shipDesiredState(v, day){
     if(day >= v.depart+SAIL_OUT_DAYS) return "done";
     if(day >= v.depart) return "sailing_out";
   }
-  if(v.arrive===null) return "anchored";              // pre-existing at window open
+  // BUG FIX (2026-07-10, ghost-fleet P0): arrive is never null any more —
+  // buildShipVisits() now infers a plausible recent arrival (depart minus a
+  // typical stay) for the coverage-gap case that used to leave arrive:null
+  // here and get read as "anchored since window open." See buildShipVisits().
   if(day >= v.arrive) return "anchored";
   if(day >= v.arrive-SAIL_IN_DAYS) return "sailing_in";
   return "future";
@@ -3613,7 +3630,18 @@ function makeConstructionWallsGeo(){
 function makeTentGeo(){
   var canvas = new THREE.Color(0xe9e6d9); // cool off-white canvas — contrasts against warm sand/duneGold
   var seam = new THREE.Color(0x4c4436);   // dark seam/rope tone
-  var cone = new THREE.ConeGeometry(1.7,2.6,6);
+  // BUG FIX (2026-07-10, tent P0): ConeGeometry is indexed by default in r128
+  // (27 unique verts / 54 index entries = 18 real triangles) — mergeGeoms()
+  // below is a hand-rolled merger that concatenates raw position.array and
+  // has no concept of an index buffer, so an indexed part silently collapses
+  // into a flat 9-triangle vertex soup (wrong faces, mostly backface-culled
+  // or degenerate) instead of a cone. Every other part in this function
+  // already calls .toNonIndexed() first; the cone — the tent's entire body,
+  // ~90% of its silhouette — did not, which is why tents never visually
+  // rendered (candidate generation/placement were fine; only the body mesh
+  // itself was corrupt). Matches the same indexed/non-indexed hazard the
+  // audit's V2 finding already flagged for makeBlobCluster()/makeBoulderGeo().
+  var cone = new THREE.ConeGeometry(1.7,2.6,6).toNonIndexed();
   cone.translate(0,1.3,0);
   colorizeUniform(cone, canvas);
   var parts = [cone];
@@ -4397,8 +4425,15 @@ function findShipArrivalRecord(name){
 }
 function openShipInspector(v){
   siNameEl.textContent = v.ship;
-  siArrivedEl.textContent = v.arrive!==null ? ("arrived "+formatIssueDateLabel(todayISOFromSimDay(v.arrive))) : "arrival undocumented in this window";
-  var rec = v.arrive!==null ? findShipArrivalRecord(v.ship) : null;
+  // BUG FIX (2026-07-10, ghost-fleet P0): v.arrive is now always a real
+  // number (buildShipVisits() fills coverage-gap visits with an inferred
+  // recent arrival instead of null — see shipDesiredState()), so this can
+  // no longer key off "!==null" to detect the undocumented case; it must
+  // check the explicit arriveInferred flag instead, or this panel would
+  // present a fabricated date/citation as documented fact.
+  var documented = v.arrive!==null && !v.arriveInferred;
+  siArrivedEl.textContent = documented ? ("arrived "+formatIssueDateLabel(todayISOFromSimDay(v.arrive))) : "arrival undocumented in this window";
+  var rec = documented ? findShipArrivalRecord(v.ship) : null;
   if(rec){
     siDetailEl.textContent = rec.headline;
     var issueKey = latestIssueOnOrBefore(todayISOFromSimDay(rec.simDay));
@@ -8130,7 +8165,9 @@ var DIRECTOR_BEATS = (function(){
   var monthSeen = {};
   shipVisits.slice().sort(function(a,b){ return (a.arrive==null?1e9:a.arrive)-(b.arrive==null?1e9:b.arrive); })
     .forEach(function(v){
-      if(v.arrive==null) return;
+      // arrive is a fill-inferred estimate (buildShipVisits' coverage-gap
+      // fix), not a documented date — never assert it as a headline beat.
+      if(v.arrive==null || v.arriveInferred) return;
       var mk = simDateISO(dateFromSimDay(v.arrive)).slice(0,7);
       if(monthSeen[mk]) return;
       monthSeen[mk] = true;
@@ -8437,8 +8474,20 @@ window.__P1850 = {
     });
     return { fleeing:fleeing, watching:watching };
   },
-  watch: setWatchMode, speed: setSimSpeed,
-  get beat(){ return DIRECTOR.beat ? DIRECTOR.beat.cls+": "+DIRECTOR.beat.headline : null; }
+  watch: setWatchMode, speed: setSimSpeed, flyTo: flyTo,
+  get beat(){ return DIRECTOR.beat ? DIRECTOR.beat.cls+": "+DIRECTOR.beat.headline : null; },
+  get tents(){ return { candidates:tentCandidates.length, spawned:spawnedTents.length, meshCount:tentMesh.count }; },
+  get ships(){
+    var anchored=0, sailing=0, inferred=0;
+    var allVisits = provenanceOnly ? shipVisits : shipVisits.concat(fillShipVisits);
+    allVisits.forEach(function(v){
+      var st = shipDesiredState(v, simDay);
+      if(st==="anchored") anchored++;
+      else if(st==="sailing_in"||st==="sailing_out") sailing++;
+      if(v.arriveInferred && (st==="anchored"||st==="sailing_in"||st==="sailing_out")) inferred++;
+    });
+    return { anchored:anchored, sailing:sailing, anchoredInferredOnly:inferred };
+  }
 };
 
 /* =====================================================================
@@ -8600,9 +8649,15 @@ function applyCameraRig(dt){
   var camZ = rig.target.z + horizR*Math.cos(rig.azimuth);
   var camY = rig.target.y + rig.distance*Math.sin(elev);
 
-  // terrain collision: keep a minimum clearance above the ground
+  // terrain collision: keep a minimum clearance above the ground.
+  // BUG FIX (2026-07-10, walk-mode P0): this floor was 4.5m (eye height of
+  // someone riding on a truck bed, not standing) — the audit's own S3/round-1
+  // finding, still open in round 2. A person's eye height is ~1.7m; this is
+  // just the hard collision clamp (the min-zoom orbit distance/pitch curve
+  // that shapes the overall close-up framing is separate and untouched here
+  // — that whole layer is being replaced by the incoming nav rebuild).
   var groundAtCam = groundHeight(camX,camZ);
-  var minY = groundAtCam + 4.5;
+  var minY = groundAtCam + 1.7;
   if(camY<minY) camY = minY;
 
   var groundAtTarget = groundHeight(rig.target.x, rig.target.z);
