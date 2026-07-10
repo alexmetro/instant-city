@@ -644,6 +644,7 @@
 <script src="catalog-occupations.js"></script>
 <script src="catalog-activities.js"></script>
 <script src="catalog-reactions.js"></script>
+<script src="streets-geometry.js"></script>
 <script>
 (function(){
 "use strict";
@@ -838,27 +839,156 @@ function updateGridSwing(){
   // the historical record describes for existing structures versus new
   // post-survey construction.
   CURRENT_STREET_SKEW = VIOGET_SKEW*(1-t);
-  // Re-paints the splat canvases only when t has actually moved (cheap 2D
-  // redraw, but no need to redo it 60x/sec); CURRENT_STREET_SKEW itself is
+  // Re-paints the splat canvases when EITHER the swing angle has moved
+  // (cheap 2D redraw, no need to redo it 60x/sec) OR simDay has crossed
+  // some street's own survey/worn-track/checkpoint threshold (see
+  // STREET_REPAINT_THRESHOLDS above) — the swing-only trigger used to be
+  // the sole repaint driver, which silently stopped mattering forever
+  // after Aug 1847 (t pinned at 1) even though streets keep
+  // appearing/upgrading for years afterward. streetTopologyMayHaveChanged
+  // also fires unconditionally the first time (LAST_SPLAT_SIMDAY===null),
+  // AND correctly re-detects a threshold crossing on a BACKWARD time-jump
+  // (rewind), not just forward playback. CURRENT_STREET_SKEW itself is
   // still updated above every call so labels stay perfectly in sync even
   // between repaints.
-  if(Math.abs(t-LAST_SPLAT_SWING_T)>0.015 && typeof renderGroundSplat==="function"){
+  var topologyChanged = streetTopologyMayHaveChanged(LAST_SPLAT_SIMDAY, simDay);
+  if((Math.abs(t-LAST_SPLAT_SWING_T)>0.015 || topologyChanged) && typeof renderGroundSplat==="function"){
     LAST_SPLAT_SWING_T = t;
+    LAST_SPLAT_SIMDAY = simDay;
     renderGroundSplat(CURRENT_STREET_SKEW);
   }
 }
 
+/* =====================================================================
+   STREET-CHECKPOINT DATA (grounding.md §9, THE STREET-CHECKPOINT LAW):
+   data/streets-geometry.json (baked as app/streets-geometry.js, loaded
+   above as window.STREETS_GEOMETRY) is now the ONLY street source in this
+   file. The old hardcoded 10-street Vioget-grid streetsU/V literals are
+   DELETED, not reconciled — every coordinate below is read straight out
+   of the dataset. This single change also fixes knownDiscrepancies[0],
+   the CLAY/WASHINGTON SWAP BUG (the app previously had clay north/
+   washington south of the Plaza; the record — Portsmouth Square bounded
+   by Washington St to the north, Clay St to the south — is the reverse):
+   every one of this file's many GEO.streetsV.clay/washington consumers
+   (the fire block, the wharf, the docks, the walker graph, City Hotel's
+   "corner of Clay and Kearny") inherits the fix automatically, with zero
+   other edits, because they all read the same corrected values from here.
+   ===================================================================== */
+var SG = window.STREETS_GEOMETRY;
+if(!SG){ throw new Error("streets-geometry.js failed to load — check the <script src> path / run tools/build-streets-geo-js.js"); }
+
+// Per-checkpoint-map simDay thresholds (when that survey's documented
+// extent becomes "current" for streets whose topology grows across
+// checkpoints, e.g. Montgomery's vioget-1839 [pacific..california] stub
+// growing to its full ofarrell-1847 [vallejo..market-crossing] run).
+// Hardcoded as plain simDay integers (not via eventDateToSimDay(), which
+// isn't defined until much further down — see ITS OWN comment on why
+// OFARRELL_SWING_START/END has to live there) rather than left as NaN
+// bait; ofarrell-1847's value is asserted equal to OFARRELL_SWING_END
+// where that constant is finally defined, so the two can never drift.
+var ERA_MAP_SIMDAY = {
+  "vioget-1839": -999999, "none": -999999, "primary-corpus": -999999, // already-there-at-sim-start baselines
+  "ofarrell-1847": 396,   // Aug 1 1847 == OFARRELL_SWING_END (asserted below, once that const exists)
+  "eddy-1849": 1279,      // Dec 31 1849 — Eddy's re-survey
+  "coast-survey-1853": 2376 // Jan 1 1853 — the Coast Survey chart (no finer date in the record)
+};
+
+/* STREETS_RUNTIME: one flattened, render-ready entry per documented street
+   (Hundred Vara group members — Folsom/Harrison/Bryant/Brannan, First
+   through Eighth — expanded out of their generative "members" arrays into
+   individual entries here). Two dataset entries are DELIBERATELY excluded:
+     - "mission-street": this file's EXISTING findLowRoute()-based winding
+       path (MISSION_ROAD_PTS, far below) is topologically TRUER than the
+       dataset's own 2-point polyline, which its own checkpoint evidence
+       calls "a DELIBERATE ANALYTICAL SIMPLIFICATION of a winding real
+       path." Per grounding.md §9 ("topology is the truth that matters
+       most"), keeping the existing curved implementation IS following the
+       law here, not a lapse from it — a straight-line swap-in would be a
+       regression. Its (u,v) endpoints still come from GEO below.
+     - "western-addition-future-streets": ships with an empty polyline on
+       purpose (meta.knownDiscrepancies explains why no coordinate exists
+       yet) — nothing to render, and outside this project's 1846-1856
+       Act I window regardless. */
+var STREETS_RUNTIME = (function(){
+  var calib = SG.meta.calibration;
+  var classWidthMap = {}; calib.widthClasses.forEach(function(c){ classWidthMap[c.class]=c.width_m; });
+  var overrideMap = {}; calib.perStreetWidthOverrides_fromEldredge1912.forEach(function(o){ overrideMap[o.id]=o.width_m; });
+  function widthFor(entry){
+    if(entry.width_m!=null) return entry.width_m;
+    if(overrideMap[entry.id]!=null) return overrideMap[entry.id];
+    return classWidthMap[entry.widthClass] || classWidthMap[entry.class] || 12; // last-resort only; calibration covers every class actually used
+  }
+  var out = [];
+  function addEntry(id,name,widthM,polyline,checkpoints,appears){
+    var swings = checkpoints.some(function(c){ return c.map==="vioget-1839"; }); // only the original Vioget-surveyed streets ease through the O'Farrell skew
+    var ckpts = checkpoints.filter(function(c){ return Array.isArray(c.extent); }).map(function(c){
+      return { day: ERA_MAP_SIMDAY[c.map]!=null ? ERA_MAP_SIMDAY[c.map] : -999999, extent:c.extent };
+    }).sort(function(a,b){ return a.day-b.day; });
+    out.push({ id:id, name:name, widthM:widthM, polyline:polyline, checkpoints:ckpts,
+      surveyedDay: appears?appears.surveyedDay:null, firstMentionDay: appears?appears.firstMentionDay:null, swings:swings });
+  }
+  SG.streets.forEach(function(s){
+    if(s.id==="mission-street" || s.id==="western-addition-future-streets") return;
+    if(s.members){ // hundred-vara-district-streets, numbered-streets-first-eighth: no growth across checkpoints, full length from ofarrell-1847
+      var wM = widthFor(s);
+      s.members.forEach(function(m){
+        var poly = m.polyline.map(function(p){ return {u:p[0],v:p[1]}; });
+        addEntry(s.id+":"+m.name, m.name+" Street", wM, poly, [{map:"ofarrell-1847",extent:[0,poly.length-1]}], s.appears);
+      });
+      return;
+    }
+    var poly = s.polyline.map(function(p){ return {u:p[0],v:p[1]}; });
+    addEntry(s.id, s.name, widthFor(s), poly, s.checkpoints, s.appears);
+  });
+  return out;
+})();
+var STREETS_RUNTIME_BY_ID = {}; STREETS_RUNTIME.forEach(function(s){ STREETS_RUNTIME_BY_ID[s.id]=s; });
+function streetUConst(id){ return STREETS_RUNTIME_BY_ID[id].polyline[0].u; } // cardinal N-S streets only: constant u along the whole run
+function streetVConst(id){ return STREETS_RUNTIME_BY_ID[id].polyline[0].v; } // cardinal E-W streets only: constant v along the whole run
+
+/* Every simDay where SOME street's rendered state could change — its own
+   survey/worn-track dates, or a checkpoint-era boundary that grows its
+   drawn extent (read by updateGridSwing() below, which used to repaint
+   the splat canvases ONLY when the O'Farrell skew was still easing; once
+   that finishes (t=1, forever after) it would otherwise never notice
+   Eddy's 1849 extensions or a street's firstMentionDay arriving — exactly
+   the "time-jump leaves the world stale" failure class the P0 quartet
+   fixed for population/ships/people, now closed for streets too). */
+var STREET_REPAINT_THRESHOLDS = (function(){
+  var set = {};
+  STREETS_RUNTIME.forEach(function(s){
+    if(s.surveyedDay!=null) set[s.surveyedDay]=1;
+    if(s.firstMentionDay!=null) set[s.firstMentionDay]=1;
+    s.checkpoints.forEach(function(c){ if(c.day>-999999) set[c.day]=1; });
+  });
+  return Object.keys(set).map(Number).sort(function(a,b){ return a-b; });
+})();
+var LAST_SPLAT_SIMDAY = null;
+function streetTopologyMayHaveChanged(prevDay, curDay){
+  if(prevDay==null || prevDay===curDay) return prevDay==null;
+  var lo=Math.min(prevDay,curDay), hi=Math.max(prevDay,curDay);
+  for(var i=0;i<STREET_REPAINT_THRESHOLDS.length;i++){
+    var t = STREET_REPAINT_THRESHOLDS[i];
+    if(t>lo && t<=hi) return true;
+  }
+  return false;
+}
+
 var GEO = {
-  // Vioget/O'Farrell grid, in ideal (u,v) grid space (pre-skew). Montgomery
-  // (u=0) sits at the 1846 shoreline; Kearny/Dupont/Stockton run inland
-  // (west = negative u) — 3 block-widths total, matching the surveyed extent.
-  streetsU: { montgomery:0, kearny:-BLOCK_W, dupont:-2*BLOCK_W, stockton:-3*BLOCK_W },
-  // E-W cross streets at these ideal v values (north is negative v) — 5
-  // block-depths total, symmetric around the Plaza (Clay/Washington).
-  streetsV: { pacific:-2.5*BLOCK_D, jackson:-1.5*BLOCK_D, clay:-0.5*BLOCK_D,
-              washington:0.5*BLOCK_D, sacramento:1.5*BLOCK_D, california:2.5*BLOCK_D },
-  // Plaza: one block inland of Montgomery (Dupont/Kearny x Clay/Washington)
-  // — "faced the water one block up from the beach."
+  // Compatibility map for this file's ~80 other GEO.streetsU/V.xxx call
+  // sites (fire block, wharf, docks, walker graph, labels' own fallback
+  // span, etc.) — same 10 named keys as the old hardcoded object, but
+  // every value is now READ from STREETS_RUNTIME above instead of computed
+  // independently, so there is exactly one source of truth for them.
+  streetsU: { montgomery:streetUConst("montgomery"), kearny:streetUConst("kearny"), dupont:streetUConst("dupont"), stockton:streetUConst("stockton") },
+  streetsV: { pacific:streetVConst("pacific"), jackson:streetVConst("jackson"), clay:streetVConst("clay"),
+              washington:streetVConst("washington"), sacramento:streetVConst("sacramento"), california:streetVConst("california-street") },
+  // Plaza: one block inland of Montgomery (Dupont/Kearny x Washington/Clay,
+  // north-to-south) — "faced the water one block up from the beach." Built
+  // from the same VARA_M/BLOCK_W/BLOCK_D constants the dataset itself
+  // defines identically (meta.constants), not independently re-derived;
+  // these bounds were never affected by the clay/washington NAME swap bug
+  // above (they're plain block-grid math), and already match the record.
   plaza: { uMin:-2*BLOCK_W, uMax:-BLOCK_W, vMin:-0.5*BLOCK_D, vMax:0.5*BLOCK_D },
 
   // shoreline: 1846 cove, inland edge ~Montgomery St, bulging in near
@@ -1355,11 +1485,18 @@ var ROAD_EDGE_COL = "#cdb87f", ROAD_RUT_COL = "#241a0f";
    stroke's flat, fully-opaque fill covered nearly the whole width and the
    graduated wear look was lost — reading as a solid dark band rather than
    worn earth. Widened + strengthened the underlay so more of the width
-   shows the lighter wear tone (closer to the old proportions). */
+   shows the lighter wear tone (closer to the old proportions).
+   WEAR-HALO TIGHTEN (2026-07-10, screening P1-5): 1.6x read as a ~3x-wide
+   smear once several streets' halos overlapped at an intersection corner
+   (Director's Screening #1, f6a) — the daytime-contrast fix above had
+   swung the ratio too far the other way. 1.22x keeps a visibly softer
+   edge than the flat-alpha main stroke without the halo dominating the
+   intersection; alpha trimmed slightly too so stacked halos at a 4-way
+   crossing don't compound into a bright smudge. */
 function paintRoad(targets, pts, widthM, color, alpha){
   alpha = alpha==null?1:alpha;
   targets.forEach(function(t){
-    splatStroke(t.ctx, t.pxFn, t.pxLenFn, pts, widthM*1.6, ROAD_EDGE_COL, alpha*0.42);
+    splatStroke(t.ctx, t.pxFn, t.pxLenFn, pts, widthM*1.22, ROAD_EDGE_COL, alpha*0.34);
     splatStroke(t.ctx, t.pxFn, t.pxLenFn, pts, widthM, color, alpha);
     if(widthM>=4){ // ruts read as noise on the already-narrow stubs/door-paths; skip those
       var rutOff = widthM*0.19;
@@ -1379,7 +1516,8 @@ function paintSmoothRoute(targets, pts, widthM, color, alpha, mottle){
   if(!pts || pts.length<2) return;
   alpha = alpha==null?1:alpha;
   targets.forEach(function(t){
-    [ {w:widthM*1.3, col:ROAD_EDGE_COL, a:alpha*0.28}, {w:widthM, col:color, a:alpha} ].forEach(function(pass){
+    // WEAR-HALO TIGHTEN (2026-07-10, screening P1-5) — same ratio pulled in as paintRoad() above.
+    [ {w:widthM*1.18, col:ROAD_EDGE_COL, a:alpha*0.24}, {w:widthM, col:color, a:alpha} ].forEach(function(pass){
       t.ctx.save();
       t.ctx.globalAlpha = pass.a;
       t.ctx.strokeStyle = pass.col;
@@ -1440,7 +1578,11 @@ var SPLAT_TARGETS_TOWN_ONLY = [ { ctx:splatTownCtx, pxFn:townPx, pxLenFn:townPxL
 var SPLAT_MISSION_PTS = [], SPLAT_ELCAMINO_PTS = [], SPLAT_DOOR_PATHS = [];
 var SPLAT_CLUTTER_PATHS = [], SPLAT_LEVELING_CART_PTS = [];
 
-var STREET_MAIN_W = 10, STREET_CROSS_W = 7; // Montgomery/Kearny/Dupont/Stockton vs the E-W cross streets
+// STREET-CHECKPOINT RESET (2026-07-10): the old fixed STREET_MAIN_W=10/
+// STREET_CROSS_W=7 constants are DELETED — every street now paints at its
+// own documented width_m straight from STREETS_RUNTIME (grounding.md §9's
+// metrological-baseline rule), not a fixed guess shared by every street
+// in its rough direction class.
 // DAYTIME-CONTRAST fix (2026-07-10, iPad field test defect #4): 0x3d3120
 // was inherited verbatim from the old drapeGroundStrip()-based streets
 // (git history: buildStreets()'s dirtColor was already 0x3d3120 pre-rebuild)
@@ -1492,11 +1634,38 @@ function renderGroundSplat(skewAngle){
   // Plaza — Portsmouth Square, filled packed-earth polygon, one block
   // inland of Montgomery; drawn first so the streets crossing it paint
   // on top, same visual layering as the old draped boxes over open ground.
+  // WORN-EARTH REPAINT (2026-07-10, screening P1-6): the old single flat
+  // fill at alpha 0.85 let ~15% of the terrain mesh's own per-pixel dither
+  // (terrainColor()'s small-scale fbm speckle) show through; combined with
+  // the splat textures' mipmaps being off (NIGHT-GLOW fix, above, traded
+  // for its own bleed fix), that speckle aliased at grazing viewing angles
+  // into the "dither/noise rectangle... reads as texture corruption" the
+  // screening flagged, plus a mechanical repeating "fish-scale" read.
+  // Replaced with an OPAQUE base fill (alpha 1 — nothing shows through)
+  // plus a few large, soft, LOW-frequency worn-earth blotches (radial
+  // gradients, not per-pixel noise) and two authored corner-to-corner
+  // foot-worn paths — real town squares wear diagonally as people cut
+  // across them — instead of small-scale repeating texture.
   var plazaCorners = [
     gridToWorld(GEO.plaza.uMin, GEO.plaza.vMin), gridToWorld(GEO.plaza.uMax, GEO.plaza.vMin),
     gridToWorld(GEO.plaza.uMax, GEO.plaza.vMax), gridToWorld(GEO.plaza.uMin, GEO.plaza.vMax)
   ];
-  splatFillPoly(splatTownCtx, townPx, plazaCorners, "#8a7350", 0.85);
+  splatFillPoly(splatTownCtx, townPx, plazaCorners, "#8a7350", 1);
+  (function paintPlazaWear(){
+    var cx=(plazaCorners[0].x+plazaCorners[2].x)/2, cz=(plazaCorners[0].z+plazaCorners[2].z)/2;
+    var halfSpan = Math.hypot(plazaCorners[2].x-plazaCorners[0].x, plazaCorners[2].z-plazaCorners[0].z)/2;
+    [ {du:-0.35,dv:-0.2,r:0.55,col:"#7a6144",a:0.30}, {du:0.3,dv:0.25,r:0.6,col:"#96805a",a:0.22},
+      {du:-0.1,dv:0.35,r:0.42,col:"#6e5738",a:0.26}, {du:0.32,dv:-0.3,r:0.4,col:"#8a7350",a:0.18} ].forEach(function(b){
+      var wx=cx+b.du*halfSpan*1.4, wz=cz+b.dv*halfSpan*1.4;
+      var p = townPx(wx,wz), rp = townPxLen(b.r*halfSpan);
+      var grad = splatTownCtx.createRadialGradient(p.x,p.y,0, p.x,p.y,rp);
+      grad.addColorStop(0, b.col); grad.addColorStop(1, "rgba(0,0,0,0)");
+      splatTownCtx.save(); splatTownCtx.globalAlpha=b.a; splatTownCtx.fillStyle=grad;
+      splatTownCtx.beginPath(); splatTownCtx.arc(p.x,p.y,rp,0,Math.PI*2); splatTownCtx.fill(); splatTownCtx.restore();
+    });
+    paintRoad(SPLAT_TARGETS_TOWN_ONLY, [plazaCorners[0], plazaCorners[2]], 3.2, "#6e5b3c", 0.4);
+    paintRoad(SPLAT_TARGETS_TOWN_ONLY, [plazaCorners[1], plazaCorners[3]], 3.2, "#6e5b3c", 0.35);
+  })();
 
   // Mission Road + El Camino Real — smooth curve through the real
   // findLowRoute() waypoints (unchanged data, see buildMissionRoad()
@@ -1520,20 +1689,50 @@ function renderGroundSplat(skewAngle){
   // drapeGroundStrip() mesh used (LEGACY-STREET-MESH fix, 2026-07-10).
   paintSmoothRoute(SPLAT_TARGETS_TOWN_ONLY, SPLAT_LEVELING_CART_PTS, 2.4, "#c7a973", 1, true);
 
-  // The Vioget/O'Farrell street grid + fading stubs.
-  var uVals=[GEO.streetsU.stockton,GEO.streetsU.dupont,GEO.streetsU.kearny,GEO.streetsU.montgomery];
-  var vVals=[GEO.streetsV.pacific,GEO.streetsV.jackson,GEO.streetsV.clay,GEO.streetsV.washington,GEO.streetsV.sacramento,GEO.streetsV.california];
-  var vSpan=[vVals[0],vVals[vVals.length-1]], uSpan=[uVals[0],uVals[uVals.length-1]];
-  uVals.forEach(function(u){
-    var p0=gridToWorldAt(u,vSpan[0],skewAngle), p1=gridToWorldAt(u,vSpan[1],skewAngle);
-    paintRoad(SPLAT_TARGETS_BOTH, [p0,p1], STREET_MAIN_W, STREET_DIRT_COL, 1);
-    paintStub(SPLAT_TARGETS_BOTH, u,vSpan[0], 0,-1, STREET_MAIN_W, skewAngle);
-    paintStub(SPLAT_TARGETS_BOTH, u,vSpan[1], 0, 1, STREET_MAIN_W, skewAngle);
-  });
-  vVals.forEach(function(v){
-    var p0=gridToWorldAt(uSpan[0],v,skewAngle), p1=gridToWorldAt(uSpan[1],v,skewAngle);
-    paintRoad(SPLAT_TARGETS_BOTH, [p0,p1], STREET_CROSS_W, STREET_DIRT_COL, 1);
-    paintStub(SPLAT_TARGETS_BOTH, uSpan[0],v, -1,0, STREET_CROSS_W, skewAngle);
+  // THE STREET-CHECKPOINT RESET (grounding.md §9): every documented street
+  // in STREETS_RUNTIME, era-gated by its own surveyedDay (faint survey
+  // line once platted) and firstMentionDay (worn track once used) — no
+  // longer a fixed 10-street grid frozen for the whole sim window. Streets
+  // that eased through the O'Farrell skew (swings:true — the original
+  // Vioget-surveyed 10) paint at the CURRENT skew angle passed in; every
+  // O'Farrell-era-and-later addition (Market, the waterfront streets,
+  // Broadway/Vallejo/Powell/Bush/Pine/Post, the Hundred Vara grid) was
+  // surveyed true from day one and always paints at skew 0.
+  // "mission-street" is deliberately excluded here — see STREETS_RUNTIME's
+  // own comment — its existing curved MISSION_ROAD_PTS handling above
+  // already covers it, more faithfully than this dataset entry would.
+  var DEFAULT_WORN_DELAY = 365; // fill: streets with no corpus firstMentionDay citation read as worn ~1yr after survey (precedent: LANDMARK_DEFAULT_FOUNDED_ISO elsewhere in this file)
+  var SURVEY_LINE_COL = "#cbb98f", SURVEY_LINE_ALPHA = 0.38, SURVEY_LINE_W_CAP = 2.6;
+  STREETS_RUNTIME.forEach(function(s){
+    // A few "gap streets" (Shubrick, Water, Portsmouth, Commercial) carry
+    // ONLY a corpus firstMentionDay, no independent survey date
+    // (data/streets-notes.md's single/double-attestation gap streets) —
+    // gate on whichever date exists rather than requiring surveyedDay
+    // specifically, or these four never render at all.
+    var gateDay = s.surveyedDay!=null ? s.surveyedDay : s.firstMentionDay;
+    if(gateDay==null || simDay<gateDay) return; // not yet on any map or in any corpus mention
+    var active = s.checkpoints[0];
+    for(var ci=0; ci<s.checkpoints.length; ci++){ if(s.checkpoints[ci].day<=simDay) active=s.checkpoints[ci]; }
+    if(!active) return;
+    var i0=active.extent[0], i1=active.extent[1], angle=s.swings?skewAngle:0;
+    var pathPts=[];
+    for(var pi=i0; pi<=i1; pi++) pathPts.push(gridToWorldAt(s.polyline[pi].u, s.polyline[pi].v, angle));
+    if(pathPts.length<2) return;
+    var isWorn = s.firstMentionDay!=null ? simDay>=s.firstMentionDay : simDay>=s.surveyedDay+DEFAULT_WORN_DELAY;
+    if(isWorn) paintRoad(SPLAT_TARGETS_BOTH, pathPts, s.widthM, STREET_DIRT_COL, 1);
+    else paintRoad(SPLAT_TARGETS_BOTH, pathPts, Math.min(s.widthM, SURVEY_LINE_W_CAP), SURVEY_LINE_COL, SURVEY_LINE_ALPHA);
+    // Fading sandy stub past the surveyed edge — kept only for the
+    // original 10 cardinal streets, whose extent ends really are
+    // "unsurveyed ground beyond this point"; every O'Farrell-era
+    // addition's polyline extent IS its documented real end (a block
+    // count, a franchise length), not a survey edge needing a fade.
+    if(s.swings && isWorn){
+      var a0=s.polyline[i0], a1=s.polyline[i1], aNext=s.polyline[Math.min(i0+1,i1)], aPrev=s.polyline[Math.max(i1-1,i0)];
+      var d0u=a0.u-aNext.u, d0v=a0.v-aNext.v, d0len=Math.hypot(d0u,d0v)||1;
+      var d1u=a1.u-aPrev.u, d1v=a1.v-aPrev.v, d1len=Math.hypot(d1u,d1v)||1;
+      paintStub(SPLAT_TARGETS_BOTH, a0.u,a0.v, d0u/d0len,d0v/d0len, s.widthM, angle);
+      paintStub(SPLAT_TARGETS_BOTH, a1.u,a1.v, d1u/d1len,d1v/d1len, s.widthM, angle);
+    }
   });
 
   splatWorldTex.needsUpdate = true;
@@ -1824,14 +2023,31 @@ function distToSegXZ(x,z,x0,z0,x1,z1){
   t = clamp(t,0,1);
   return Math.hypot(x-(x0+dx*t), z-(z0+dz*t));
 }
-var PLACEMENT_STREET_HALF_MAIN = 5, PLACEMENT_STREET_HALF_CROSS = 3.5; // half of buildStreets()' MAIN_W=10/CROSS_W=7
+/* STREET-CHECKPOINT RESET (grounding.md §9): the old fixed 10-segment
+   cardinal-grid-only list (half-widths guessed at 5/3.5) is DELETED —
+   every documented street in STREETS_RUNTIME now contributes its own
+   segments at its own documented half-width. Built once, against each
+   street's FULLEST known extent (its last/biggest checkpoint — placement
+   deliberately treats the network as already fully grown, so early
+   buildings never end up standing where a not-yet-surveyed later street
+   will run; only the SPLAT PAINTER and LABELS are era-gated, since only
+   they need to visibly grow over time). Projected via the same fixed
+   gridToWorld() (permanent VIOGET_SKEW) every OTHER placement call in this
+   file uses — matching the existing, already-screening-passed convention
+   that collision geometry lives in buildings' own fixed frame, not
+   whatever angle a street happens to be painted at post-swing (see
+   updateGridSwing()'s comment on why buildings "never re-baked" is
+   historically correct, not a bug). */
 var PLACEMENT_STREET_SEGS = (function(){
-  var uVals=[GEO.streetsU.stockton,GEO.streetsU.dupont,GEO.streetsU.kearny,GEO.streetsU.montgomery];
-  var vVals=[GEO.streetsV.pacific,GEO.streetsV.jackson,GEO.streetsV.clay,GEO.streetsV.washington,GEO.streetsV.sacramento,GEO.streetsV.california];
-  var vSpan=[vVals[0],vVals[vVals.length-1]], uSpan=[uVals[0],uVals[uVals.length-1]];
-  var segs=[];
-  uVals.forEach(function(u){ var a=gridToWorld(u,vSpan[0]), b=gridToWorld(u,vSpan[1]); segs.push({x0:a.x,z0:a.z,x1:b.x,z1:b.z,halfW:PLACEMENT_STREET_HALF_MAIN}); });
-  vVals.forEach(function(v){ var a=gridToWorld(uSpan[0],v), b=gridToWorld(uSpan[1],v); segs.push({x0:a.x,z0:a.z,x1:b.x,z1:b.z,halfW:PLACEMENT_STREET_HALF_CROSS}); });
+  var segs = [];
+  STREETS_RUNTIME.forEach(function(s){
+    var i1 = s.checkpoints.length ? s.checkpoints[s.checkpoints.length-1].extent[1] : s.polyline.length-1;
+    var halfW = s.widthM/2;
+    for(var i=0;i<i1;i++){
+      var a=gridToWorld(s.polyline[i].u, s.polyline[i].v), b=gridToWorld(s.polyline[i+1].u, s.polyline[i+1].v);
+      segs.push({x0:a.x,z0:a.z,x1:b.x,z1:b.z,halfW:halfW});
+    }
+  });
   return segs;
 })();
 /* Rough Mission Road corridor (village edge -> Mission Dolores) for early
@@ -1902,75 +2118,78 @@ function canPlace(x,z,footprintR,opts){
    ===================================================================== */
 
 /* =====================================================================
-   STREET NAME LABELS (task #20, data-driven from data/streets-by-year.json
-   via streets-by-year.js): small-caps text lying along each street's own
-   line, repeating on long streets (Google Maps convention), altitude-gated
-   to the ~120-1200m band where they're legible without cluttering close-in
-   architecture or far-out overview shots. Only the 10 original Vioget-grid
-   streets have real rendered geometry in this build (this app doesn't yet
-   lay down O'Farrell's later Market/Bush/Pine/Post/Powell additions), so
-   those are the only ones labeled — all present from day one (1846) per
-   the dataset's "vioget-core" category, so no era-gate is needed for them.
+   STREET NAME LABELS (STREET-CHECKPOINT RESET, 2026-07-10): every
+   documented street in STREETS_RUNTIME now gets a label pool — not just
+   the original 10 Vioget-grid streets. Era-gated to each street's own
+   surveyedDay (a name doesn't exist on the map before its street does);
+   small-caps text lying along the street's own (possibly multi-point,
+   possibly growing) line, repeating on long streets (Google Maps
+   convention), altitude-gated to the ~120-1200m band where they're
+   legible without cluttering close-in architecture or far-out overview
+   shots. "mission-street" stays unlabeled here (see STREETS_RUNTIME's own
+   comment on why it's excluded from the generic street list).
 
-   REBUILT 2026-07-10 (iPad field-test defect #5) from a world-space
-   ground-decal PlaneGeometry+CanvasTexture per street to a DOM/CSS
-   billboard pool — the same screen-space-constant-size technique this
-   file already uses for building-name labels (updateBuildingLabels) and
-   biz glyphs (updateBizGlyphs), reprojected every frame via
-   camera.project(). That one change fixes BOTH reported problems at once:
-     - GARBLED MICRO-TEXT: a world-space label's on-screen size shrinks
-       with distance/altitude like any other ground decal; across the full
-       120-1200m legible band its real glyph height (a few meters) read as
-       a handful of screen pixels at anything past the near end — tiny,
-       aliased, illegible "micro-text". A DOM label has a fixed CSS font
-       size regardless of altitude, so it's exactly as readable at 1200m as
-       at 120m.
-     - MISALIGNMENT: the old mesh was seated with gridToWorld(), which
-       always bakes in the fixed, never-swinging VIOGET_SKEW — while the
-       street paint itself (renderGroundSplat(), driven by
-       updateGridSwing()) eases that skew down to 0 through 1847. Before
-       the swing completes, the label sat at a visibly different angle
-       than the street it was supposed to name. Recomputing position AND
-       on-screen angle every frame from CURRENT_STREET_SKEW (the same
-       value updateGridSwing() just fed renderGroundSplat()) keeps the
-       label glued to the actual painted street at every date. */
-var STREET_LABELS = [
-  { name:"MONTGOMERY STREET", axis:"u", val:GEO.streetsU.montgomery },
-  { name:"KEARNY STREET",     axis:"u", val:GEO.streetsU.kearny },
-  { name:"DUPONT STREET",     axis:"u", val:GEO.streetsU.dupont },
-  { name:"STOCKTON STREET",   axis:"u", val:GEO.streetsU.stockton },
-  { name:"PACIFIC STREET",    axis:"v", val:GEO.streetsV.pacific },
-  { name:"JACKSON STREET",    axis:"v", val:GEO.streetsV.jackson },
-  { name:"CLAY STREET",       axis:"v", val:GEO.streetsV.clay },
-  { name:"WASHINGTON STREET", axis:"v", val:GEO.streetsV.washington },
-  { name:"SACRAMENTO STREET", axis:"v", val:GEO.streetsV.sacramento },
-  { name:"CALIFORNIA STREET", axis:"v", val:GEO.streetsV.california }
-];
-var STREET_LABEL_VSPAN = [GEO.streetsV.pacific, GEO.streetsV.california];
-var STREET_LABEL_USPAN = [GEO.streetsU.stockton, GEO.streetsU.montgomery];
-var streetLabelSlots = []; // {el, axis, val, t} — t is the fractional 0..1 position along the run
+   Still a DOM/CSS billboard pool (2026-07-10, iPad field-test defect #5's
+   fix) reprojected every frame via camera.project() — see that fix's own
+   history below for why this beats a world-space ground decal (fixed CSS
+   size at any altitude; recomputed every frame from CURRENT_STREET_SKEW /
+   the street's own active checkpoint extent, so a label never drifts from
+   what's actually painted underneath it, at any date). */
+var STREET_LABEL_DEFS = STREETS_RUNTIME.filter(function(s){ return s.surveyedDay!=null || s.firstMentionDay!=null; })
+  .map(function(s){ return { s:s, name:s.name.toUpperCase(), gateDay: s.surveyedDay!=null?s.surveyedDay:s.firstMentionDay }; });
+var streetLabelSlots = []; // {el, s, t} — t is the fractional 0..1 position along the street's active-extent polyline (by arc length)
 (function buildStreetLabelPool(){
   var hudEl = document.getElementById("hud");
   var REPEAT_SPACING = 200; // meters between repeated name instances along a long street
-  var MAX_REPS = 3; // bounded DOM pool — plenty for these ~380-420m runs
-  STREET_LABELS.forEach(function(st){
-    var p0, p1;
-    // gridToWorldAt() is a pure rotation (see its own comment) — distance
-    // between two grid points is skew-invariant, so any fixed angle here
-    // gives the same real-world length used only to size the repeat count.
-    if(st.axis==="u"){ p0=gridToWorldAt(st.val,STREET_LABEL_VSPAN[0],VIOGET_SKEW); p1=gridToWorldAt(st.val,STREET_LABEL_VSPAN[1],VIOGET_SKEW); }
-    else { p0=gridToWorldAt(STREET_LABEL_USPAN[0],st.val,VIOGET_SKEW); p1=gridToWorldAt(STREET_LABEL_USPAN[1],st.val,VIOGET_SKEW); }
-    var len = Math.hypot(p1.x-p0.x, p1.z-p0.z);
-    var reps = Math.min(MAX_REPS, Math.max(1, Math.round(len/REPEAT_SPACING)));
-    for(var i=0;i<reps;i++){
+  var MAX_REPS = 3; // bounded DOM pool per street
+  STREET_LABEL_DEFS.forEach(function(def){
+    var s = def.s;
+    // gridToWorldAt() is a pure rotation — distance is skew-invariant, so
+    // any fixed angle gives the same real-world length, used only to size
+    // the repeat count; use the street's FULL polyline (its eventual
+    // longest run) so the repeat count doesn't itself change across eras.
+    var total = 0;
+    for(var i=1;i<s.polyline.length;i++) total += Math.hypot(
+      gridToWorldAt(s.polyline[i].u,s.polyline[i].v,0).x - gridToWorldAt(s.polyline[i-1].u,s.polyline[i-1].v,0).x,
+      gridToWorldAt(s.polyline[i].u,s.polyline[i].v,0).z - gridToWorldAt(s.polyline[i-1].u,s.polyline[i-1].v,0).z);
+    var reps = Math.min(MAX_REPS, Math.max(1, Math.round(total/REPEAT_SPACING)));
+    for(var r=0;r<reps;r++){
       var el = document.createElement("div");
       el.className = "street-label";
-      el.textContent = st.name;
+      el.textContent = def.name;
       hudEl.appendChild(el);
-      streetLabelSlots.push({ el:el, axis:st.axis, val:st.val, t:(i+0.5)/reps });
+      streetLabelSlots.push({ el:el, s:s, gateDay:def.gateDay, t:(r+0.5)/reps });
     }
   });
 })();
+/* Active checkpoint extent's world-space polyline for a street at the
+   given skew angle (cardinal streets swing, everything else is fixed at
+   0 — same rule renderGroundSplat() itself follows), plus a point at
+   fractional arc-length position t along it. Shared by the label
+   repaint below; renderGroundSplat() inlines its own simpler version
+   since it just needs the whole polyline, not a single interpolated point. */
+function streetActiveWorldPts(s, day, skewAngleForSwinging){
+  var active = s.checkpoints[0];
+  for(var ci=0; ci<s.checkpoints.length; ci++){ if(s.checkpoints[ci].day<=day) active=s.checkpoints[ci]; }
+  if(!active) return null;
+  var angle = s.swings ? skewAngleForSwinging : 0;
+  var pts = [];
+  for(var pi=active.extent[0]; pi<=active.extent[1]; pi++) pts.push(gridToWorldAt(s.polyline[pi].u, s.polyline[pi].v, angle));
+  return pts;
+}
+function pointAlongWorldPts(pts, t){
+  if(!pts || pts.length<1) return null;
+  if(pts.length===1) return { x:pts[0].x, z:pts[0].z };
+  var lens=[0]; for(var i=1;i<pts.length;i++) lens.push(lens[i-1]+Math.hypot(pts[i].x-pts[i-1].x, pts[i].z-pts[i-1].z));
+  var target = t*lens[lens.length-1];
+  for(var j=1;j<pts.length;j++){
+    if(target<=lens[j] || j===pts.length-1){
+      var segLen=lens[j]-lens[j-1], lt=segLen>0?(target-lens[j-1])/segLen:0;
+      return { x:lerp(pts[j-1].x,pts[j].x,lt), z:lerp(pts[j-1].z,pts[j].z,lt) };
+    }
+  }
+  return { x:pts[pts.length-1].x, z:pts[pts.length-1].z };
+}
 var STREET_LABEL_ALT_MIN=120, STREET_LABEL_ALT_MAX=1200;
 var _slPos = new THREE.Vector3(), _slFwd = new THREE.Vector3();
 function updateStreetLabels(alt){
@@ -1981,11 +2200,13 @@ function updateStreetLabels(alt){
   }
   var skew = CURRENT_STREET_SKEW;
   for(var j=0;j<streetLabelSlots.length;j++){
-    var s = streetLabelSlots[j], el = s.el;
-    var p0, p1;
-    if(s.axis==="u"){ p0=gridToWorldAt(s.val,STREET_LABEL_VSPAN[0],skew); p1=gridToWorldAt(s.val,STREET_LABEL_VSPAN[1],skew); }
-    else { p0=gridToWorldAt(STREET_LABEL_USPAN[0],s.val,skew); p1=gridToWorldAt(STREET_LABEL_USPAN[1],s.val,skew); }
-    var wx=lerp(p0.x,p1.x,s.t), wz=lerp(p0.z,p1.z,s.t), wy=terrainHeight(wx,wz)+0.3;
+    var slot = streetLabelSlots[j], el = slot.el, s = slot.s;
+    if(simDay<slot.gateDay){ el.style.opacity=0; continue; } // this street's name isn't on any map or in any corpus mention yet
+    var pts = streetActiveWorldPts(s, simDay, skew);
+    var here = pointAlongWorldPts(pts, slot.t);
+    var ahead = pointAlongWorldPts(pts, Math.min(0.98, slot.t+0.05));
+    if(!here || !ahead){ el.style.opacity=0; continue; }
+    var wx=here.x, wz=here.z, wy=terrainHeight(wx,wz)+0.3;
     _slPos.set(wx,wy,wz).applyMatrix4(camera.matrixWorldInverse);
     if(_slPos.z>-1){ el.style.opacity=0; continue; } // behind the camera
     _slPos.set(wx,wy,wz).project(camera);
@@ -1995,8 +2216,7 @@ function updateStreetLabels(alt){
     // gives the true on-screen (perspective-correct) angle to rotate the
     // DOM label by, so it visually lies along the street as drawn, not
     // just its flat world-space yaw.
-    var tf = Math.min(0.98, s.t+0.05);
-    var fx=lerp(p0.x,p1.x,tf), fz=lerp(p0.z,p1.z,tf), fy=terrainHeight(fx,fz)+0.3;
+    var fx=ahead.x, fz=ahead.z, fy=terrainHeight(fx,fz)+0.3;
     _slFwd.set(fx,fy,fz).project(camera);
     var fsx=(_slFwd.x*0.5+0.5)*window.innerWidth, fsy=(-_slFwd.y*0.5+0.5)*window.innerHeight;
     var screenAngle = Math.atan2(fsy-sy, fsx-sx)*180/Math.PI;
@@ -2057,8 +2277,17 @@ function landmarkFoundedDay(name){
 }
 (function buildVillage(){
   var uVals = [GEO.streetsU.stockton, GEO.streetsU.dupont, GEO.streetsU.kearny, GEO.streetsU.montgomery];
-  var vVals = [GEO.streetsV.pacific, GEO.streetsV.jackson, GEO.streetsV.clay, GEO.streetsV.washington, GEO.streetsV.sacramento, GEO.streetsV.california];
-  var PLAZA_BX = 1, PLAZA_BZ = 2; // block between Dupont/Kearny x Clay/Washington
+  // CLAY/WASHINGTON SWAP FIX (2026-07-10): this array's adjacent PAIRS
+  // (vVals[bz]..vVals[bz+1]) are read as block bounds below, so it has to
+  // be listed in real geographic (north-to-south) order — washington
+  // before clay, now that the correction has washington north of the
+  // Plaza and clay south of it. Leaving the old clay-before-washington
+  // order after fixing GEO.streetsV's VALUES would silently double the
+  // width of the Jackson/Washington and Clay/Sacramento blocks (each
+  // swallowing the Plaza's own gap) and could let founding-village
+  // buildings spawn inside Portsmouth Square itself.
+  var vVals = [GEO.streetsV.pacific, GEO.streetsV.jackson, GEO.streetsV.washington, GEO.streetsV.clay, GEO.streetsV.sacramento, GEO.streetsV.california];
+  var PLAZA_BX = 1, PLAZA_BZ = 2; // block between Dupont/Kearny x Washington/Clay
   window._VILLAGE_GRID = { uVals:uVals, vVals:vVals, PLAZA_BX:PLAZA_BX, PLAZA_BZ:PLAZA_BZ }; // Phase 5 fire-footprint lookup
 
   var adobeColors = [0xcda86e, 0xd8bc84, 0xc39a5f];
@@ -2258,61 +2487,85 @@ function landmarkFoundedDay(name){
      ----------------------------------------------------------------------- */
   (function buildFireBlock(){
     var kU = uVals[2], mU = uVals[3];            // kearny, montgomery
-    var cV = vVals[2], wV = vVals[3];            // clay, washington
+    // CLAY/WASHINGTON SWAP FIX (2026-07-10, grounding.md §9 knownDiscrepancies):
+    // this whole block's offsets were written against the OLD, buggy
+    // GEO.streetsV (clay = north/smaller value, washington = south/larger)
+    // as bare "+N"/"-N" nudges relative to whichever edge was meant. Now
+    // that GEO.streetsV.clay/washington read the CORRECTED values (washington
+    // is north, clay is south), every one of those nudges has to flip sign
+    // to keep pointing the same DIRECTION (interior vs. across-the-street)
+    // relative to the correct edge — otherwise the whole named row would
+    // silently reflect to the wrong side. nV/sV name the edges by compass
+    // direction instead of street name, so every offset below still reads
+    // as "+N toward the interior" the same way the original code intended;
+    // only the actual (x,z) each named building lands on has moved to match
+    // the corrected record.
+    var nV = Math.min(GEO.streetsV.clay, GEO.streetsV.washington); // north edge = Washington St (corrected)
+    var sV = Math.max(GEO.streetsV.clay, GEO.streetsV.washington); // south edge = Clay St (corrected)
     function put(u,v,rot,opts){
       opts = opts||{};
       opts.denseRow = true; // documented continuous frontage row (Alta account) — see placeBuilding()
       var p = gridToWorld(u,v); placeBuilding(p.x,p.z,rot,opts);
     }
 
-    // Kearny frontage, plaza-facing row — order per the Alta's loss list
-    put(kU+8,  wV-9,  Math.PI/2, { name:"El Dorado",            sizeMul:1.45, tall:true, forceFrame:true });
-    put(kU+8,  wV-23, Math.PI/2, { name:"Parker House",         sizeMul:1.55, tall:true, forceFrame:true });
-    put(kU+8,  wV-36, Math.PI/2, { name:"Dennison's Exchange",  sizeMul:1.25, forceFrame:true, isIgnition:true });
-    put(kU+8,  wV-48, Math.PI/2, { name:"United States Restaurant", sizeMul:1.15, forceFrame:true });
-    put(kU+8,  wV-58, Math.PI/2, { name:"Hughs, Noel & Crenshaw", forceFrame:true });
-    put(kU+8,  cV+16, Math.PI/2, { name:"Florence Saloon", forceFrame:true });
-    put(kU+8,  cV+7,  Math.PI/2, { name:"Delmonico's",          sizeMul:1.2, forceFrame:true, fireproof:true }); // saved by its own roof crew (Alta)
+    // Kearny frontage, plaza-facing row — order per the Alta's loss list.
+    // The Alta's account has this row running along Washington St (the
+    // corrected north edge, nV) with two lots (Florence Saloon, Delmonico's)
+    // toward the Clay St (south edge, sV) end near the plaza corner.
+    put(kU+8,  nV+9,  Math.PI/2, { name:"El Dorado",            sizeMul:1.45, tall:true, forceFrame:true });
+    put(kU+8,  nV+23, Math.PI/2, { name:"Parker House",         sizeMul:1.55, tall:true, forceFrame:true });
+    put(kU+8,  nV+36, Math.PI/2, { name:"Dennison's Exchange",  sizeMul:1.25, forceFrame:true, isIgnition:true });
+    put(kU+8,  nV+48, Math.PI/2, { name:"United States Restaurant", sizeMul:1.15, forceFrame:true });
+    put(kU+8,  nV+58, Math.PI/2, { name:"Hughs, Noel & Crenshaw", forceFrame:true });
+    put(kU+8,  sV-16, Math.PI/2, { name:"Florence Saloon", forceFrame:true });
+    put(kU+8,  sV-7,  Math.PI/2, { name:"Delmonico's",          sizeMul:1.2, forceFrame:true, fireproof:true }); // saved by its own roof crew (Alta)
 
     // Washington St frontage, running toward Montgomery — incl. the
     // Merchants' Exchange the authorities blew up, and the unfinished
     // Burgoyne & Co. brick store that finally stayed the fire.
-    put(kU+20, wV-8, 0, { name:"B. Ayres store", forceFrame:true });            // "in rear of the El Dorado" — 1st demolition
-    put(kU+32, wV-8, 0, { name:"Rosenbaum & Schaeffer", forceFrame:true });
-    put(kU+46, wV-8, 0, { name:"Merchants' Exchange",   sizeMul:1.3, forceFrame:true }); // Dunbar & Gibbs — 2nd demolition
-    put(kU+60, wV-8, 0, { name:"Washington Arcade", forceFrame:true });
-    put(kU+72, wV-8, 0, { name:"Central House", forceFrame:true });
-    put(kU+84, wV-8, 0, { name:"Geurschard & Van Beuren", sizeMul:1.15, forceFrame:true }); // 3rd demolition, by the Alcalde's order
-    put(kU+98, wV-8, 0, { name:"Baltimore Restaurant", forceFrame:true });
-    put(mU-8,  wV-8, 0, { name:"Burgoyne & Co. (brick, unfinished)", sizeMul:1.3, fireproof:true });
+    put(kU+20, nV+8, 0, { name:"B. Ayres store", forceFrame:true });            // "in rear of the El Dorado" — 1st demolition
+    put(kU+32, nV+8, 0, { name:"Rosenbaum & Schaeffer", forceFrame:true });
+    put(kU+46, nV+8, 0, { name:"Merchants' Exchange",   sizeMul:1.3, forceFrame:true }); // Dunbar & Gibbs — 2nd demolition
+    put(kU+60, nV+8, 0, { name:"Washington Arcade", forceFrame:true });
+    put(kU+72, nV+8, 0, { name:"Central House", forceFrame:true });
+    put(kU+84, nV+8, 0, { name:"Geurschard & Van Beuren", sizeMul:1.15, forceFrame:true }); // 3rd demolition, by the Alcalde's order
+    put(kU+98, nV+8, 0, { name:"Baltimore Restaurant", forceFrame:true });
+    put(mU-8,  nV+8, 0, { name:"Burgoyne & Co. (brick, unfinished)", sizeMul:1.3, fireproof:true });
 
     // interior + Clay-side fill to the documented ~50-building count
     for(var i=0;i<30;i++){
       var u = lerp(kU+16, mU-14, rngBuild());
-      var v = lerp(cV+12, wV-18, rngBuild());
+      var v = lerp(sV-12, nV+18, rngBuild());
       put(u, v, rngBuild()<0.5?0:Math.PI/2, { forceFrame:true });
     }
 
     // scorched survivors just OUTSIDE the footprint (blanket crews kept
     // them wet, per the Alta): the Verandah opposite the El Dorado, and
-    // the Bella Union / Haley House / Miners' Bank row across Washington.
-    put(kU-9,  wV+9,  Math.PI/2, { name:"Verandah", sizeMul:1.15, forceFrame:true }); // kept out of the open Plaza block itself
-    put(kU-24, wV+9,  0, { name:"Miners' Bank", forceFrame:true });
-    put(kU-38, wV+9,  0, { name:"Bella Union", sizeMul:1.25, forceFrame:true });
-    put(kU-52, wV+9,  0, { name:"Haley House", sizeMul:1.15, forceFrame:true });
+    // the Bella Union / Haley House / Miners' Bank row across Washington
+    // (now correctly the NORTH side, nV-9, not the old buggy south side).
+    put(kU-9,  nV-9,  Math.PI/2, { name:"Verandah", sizeMul:1.15, forceFrame:true }); // kept out of the open Plaza block itself
+    put(kU-24, nV-9,  0, { name:"Miners' Bank", forceFrame:true });
+    put(kU-38, nV-9,  0, { name:"Bella Union", sizeMul:1.25, forceFrame:true });
+    put(kU-52, nV-9,  0, { name:"Haley House", sizeMul:1.15, forceFrame:true });
   })();
 
   /* GAPS-2026-07-09 item 3 (named landmarks): City Hotel — William A.
      Leidesdorff, 1846, "corner of Clay and Kearny," Bancroft's first
      building in Yerba Buena "entitled to the name" of hotel (clm:timeline:14,
-     clm:cast:86). Placed one block north of the fire footprint (Kearny
-     frontage, the Jackson-Clay block) — the exact lot isn't in the record
+     clm:cast:86). Placed one block SOUTH of the fire footprint (Kearny
+     frontage, the Clay-Sacramento block) — the exact lot isn't in the record
      (approximate, per QA-GATE §1), and no claim documents its Dec 24 1849
      fate, so it's kept outside the documented burn footprint rather than
-     guessed into it either way. */
+     guessed into it either way.
+     CLAY/WASHINGTON SWAP FIX (2026-07-10): Clay St is now correctly the
+     fire block's SOUTH edge (sV above), so "outside the footprint, fronting
+     Clay & Kearny from the far side" is now south of Clay (+10) rather than
+     the old code's north-of-Clay (-10) — the old offset direction was
+     calibrated against the pre-fix (wrong) street identity, not an
+     independent design choice, so it has to flip along with the fix. */
   (function(){
-    var kU2 = uVals[2], cV2 = vVals[2];
-    var p = gridToWorld(kU2+8, cV2-10);
+    var kU2 = uVals[2], cV2 = GEO.streetsV.clay;
+    var p = gridToWorld(kU2+8, cV2+10);
     placeBuilding(p.x, p.z, Math.PI/2, { name:"City Hotel", sizeMul:1.35, tall:true, forceFrame:true, denseRow:true });
   })();
 
@@ -2789,6 +3042,7 @@ function eventDateToSimDay(dateStr){
    the swing entirely since page load. */
 var OFARRELL_SWING_START = eventDateToSimDay("1847-02-01");
 var OFARRELL_SWING_END = eventDateToSimDay("1847-08-01");
+console.assert(ERA_MAP_SIMDAY["ofarrell-1847"]===OFARRELL_SWING_END, "ERA_MAP_SIMDAY's hardcoded ofarrell-1847 day has drifted from OFARRELL_SWING_END — update the literal near STREETS_RUNTIME to match");
 
 /* =====================================================================
    TOWN CHAPEL — behavior-spec.md item 3 ("a modest church building...
@@ -3662,21 +3916,97 @@ function dayForBuildingIndex(i){
   return dayForPopulationAtLeast(2200 + (n-housedCapCount)*BUILDING_SURGE_DIV);
 }
 
+/* =====================================================================
+   BLOCKS -> FRONTAGE (grounding.md §9 "Buildings belong to blocks",
+   2026-07-10 street-checkpoint reset, bullet 5): meta.blocks.cardinal's
+   ofarrell-1847 uLines x vLines grid — the dataset's own documented block
+   subdivision — used to bias growth-building candidates onto block edges,
+   facing the street, instead of scattering anywhere inside a block. Corner
+   lots and main-street (N-S) frontages get double weight ("street-wall
+   bias toward corners/main streets" per the brief). The Plaza's own block
+   is excluded (found by matching line positions rather than a hardcoded
+   index, so it stays correct if the dataset's grid ever changes). */
+var GROWTH_BLOCKS = (function(){
+  var era = SG.meta.blocks.cardinal.filter(function(b){ return b.era==="ofarrell-1847"; })[0];
+  var uLines = era.uLines, vLines = era.vLines;
+  function findLine(lines, val){ for(var i=0;i<lines.length;i++) if(Math.abs(lines[i]-val)<0.5) return i; return -1; }
+  var plazaBX = findLine(uLines, Math.min(GEO.streetsU.dupont, GEO.streetsU.kearny));
+  var plazaBZ = findLine(vLines, Math.min(GEO.streetsV.washington, GEO.streetsV.clay));
+  var list = [];
+  for(var bx=0; bx<uLines.length-1; bx++){
+    for(var bz=0; bz<vLines.length-1; bz++){
+      if(bx===plazaBX && bz===plazaBZ) continue; // Portsmouth Square — kept open, matches buildVillage()'s own exclusion
+      list.push({ u0:uLines[bx], u1:uLines[bx+1], v0:vLines[bz], v1:vLines[bz+1] });
+    }
+  }
+  return list;
+})();
+/* One frontage-biased (u,v,rot) candidate: pick a random block, then a
+   random edge of it (main-street N-S edges double-weighted), a period
+   setback inward from that edge, and a position along it (corner-biased
+   ~35% of the time) — "face it, period setback, street-wall bias toward
+   corners/main streets" (brief bullet 5), replacing pure scatter. */
+function pickFrontageSpot(){
+  var blk = GROWTH_BLOCKS[Math.floor(rngBuild()*GROWTH_BLOCKS.length)];
+  var edges = [ {kind:"v0",w:1}, {kind:"v1",w:1}, {kind:"u0",w:2}, {kind:"u1",w:2} ];
+  var totalW = 6, r = rngBuild()*totalW, edge = edges[edges.length-1];
+  for(var i=0;i<edges.length;i++){ if(r<edges[i].w){ edge=edges[i]; break; } r-=edges[i].w; }
+  // BOTH insets have to clear canPlace's street-proximity check, not just
+  // look like a plausible yard depth — the chosen edge is a STREET
+  // CENTERLINE (these are the same uLines/vLines the streets themselves
+  // are drawn on), and the perpendicular block edges the along-axis lerp
+  // approaches at its extremes (corner lots) are ALSO street centerlines.
+  // The widest street on any cardinal-grid edge is California St (25.91m,
+  // half 12.96m); canPlace additionally wants footprintR(4)+streetMargin(2)
+  // beyond that. A too-small inset here (an earlier pass used 3-8m) means
+  // canPlace silently rejects nearly every frontage candidate, collapsing
+  // the whole growth-building candidate pool (caught live: 1500 attempts
+  // -> 163 accepted instead of the expected ~650 — verify pixels/counts,
+  // not just "the code runs", per QA-GATE's own standing lesson).
+  var edgeSetback = 18+rngBuild()*12;  // 18-30m in from the fronted edge
+  var cornerInset = 14+rngBuild()*8;   // 14-22m in from the block's other two edges
+  var alongT = rngBuild();
+  if(rngBuild()<0.35) alongT = alongT<0.5 ? alongT*0.3 : 1-(1-alongT)*0.3; // corner bias
+  var u,v,rot;
+  if(edge.kind==="v0"||edge.kind==="v1"){
+    u = lerp(blk.u0+cornerInset, blk.u1-cornerInset, alongT);
+    v = edge.kind==="v0" ? blk.v0+edgeSetback : blk.v1-edgeSetback;
+    rot = 0;
+  } else {
+    v = lerp(blk.v0+cornerInset, blk.v1-cornerInset, alongT);
+    u = edge.kind==="u0" ? blk.u0+edgeSetback : blk.u1-edgeSetback;
+    rot = Math.PI/2;
+  }
+  return { u:u, v:v, rot:rot };
+}
+
 /* candidate lots for growth buildings: same grid the Phase 1 village used,
    spilling a little past its surveyed edge (town filling out) since new
-   streets are this brief's explicitly optional/skippable stretch goal. */
+   streets are this brief's explicitly optional/skippable stretch goal.
+   FRONTAGE fix (2026-07-10): 80% of attempts now propose a block-edge
+   frontage spot (pickFrontageSpot(), above) instead of pure uniform
+   scatter across the whole padded box — same total attempt count and
+   acceptance pipeline as before (canPlace/registerPlacement/sort/reveal),
+   so accepted COUNTS are unaffected (growth-density calibration, commit
+   569012f, is untouched), only WHERE each candidate lands within its
+   block. The remaining 20% keep the old free scatter, preserving the
+   "ragged expansion... spilling past the surveyed grid" character for
+   growth beyond the platted blocks (frontage discipline only applies to
+   platted ground — grounding.md §9). */
 var growthBuildingCandidates = (function(){
   var uVals=[GEO.streetsU.stockton,GEO.streetsU.montgomery], vVals=[GEO.streetsV.pacific,GEO.streetsV.california];
-  // P0-4 fix (2026-07-10): pad widened (110->200) and attempts raised
-  // (420->1500) so the candidate pool can actually supply BUILDING_CAP's
-  // new 650 (up from 260) — "ragged expansion... spilling past the
-  // surveyed grid" per the Director's screening, without touching street
-  // layout itself (still the same placeBuilding/canPlace engine, just more
-  // lots offered to it further from the grid).
+  var fireBlockNV = Math.min(GEO.streetsV.clay, GEO.streetsV.washington), fireBlockSV = Math.max(GEO.streetsV.clay, GEO.streetsV.washington);
   var pad=200, out=[];
   for(var i=0;i<1500;i++){
-    var u = lerp(uVals[0]-pad, uVals[1]+pad, rngBuild());
-    var v = lerp(vVals[0]-pad, vVals[1]+pad, rngBuild());
+    var useFrontage = rngBuild()<0.8;
+    var u,v,frontRot=null;
+    if(useFrontage){
+      var spot = pickFrontageSpot();
+      u=spot.u; v=spot.v; frontRot=spot.rot;
+    } else {
+      u = lerp(uVals[0]-pad, uVals[1]+pad, rngBuild());
+      v = lerp(vVals[0]-pad, vVals[1]+pad, rngBuild());
+    }
     var p = gridToWorld(u,v);
     var h = terrainHeight(p.x,p.z);
     if(h<=1.2) continue;
@@ -3686,8 +4016,14 @@ var growthBuildingCandidates = (function(){
     // block is explicitly built (buildFireBlock) and must burn as a unit;
     // an instanced growth cottage standing unburned in the ruins would
     // contradict the documented footprint.
+    // CLAY/WASHINGTON SWAP FIX (2026-07-10): this range used to read
+    // "v>clay-8 && v<washington+8", which only worked because the OLD
+    // (buggy) values happened to have clay<washington; read literally by
+    // NAME with the corrected values (clay>washington now) that range is
+    // never true, silently disabling this exclusion. min/max makes it
+    // correct regardless of which street ends up on which side.
     if(u>GEO.streetsU.kearny-8 && u<GEO.streetsU.montgomery+8 &&
-       v>GEO.streetsV.clay-8 && v<GEO.streetsV.washington+8) continue;
+       v>fireBlockNV-8 && v<fireBlockSV+8) continue;
     // WORLD-P0 fix (canPlace engine): growth cottages previously only
     // checked height — now also avoid streets/Mission Road and overlap
     // with every already-accepted footprint (village buildings, other
@@ -3695,10 +4031,11 @@ var growthBuildingCandidates = (function(){
     if(!canPlace(p.x,p.z,4,{streetMargin:2})) continue;
     registerPlacement(p.x,p.z,4);
     // rotBase: grid-facing (0 or 90) rather than fully random — this is new
-    // construction going up on real lots, not tumbleweed. Final rot (with
+    // construction going up on real lots, not tumbleweed; frontage spots
+    // use the EDGE's own facing rather than a coin flip. Final rot (with
     // era-appropriate jitter) is assigned below, after sorting, since that's
     // what fixes each candidate's reveal order/era.
-    out.push({ x:p.x, z:p.z, rotBase: rngBuild()<0.5?0:Math.PI/2, priority: dPlaza+rngBuild()*70 });
+    out.push({ x:p.x, z:p.z, rotBase: frontRot!=null?frontRot:(rngBuild()<0.5?0:Math.PI/2), priority: dPlaza+rngBuild()*70 });
   }
   out.sort(function(a,b){ return a.priority-b.priority; });
   // ORGANIC LAYOUT (2026-07-10): candidates are revealed strictly in sorted
@@ -6200,7 +6537,16 @@ var STREET_GRAPH = (function(){
     var d = Math.hypot(nodes[i1].x-nodes[i2].x, nodes[i1].z-nodes[i2].z);
     edgeList[i1].push({to:i2,d:d}); edgeList[i2].push({to:i1,d:d});
   }
-  var uKeys = Object.keys(GEO.streetsU), vKeys = Object.keys(GEO.streetsV);
+  // CLAY/WASHINGTON SWAP FIX (2026-07-10): the adjacency loops below
+  // connect each key to its NEXT key in this array, assuming that order is
+  // already geographic (ascending u/v) — true before the fix (object-
+  // literal insertion order happened to match), but no longer guaranteed
+  // once GEO.streetsV.clay/washington's VALUES swapped while their key
+  // POSITIONS in the object literal did not. Sorting by actual coordinate
+  // value makes this correct regardless of insertion order (and immune to
+  // future edits reordering the literal).
+  var uKeys = Object.keys(GEO.streetsU).sort(function(a,b){ return GEO.streetsU[a]-GEO.streetsU[b]; });
+  var vKeys = Object.keys(GEO.streetsV).sort(function(a,b){ return GEO.streetsV[a]-GEO.streetsV[b]; });
   uKeys.forEach(function(uk){ vKeys.forEach(function(vk){
     var p = gridToWorld(GEO.streetsU[uk], GEO.streetsV[vk]);
     addNode(uk+"_"+vk, p.x, p.z);
@@ -7893,10 +8239,21 @@ window.addEventListener("keydown", function(e){
    building came down." Six hours, ~50 buildings, one block.
    ========================================================================= */
 var FIRE = (function(){
-  var kU=GEO.streetsU.kearny, mU=GEO.streetsU.montgomery, cV=GEO.streetsV.clay, wV=GEO.streetsV.washington;
+  var kU=GEO.streetsU.kearny, mU=GEO.streetsU.montgomery;
+  // CLAY/WASHINGTON SWAP FIX (2026-07-10): same fix as buildFireBlock()
+  // above (and for the same reason) — nV/sV name the block's edges by
+  // compass direction so inFootprint()'s range check stays a valid
+  // (small,big) range regardless of which street now owns which value;
+  // reading cV=clay/wV=washington directly and assuming cV<wV (the OLD,
+  // buggy ordering) would make the range empty post-fix (clay>washington
+  // now), silently zeroing out the fire entirely (0 buildings "in
+  // footprint" — this is the Dec 24 1849 fire, the screening's own
+  // highest-praised frame, so this bug would have been very visible).
+  var nV = Math.min(GEO.streetsV.clay, GEO.streetsV.washington); // north edge = Washington St
+  var sV = Math.max(GEO.streetsV.clay, GEO.streetsV.washington); // south edge = Clay St
   var igniteDay = eventDateToSimDay("1849-12-24") + 5.75/24;  // 5:45 a.m., per the Alta
   var endDay    = eventDateToSimDay("1849-12-24") + 12.1/24;  // "at about 12 M. ... at an end"
-  var center = gridToWorld((kU+mU)/2, (cV+wV)/2);
+  var center = gridToWorld((kU+mU)/2, (nV+sV)/2);
   // demolition schedule, hours after ignition — the Alta's narrative order:
   // Ayres' store during the El Dorado's burning, the Merchants' Exchange
   // next, Geurschard & Van Beuren as the fire neared Montgomery St.
@@ -7905,11 +8262,11 @@ var FIRE = (function(){
   function inFootprint(x,z,margin){
     var g = worldToGridApprox(x,z);
     var m = margin||6;
-    return g.u>kU-m && g.u<mU+m && g.v>cV-m && g.v<wV+m;
+    return g.u>kU-m && g.u<mU+m && g.v>nV-m && g.v<sV+m;
   }
   var ignitionSpot = null;
   VILLAGE_BUILDING_SPOTS.forEach(function(s){ if(s.isIgnition) ignitionSpot = s; });
-  if(!ignitionSpot) ignitionSpot = { x:gridToWorld(kU+8,wV-36).x, z:gridToWorld(kU+8,wV-36).z };
+  if(!ignitionSpot) ignitionSpot = { x:gridToWorld(kU+8,nV+36).x, z:gridToWorld(kU+8,nV+36).z }; // matches Dennison's Exchange's corrected placement in buildFireBlock()
 
   var burn = [], scorch = [];
   VILLAGE_BUILDING_SPOTS.forEach(function(s){
@@ -7935,8 +8292,8 @@ var FIRE = (function(){
     cx: center.x, cz: center.z,
     burn: burn, scorch: scorch, inFootprint: inFootprint,
     spectatorSpots: [ // the documented crowd: "Portsmouth square ... was crowded with anxious spectators"
-      gridToWorld(GEO.streetsU.dupont+22, cV+14), gridToWorld(GEO.streetsU.dupont+30, (cV+wV)/2),
-      gridToWorld(GEO.streetsU.dupont+22, wV-14), gridToWorld(GEO.streetsU.dupont+48, (cV+wV)/2 - 8)
+      gridToWorld(GEO.streetsU.dupont+22, sV-14), gridToWorld(GEO.streetsU.dupont+30, (nV+sV)/2),
+      gridToWorld(GEO.streetsU.dupont+22, nV+14), gridToWorld(GEO.streetsU.dupont+48, (nV+sV)/2 - 8)
     ]
   };
 })();
