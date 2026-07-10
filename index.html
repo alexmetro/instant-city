@@ -484,6 +484,8 @@
 <script src="events-1846-49.js"></script>
 <script src="feed-1846-49.js"></script>
 <script src="prices-1846-49.js"></script>
+<script src="roster-1846-49.js"></script>
+<script src="catalog-occupations.js"></script>
 <script>
 (function(){
 "use strict";
@@ -503,8 +505,12 @@ var CFG = {
   zoomTrueScaleFull: 550, // semantic zoom (Phase 2 addendum): below this altitude,
   zoomCartoFull: 850,     // true-scale buildings are fully opaque and the district-tint
                            // cartographic layer is invisible; above zoomCartoFull it's reversed.
-  peopleMaxAltitude: 350  // Phase 4 §9: ambient people exist only below this altitude
+  peopleMaxAltitude: 350, // Phase 4 §9: ambient people exist only below this altitude
                            // (statistics/the population curve stand in above it).
+  buildingLabelAlwaysAlt: 250 // coordinator directive: DOM building-name chips render
+                           // unconditionally only below this altitude; between this and
+                           // zoomCartoFull they show only on hover (desktop) — physical
+                           // signage (mountSignBoard) is the wayfinding there instead.
 };
 
 /* =====================================================================
@@ -2061,6 +2067,58 @@ function eventDateToSimDay(dateStr){
   return (Date.UTC(y,m,d)-SIM_START_MS)/86400000;
 }
 
+/* =====================================================================
+   TOWN CHAPEL — behavior-spec.md item 3 ("a modest church building...
+   simple frame chapel"); closes catalog-occupations.json's
+   missing:church_building gap for protestant_minister. Rev. Timothy
+   Dwight Hunt (arrived from Hawaii Oct 29 1848) held the city's first
+   Protestant services as a nondenominational City Chaplain from Nov 2
+   1848 (research/demographics-society.md "Other" ministries note); First
+   Congregational Church organized July 1849. A 1847 proposal to build a
+   church was tabled (data/events.jsonl 1847-10-06, "Proposal to build
+   church tabled") — so the chapel is gated to Hunt's first-service date,
+   never appearing before it, honoring the never-contradict rule. Distinct
+   from Mission Dolores's Catholic adobe church (buildMissionDolores,
+   already standing since the mission era) — this is the town's own small
+   nondenominational/Protestant meeting house. "The Chapel" is a generic
+   period-plausible label, not an asserted historical proper name (no
+   documented building name survives for it). (Placed here, after
+   eventDateToSimDay/SIM_START_MS are defined, rather than up with the
+   other early village buildings — CHURCH_REVEAL_DAY needs the sim clock.)
+   ===================================================================== */
+var CHURCH_REVEAL_DAY = eventDateToSimDay("1848-11-02");
+var CHURCH_SPOT = null;
+(function buildTownChapel(){
+  var base = gridToWorld(GEO.streetsU.stockton-55, GEO.streetsV.jackson-30);
+  var x=base.x, z=base.z, footprintR=8, found=false;
+  for(var tries=0; tries<50 && !found; tries++){
+    var tx = base.x + (rngBuild()-0.5)*110, tz = base.z + (rngBuild()-0.5)*110;
+    if(canPlace(tx,tz,footprintR,{streetMargin:4})){ x=tx; z=tz; found=true; }
+  }
+  var y = terrainHeight(x,z);
+  registerPlacement(x,z,footprintR);
+  var rot = VIOGET_SKEW;
+  var wall = new THREE.Color(0xe4dcc0), roof = new THREE.Color(0x5a4432), trim = new THREE.Color(0x3a3226);
+  var w=8.5, d=5.6, h=3.4;
+  var geoms = [];
+  geoms.push(makeBoxLocal(w,h,d,wall));
+  var roofG = makeGableRoof(w,d,0.5,2.2,roof); bake(roofG, new THREE.Vector3(0,h,0)); geoms.push(roofG);
+  var steeple = makeBoxLocal(1.3,2.0,1.3,wall); bake(steeple, new THREE.Vector3(0,h+2.2,0)); geoms.push(steeple);
+  var steepleRoof = makeGableRoof(1.3,1.3,0.1,1.1,roof); bake(steepleRoof, new THREE.Vector3(0,h+4.2,0)); geoms.push(steepleRoof);
+  var crossV = makeBoxLocal(0.14,1.0,0.14,trim); bake(crossV, new THREE.Vector3(0,h+5.3,0)); geoms.push(crossV);
+  var crossH = makeBoxLocal(0.6,0.14,0.14,trim); bake(crossH, new THREE.Vector3(0,h+5.6,0)); geoms.push(crossH);
+  var door = makeBoxLocal(1.0,1.9,0.08,trim); bake(door, new THREE.Vector3(0,0.95,d/2+0.02)); geoms.push(door);
+  var merged = mergeGeoms(geoms);
+  bake(merged, new THREE.Vector3(x,y,z), rot);
+  var mesh = new THREE.Mesh(merged, new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, side:THREE.DoubleSide, specular:0x000000, shininess:0}));
+  mesh.visible = false; // gated on CHURCH_REVEAL_DAY, toggled each frame alongside the wharf-landing mesh
+  scene.add(mesh);
+  window._townChapelMesh = mesh;
+  CHURCH_SPOT = { x:x, z:z, y:y, rot:rot, w:w, d:d, h:h, name:"The Chapel" };
+  VILLAGE_BUILDING_SPOTS.push(CHURCH_SPOT); // no vStart/vEnd — the fire system already guards s.vStart==null; gets label/inspector/sign treatment like any named spot
+  console.log("[verify] Town chapel at ("+x.toFixed(0)+","+z.toFixed(0)+"), reveal day "+CHURCH_REVEAL_DAY.toFixed(0)+" (1848-11-02)");
+})();
+
 /* =========================================================================
    1. SIM CLOCK — fractional sim-days since 1846-07-01. Speeds read straight
    off dt each frame (no need for a sub-stepped accumulator: nothing here is
@@ -2161,6 +2219,65 @@ function formatPrice(p){
   if(!p) return null;
   var amt = "$"+(p.priceHigh!=null ? (p.price+"-"+p.priceHigh) : p.price);
   return amt + (p.unit ? ("/"+p.unit) : "");
+}
+
+/* =========================================================================
+   2c. ROSTER + OCCUPATION CATALOG — behavior-spec.md §0/item 2: real names
+   from data/people.jsonl (tools/build-roster.js -> roster-1846-49.js) seed
+   the persistent population BEFORE invented people; occupations are dealt
+   from data/catalog-occupations.json's eraWeight/genderRule/originSkew
+   (tools/build-catalog-js.js -> catalog-occupations.js), binding venueNeeds
+   only where worldSupport==="exists" (behavior-spec.md's own instruction).
+   ========================================================================= */
+var ROSTER = window.ROSTER_1846_49 || [];
+if(!window.ROSTER_1846_49) console.warn("[verify] roster-1846-49.js failed to load — routine cast will use invented names only. Run: node tools/build-roster.js");
+var CATALOG_OCC_ALL = (window.CATALOG_OCCUPATIONS && window.CATALOG_OCCUPATIONS.occupations) || [];
+if(!window.CATALOG_OCCUPATIONS) console.warn("[verify] catalog-occupations.js failed to load — falling back to the legacy ad-hoc TRADES list. Run: node tools/build-catalog-js.js");
+var CATALOG_OCC = CATALOG_OCC_ALL.filter(function(o){ return o.worldSupport==="exists"; });
+var CATALOG_OCC_BY_ID = {}; CATALOG_OCC_ALL.forEach(function(o){ CATALOG_OCC_BY_ID[o.id]=o; });
+// roster people are consumed sequentially (best-attested first — see the
+// builder's sort) into routine slots first, then extras, so real names use
+// up the persistent cast before density-fill anonymous slots reach for one.
+var rosterPtr = 0;
+function nextRosterPerson(){
+  return rosterPtr < ROSTER.length ? ROSTER[rosterPtr++] : null;
+}
+/* era column for the catalog's eraWeight table, given a sim day a person is
+   expected to be active in (behavior-spec.md item 2: "assign per its
+   eraWeights"). 1849-01-01 is the documented column boundary. */
+var ERA_1849_DAY = eventDateToSimDay("1849-01-01");
+function eraColumnForDay(day){ return day>=ERA_1849_DAY ? "1849" : "1846-1848"; }
+/* weighted pick over CATALOG_OCC for a given era + origin, honoring
+   eraWeight and originSkew (originSkew is a fill-marked per-origin
+   multiplier map on some entries; absent = neutral 1.0). */
+function pickCatalogOccupation(era, originKey, rng){
+  var total=0, weights=[];
+  for(var i=0;i<CATALOG_OCC.length;i++){
+    var o=CATALOG_OCC[i], ew=o.eraWeight && o.eraWeight[era];
+    var w = ew ? ew.weight : 0;
+    if(w<=0) continue;
+    if(o.originSkew && originKey && o.originSkew[originKey]!=null) w *= o.originSkew[originKey];
+    weights.push({o:o, w:w}); total += w;
+  }
+  if(total<=0) return null;
+  var r = rng()*total;
+  for(var j=0;j<weights.length;j++){ r -= weights[j].w; if(r<=0) return weights[j].o; }
+  return weights[weights.length-1].o;
+}
+/* occupation's own genderRule overrides the origin-driven era curve when
+   present (per-trade rules are more specific — e.g. sailor 99% male even in
+   an era/origin with a more even overall ratio). */
+function isMaleForOccupation(occ, fallbackFrac, rng){
+  if(occ && occ.genderRule && typeof occ.genderRule.m === "number") return rng() < occ.genderRule.m;
+  return rng() < fallbackFrac;
+}
+/* behavior-spec.md §1: two traits per person, from independent axes, skew
+   activity weights (evening venue choice, drunkenness) rather than scripts. */
+var TRAIT_AXES = [ ["temperate","heavy-drinker"], ["industrious","idler"], ["pious","indifferent"], ["gregarious","solitary"], ["restless","settled"] ];
+function rollTraits(rng){
+  var t = {};
+  TRAIT_AXES.forEach(function(axis){ t[axis[0]+":"+axis[1]] = axis[rng()<0.5?0:1]; });
+  return { drink: t["temperate:heavy-drinker"], work: t["industrious:idler"], faith: t["pious:indifferent"], social: t["gregarious:solitary"], temperament: t["restless:settled"] };
 }
 
 /* =========================================================================
@@ -2773,6 +2890,26 @@ function makeGrowthBuildingGeo(){
   bake(roof, new THREE.Vector3(0,2.8,0));
   return mergeGeoms([body,roof]);
 }
+/* behavior-spec.md item 4 ("CONSTRUCTION AS PROCESS"): three earlier-stage
+   geometries for a growth building's site, same footprint/rotation as the
+   finished makeGrowthBuildingGeo() above — materials pile -> frame ->
+   walls (no roof) -> the finished body+roof already defined above. */
+function makeConstructionMaterialsGeo(){ return makeTimberStackGeo(); } // a lumber/materials delivery, before framing starts
+function makeConstructionFrameGeo(){
+  var postColor = new THREE.Color(0x6b5238);
+  var parts = [];
+  [[-2.3,-1.85],[2.3,-1.85],[-2.3,1.85],[2.3,1.85]].forEach(function(c){
+    var post = makeBoxLocal(0.18,2.8,0.18,postColor); bake(post, new THREE.Vector3(c[0],0,c[1])); parts.push(post);
+  });
+  var ridgeA = makeBoxLocal(5.0,0.16,0.16,postColor); bake(ridgeA, new THREE.Vector3(0,2.8,-1.85)); parts.push(ridgeA);
+  var ridgeB = makeBoxLocal(5.0,0.16,0.16,postColor); bake(ridgeB, new THREE.Vector3(0,2.8,1.85)); parts.push(ridgeB);
+  var crossA = makeBoxLocal(0.16,0.16,4.0,postColor); bake(crossA, new THREE.Vector3(-2.3,2.8,0)); parts.push(crossA);
+  var crossB = makeBoxLocal(0.16,0.16,4.0,postColor); bake(crossB, new THREE.Vector3(2.3,2.8,0)); parts.push(crossB);
+  return mergeGeoms(parts);
+}
+function makeConstructionWallsGeo(){
+  return makeBoxLocal(5,2.8,4, new THREE.Color(0xceb182)); // same body dims as the finished building, roof not yet raised
+}
 /* QA-GATE tents debt: the old tent was a single warm-tan cone (0xd8cba0)
    almost indistinguishable from the sand palette (sand 0xd8c48c, duneGold
    0xc9ad6c in terrainColor() above) — it failed the silhouette check
@@ -2806,6 +2943,36 @@ function makeCampfireGeo(){
 }
 var growthBuildingMesh = new THREE.InstancedMesh(makeGrowthBuildingGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, transparent:true, side:THREE.DoubleSide, specular:0x000000, shininess:0}), growthBuildingCandidates.length);
 growthBuildingMesh.count = 0; scene.add(growthBuildingMesh);
+// staged-construction meshes (item 4): a candidate occupies exactly one of
+// these four meshes at a time, keyed by age-since-spawn (see
+// updateGrowth()'s staged-reveal loop) — never a scale-in blob.
+var growthMaterialsMesh = new THREE.InstancedMesh(makeConstructionMaterialsGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, transparent:true, specular:0x000000, shininess:0}), Math.max(1,growthBuildingCandidates.length));
+growthMaterialsMesh.count = 0; scene.add(growthMaterialsMesh);
+var growthFrameMesh = new THREE.InstancedMesh(makeConstructionFrameGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, transparent:true, specular:0x000000, shininess:0}), Math.max(1,growthBuildingCandidates.length));
+growthFrameMesh.count = 0; scene.add(growthFrameMesh);
+var growthWallsMesh = new THREE.InstancedMesh(makeConstructionWallsGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, transparent:true, side:THREE.DoubleSide, specular:0x000000, shininess:0}), Math.max(1,growthBuildingCandidates.length));
+growthWallsMesh.count = 0; scene.add(growthWallsMesh);
+// up to 3 static worker figures per active (frame/walls-stage) site, shown
+// only in daylight hours — "visible work" (item 4), cheap static figures
+// per the existing wharf-builder/leveling-crew precedent, not full sim actors.
+var CONSTRUCTION_WORKERS_PER_SITE = 2;
+var constructionWorkerMesh = new THREE.InstancedMesh(makeOutpostPersonGeo(new THREE.Color(0x3a3226), new THREE.Color(0x241f1a), false), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), Math.max(1, growthBuildingCandidates.length*CONSTRUCTION_WORKERS_PER_SITE));
+constructionWorkerMesh.count = 0; scene.add(constructionWorkerMesh);
+// supply carts (item 4: "carts travel dealer->sites") — a small pool
+// shuttling between LUMBER_YARD_SPOT (defined later, referenced only at
+// call time inside growRevealStaged()) and whichever sites are still
+// early in construction.
+var SUPPLY_CART_CAP = 6;
+function makeSupplyCartGeo(){
+  var hullColor = new THREE.Color(0x5a4632), wheelColor = new THREE.Color(0x2e261c), loadColor = new THREE.Color(0x8a7050);
+  var bed = makeBoxLocal(1.3,0.35,2.2, hullColor);
+  var load = makeBoxLocal(1.0,0.35,1.7, loadColor); bake(load, new THREE.Vector3(0,0.35,0));
+  var wheelA = new THREE.CylinderGeometry(0.32,0.32,0.14,8).toNonIndexed(); wheelA.rotateX(Math.PI/2); wheelA.translate(-0.7,0.32,0.6); colorizeUniform(wheelA, wheelColor);
+  var wheelB = wheelA.clone(); wheelB.translate(1.4,0,0);
+  return mergeGeoms([bed, load, wheelA, wheelB]);
+}
+var supplyCartMesh = new THREE.InstancedMesh(makeSupplyCartGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), SUPPLY_CART_CAP);
+supplyCartMesh.count = 0; scene.add(supplyCartMesh);
 var tentMesh = new THREE.InstancedMesh(makeTentGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, transparent:true, specular:0x000000, shininess:0}), tentCandidates.length);
 tentMesh.count = 0; scene.add(tentMesh);
 var campfireMesh = new THREE.InstancedMesh(makeCampfireGeo(), new THREE.MeshBasicMaterial({color:0xffb060, transparent:true, opacity:0}), Math.max(1,Math.ceil(tentCandidates.length/5)));
@@ -2828,6 +2995,64 @@ function growReveal(pool, spawned, targetCount, mesh){
   }
   mesh.instanceMatrix.needsUpdate = true;
 }
+/* behavior-spec.md item 4: staged assembly over ~2 sim-weeks, replacing the
+   old uniform scale-in for buildings specifically (tents/boats/cargo/timber
+   keep the plain growReveal() scale-in above — this is deliberately just
+   for houses going up). A site occupies exactly one of materials/frame/
+   walls/finished at a time, keyed by age since its reveal trigger (which
+   itself is still paced by the population-curve growthTargets() above —
+   only WHAT renders during that window changes, not WHEN a site starts). */
+var CONSTRUCTION_DAYS = 14;
+function growRevealStaged(pool, spawned, targetCount){
+  while(spawned.length<targetCount && spawned.length<pool.length){
+    var c = pool[spawned.length];
+    spawned.push({ x:c.x, z:c.z, h:terrainHeight(c.x,c.z), rot:c.rot, spawnDay:simDay, settled:false });
+  }
+  var matN=0, frameN=0, wallN=0, doneN=0, workerN=0;
+  var dayHour = (simDay-Math.floor(simDay))*24;
+  var isDaylight = dayHour>=6.5 && dayHour<18;
+  for(var i=0;i<spawned.length;i++){
+    var b = spawned[i];
+    var age = simDay-b.spawnDay;
+    var frac = clamp(age/CONSTRUCTION_DAYS, 0, 1);
+    var activeStage = (frac>=0.18 && frac<0.8); // frame or walls — the stages with workers/carts present
+    if(frac<0.18){ setShipInstance(growthMaterialsMesh, matN++, b.x,b.h,b.z,b.rot,1); }
+    else if(frac<0.45){ setShipInstance(growthFrameMesh, frameN++, b.x,b.h,b.z,b.rot,1); }
+    else if(frac<0.8){ setShipInstance(growthWallsMesh, wallN++, b.x,b.h,b.z,b.rot,1); }
+    else { setShipInstance(growthBuildingMesh, doneN++, b.x,b.h,b.z,b.rot,1); b.settled = frac>=1; }
+    if(isDaylight && activeStage){
+      for(var wk=0; wk<CONSTRUCTION_WORKERS_PER_SITE && workerN<constructionWorkerMesh.instanceMatrix.count; wk++){
+        var wang = wk*2.4 + i*0.7;
+        var wx = b.x+Math.cos(wang)*2.6, wz = b.z+Math.sin(wang)*2.6;
+        setShipInstance(constructionWorkerMesh, workerN++, wx, terrainHeight(wx,wz), wz, wang+1.6, 1);
+      }
+    }
+  }
+  growthMaterialsMesh.count = matN; growthMaterialsMesh.instanceMatrix.needsUpdate = true;
+  growthFrameMesh.count = frameN; growthFrameMesh.instanceMatrix.needsUpdate = true;
+  growthWallsMesh.count = wallN; growthWallsMesh.instanceMatrix.needsUpdate = true;
+  growthBuildingMesh.count = doneN; growthBuildingMesh.instanceMatrix.needsUpdate = true;
+  constructionWorkerMesh.count = workerN; constructionWorkerMesh.instanceMatrix.needsUpdate = true;
+
+  // supply carts: a small pool shuttling between the lumber yard and
+  // whichever sites are still in their materials/frame stage (item 4:
+  // "carts travel dealer->sites").
+  var earlyStageSites = [];
+  for(i=0;i<spawned.length;i++){
+    var age2 = simDay-spawned[i].spawnDay, f2 = clamp(age2/CONSTRUCTION_DAYS,0,1);
+    if(f2<0.45) earlyStageSites.push(spawned[i]);
+    if(earlyStageSites.length>=SUPPLY_CART_CAP) break;
+  }
+  supplyCartMesh.count = earlyStageSites.length;
+  earlyStageSites.forEach(function(site, ci){
+    var cyc = ((simDay*3 + ci*0.37)%1+1)%1;
+    var ct = cyc<0.5 ? cyc*2 : (1-cyc)*2;
+    var cx = lerp(LUMBER_YARD_SPOT.x, site.x, ct), cz = lerp(LUMBER_YARD_SPOT.z, site.z, ct);
+    var yaw = Math.atan2(site.x-LUMBER_YARD_SPOT.x, site.z-LUMBER_YARD_SPOT.z);
+    setShipInstance(supplyCartMesh, ci, cx, terrainHeight(cx,cz)+0.15, cz, yaw, 1);
+  });
+  supplyCartMesh.instanceMatrix.needsUpdate = true;
+}
 function updateCampfires(){
   var cfCount = Math.floor(spawnedTents.length/5);
   campfireMesh.count = cfCount;
@@ -2842,7 +3067,7 @@ function updateCampfires(){
 function updateGrowth(){
   var pop = populationAt(simDay);
   var t = growthTargets(pop);
-  growReveal(growthBuildingCandidates, spawnedBuildings, t.buildings, growthBuildingMesh);
+  growRevealStaged(growthBuildingCandidates, spawnedBuildings, t.buildings);
   growReveal(tentCandidates, spawnedTents, t.tents, tentMesh);
   updateCampfires();
 }
@@ -3076,6 +3301,9 @@ function updateDistrictZones(alt){
   var structOpacity = 1-cartoT*0.88;
   buildingsMesh.material.opacity = structOpacity;
   growthBuildingMesh.material.opacity = structOpacity;
+  growthMaterialsMesh.material.opacity = structOpacity;
+  growthFrameMesh.material.opacity = structOpacity;
+  growthWallsMesh.material.opacity = structOpacity;
   tentMesh.material.opacity = structOpacity;
 }
 
@@ -3506,7 +3734,8 @@ var NAMED_BUILDINGS = {
   "Verandah": { detail:"A gambling saloon on the plaza's west side, opposite the El Dorado.", src:"economy-daily-life.md §4.1" },
   "Washington Arcade": { detail:"One of the round-the-clock gambling houses ringing Portsmouth Square in 1849.", src:"timeline-spine.md ¶Gambling around the plaza" },
   "Merchants' Exchange": { detail:"Blown up by the authorities' powder demolition as the Great Fire neared Montgomery St.", src:"AUTOGEN:fire-spine" },
-  "Delmonico's": { detail:"Saved from the Great Fire by its own roof crew, at Clay & Kearny.", src:"AUTOGEN:fire-spine" }
+  "Delmonico's": { detail:"Saved from the Great Fire by its own roof crew, at Clay & Kearny.", src:"AUTOGEN:fire-spine" },
+  "The Chapel": { detail:"Rev. Timothy Dwight Hunt (from Hawaii, arrived Oct 29 1848) held the town's first Protestant services as a nondenominational City Chaplain from Nov 2, 1848; the congregation organized as First Congregational Church in July 1849. No documented name survives for an early meeting-house building itself.", src:"demographics-society.md §ministries" }
 };
 var FIRE_RECEIPT_URL = "https://cdnc.ucr.edu/?a=d&d=DAC18491226.1.2";
 var buildingInspectorEl = document.getElementById("building-inspector");
@@ -3554,6 +3783,14 @@ var buildingLabelPool = [];
   }
 })();
 var _bldgLabelV = new THREE.Vector3();
+// coordinator directive (building label discipline): between
+// buildingLabelAlwaysAlt and zoomCartoFull, a desktop chip shows only when
+// the mouse is near it — physical wall signage carries wayfinding there
+// instead. Touch has no hover concept, so it keeps the old always-on
+// behavior in that band (tap still needs a visible target).
+var _mouseX = -9999, _mouseY = -9999;
+window.addEventListener("pointermove", function(e){ _mouseX = e.clientX; _mouseY = e.clientY; }, {passive:true});
+var BUILDING_LABEL_HOVER_PX = 46;
 function updateBuildingLabels(alt){
   // findability (QA-GATE §3): only worth showing once semantic zoom is in
   // the true-scale band — at cartographic altitude the district tint (THE
@@ -3562,6 +3799,7 @@ function updateBuildingLabels(alt){
     buildingLabelPool.forEach(function(el){ el.style.opacity = 0; });
     return;
   }
+  var alwaysOn = alt<=CFG.buildingLabelAlwaysAlt || IS_TOUCH;
   // nearest-N by screen distance from camera target, cheap since N is tiny (<25)
   var cands = NAMED_BUILDING_SPOTS.slice().sort(function(a,b){
     return (Math.hypot(a.x-camera.position.x,a.z-camera.position.z)) - (Math.hypot(b.x-camera.position.x,b.z-camera.position.z));
@@ -3574,10 +3812,15 @@ function updateBuildingLabels(alt){
     if(_bldgLabelV.z>-1){ el.style.opacity=0; el._spot=null; continue; }
     _bldgLabelV.set(spot.x, spot.y+spot.h+1.4, spot.z).project(camera);
     if(_bldgLabelV.x<-1.05||_bldgLabelV.x>1.05||_bldgLabelV.y<-1.05||_bldgLabelV.y>1.05){ el.style.opacity=0; el._spot=null; continue; }
+    var sx = (_bldgLabelV.x*0.5+0.5)*window.innerWidth, sy = (-_bldgLabelV.y*0.5+0.5)*window.innerHeight;
+    if(!alwaysOn){
+      var hovered = Math.hypot(sx-_mouseX, sy-_mouseY) <= BUILDING_LABEL_HOVER_PX;
+      if(!hovered){ el.style.opacity=0; el._spot=null; continue; }
+    }
     el.textContent = spot.name.toUpperCase();
     el.style.opacity = 0.9;
-    el.style.left = ((_bldgLabelV.x*0.5+0.5)*window.innerWidth)+"px";
-    el.style.top = ((-_bldgLabelV.y*0.5+0.5)*window.innerHeight)+"px";
+    el.style.left = sx+"px";
+    el.style.top = sy+"px";
     el._spot = spot;
   }
 }
@@ -4087,6 +4330,7 @@ function updateFarScatter(alt){
   };
   window.updateWharfGrowth = function(){
     window._wharfLandingMesh.visible = simDay >= WHARF_LANDING_START_DAY;
+    if(window._townChapelMesh) window._townChapelMesh.visible = simDay >= CHURCH_REVEAL_DAY;
     var t = clamp((simDay-CENTRAL_WHARF_START_DAY)/(SIM_END_DAY-CENTRAL_WHARF_START_DAY), 0, 1);
     var lenM = t>0 ? Math.max(6, CENTRAL_WHARF_FULL_LEN*t) : 0;
     var rounded = Math.round(lenM/2)*2;
@@ -4097,6 +4341,41 @@ function updateFarScatter(alt){
   };
   window.updateWharfGrowth();
 })();
+
+/* canvas-texture painted sign board — hoisted to global scope (was local to
+   buildYardObjects) so both the shop-shingle system below AND the notable-
+   landmark physical signage / lumber-yard sign further down can share one
+   texture-maker (coordinator directive: "extend the existing canvas
+   signage-board system"). */
+function makeSignTexture(word, priceLine){
+  var h = priceLine ? 84 : 64;
+  var cnv = document.createElement("canvas"); cnv.width=256; cnv.height=h;
+  var ctx = cnv.getContext("2d");
+  ctx.fillStyle = "#e8dfc0"; ctx.fillRect(0,0,256,h);
+  ctx.strokeStyle = "#2b1d0e"; ctx.lineWidth=4; ctx.strokeRect(4,4,248,h-8);
+  ctx.fillStyle = "#2b1d0e";
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.font = "bold 26px Georgia, serif";
+  ctx.fillText(word, 128, priceLine ? 30 : 34);
+  if(priceLine){
+    ctx.font = "20px Georgia, serif";
+    ctx.fillText(priceLine, 128, 62);
+  }
+  var tex = new THREE.CanvasTexture(cnv);
+  tex.needsUpdate = true;
+  return { tex:tex, h:h };
+}
+function mountSignBoard(spot, word, priceLine, yOffset){
+  var built = makeSignTexture(word, priceLine);
+  var mat = new THREE.MeshBasicMaterial({ map:built.tex, side:THREE.DoubleSide, transparent:true });
+  var geo = new THREE.PlaneGeometry(1.9, 0.5*(built.h/64));
+  var mesh = new THREE.Mesh(geo, mat);
+  var faceDist = spot.d*0.5+0.06;
+  mesh.position.set(spot.x + Math.sin(spot.rot)*faceDist, spot.y+(yOffset!=null?yOffset:1.55), spot.z + Math.cos(spot.rot)*faceDist);
+  mesh.rotation.y = spot.rot;
+  scene.add(mesh);
+  return mesh;
+}
 
 /* =====================================================================
    YARD OBJECTS (QA-GATE town-density debt, 2026-07): period yard objects
@@ -4206,24 +4485,6 @@ var SIGN_BUILDING_SPOTS = []; // {x,z,y,rot,w,d,word} — reused by Phase 4's ho
   // trade — no "1846-49 price" label, just the figure a real sign would carry.
   var SIGN_PRICE_ITEM = { "GROCER":/^eggs$/i, "DRY GOODS":/^cloth$/i, "PROVISIONS":/^flour$/i,
     "BOARDING":/^house rent$/i, "TIN SHOP":/^tin, plate$/i, "SHIP CHANDLERY":/^cordage, hemp$/i };
-  function makeSignTexture(word, priceLine){
-    var h = priceLine ? 84 : 64;
-    var cnv = document.createElement("canvas"); cnv.width=256; cnv.height=h;
-    var ctx = cnv.getContext("2d");
-    ctx.fillStyle = "#e8dfc0"; ctx.fillRect(0,0,256,h);
-    ctx.strokeStyle = "#2b1d0e"; ctx.lineWidth=4; ctx.strokeRect(4,4,248,h-8);
-    ctx.fillStyle = "#2b1d0e";
-    ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.font = "bold 26px Georgia, serif";
-    ctx.fillText(word, 128, priceLine ? 30 : 34);
-    if(priceLine){
-      ctx.font = "20px Georgia, serif";
-      ctx.fillText(priceLine, 128, 62);
-    }
-    var tex = new THREE.CanvasTexture(cnv);
-    tex.needsUpdate = true;
-    return { tex:tex, h:h };
-  }
   var plazaSorted = VILLAGE_BUILDING_SPOTS.slice().sort(function(a,b){
     return Math.hypot(a.x-PLAZA_CENTER.x,a.z-PLAZA_CENTER.z) - Math.hypot(b.x-PLAZA_CENTER.x,b.z-PLAZA_CENTER.z);
   }).slice(0, SIGN_WORDS.length);
@@ -4232,17 +4493,100 @@ var SIGN_BUILDING_SPOTS = []; // {x,z,y,rot,w,d,word} — reused by Phase 4's ho
     var re = SIGN_PRICE_ITEM[word];
     var priceRec = re ? findPriceByItem(re) : null;
     var priceLine = priceRec ? formatPrice(priceRec).toUpperCase() : null;
-    var built = makeSignTexture(word, priceLine);
-    var mat = new THREE.MeshBasicMaterial({ map:built.tex, side:THREE.DoubleSide, transparent:true });
-    var geo = new THREE.PlaneGeometry(1.6, 0.42*(built.h/64));
-    var mesh = new THREE.Mesh(geo, mat);
-    var faceDist = spot.d*0.5+0.06;
-    mesh.position.set(spot.x + Math.sin(spot.rot)*faceDist, spot.y+1.55, spot.z + Math.cos(spot.rot)*faceDist);
-    mesh.rotation.y = spot.rot;
-    scene.add(mesh);
+    mountSignBoard(spot, word, priceLine);
     SIGN_BUILDING_SPOTS.push({ x:spot.x, z:spot.z, y:spot.y, rot:spot.rot, w:spot.w, d:spot.d, word:word });
   });
 })();
+
+/* =====================================================================
+   PHYSICAL SIGNAGE FOR NAMED LANDMARKS (coordinator directive): the plaza's
+   documented establishments (El Dorado, Parker House, City Hotel, etc.)
+   previously only had a DOM label chip — no in-world identity below the
+   distance a chip is legible. A painted wall board with the real name,
+   mounted the same way as the trade-word shingles above, makes them
+   readable at bubble/near range by architecture+signage alone, per the
+   "signs ARE the wayfinding, chips are the fallback" directive.
+   ===================================================================== */
+(function buildNamedLandmarkSignage(){
+  NAMED_BUILDING_SPOTS.forEach(function(spot){
+    mountSignBoard(spot, spot.name.toUpperCase(), null, spot.h ? spot.h*0.55 : 1.7);
+  });
+})();
+
+/* =====================================================================
+   DUNE-LEVELING CREW (behavior-spec.md item 4): a designated sand hill on
+   the town's edge that visibly shrinks over months as it's carted away —
+   never modifying the baked heightfield itself (the mound is a separate
+   prop standing ON the real terrain; only ITS OWN scale animates), with
+   2 static worker figures at its working face, a cart path, and a fill
+   pile at the cove/wharf edge that grows as the hill shrinks — the same
+   material moving from one honest visual system to another, echoing the
+   town's real land-leveling/land-filling economy (research/geography-
+   shoreline.md's cove-fill arc) at a legible, small scale.
+   ===================================================================== */
+var LEVELING_SITE = (function buildDuneLevelingSite(){
+  var best = null;
+  for(var tries=0; tries<220; tries++){
+    var x = PLAZA_CENTER.x - 260 - rngBuild()*280;
+    var z = PLAZA_CENTER.z - 40 + (rngBuild()-0.5)*320;
+    var h = terrainHeight(x,z);
+    if(h<3 || h>11) continue;
+    if(!farFromVillage(x,z,40)) continue;
+    if(!canPlace(x,z,16,{streetMargin:2})) continue;
+    if(!best || h>best.h) best = {x:x,z:z,h:h};
+  }
+  if(!best){ var fx=PLAZA_CENTER.x-420, fz=PLAZA_CENTER.z-40; best = {x:fx,z:fz,h:terrainHeight(fx,fz)}; }
+  registerPlacement(best.x,best.z,16);
+
+  var moundGeo = new THREE.ConeGeometry(15,8,8,1).toNonIndexed();
+  moundGeo.translate(0,4,0); // pivot at base — scaling Y shrinks from the base up, top comes down
+  var posAttr = moundGeo.attributes.position;
+  for(var vi=0; vi<posAttr.count; vi++){ // irregular silhouette, not a perfect cone
+    posAttr.setX(vi, posAttr.getX(vi) + (hash2(vi*3.1, best.x*0.011)-0.5)*2.2);
+    posAttr.setZ(vi, posAttr.getZ(vi) + (hash2(vi*4.7, best.z*0.011)-0.5)*2.2);
+  }
+  moundGeo.computeVertexNormals();
+  colorizeUniform(moundGeo, new THREE.Color(0xd8c48c));
+  var moundMesh = new THREE.Mesh(moundGeo, new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}));
+  moundMesh.position.set(best.x, best.h, best.z);
+  scene.add(moundMesh);
+
+  var wharfPt = (function(){ var v=(GEO.streetsV.clay+GEO.streetsV.washington)/2; return gridToWorld(GEO.streetsU.montgomery+14, v); })();
+  var fillGeo = new THREE.ConeGeometry(7,3,7,1).toNonIndexed();
+  fillGeo.translate(0,1.5,0);
+  colorizeUniform(fillGeo, new THREE.Color(0xc9b378));
+  var fillMesh = new THREE.Mesh(fillGeo, new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}));
+  var fillBaseY = Math.max(terrainHeight(wharfPt.x, wharfPt.z), 0);
+  fillMesh.position.set(wharfPt.x, fillBaseY, wharfPt.z);
+  fillMesh.scale.y = 0.001;
+  scene.add(fillMesh);
+
+  var pathGeoms = [], pathPts = [], hops=10;
+  for(var i=0;i<=hops;i++){ var t=i/hops; pathPts.push({x:lerp(best.x,wharfPt.x,t), z:lerp(best.z,wharfPt.z,t)}); }
+  for(i=0;i<pathPts.length-1;i++){ drapeGroundStrip(pathPts[i].x,pathPts[i].z,pathPts[i+1].x,pathPts[i+1].z, 2.4, new THREE.Color(0xc7a973), 20, pathGeoms, true); }
+  if(pathGeoms.length) scene.add(new THREE.Mesh(mergeGeoms(pathGeoms), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0})));
+
+  var workerGeoms = [];
+  for(var wI=0; wI<2; wI++){
+    var wx = best.x + Math.cos(wI*2.4)*6, wz = best.z + Math.sin(wI*2.4)*6;
+    var wy = terrainHeight(wx,wz);
+    workerGeoms.push(makeOutpostPersonGeo(new THREE.Color(0x39332a), new THREE.Color(0x241f1a), false));
+    bake(workerGeoms[workerGeoms.length-1], new THREE.Vector3(wx,wy,wz), wI*1.4);
+    var pick = makeBoxLocal(0.06,1.1,0.06, new THREE.Color(0x4a3c2c));
+    bake(pick, new THREE.Vector3(wx+0.3,wy+0.5,wz), wI*1.4+0.6);
+    workerGeoms.push(pick);
+  }
+  if(workerGeoms.length) scene.add(new THREE.Mesh(mergeGeoms(workerGeoms), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0})));
+
+  console.log("[verify] Dune-leveling site at ("+best.x.toFixed(0)+","+best.z.toFixed(0)+"), start height "+best.h.toFixed(1)+"m");
+  return { x:best.x, z:best.z, baseH:best.h, moundMesh:moundMesh, fillMesh:fillMesh, fillBaseY:fillBaseY,
+    startDay:eventDateToSimDay("1847-09-01"), endDay:eventDateToSimDay("1849-06-01") };
+})();
+function updateLevelingSite(){
+  var t = clamp((simDay-LEVELING_SITE.startDay)/(LEVELING_SITE.endDay-LEVELING_SITE.startDay),0,1);
+  LEVELING_SITE.moundMesh.scale.y = 1 - 0.82*smoothstep(0,1,t); // shrinks toward a low residual rise, never fully vanishes
+  LEVELING_SITE.fillMesh.scale.y = 0.05 + 2.1*smoothstep(0,1,t);
+}
 
 /* =====================================================================
    WATERFRONT LIFE — the working beach between the village's Montgomery
@@ -4274,6 +4618,42 @@ var waterfrontBeachLines = (function(){
   }
   return lines;
 })();
+
+/* =====================================================================
+   THE LUMBER DEALER (behavior-spec.md item 4 — a documented building-
+   materials trade): closes catalog-occupations.json's
+   missing:lumber_yard_timber_stand gap for woodcutter_woodyard, and gives
+   staged construction (below) a real materials source that supply carts
+   travel from. Sited on the working beach — lumber arrived by ship, same
+   waterfront the timber-stack waterfront-life props already occupy.
+   (Placed here, after waterfrontBeachLines is actually assigned, rather
+   than up with the other yard objects — it reads that array directly.)
+   ===================================================================== */
+var LUMBER_YARD_SPOT = (function buildLumberYard(){
+  var ln = waterfrontBeachLines[Math.max(0, Math.floor(waterfrontBeachLines.length*0.78))] || null;
+  var p = ln ? { x:lerp(ln.landX,ln.waterX,0.4), z:ln.z } : { x:WORKSITE_WHARF ? WORKSITE_WHARF.x : PLAZA_CENTER.x, z:PLAZA_CENTER.z };
+  var y = terrainHeight(p.x,p.z);
+  registerPlacement(p.x,p.z,7);
+  var geoms = [];
+  for(var s=0;s<3;s++){
+    var stack = makeTimberStackGeo();
+    bake(stack, new THREE.Vector3((s-1)*2.6, 0, (s%2)*1.2), s*0.5);
+    geoms.push(stack);
+  }
+  // a simple open lean-to roof over the stacks — posts + gable, no walls
+  var postColor = new THREE.Color(0x5a4632), roofColor = new THREE.Color(0x6b5238);
+  [[-3.2,-2.2],[3.2,-2.2],[-3.2,2.2],[3.2,2.2]].forEach(function(o){
+    var post = makeBoxLocal(0.22,3.0,0.22,postColor); bake(post, new THREE.Vector3(o[0],0,o[1])); geoms.push(post);
+  });
+  var roof = makeGableRoof(7.2,5.0,0.5,1.0,roofColor); bake(roof, new THREE.Vector3(0,3.0,0)); geoms.push(roof);
+  var merged = mergeGeoms(geoms);
+  bake(merged, new THREE.Vector3(p.x,y,p.z), 0.15);
+  scene.add(new THREE.Mesh(merged, new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, side:THREE.DoubleSide, specular:0x000000, shininess:0})));
+  mountSignBoard({x:p.x,z:p.z,y:y,rot:0.15,d:5.0}, "LUMBER YARD", null, 3.3);
+  console.log("[verify] Lumber yard at ("+p.x.toFixed(0)+","+p.z.toFixed(0)+")");
+  return { key:"lumberyard", label:"the lumber yard", x:p.x, z:p.z, activity:"stationary" };
+})();
+
 function beachCandidatePool(count, salt, tNear, tFar){
   var out = [], tries = 0, attempts = count*4;
   while(out.length<count && tries<attempts && waterfrontBeachLines.length>0){
@@ -4784,6 +5164,108 @@ function worksiteForTrade(trade, rng){
     default: return WORKSITE_PLAZA_MARKET;
   }
 }
+/* ---- 2d. CATALOG-DRIVEN OCCUPATION -> VENUE binding (behavior-spec.md
+   item 2): occ.venueNeeds carries catalog venue-key strings (wharf, shop,
+   construction_site, leveling_site, saloon, mission, ...); this resolves
+   the first one that has a real standing venue in this world, honoring
+   "venueNeeds bind people to the venues that exist — worldSupport:exists
+   only". A few named/notable spots get specific bindings (City Hotel,
+   the plaza's gambling houses, the new chapel/lumber yard) rather than
+   always falling through to the generic Plaza. ---- */
+function pickAnyShopSite(rng){
+  if(SIGN_BUILDING_SPOTS.length===0) return null;
+  var s = SIGN_BUILDING_SPOTS[Math.floor(rng()*SIGN_BUILDING_SPOTS.length)];
+  return { key:"shop_"+s.word+"_r", label:SIGN_WORD_LABEL[s.word]||s.word.toLowerCase(), x:s.x, z:s.z, activity:"stationary" };
+}
+var CITY_HOTEL_SPOT = NAMED_BUILDING_SPOTS.filter(function(s){ return s.name==="City Hotel"; })[0] || null;
+var WORKSITE_CHURCH = { key:"chapel", label:(CHURCH_SPOT&&CHURCH_SPOT.name)||"the chapel", x:(CHURCH_SPOT?CHURCH_SPOT.x:PLAZA_CENTER.x), z:(CHURCH_SPOT?CHURCH_SPOT.z:PLAZA_CENTER.z), activity:"stationary" };
+var VENUE_KEY_RESOLVERS = {
+  wharf: function(){ return WORKSITE_WHARF; },
+  shore: function(){ return WORKSITE_BEACH; },
+  construction_site: function(rng){ return pickConstructionSite(rng); },
+  leveling_site: function(){ return { key:"leveling", label:"the leveling ground", x:LEVELING_SITE.x, z:LEVELING_SITE.z, activity:"construction" }; },
+  shop: function(rng){ return pickAnyShopSite(rng) || WORKSITE_PLAZA_MARKET; },
+  store: function(rng){ return pickShopSite("DRY GOODS")||pickShopSite("GROCER")||pickAnyShopSite(rng)||WORKSITE_PLAZA_MARKET; },
+  market: function(){ return WORKSITE_PLAZA_MARKET; },
+  mission: function(){ return WORKSITE_MISSION; },
+  boarding_house: function(){ return pickShopSite("BOARDING")||WORKSITE_PLAZA_MARKET; },
+  hotel: function(){ return CITY_HOTEL_SPOT ? { key:"cityhotel", label:"City Hotel", x:CITY_HOTEL_SPOT.x, z:CITY_HOTEL_SPOT.z, activity:"stationary" } : (pickShopSite("BOARDING")||WORKSITE_PLAZA_MARKET); },
+  tavern: function(){ return pickGamblingSite()||pickShopSite("BOARDING")||WORKSITE_PLAZA_MARKET; },
+  saloon: function(){ return pickGamblingSite()||pickShopSite("BOARDING")||WORKSITE_PLAZA_MARKET; },
+  newspaper_office: function(){ return { key:"pressoffice", label:"the printing office", x:PLAZA_CENTER.x+8, z:PLAZA_CENTER.z-6, activity:"stationary" }; },
+  public_building: function(){ return { key:"publicoffice", label:"the public offices on the Plaza", x:PLAZA_CENTER.x, z:PLAZA_CENTER.z, activity:"stationary" }; },
+  warehouse: function(){ return pickShopSite("SHIP CHANDLERY")||WORKSITE_WHARF; },
+  street: function(){ return WORKSITE_PLAZA_MARKET; },
+  school: function(){ return { key:"school", label:"the schoolhouse on the Plaza", x:PLAZA_CENTER.x-10, z:PLAZA_CENTER.z+8, activity:"stationary" }; }
+};
+function worksiteForOccupation(occ, rng){
+  if(!occ || !occ.venueNeeds || !occ.venueNeeds.length) return WORKSITE_PLAZA_MARKET;
+  for(var i=0;i<occ.venueNeeds.length;i++){
+    var resolver = VENUE_KEY_RESOLVERS[occ.venueNeeds[i]];
+    if(resolver){ var w = resolver(rng); if(w) return w; }
+  }
+  return WORKSITE_PLAZA_MARKET;
+}
+
+/* =========================================================================
+   ARRIVALS FLOW (behavior-spec.md item 5): a ship reaching its documented
+   arrival day triggers a short disembark window — a boat rows from the
+   anchorage to the Clay St landing, then a knot of passengers with bundles
+   walks from the landing to a boarding house/hotel (most) or continues to
+   the tent district (some), via the real street graph. Reuses the existing
+   shipVisits/fillShipVisits arrival dates as its trigger — no new date
+   data required, so real AND coverage-gap-fill arrivals both produce a
+   disembarking crowd (matching whichever the provenance toggle shows).
+   ========================================================================= */
+var ARRIVAL_WINDOW_DAYS = 1.2, ARRIVAL_ROW_FRAC = 0.3, ARRIVAL_PASSENGERS_PER_SHIP = 4, ARRIVAL_CAP = 28;
+function makeBundlePersonGeo(coatColor, hatColor){
+  var parts = [makeOutpostPersonGeo(coatColor, hatColor, false)];
+  var bundle = makeBoxLocal(0.3,0.3,0.3, new THREE.Color(0x8a7050));
+  bake(bundle, new THREE.Vector3(0.24,0.55,0));
+  parts.push(bundle);
+  return mergeGeoms(parts);
+}
+var arrivalBoatMesh = new THREE.InstancedMesh(makeRowboatGeo ? makeRowboatGeo() : new THREE.BoxGeometry(1.5,0.5,3), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), 6);
+arrivalBoatMesh.count = 0; scene.add(arrivalBoatMesh);
+var arrivalPassengerMesh = new THREE.InstancedMesh(makeBundlePersonGeo(new THREE.Color(0x3a3226), new THREE.Color(0x241f1a)), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), ARRIVAL_CAP);
+arrivalPassengerMesh.count = 0; scene.add(arrivalPassengerMesh);
+var _arrivalCache = {};
+function arrivalDestination(rng){
+  if(rng()<0.7){ var b = pickShopSite("BOARDING"); if(b) return { x:b.x, z:b.z }; }
+  var camp = STREET_GRAPH.idx["camp_happyvalley"]!=null ? STREET_GRAPH.nodes[STREET_GRAPH.idx["camp_happyvalley"]] : null;
+  return camp ? { x:camp.x, z:camp.z } : { x:PLAZA_CENTER.x, z:PLAZA_CENTER.z };
+}
+function updateArrivals(){
+  var boatN=0, passN=0;
+  var visits = provenanceOnly ? shipVisits : shipVisits.concat(fillShipVisits);
+  for(var vi=0; vi<visits.length; vi++){
+    var v = visits[vi];
+    if(v.arrive==null || !v._anchorPos) continue;
+    var age = simDay - v.arrive;
+    if(age<0 || age>ARRIVAL_WINDOW_DAYS) continue;
+    var key = v.ship+"_"+v.arrive;
+    var cache = _arrivalCache[key];
+    if(!cache){
+      var dest = arrivalDestination(rngBuild);
+      cache = _arrivalCache[key] = { poly: buildRoutePoly(WORKSITE_WHARF.x, WORKSITE_WHARF.z, dest.x, dest.z) };
+    }
+    var rowT = clamp(age/(ARRIVAL_WINDOW_DAYS*ARRIVAL_ROW_FRAC), 0, 1);
+    if(rowT<1 && boatN<arrivalBoatMesh.instanceMatrix.count){
+      var bx = lerp(v._anchorPos.x, WORKSITE_WHARF.x, rowT), bz = lerp(v._anchorPos.z, WORKSITE_WHARF.z, rowT);
+      var byaw = Math.atan2(WORKSITE_WHARF.x-v._anchorPos.x, WORKSITE_WHARF.z-v._anchorPos.z);
+      setShipInstance(arrivalBoatMesh, boatN++, bx, 0.15, bz, byaw, 1);
+    }
+    var walkT = clamp((age-(ARRIVAL_WINDOW_DAYS*ARRIVAL_ROW_FRAC))/(ARRIVAL_WINDOW_DAYS*(1-ARRIVAL_ROW_FRAC)), 0, 1);
+    for(var pi=0; pi<ARRIVAL_PASSENGERS_PER_SHIP && passN<arrivalPassengerMesh.instanceMatrix.count; pi++){
+      var pt = rowT<1 ? { x:lerp(v._anchorPos.x,WORKSITE_WHARF.x,rowT), z:lerp(v._anchorPos.z,WORKSITE_WHARF.z,rowT) } : pointOnPolyline(cache.poly, walkT*cache.poly.total);
+      var jx = (pi-1.5)*0.55, jz = (pi-1.5)*0.3;
+      var px = pt.x+jx, pz = pt.z+jz;
+      setShipInstance(arrivalPassengerMesh, passN++, px, terrainHeight(px,pz), pz, 0.4, 1);
+    }
+  }
+  arrivalBoatMesh.count = boatN; arrivalBoatMesh.instanceMatrix.needsUpdate = true;
+  arrivalPassengerMesh.count = passN; arrivalPassengerMesh.instanceMatrix.needsUpdate = true;
+}
 var HOME_BUILDING_SPOTS = VILLAGE_BUILDING_SPOTS.map(function(spot){
   var boarding = rngBuild()<0.18;
   return { x:spot.x, z:spot.z, y:spot.y, rot:spot.rot, w:spot.w, d:spot.d,
@@ -4834,12 +5316,19 @@ var ALL_PEOPLE_SLOTS = (function(){
   for(var ri=0; ri<ROUTINE_CAP; ri++){
     var originKey = pickWeighted(ALL_ORIGIN_KEYS, ORIGINS_BY_KEY);
     var origin = ORIGINS_BY_KEY[originKey];
-    var trade = TRADES_WITH_CONSTABLE[Math.floor(rngBuild()*TRADES_WITH_CONSTABLE.length)];
-    var isMale = rngBuild() < genderMaleFrac(origin.earliestDay);
+    // behavior-spec.md §0: real names from the roster first, best-attested
+    // first (the builder's own sort order) — invented people only once the
+    // roster is exhausted.
+    var rosterPerson = nextRosterPerson();
+    var era = eraColumnForDay(origin.earliestDay);
+    var occ = (rosterPerson && rosterPerson.occ) ? CATALOG_OCC_BY_ID[rosterPerson.occ] : pickCatalogOccupation(era, origin.key, rngBuild);
+    var isMale = isMaleForOccupation(occ, genderMaleFrac(origin.earliestDay), rngBuild);
+    if(rosterPerson && rosterPerson.gender==="f") isMale = false;
     var variant = isMale ? Math.floor(rngBuild()*3) : 3;
+    var traits = rollTraits(rngBuild);
 
     var home = nextHome();
-    var work = worksiteForTrade(trade, rngBuild);
+    var work = worksiteForOccupation(occ, rngBuild);
     if(origin.key==="californio" && missionAssigned<MISSION_TARGET && rngBuild()<0.5){ work = WORKSITE_MISSION; missionAssigned++; }
 
     var homePos = { x: home.spot.x + (rngBuild()-0.5)*(home.type==="tent"?2.2:(home.spot.w||3)*0.7),
@@ -4849,33 +5338,48 @@ var ALL_PEOPLE_SLOTS = (function(){
     var commutePoly = buildRoutePoly(homePos.x,homePos.z, workPos.x,workPos.z);
     var errandPoly  = buildRoutePoly(workPos.x,workPos.z, PLAZA_CENTER.x,PLAZA_CENTER.z);
     var sundayPoly  = buildRoutePoly(homePos.x,homePos.z, PLAZA_CENTER.x,PLAZA_CENTER.z);
+    // behavior-spec.md §1: a pious minority attends the town chapel once it
+    // exists (from CHURCH_REVEAL_DAY) rather than the Plaza's Sunday crowd.
+    var sundayGoesToChurch = traits.faith==="pious" && rngBuild()<0.55;
+    var churchPoly = (sundayGoesToChurch && CHURCH_SPOT) ? buildRoutePoly(homePos.x,homePos.z, CHURCH_SPOT.x, CHURCH_SPOT.z) : null;
 
     var doErrand = rngBuild()<0.4;
-    var doEvening = rngBuild()<0.25;
-    var eveningSite, eveningPoly;
+    var doEvening = rngBuild()<(0.25 + (traits.social==="gregarious"?0.15:0) + (traits.drink==="heavy-drinker"?0.1:0));
+    var eveningSite, eveningPoly, isDrunkWalk=false;
     if(home.type==="tent"){ eveningSite = { x:homePos.x, z:homePos.z, label:"the campfire" }; eveningPoly = null; }
     else {
-      // GAPS-2026-07-09 item 3 (gambling quarter): roughly a third of
-      // evening-goers head for one of the plaza's named gambling houses
-      // instead of a generic boarding house — the round-the-clock crowd
-      // the claims describe (timeline:67/175), catalog-plausible for the
-      // era's professional_gambler/faro_monte_dealer/tavern_saloonkeeper
-      // trades rather than an anonymous gathering.
-      var gambling = rngBuild()<0.35 ? pickGamblingSite() : null;
+      // behavior-spec.md item 3 (venues as smart objects): a trait-weighted
+      // dice for the saloon/gambling house vs. a quieter boarding-house
+      // evening, rather than a flat 35% split (GAPS-2026-07-09 item 3's
+      // original gambling-quarter note, now dealt per-person instead of
+      // per-population).
+      var saloonWeight = clamp(0.35 + (traits.drink==="heavy-drinker"?0.35:0) + (traits.social==="gregarious"?0.1:0) - (traits.drink==="temperate"?0.15:0), 0.05, 0.85);
+      var goSaloon = rngBuild() < saloonWeight;
+      var gambling = goSaloon ? pickGamblingSite() : null;
       var saloon = gambling || pickShopSite("BOARDING") || { x:PLAZA_CENTER.x, z:PLAZA_CENTER.z, label:"the Plaza" };
       eveningSite = { x:saloon.x, z:saloon.z, label:saloon.label };
       eveningPoly = buildRoutePoly(workPos.x,workPos.z, eveningSite.x,eveningSite.z);
+      // "occasional drunk stumbling home" — a heavy-drinker who went to a
+      // gambling house/saloon sometimes weaves on the walk back (rendered
+      // in computeRoutinePosition's evening_back branch).
+      isDrunkWalk = !!gambling && traits.drink==="heavy-drinker" && rngBuild()<0.4;
     }
 
+    var rosterFirstDay = (rosterPerson && rosterPerson.first) ? eventDateToSimDay(rosterPerson.first) : null;
+    var rosterLastDay  = (rosterPerson && rosterPerson.last)  ? eventDateToSimDay(rosterPerson.last)  : null;
+
     slots.push({
-      id:id++, kind:"routine", origin:origin, gender:isMale?"male":"female", variant:variant, trade:trade,
+      id:id++, kind:"routine", origin:origin, gender:isMale?"male":"female", variant:variant,
+      occ:occ, roster:rosterPerson, traits:traits, isDrunkWalk:isDrunkWalk,
+      sundayGoesToChurch:sundayGoesToChurch, churchPoly:churchPoly,
       lateralJitter:(rngBuild()-0.5)*2.2, clusterOffset:{ x:(rngBuild()-0.5)*3.6, z:(rngBuild()-0.5)*3.6 },
       isLanternCandidate: rngBuild()<0.32,
       home:home, homePos:homePos, homeLabel:homeLabelFor(home),
       work:work, workPos:workPos, workLabel:work.label, workActivity:work.activity,
       commutePoly:commutePoly, errandPoly:errandPoly, sundayPoly:sundayPoly,
       doErrand:doErrand, doEvening:doEvening, eveningSite:eveningSite, eveningPoly:eveningPoly,
-      notBeforeDay: Math.max(origin.earliestDay, home.revealDay||0, TRADE_EARLIEST_DAY[trade]||0),
+      notBeforeDay: Math.max(rosterFirstDay!=null?rosterFirstDay:0, origin.earliestDay, home.revealDay||0),
+      notAfterDay: rosterLastDay,
       bio:null, _x:homePos.x, _z:homePos.z, _distSq:1e18, _now:"", _pose:"idle"
     });
   }
@@ -4884,17 +5388,29 @@ var ALL_PEOPLE_SLOTS = (function(){
   for(var ei=0; ei<EXTRA_POOL_SIZE; ei++){
     var originKey2 = pickWeighted(ALL_ORIGIN_KEYS, ORIGINS_BY_KEY);
     var origin2 = ORIGINS_BY_KEY[originKey2];
+    var rosterPerson2 = nextRosterPerson(); // real names keep filling density-fill slots after the routine cast (§0: "invented people only beyond the roster")
     var isMale2 = rngBuild() < genderMaleFrac(origin2.earliestDay);
+    if(rosterPerson2 && rosterPerson2.gender==="f") isMale2 = false;
     var variant2 = isMale2 ? Math.floor(rngBuild()*3) : 3;
-    var wanderPoly = buildWanderPoly(rngBuild);
+    // behavior-spec.md item 5: a handful of extras are dedicated Mission
+    // Road foot traffic — the "travelers both directions daily" ask —
+    // instead of the generic in-town street-graph wander, so the road to
+    // the Mission always reads as used, not just when a Californio
+    // routine-slot's workplace happens to be assigned there.
+    var isMissionTraveler = ei<6 && typeof MISSION_ROAD_PTS!=="undefined" && MISSION_ROAD_PTS.length>1;
+    var wanderPoly = isMissionTraveler ? buildPolyline(MISSION_ROAD_PTS, false) : buildWanderPoly(rngBuild);
+    var rosterFirstDay2 = (rosterPerson2 && rosterPerson2.first) ? eventDateToSimDay(rosterPerson2.first) : null;
+    var rosterLastDay2  = (rosterPerson2 && rosterPerson2.last)  ? eventDateToSimDay(rosterPerson2.last)  : null;
     slots.push({
-      id:id++, kind:"extra", origin:origin2, gender:isMale2?"male":"female", variant:variant2, trade:null,
+      id:id++, kind:"extra", origin:origin2, gender:isMale2?"male":"female", variant:variant2,
+      occ:null, roster:rosterPerson2, traits:rollTraits(rngBuild),
       speed:0.8+rngBuild()*0.7, phaseOffset: rngBuild()*wanderPoly.total*2, lateralJitter:(rngBuild()-0.5)*2.0,
       isLanternCandidate: rngBuild()<0.32,
       wanderPoly:wanderPoly, homePos:{x:wanderPoly.segs[0].a.x, z:wanderPoly.segs[0].a.z},
-      homeLabel:"about "+nearestStreetPair(wanderPoly.segs[0].a.x, wanderPoly.segs[0].a.z)+" Streets",
+      homeLabel: isMissionTraveler ? "on the Mission road" : ("about "+nearestStreetPair(wanderPoly.segs[0].a.x, wanderPoly.segs[0].a.z)+" Streets"),
       work:null, workPos:null, workLabel:null,
-      notBeforeDay: origin2.earliestDay,
+      notBeforeDay: Math.max(rosterFirstDay2!=null?rosterFirstDay2:0, origin2.earliestDay),
+      notAfterDay: rosterLastDay2,
       bio:null, _x:wanderPoly.segs[0].a.x, _z:wanderPoly.segs[0].a.z, _distSq:1e18, _now:"about the streets", _pose:"walk"
     });
   }
@@ -4966,28 +5482,50 @@ function reshuffleLifeStream(){
 // GAPS-2026-07-09 item 2 (economy layer): where the extraction has a
 // documented period wage for a slot's catalog trade, a bio card may mention
 // it — quietly, as a fact about the person, not a system callout.
+// GAPS-2026-07-09 item 2 (economy layer): documented period wages, keyed by
+// catalog occupation id now that occupations are catalog-driven rather than
+// the legacy ad-hoc TRADES strings.
 var TRADE_WAGE_ITEM = {
-  carpenter: /^mechanical labor wages$/i, brickmaker: /^mechanical labor wages$/i, blacksmith: /^mechanical labor wages$/i,
-  teamster: /^labor wage$/i, drayman: /^labor wage$/i, stevedore: /^labor wage$/i, "sailor ashore": /^labor wage$/i,
-  clerk: /^clerk hire$/i, constable: /^constable salary$/i,
-  cook: /^domestic labor$/i, "boarding-house cook": /^domestic labor$/i, washerwoman: /^domestic labor$/i,
-  "lodging-house keeper": /^domestic labor$/i
+  carpenter: /^mechanical labor wages$/i, mason_bricklayer: /^mechanical labor wages$/i, blacksmith: /^mechanical labor wages$/i,
+  wharf_laborer_stevedore: /^labor wage$/i, common_laborer: /^labor wage$/i, porter: /^labor wage$/i,
+  clerk: /^clerk hire$/i,
+  cook: /^domestic labor$/i, domestic_servant: /^domestic labor$/i
 };
 function generateBio(slot){
   if(slot.bio) return slot.bio;
   var rng = personRng(slot.id);
+  // behavior-spec.md §0: a roster person's name + printed role are FIXED
+  // (real, from data/people.jsonl) — everything else about them (origin,
+  // traits, schedule) was already dealt from the catalog at slot-build
+  // time; only invented people get an on-the-spot name/agenda draw here.
+  if(slot.roster){
+    var rp = slot.roster;
+    var rpOcc = rp.occ ? CATALOG_OCC_BY_ID[rp.occ] : slot.occ;
+    var wageRe2 = rpOcc ? TRADE_WAGE_ITEM[rpOcc.id] : null;
+    var wageRec2 = wageRe2 ? findPriceByItem(wageRe2) : null;
+    slot.bio = {
+      name: rp.name,
+      origin: slot.origin ? slot.origin.label : "unrecorded",
+      arrivedYear: dateFromSimDay(rp.first ? eventDateToSimDay(rp.first) : Math.max(slot.notBeforeDay,0)).getUTCFullYear(),
+      trade: rpOcc ? rpOcc.label : (rp.role || "—"),
+      role: rp.role || null, mentions: rp.mentions || null,
+      agenda: null,
+      wage: wageRec2 ? formatPrice(wageRec2) : null
+    };
+    return slot.bio;
+  }
   var bank = NAME_BANKS[slot.origin.key] || NAME_BANKS.american;
   var first = bank.first[Math.floor(rng()*bank.first.length)];
   var name = bank.singleName ? first : (first+" "+bank.last[Math.floor(rng()*bank.last.length)]);
   var earliestDay = Math.max(slot.notBeforeDay,0), latestDay = Math.max(earliestDay, simDay);
   var arrivedDay = earliestDay + rng()*Math.max(1,(latestDay-earliestDay));
-  var tradePool = simDay>=SFPD_FOUNDING_DAY ? TRADES_WITH_CONSTABLE : TRADES;
-  var trade = slot.trade || tradePool[Math.floor(rng()*tradePool.length)];
-  var wageRe = TRADE_WAGE_ITEM[trade];
+  var occ = slot.occ || pickCatalogOccupation(eraColumnForDay(arrivedDay), slot.origin.key, rng);
+  var wageRe = occ ? TRADE_WAGE_ITEM[occ.id] : null;
   var wageRec = wageRe ? findPriceByItem(wageRe) : null;
   slot.bio = {
     name:name, origin:slot.origin.label, arrivedYear:dateFromSimDay(arrivedDay).getUTCFullYear(),
-    trade: trade,
+    trade: occ ? occ.label : "laborer",
+    role: null, mentions: null,
     agenda:AGENDAS[Math.floor(rng()*AGENDAS.length)],
     wage: wageRec ? formatPrice(wageRec) : null
   };
@@ -5058,12 +5596,22 @@ function computeRoutinePosition(slot, day, dt){
   var sunday = isSundayForDay(day);
   var pose="idle", label="at home", x=slot.homePos.x, z=slot.homePos.z, dx=0, dz=1, pp;
 
+  // behavior-spec.md item 3: once the chapel exists, a pious minority
+  // attends its Sunday service there instead of the Plaza's secular
+  // gathering (CHURCH_SPOT/CHURCH_REVEAL_DAY, built above).
+  var goingToChurch = sunday && slot.sundayGoesToChurch && slot.churchPoly && day>=CHURCH_REVEAL_DAY;
+  var sundayDestPoly = goingToChurch ? slot.churchPoly : slot.sundayPoly;
+  var sundayDestLabel = goingToChurch ? "the chapel" : "the Plaza";
+  var sundayAtLabel = goingToChurch ? "at the chapel, Sunday service" : "at the Plaza, Sunday gathering";
+  var sundayDestX = goingToChurch ? CHURCH_SPOT.x : PLAZA_CENTER.x;
+  var sundayDestZ = goingToChurch ? CHURCH_SPOT.z : PLAZA_CENTER.z;
+
   if(sunday){
     if(h<7 || h>=21){ label="asleep at home"; }
     else if(h<8){ label="waking, a Sunday"; }
-    else if(h<8.5){ pp=sampleWithJitter(slot.sundayPoly,walkT01(slot,"sun_out",day,slot.sundayPoly,dt),slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking to the Plaza"; }
-    else if(h<12.5){ x=PLAZA_CENTER.x; z=PLAZA_CENTER.z; pose="market"; label="at the Plaza, Sunday gathering"; }
-    else if(h<13){ pp=sampleWithJitter(slot.sundayPoly,1-walkT01(slot,"sun_back",day,slot.sundayPoly,dt),slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking home"; }
+    else if(h<8.5){ pp=sampleWithJitter(sundayDestPoly,walkT01(slot,"sun_out",day,sundayDestPoly,dt),slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking to "+sundayDestLabel; }
+    else if(h<12.5){ x=sundayDestX; z=sundayDestZ; pose="market"; label=sundayAtLabel; }
+    else if(h<13){ pp=sampleWithJitter(sundayDestPoly,1-walkT01(slot,"sun_back",day,sundayDestPoly,dt),slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking home"; }
     else { label="at home, the Sabbath"; }
   } else {
     if(h<5.5 || h>=21){ label="asleep at home"; }
@@ -5081,7 +5629,15 @@ function computeRoutinePosition(slot, day, dt){
       if(slot.eveningPoly){
         if(h<19.3){ pp=sampleWithJitter(slot.eveningPoly,walkT01(slot,"evening_out",day,slot.eveningPoly,dt),slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking to the "+slot.eveningSite.label; }
         else if(h<20.7){ x=slot.eveningSite.x; z=slot.eveningSite.z; pose="evening"; label="at the "+slot.eveningSite.label+", of an evening"; }
-        else { pp=sampleWithJitter(slot.eveningPoly,1-walkT01(slot,"evening_back",day,slot.eveningPoly,dt),slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking home"; }
+        else {
+          // "occasional drunk stumbling home" (item 3, trait-weighted): an
+          // extra oscillating perpendicular weave on top of the normal
+          // lateral jitter, only for the heavy-drinker slots the dice
+          // already picked at slot-build time (isDrunkWalk).
+          var weaveJit = slot.isDrunkWalk ? slot.lateralJitter + Math.sin(peopleClock*3.1+slot.id*1.7)*1.6 : slot.lateralJitter;
+          pp=sampleWithJitter(slot.eveningPoly,1-walkT01(slot,"evening_back",day,slot.eveningPoly,dt),weaveJit); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk";
+          label = slot.isDrunkWalk ? "stumbling home" : "walking home";
+        }
       } else { x=slot.eveningSite.x; z=slot.eveningSite.z; pose="evening"; label="at the campfire"; }
     }
     else { label="at home"; }
@@ -5146,6 +5702,7 @@ function updatePeople(dt, camX, camZ, alt){
   for(var i=0;i<ALL_PEOPLE_SLOTS.length;i++){
     var s = ALL_PEOPLE_SLOTS[i];
     if(day<s.notBeforeDay) continue;
+    if(s.notAfterDay!=null && day>s.notAfterDay) continue; // roster presence window closes (last documented mention)
     if(s.kind==="routine") computeRoutinePosition(s, day, dt); else computeExtraPosition(s, day);
     applyFireCrowd(s, day); // PHASE 5: flee the fire zone via the street graph, then spectate
     s._distSq = (s._x-camX)*(s._x-camX)+(s._z-camZ)*(s._z-camZ);
@@ -5276,7 +5833,10 @@ window.__piFlyTo = function(x,z,alt){
 };
 function openPersonInspectorForSlot(slot){
   var bio = generateBio(slot);
-  piTierEl.textContent = "SIMULATED"; piTierEl.classList.remove("documented");
+  // grounding.md cast tiers: a roster-backed person is "from the record"
+  // (real name, printed role) rather than wholly simulated — quiet badge
+  // text only, no meta commentary (voice rule).
+  piTierEl.textContent = bio.role ? "FROM THE RECORD" : "SIMULATED"; piTierEl.classList.remove("documented");
   piNameEl.textContent = bio.name;
   var summaryTxt = bio.origin+" · "+bio.arrivedYear+" · "+bio.trade+(bio.wage?(" · "+bio.wage):"");
   piSummaryEl.innerHTML = '<span class="pi-label">ORIGIN &middot; ARRIVED &middot; TRADE'+(bio.wage?" &middot; WAGE":"")+'</span>'+escapeHTML(summaryTxt);
@@ -5285,7 +5845,7 @@ function openPersonInspectorForSlot(slot){
   if(slot.workPos){
     detailHtml += '; works the <a href="#" class="pi-fly" onclick="__piFlyTo('+slot.workPos.x.toFixed(1)+','+slot.workPos.z.toFixed(1)+',110);return false;">'+escapeHTML(slot.workLabel)+'</a>';
   }
-  detailHtml += ". "+escapeHTML(bio.agenda)+".";
+  detailHtml += bio.role ? (". Printed in the record as \""+escapeHTML(bio.role)+"\".") : (". "+escapeHTML(bio.agenda)+".");
   piDetailEl.innerHTML = detailHtml;
   piNowEl.innerHTML = '<span class="pi-label">NOW</span>'+escapeHTML(slot._now||"—");
   piReceiptWrapEl.style.display = "none";
@@ -6947,6 +7507,7 @@ function animate(){
   updateWharfGrowth();
   updateGrowth();
   updateWaterfrontLife();
+  updateLevelingSite();
   updateTicker();
   updateFire(dt);      // PHASE 5 — the Dec 24 1849 Great Fire + aftermath/rebuild
 
@@ -6974,6 +7535,7 @@ function animate(){
   updateGroundScatter(alt);
   updateFarScatter(alt);
   updatePeople(dt, camera.position.x, camera.position.z, alt);
+  updateArrivals();
   updateSmoke(dt);
   updateDistrictZones(alt);
   updateBuildingLabels(alt);
