@@ -111,6 +111,8 @@
   }
   .ship-label{ pointer-events:auto; cursor:pointer; }
   .ship-label:hover{ background:rgba(241,230,201,0.98); }
+  .building-label{ pointer-events:auto; cursor:pointer; }
+  .building-label:hover{ background:rgba(241,230,201,0.98); }
   #hud-loading{
     position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
     background:#101418; color:#e8dcb8; font-family:'Fraunces',Georgia,serif;
@@ -197,6 +199,13 @@
   .fi-receipt:hover{ opacity:1; }
   .item-flash{ animation:ppFlash 1.4s ease 0s 2; }
   @keyframes ppFlash{ 0%,100%{ background:rgba(255,255,255,0.18);} 50%{ background:rgba(200,150,60,0.45);} }
+  .pp-markets{
+    width:100%; margin-top:14px; border-collapse:collapse; break-inside:avoid;
+    font-size:0.68rem; border-top:1px solid rgba(43,29,14,0.35); border-bottom:1px solid rgba(43,29,14,0.35);
+  }
+  .pp-markets caption{ text-align:left; font-size:0.6rem; letter-spacing:2.5px; opacity:0.7; padding:6px 0 4px; }
+  .pp-markets td{ padding:2px 6px 2px 0; border-top:1px solid rgba(43,29,14,0.12); }
+  .pp-markets td:last-child{ text-align:right; white-space:nowrap; }
 
   #horizon-ring{
     position:fixed; top:0; left:0; right:0; z-index:6; pointer-events:none;
@@ -229,6 +238,16 @@
   #ship-inspector .si-close:hover{ opacity:1; }
   #ship-inspector .si-field{ display:block; font-size:0.62rem; letter-spacing:1px; opacity:0.7; margin-top:6px; }
   #ship-inspector a{ color:var(--ink); }
+
+  /* GAPS-2026-07-09 item 3 (named landmarks) — same layout as #ship-inspector,
+     reusing its .si-close/.si-field rules (those are class-based already). */
+  #building-inspector{
+    top:120px; right:16px; width:250px; pointer-events:auto;
+    font-size:0.72rem; line-height:1.45; display:none;
+  }
+  #building-inspector.on{ display:block; }
+  #building-inspector h3{ margin:0 0 4px; font-size:0.95rem; letter-spacing:0.5px; }
+  #building-inspector a{ color:var(--ink); }
 
   /* ---- PHASE 4: THE PEOPLE ---- */
   #person-inspector{
@@ -325,7 +344,7 @@
   body.watch-mode #hud-title, body.watch-mode #hud-seed, body.watch-mode #hud-altitude,
   body.watch-mode #hud-hint, body.watch-mode #hud-hint-toggle, body.watch-mode #paper-toggle,
   body.watch-mode #hud-ghost, body.watch-mode #hud-provenance, body.watch-mode #ship-inspector,
-  body.watch-mode #person-inspector, body.watch-mode #horizon-ring{ display:none !important; }
+  body.watch-mode #person-inspector, body.watch-mode #horizon-ring, body.watch-mode #building-inspector{ display:none !important; }
 
   /* ---- touch/mobile ---- */
   #hud-hint-toggle{
@@ -352,7 +371,7 @@
     #hud-provenance{ top:100px; max-width:60vw; font-size:0.52rem; letter-spacing:1px; white-space:normal; }
     #hud-altitude{ min-width:0; font-size:0.7rem; }
     #paper-pane{ width:100vw; }
-    #ship-inspector, #person-inspector{ width:min(260px,72vw); }
+    #ship-inspector, #person-inspector, #building-inspector{ width:min(260px,72vw); }
   }
 </style>
 </head>
@@ -404,6 +423,17 @@
     <span class="si-field"><a id="si-receipt" href="#" target="_blank" rel="noopener">view the original page &rarr;</a></span>
   </div>
 
+  <!-- GAPS-2026-07-09 item 3 (named landmarks): reuses the ship-inspector's
+       CSS (#ship-inspector rules are all by-class, not by-id) for the
+       plaza's named buildings — El Dorado, Parker House, etc. -->
+  <div class="panel" id="building-inspector">
+    <span class="si-close" id="bi-close">&times;</span>
+    <h3 id="bi-name">&mdash;</h3>
+    <span class="si-field" id="bi-status"></span>
+    <span class="si-field" id="bi-detail"></span>
+    <span class="si-field" id="bi-receipt-wrap"><a id="bi-receipt" href="#" target="_blank" rel="noopener">view the original page &rarr;</a></span>
+  </div>
+
   <div class="panel" id="person-inspector">
     <span class="pi-close" id="pi-close">&times;</span>
     <span class="pi-tier" id="pi-tier">SIMULATED</span>
@@ -453,6 +483,7 @@
 <script src="terrain-1846.js"></script>
 <script src="events-1846-49.js"></script>
 <script src="feed-1846-49.js"></script>
+<script src="prices-1846-49.js"></script>
 <script>
 (function(){
 "use strict";
@@ -599,6 +630,31 @@ var STREET_STUB_LEN = 180;               // sandy-track fade-out length beyond t
 function gridToWorld(u,v){
   var c = Math.cos(VIOGET_SKEW), s = Math.sin(VIOGET_SKEW);
   return { x: u*c - v*s, z: u*s + v*c };
+}
+
+/* GAPS-2026-07-09 item 4 (reconciler flag) — the O'Farrell "grid swing":
+   the comment above always noted the 1847 correction but never executed
+   it. Scoped here to the STREET MESHES (see buildStreets() below, which
+   parents streetsMesh/stubMesh into this group): the group rotates from
+   the as-built Vioget skew down to 0 (true grid) over Feb-Aug 1847, a
+   subtle, watchable "the map learns from the survey" moment (pillar 4).
+   Buildings are NOT re-baked in this pass — they stay at their as-built
+   angle, so they read as increasingly (slightly) off the corrected grid
+   afterward, same as the historical record describes for existing
+   structures versus new post-survey construction. */
+var VIOGET_GRID_GROUP = new THREE.Group();
+var OFARRELL_SWING_START = eventDateToSimDay("1847-02-01");
+var OFARRELL_SWING_END = eventDateToSimDay("1847-08-01");
+function updateGridSwing(){
+  var t = clamp((simDay-OFARRELL_SWING_START)/(OFARRELL_SWING_END-OFARRELL_SWING_START), 0, 1);
+  // t=0 (pre-Feb 1847): no extra rotation — streets sit at their baked
+  // Vioget skew, same as the buildings. t=1 (post-Aug 1847): rotates the
+  // group by +VIOGET_SKEW, canceling the baked-in skew (verified against
+  // Three.js's actual rotateY convention, x'=x*cos+z*sin/z'=-x*sin+z*cos —
+  // the naive "-skew" guess doubles the tilt instead of canceling it) so
+  // the street grid reads true/square while buildings (a separate,
+  // unrotated mesh) stay tilted.
+  VIOGET_GRID_GROUP.rotation.y = VIOGET_SKEW*t;
 }
 
 var GEO = {
@@ -1369,9 +1425,19 @@ var streetsMesh, stubMesh; // hoisted for semantic-zoom crossfade (see SEMANTIC 
   });
 
   streetsMesh = new THREE.Mesh(mergeGeoms(geoms), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, transparent:true, specular:0x000000, shininess:0}));
-  scene.add(streetsMesh);
   stubMesh = new THREE.Mesh(mergeGeoms(stubGeoms), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, transparent:true, opacity:0.5, specular:0x000000, shininess:0}));
-  scene.add(stubMesh);
+  // GAPS-2026-07-09 item 4 (O'Farrell's Feb-Aug 1847 grid swing): both
+  // street meshes ride in a group pivoted at the grid origin (Portsmouth
+  // Square, world (0,0) — gridToWorld(0,0) with no translation) so they can
+  // rotate as one unit; see updateGridSwing() below. Scoped to the STREETS
+  // only for this pass — buildings/lots stay at their as-built Vioget skew
+  // (a full per-building re-bake on the survey date is a further increment;
+  // see the report), which is itself the honest part of the moment: the
+  // record describes existing structures staying crooked while new work
+  // aligns to the corrected grid.
+  VIOGET_GRID_GROUP.add(streetsMesh);
+  VIOGET_GRID_GROUP.add(stubMesh);
+  scene.add(VIOGET_GRID_GROUP);
 })();
 
 /* =====================================================================
@@ -1617,6 +1683,20 @@ function pushBuildingGeo(list, geo){ list.push(geo); buildingVertCursor += geo.a
     put(kU-24, wV+9,  0, { name:"Miners' Bank", forceFrame:true });
     put(kU-38, wV+9,  0, { name:"Bella Union", sizeMul:1.25, forceFrame:true });
     put(kU-52, wV+9,  0, { name:"Haley House", sizeMul:1.15, forceFrame:true });
+  })();
+
+  /* GAPS-2026-07-09 item 3 (named landmarks): City Hotel — William A.
+     Leidesdorff, 1846, "corner of Clay and Kearny," Bancroft's first
+     building in Yerba Buena "entitled to the name" of hotel (clm:timeline:14,
+     clm:cast:86). Placed one block north of the fire footprint (Kearny
+     frontage, the Jackson-Clay block) — the exact lot isn't in the record
+     (approximate, per QA-GATE §1), and no claim documents its Dec 24 1849
+     fate, so it's kept outside the documented burn footprint rather than
+     guessed into it either way. */
+  (function(){
+    var kU2 = uVals[2], cV2 = vVals[2];
+    var p = gridToWorld(kU2+8, cV2-10);
+    placeBuilding(p.x, p.z, Math.PI/2, { name:"City Hotel", sizeMul:1.35, tall:true, forceFrame:true, denseRow:true });
   })();
 
   buildingsMesh = new THREE.Mesh(mergeGeoms(buildingGeoms), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, transparent:true, side:THREE.DoubleSide, specular:0x000000, shininess:0}));
@@ -2054,6 +2134,34 @@ EVENTS_RAW.forEach(function(e){
   // the ship system, ticker, and director all see them as arrivals.
   if(!e.type && e.class==="arrival" && e.ship) e.type = "ship_arrival";
 });
+
+/* =========================================================================
+   2b. PRICES DATA — data/prices.jsonl baked (review:true skipped) into
+   prices-1846-49.js by tools/build-prices.js (GAPS-2026-07-09 item 2, the
+   economy layer). Surfaced quietly per grounding.md's voice rule: shop
+   signage price lines, the paper pane's MARKETS table (linked to issues
+   whose extraction already tagged sourceContext:"prices_current"), and a
+   documented-wage mention on person-inspector bio cards. No UI badge or
+   commentary calls this system out by name.
+   ========================================================================= */
+var PRICES_RAW = window.PRICES_1846_49 || [];
+if(!window.PRICES_1846_49) console.warn("[verify] prices-1846-49.js failed to load — signage/markets/wage lines will be empty. Run: node tools/build-prices.js");
+PRICES_RAW.forEach(function(p){ p.simDay = p.date ? eventDateToSimDay(p.date) : null; });
+var PRICES_BY_DATE = {};
+PRICES_RAW.forEach(function(p){ if(p.date){ (PRICES_BY_DATE[p.date]=PRICES_BY_DATE[p.date]||[]).push(p); } });
+/* first-match-wins lookup by item-name substring, era-general (not tied to
+   simDay — signage/bio text is baked once, so "the" documented figure for a
+   trade is whichever the era's own record set surfaces first, favoring
+   earlier/cheaper era-typical figures over the 1849 inflation spike). */
+function findPriceByItem(re){
+  for(var i=0;i<PRICES_RAW.length;i++){ if(re.test(PRICES_RAW[i].item)) return PRICES_RAW[i]; }
+  return null;
+}
+function formatPrice(p){
+  if(!p) return null;
+  var amt = "$"+(p.priceHigh!=null ? (p.price+"-"+p.priceHigh) : p.price);
+  return amt + (p.unit ? ("/"+p.unit) : "");
+}
 
 /* =========================================================================
    3. SHIPS ON THEIR TRUE DATES
@@ -2865,7 +2973,14 @@ var DISTRICT_ZONES = [
   { name:"THE VILLAGE",      cx:PLAZA_CENTER.x,      cz:PLAZA_CENTER.z,      r:360, color:0xcdb37a, revealDay:-1 },
   { name:"MISSION DOLORES",  cx:OUTPOSTS.mission.x,  cz:OUTPOSTS.mission.z,  r:190, color:0x93a674, revealDay:-1 },
   { name:"THE PRESIDIO",     cx:OUTPOSTS.presidio.x, cz:OUTPOSTS.presidio.z, r:190, color:0x88a0ad, revealDay:-1 },
-  { name:"HAPPY VALLEY",     cx:900, cz:950,          r:440, color:0xd8a15c, revealDay:eventDateToSimDay("1849-01-10") }
+  { name:"HAPPY VALLEY",     cx:900, cz:950,          r:440, color:0xd8a15c, revealDay:eventDateToSimDay("1849-01-10") },
+  // GAPS-2026-07-09 item 3 (1849 bible-tier events): the Chilean immigrant
+  // encampment at Clark's Point (clm demographics-society.md §3 / research
+  // police-courts.md), site of the Hounds' July 15 1849 attack. Placement
+  // approximate (toward the waterfront at the base of Telegraph Hill/Clark's
+  // Point, per the record — no lot-level position survives); revealed on
+  // ORIGINS' own documented Chilean-arrival onset (1848-10-25).
+  { name:"LITTLE CHILE",     cx:150, cz:-830,         r:130, color:0xb98a5a, revealDay:eventDateToSimDay("1848-10-25") }
 ];
 var ZONE_GRID_RES = 28; // (res+1)^2 verts per zone, land-masked once at build time
 var zoneVert = [
@@ -2971,7 +3086,12 @@ function updateDistrictZones(alt){
    no click-through yet.
    ========================================================================= */
 var TICKER_TYPES = { proclamation:1, ship_arrival:1, ship_departure:1, celebration:1, election:1, epidemic:1, shipwreck:1, fire:1 };
-var TICKER_CLASSES = { fire:1, disaster:1 };
+// 2026-07-09 (GAPS item "1849 bible-tier events visible"): "crime" joins the
+// ticker classes so the newly-baked Hounds/riot/trial bible records surface
+// on the bottom-bar ticker (SFPD founding is class:civic like hundreds of
+// routine notices, so it's a director beat only — see DIRECTOR_BEATS below —
+// rather than widening the ticker's civic gate and drowning it in noise).
+var TICKER_CLASSES = { fire:1, disaster:1, crime:1 };
 function tickerScore(e){
   var s = e.priority||0;
   if(e.class==="fire" || e.type==="fire") s += 100;
@@ -3214,22 +3334,35 @@ ppBodyEl.addEventListener("click", function(e){
   if(place) flyTo(place.x, place.z, place.alt);
 });
 
-function renderBroadsheet(issue){
+// GAPS-2026-07-09 item 2 (economy layer): issues whose extraction already
+// tagged prices as sourceContext:"prices_current" get a small MARKETS table —
+// the same column a real period paper carried — linking data already baked
+// from data/prices.jsonl to the specific issue date that reported it.
+function marketsTableHTML(dateKey){
+  var recs = (PRICES_BY_DATE[dateKey]||[]).filter(function(p){ return p.ctx==="prices_current"; });
+  if(recs.length===0) return "";
+  var rows = recs.slice(0,12).map(function(p){
+    var amt = formatPrice(p);
+    return '<tr><td>'+escapeHTML(p.item)+'</td><td>'+escapeHTML(amt||"")+'</td></tr>';
+  }).join("");
+  return '<table class="pp-markets"><caption>MARKETS</caption><tbody>'+rows+'</tbody></table>';
+}
+function renderBroadsheet(issue, dateKey){
   var html = '<div class="bs-columns">';
   issue.items.forEach(function(item, i){
     html += '<div class="bs-item" data-idx="'+i+'">' + fiHeadlineHTML(item)
       + '<p class="fi-text">'+escapeHTML(item.text)+'</p>' + receiptHTML(item.prov) + '</div>';
   });
-  ppBodyEl.innerHTML = html + '</div>';
+  ppBodyEl.innerHTML = html + '</div>' + marketsTableHTML(dateKey);
 }
-function renderFeed(issue){
+function renderFeed(issue, dateKey){
   var html = "";
   issue.items.forEach(function(item, i){
     html += '<div class="feed-item" data-idx="'+i+'">'
       + '<span class="fi-chip'+(item.type==="ad"?" ad":"")+'">'+chipLabel(item.type)+'</span>'
       + fiHeadlineHTML(item) + '<p class="fi-text">'+escapeHTML(item.text)+'</p>' + receiptHTML(item.prov) + '</div>';
   });
-  ppBodyEl.innerHTML = html;
+  ppBodyEl.innerHTML = html + marketsTableHTML(dateKey);
 }
 function renderNoIssueYet(){
   ppMastheadEl.textContent = "THE INSTANT CITY";
@@ -3273,7 +3406,7 @@ function updatePaper(){
   ppMastheadEl.textContent = issueMasthead;
   if(suspended){ ppIssueDateEl.textContent="SUSPENDED"; renderSuspended(dateKey); forcedIssueKey=null; return; }
   ppIssueDateEl.textContent = (dateKey===naturalKey && todayISO===dateKey) ? ("issue of "+formatIssueDateLabel(dateKey)) : ("no paper since "+formatIssueDateLabel(dateKey));
-  if(paperView==="broadsheet") renderBroadsheet(issue); else renderFeed(issue);
+  if(paperView==="broadsheet") renderBroadsheet(issue, dateKey); else renderFeed(issue, dateKey);
   scrollToPendingHeadline();
   forcedIssueKey = null;
 }
@@ -3353,6 +3486,100 @@ function openShipInspector(v){
     siReceiptEl.parentElement.style.display = "none";
   }
   shipInspectorEl.classList.add("on");
+}
+
+/* =========================================================================
+   GAPS-2026-07-09 item 3 — NAMED LANDMARKS: the plaza's named buildings
+   (currently only "live" inside the fire system's burn/scorch lists) get
+   an inspector card + a clickable label, same DOM-label-pool pattern as
+   ship labels above. Curated one-line facts for the buildings the gap
+   report specifically named; every other named spot (the fire block's
+   ~8 other documented establishments) still gets a card with its name and
+   burn status — just without invented color beyond what's sourced.
+   ========================================================================= */
+var NAMED_BUILDINGS = {
+  "El Dorado": { detail:"Opened as a 15x25-ft canvas gambling tent around 1849, next to City Hall on Portsmouth Square, run by James McCabe and Thomas J.A. Chambers; the tent alone reportedly rented for $40,000/year.", src:"economy-daily-life.md §4.1" },
+  "Parker House": { detail:"Built as a hotel by Robert A. Parker; its upper floors were leased to gamblers for faro, monte, and roulette.", src:"timeline-part-1849.md ¶gambling" },
+  "Dennison's Exchange": { detail:"A gambling exchange on the Kearny frontage — the Great Fire's point of origin, 5:45 a.m., Dec 24 1849.", src:"weather-climate.md §2" },
+  "City Hotel": { detail:"Built by William A. Leidesdorff in 1846 — Bancroft's first building in Yerba Buena \"entitled to the name\" of hotel.", src:"timeline-spine.md 1846-12-31" },
+  "Bella Union": { detail:"Opened Oct 22, 1849 at 720 Washington St — hosted San Francisco's first minstrel show that year.", src:"economy-daily-life.md §4.1" },
+  "Verandah": { detail:"A gambling saloon on the plaza's west side, opposite the El Dorado.", src:"economy-daily-life.md §4.1" },
+  "Washington Arcade": { detail:"One of the round-the-clock gambling houses ringing Portsmouth Square in 1849.", src:"timeline-spine.md ¶Gambling around the plaza" },
+  "Merchants' Exchange": { detail:"Blown up by the authorities' powder demolition as the Great Fire neared Montgomery St.", src:"AUTOGEN:fire-spine" },
+  "Delmonico's": { detail:"Saved from the Great Fire by its own roof crew, at Clay & Kearny.", src:"AUTOGEN:fire-spine" }
+};
+var FIRE_RECEIPT_URL = "https://cdnc.ucr.edu/?a=d&d=DAC18491226.1.2";
+var buildingInspectorEl = document.getElementById("building-inspector");
+var biNameEl = document.getElementById("bi-name");
+var biStatusEl = document.getElementById("bi-status");
+var biDetailEl = document.getElementById("bi-detail");
+var biReceiptWrapEl = document.getElementById("bi-receipt-wrap");
+var biReceiptEl = document.getElementById("bi-receipt");
+document.getElementById("bi-close").addEventListener("click", function(){ buildingInspectorEl.classList.remove("on"); });
+function buildingStatus(spot){
+  var burning = FIRE.burn.some(function(b){ return b.spot===spot; });
+  var scorched = !burning && FIRE.scorch.some(function(s){ return s.spot===spot; });
+  if(!burning && !scorched) return { text:"standing", onFire:false };
+  if(simDay < FIRE.day0) return { text:"standing", onFire:false };
+  if(simDay <= FIRE.day1+0.3) return { text: burning ? "burning — the Great Fire, Dec 24 1849" : "scorched but standing — the Great Fire", onFire:true };
+  if(burning) return { text: simDay>=FIRE.rebuildDay ? "destroyed Dec 24 1849 — rebuilding" : "destroyed, Dec 24 1849", onFire:true };
+  return { text:"standing (scorched in the Great Fire)", onFire:true };
+}
+function openBuildingInspector(spot){
+  biNameEl.textContent = spot.name;
+  var st = buildingStatus(spot);
+  biStatusEl.textContent = st.text;
+  var info = NAMED_BUILDINGS[spot.name];
+  biDetailEl.textContent = info ? info.detail : "One of the establishments named in the Alta's own account of Portsmouth Square.";
+  if(st.onFire){ biReceiptEl.href = FIRE_RECEIPT_URL; biReceiptWrapEl.style.display = ""; }
+  else { biReceiptWrapEl.style.display = "none"; }
+  buildingInspectorEl.classList.add("on");
+  followedSlot = null; followedDocumented = null;
+  flyTo(spot.x, spot.z, 90);
+}
+var NAMED_BUILDING_SPOTS = VILLAGE_BUILDING_SPOTS.filter(function(s){ return !!s.name; });
+var BUILDING_LABEL_POOL = Math.min(14, NAMED_BUILDING_SPOTS.length);
+var buildingLabelPool = [];
+(function buildBuildingLabelPool(){
+  var hudEl = document.getElementById("hud");
+  for(var i=0;i<BUILDING_LABEL_POOL;i++){
+    var el = document.createElement("div");
+    el.className = "geo-label building-label";
+    el.addEventListener("click", function(e){
+      e.stopPropagation();
+      if(this._spot) openBuildingInspector(this._spot);
+    });
+    hudEl.appendChild(el);
+    buildingLabelPool.push(el);
+  }
+})();
+var _bldgLabelV = new THREE.Vector3();
+function updateBuildingLabels(alt){
+  // findability (QA-GATE §3): only worth showing once semantic zoom is in
+  // the true-scale band — at cartographic altitude the district tint (THE
+  // VILLAGE) already carries the plaza's identity.
+  if(alt > CFG.zoomCartoFull || NAMED_BUILDING_SPOTS.length===0){
+    buildingLabelPool.forEach(function(el){ el.style.opacity = 0; });
+    return;
+  }
+  // nearest-N by screen distance from camera target, cheap since N is tiny (<25)
+  var cands = NAMED_BUILDING_SPOTS.slice().sort(function(a,b){
+    return (Math.hypot(a.x-camera.position.x,a.z-camera.position.z)) - (Math.hypot(b.x-camera.position.x,b.z-camera.position.z));
+  }).slice(0, BUILDING_LABEL_POOL);
+  for(var i=0;i<BUILDING_LABEL_POOL;i++){
+    var el = buildingLabelPool[i], spot = cands[i];
+    if(!spot){ el.style.opacity = 0; el._spot = null; continue; }
+    _bldgLabelV.set(spot.x, spot.y+spot.h+1.4, spot.z);
+    _bldgLabelV.applyMatrix4(camera.matrixWorldInverse);
+    if(_bldgLabelV.z>-1){ el.style.opacity=0; el._spot=null; continue; }
+    _bldgLabelV.set(spot.x, spot.y+spot.h+1.4, spot.z).project(camera);
+    if(_bldgLabelV.x<-1.05||_bldgLabelV.x>1.05||_bldgLabelV.y<-1.05||_bldgLabelV.y>1.05){ el.style.opacity=0; el._spot=null; continue; }
+    el.textContent = spot.name.toUpperCase();
+    el.style.opacity = 0.9;
+    el.style.left = ((_bldgLabelV.x*0.5+0.5)*window.innerWidth)+"px";
+    el.style.top = ((-_bldgLabelV.y*0.5+0.5)*window.innerHeight)+"px";
+    el._spot = spot;
+  }
 }
 
 /* =====================================================================
@@ -3974,27 +4201,40 @@ var SIGN_BUILDING_SPOTS = []; // {x,z,y,rot,w,d,word} — reused by Phase 4's ho
   // InstancedMesh (each needs its own texture); kept to <10 (+6 draw calls,
   // stated in the QA report) rather than forcing a texture-atlas pass. ----
   var SIGN_WORDS = ["GROCER","DRY GOODS","PROVISIONS","BOARDING","TIN SHOP","SHIP CHANDLERY"];
-  function makeSignTexture(word){
-    var cnv = document.createElement("canvas"); cnv.width=256; cnv.height=64;
+  // GAPS-2026-07-09 item 2 (economy layer): a documented period price, quietly
+  // painted as the board's second line where the extraction has one for that
+  // trade — no "1846-49 price" label, just the figure a real sign would carry.
+  var SIGN_PRICE_ITEM = { "GROCER":/^eggs$/i, "DRY GOODS":/^cloth$/i, "PROVISIONS":/^flour$/i,
+    "BOARDING":/^house rent$/i, "TIN SHOP":/^tin, plate$/i, "SHIP CHANDLERY":/^cordage, hemp$/i };
+  function makeSignTexture(word, priceLine){
+    var h = priceLine ? 84 : 64;
+    var cnv = document.createElement("canvas"); cnv.width=256; cnv.height=h;
     var ctx = cnv.getContext("2d");
-    ctx.fillStyle = "#e8dfc0"; ctx.fillRect(0,0,256,64);
-    ctx.strokeStyle = "#2b1d0e"; ctx.lineWidth=4; ctx.strokeRect(4,4,248,56);
+    ctx.fillStyle = "#e8dfc0"; ctx.fillRect(0,0,256,h);
+    ctx.strokeStyle = "#2b1d0e"; ctx.lineWidth=4; ctx.strokeRect(4,4,248,h-8);
     ctx.fillStyle = "#2b1d0e";
-    ctx.font = "bold 26px Georgia, serif";
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.fillText(word, 128, 34);
+    ctx.font = "bold 26px Georgia, serif";
+    ctx.fillText(word, 128, priceLine ? 30 : 34);
+    if(priceLine){
+      ctx.font = "20px Georgia, serif";
+      ctx.fillText(priceLine, 128, 62);
+    }
     var tex = new THREE.CanvasTexture(cnv);
     tex.needsUpdate = true;
-    return tex;
+    return { tex:tex, h:h };
   }
   var plazaSorted = VILLAGE_BUILDING_SPOTS.slice().sort(function(a,b){
     return Math.hypot(a.x-PLAZA_CENTER.x,a.z-PLAZA_CENTER.z) - Math.hypot(b.x-PLAZA_CENTER.x,b.z-PLAZA_CENTER.z);
   }).slice(0, SIGN_WORDS.length);
   plazaSorted.forEach(function(spot, i){
     var word = SIGN_WORDS[i % SIGN_WORDS.length];
-    var tex = makeSignTexture(word);
-    var mat = new THREE.MeshBasicMaterial({ map:tex, side:THREE.DoubleSide, transparent:true });
-    var geo = new THREE.PlaneGeometry(1.6,0.42);
+    var re = SIGN_PRICE_ITEM[word];
+    var priceRec = re ? findPriceByItem(re) : null;
+    var priceLine = priceRec ? formatPrice(priceRec).toUpperCase() : null;
+    var built = makeSignTexture(word, priceLine);
+    var mat = new THREE.MeshBasicMaterial({ map:built.tex, side:THREE.DoubleSide, transparent:true });
+    var geo = new THREE.PlaneGeometry(1.6, 0.42*(built.h/64));
     var mesh = new THREE.Mesh(geo, mat);
     var faceDist = spot.d*0.5+0.06;
     mesh.position.set(spot.x + Math.sin(spot.rot)*faceDist, spot.y+1.55, spot.z + Math.cos(spot.rot)*faceDist);
@@ -4243,6 +4483,12 @@ var NAME_BANKS = {
 var TRADES = ["carpenter","teamster","sailor ashore","clerk","blacksmith","cook","washerwoman",
   "lodging-house keeper","drayman","baker","tinsmith","stevedore","grocer's hand","outfitter",
   "boarding-house cook","brickmaker"];
+// GAPS-2026-07-09 item 3 (SFPD founding, Aug 13 1849): "constable" only
+// enters the trade pool once Malachi Fallon's force actually existed — see
+// TRADE_EARLIEST_DAY below, folded into each routine slot's notBeforeDay.
+var TRADES_WITH_CONSTABLE = TRADES.concat(["constable"]);
+var SFPD_FOUNDING_DAY = eventDateToSimDay("1849-08-13");
+var TRADE_EARLIEST_DAY = { constable: SFPD_FOUNDING_DAY };
 var AGENDAS = [
   "saving passage money for the mines","minding a cousin's store on commission",
   "waiting on a ship that hasn't come in","just off the boat, still finding his feet",
@@ -4489,6 +4735,16 @@ function pickShopSite(word){
   }
   return null;
 }
+// GAPS-2026-07-09 item 3 (gambling quarter): the plaza's named gambling
+// houses, already standing as VILLAGE_BUILDING_SPOTS entries — see
+// buildFireBlock() and the City Hotel placement above.
+var GAMBLING_BUILDING_NAMES = { "El Dorado":1, "Parker House":1, "Bella Union":1, "Verandah":1, "Washington Arcade":1, "Dennison's Exchange":1 };
+var GAMBLING_SPOTS = VILLAGE_BUILDING_SPOTS.filter(function(s){ return GAMBLING_BUILDING_NAMES[s.name]; });
+function pickGamblingSite(){
+  if(GAMBLING_SPOTS.length===0) return null;
+  var s = GAMBLING_SPOTS[Math.floor(rngBuild()*GAMBLING_SPOTS.length)];
+  return { key:"gambling_"+s.name, label:s.name, x:s.x, z:s.z, activity:"stationary" };
+}
 var WORKSITE_PLAZA_MARKET = { key:"plazamarket", label:"Plaza market", x:PLAZA_CENTER.x, z:PLAZA_CENTER.z, activity:"market" };
 var WORKSITE_MISSION = { key:"mission", label:"Mission Dolores", x:OUTPOSTS.mission.x, z:OUTPOSTS.mission.z, activity:"stationary" };
 var WORKSITE_WHARF = (function(){
@@ -4521,6 +4777,10 @@ function worksiteForTrade(trade, rng){
     case "cook": case "boarding-house cook": case "lodging-house keeper": case "washerwoman":
       return pickShopSite("BOARDING") || WORKSITE_PLAZA_MARKET;
     case "tinsmith": return pickShopSite("TIN SHOP") || WORKSITE_PLAZA_MARKET;
+    // GAPS-2026-07-09 item 3: the SFPD's first station was a one-room former
+    // schoolhouse on Portsmouth Square (clm:police:28) — same plaza worksite,
+    // distinct label.
+    case "constable": return { key:"stationhouse", label:"station house on the Plaza", x:PLAZA_CENTER.x, z:PLAZA_CENTER.z, activity:"stationary" };
     default: return WORKSITE_PLAZA_MARKET;
   }
 }
@@ -4574,7 +4834,7 @@ var ALL_PEOPLE_SLOTS = (function(){
   for(var ri=0; ri<ROUTINE_CAP; ri++){
     var originKey = pickWeighted(ALL_ORIGIN_KEYS, ORIGINS_BY_KEY);
     var origin = ORIGINS_BY_KEY[originKey];
-    var trade = TRADES[Math.floor(rngBuild()*TRADES.length)];
+    var trade = TRADES_WITH_CONSTABLE[Math.floor(rngBuild()*TRADES_WITH_CONSTABLE.length)];
     var isMale = rngBuild() < genderMaleFrac(origin.earliestDay);
     var variant = isMale ? Math.floor(rngBuild()*3) : 3;
 
@@ -4595,7 +4855,14 @@ var ALL_PEOPLE_SLOTS = (function(){
     var eveningSite, eveningPoly;
     if(home.type==="tent"){ eveningSite = { x:homePos.x, z:homePos.z, label:"the campfire" }; eveningPoly = null; }
     else {
-      var saloon = pickShopSite("BOARDING") || { x:PLAZA_CENTER.x, z:PLAZA_CENTER.z, label:"the Plaza" };
+      // GAPS-2026-07-09 item 3 (gambling quarter): roughly a third of
+      // evening-goers head for one of the plaza's named gambling houses
+      // instead of a generic boarding house — the round-the-clock crowd
+      // the claims describe (timeline:67/175), catalog-plausible for the
+      // era's professional_gambler/faro_monte_dealer/tavern_saloonkeeper
+      // trades rather than an anonymous gathering.
+      var gambling = rngBuild()<0.35 ? pickGamblingSite() : null;
+      var saloon = gambling || pickShopSite("BOARDING") || { x:PLAZA_CENTER.x, z:PLAZA_CENTER.z, label:"the Plaza" };
       eveningSite = { x:saloon.x, z:saloon.z, label:saloon.label };
       eveningPoly = buildRoutePoly(workPos.x,workPos.z, eveningSite.x,eveningSite.z);
     }
@@ -4608,7 +4875,7 @@ var ALL_PEOPLE_SLOTS = (function(){
       work:work, workPos:workPos, workLabel:work.label, workActivity:work.activity,
       commutePoly:commutePoly, errandPoly:errandPoly, sundayPoly:sundayPoly,
       doErrand:doErrand, doEvening:doEvening, eveningSite:eveningSite, eveningPoly:eveningPoly,
-      notBeforeDay: Math.max(origin.earliestDay, home.revealDay||0),
+      notBeforeDay: Math.max(origin.earliestDay, home.revealDay||0, TRADE_EARLIEST_DAY[trade]||0),
       bio:null, _x:homePos.x, _z:homePos.z, _distSq:1e18, _now:"", _pose:"idle"
     });
   }
@@ -4696,6 +4963,16 @@ function reshuffleLifeStream(){
   updateHashSeed();
   if(followedSlot) generateBio(followedSlot); // refresh an open inspector in place
 }
+// GAPS-2026-07-09 item 2 (economy layer): where the extraction has a
+// documented period wage for a slot's catalog trade, a bio card may mention
+// it — quietly, as a fact about the person, not a system callout.
+var TRADE_WAGE_ITEM = {
+  carpenter: /^mechanical labor wages$/i, brickmaker: /^mechanical labor wages$/i, blacksmith: /^mechanical labor wages$/i,
+  teamster: /^labor wage$/i, drayman: /^labor wage$/i, stevedore: /^labor wage$/i, "sailor ashore": /^labor wage$/i,
+  clerk: /^clerk hire$/i, constable: /^constable salary$/i,
+  cook: /^domestic labor$/i, "boarding-house cook": /^domestic labor$/i, washerwoman: /^domestic labor$/i,
+  "lodging-house keeper": /^domestic labor$/i
+};
 function generateBio(slot){
   if(slot.bio) return slot.bio;
   var rng = personRng(slot.id);
@@ -4704,10 +4981,15 @@ function generateBio(slot){
   var name = bank.singleName ? first : (first+" "+bank.last[Math.floor(rng()*bank.last.length)]);
   var earliestDay = Math.max(slot.notBeforeDay,0), latestDay = Math.max(earliestDay, simDay);
   var arrivedDay = earliestDay + rng()*Math.max(1,(latestDay-earliestDay));
+  var tradePool = simDay>=SFPD_FOUNDING_DAY ? TRADES_WITH_CONSTABLE : TRADES;
+  var trade = slot.trade || tradePool[Math.floor(rng()*tradePool.length)];
+  var wageRe = TRADE_WAGE_ITEM[trade];
+  var wageRec = wageRe ? findPriceByItem(wageRe) : null;
   slot.bio = {
     name:name, origin:slot.origin.label, arrivedYear:dateFromSimDay(arrivedDay).getUTCFullYear(),
-    trade: slot.trade || TRADES[Math.floor(rng()*TRADES.length)],
-    agenda:AGENDAS[Math.floor(rng()*AGENDAS.length)]
+    trade: trade,
+    agenda:AGENDAS[Math.floor(rng()*AGENDAS.length)],
+    wage: wageRec ? formatPrice(wageRec) : null
   };
   return slot.bio;
 }
@@ -4738,7 +5020,40 @@ function sampleWithJitter(poly, t01, lateralJitter){
   var len = Math.hypot(p.dx,p.dz)||1;
   return { x:p.x+(-p.dz/len)*lateralJitter, z:p.z+(p.dx/len)*lateralJitter, dx:p.dx, dz:p.dz };
 }
-function computeRoutinePosition(slot, day){
+/* USER-BUG FIX (2026-07-09, "two NPC populations at different time bases"):
+   this used to derive a walking person's t01 straight from the sim-clock's
+   fractional hour-of-day (e.g. (h-6.5)/1 spans exactly one SIMULATED hour).
+   At the app's normal "1x" rate (SIM_SPEEDS[1] = 0.5 sim-days/sec — the
+   whole point being to watch months pass quickly) one simulated hour is
+   ~83ms of real time, so a routine person's entire commute animated in a
+   blink, every single sim-day (i.e. every 2 real seconds) — reading as
+   thousands of figures sprinting, while EXTRA/ambient walkers (which were
+   always paced by peopleClock, real wall-clock seconds, at a fixed
+   slot.speed) looked normal. Both populations are real — this was one
+   system's motion incorrectly coupled to the sim-clock rate, not a
+   duplicate/legacy spawner (there is exactly one PEOPLE_CAP InstancedMesh
+   set and one updatePeople()).
+   Fix: routine WALKING segments now advance via wall-clock dt at a fixed
+   human walking pace (PERSON_WALK_MPS), independent of sim speed — same
+   time base as the extras. The sim-clock's hour-of-day still decides WHICH
+   schedule state applies (asleep/home/work/walking-window) each frame, so
+   people are still in the right place at the right simulated hour; only
+   the VISUAL foot-travel across a segment is wall-clock-paced. At extreme
+   fast-forward the sim may advance past a walk's scheduled window before
+   the real-time walk finishes — the person simply resumes at the new
+   state next frame (fades between states) rather than blurring across
+   the screen, which is the explicitly-accepted tradeoff at high speeds. */
+var PERSON_WALK_MPS = 1.6;
+function walkT01(slot, segBase, day, poly, dt){
+  // segKey includes the calendar day so a new day's "commute_out" (etc.)
+  // starts fresh at 0 instead of inheriting yesterday's finished (t=1)
+  // progress under the same segment name.
+  var segKey = segBase+"_"+Math.floor(day);
+  if(slot._walkSeg !== segKey){ slot._walkSeg = segKey; slot._walkT = 0; }
+  else { slot._walkT = clamp(slot._walkT + (PERSON_WALK_MPS*dt)/Math.max(20,poly.total), 0, 1); }
+  return slot._walkT;
+}
+function computeRoutinePosition(slot, day, dt){
   var h = (day-Math.floor(day))*24;
   var sunday = isSundayForDay(day);
   var pose="idle", label="at home", x=slot.homePos.x, z=slot.homePos.z, dx=0, dz=1, pp;
@@ -4746,27 +5061,27 @@ function computeRoutinePosition(slot, day){
   if(sunday){
     if(h<7 || h>=21){ label="asleep at home"; }
     else if(h<8){ label="waking, a Sunday"; }
-    else if(h<8.5){ pp=sampleWithJitter(slot.sundayPoly,(h-8)/0.5,slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking to the Plaza"; }
+    else if(h<8.5){ pp=sampleWithJitter(slot.sundayPoly,walkT01(slot,"sun_out",day,slot.sundayPoly,dt),slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking to the Plaza"; }
     else if(h<12.5){ x=PLAZA_CENTER.x; z=PLAZA_CENTER.z; pose="market"; label="at the Plaza, Sunday gathering"; }
-    else if(h<13){ pp=sampleWithJitter(slot.sundayPoly,1-(h-12.5)/0.5,slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking home"; }
+    else if(h<13){ pp=sampleWithJitter(slot.sundayPoly,1-walkT01(slot,"sun_back",day,slot.sundayPoly,dt),slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking home"; }
     else { label="at home, the Sabbath"; }
   } else {
     if(h<5.5 || h>=21){ label="asleep at home"; }
     else if(h<6.5){ label="waking for the day"; }
-    else if(h<7.5){ pp=sampleWithJitter(slot.commutePoly,(h-6.5)/1,slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking to the "+slot.workLabel; }
+    else if(h<7.5){ pp=sampleWithJitter(slot.commutePoly,walkT01(slot,"commute_out",day,slot.commutePoly,dt),slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking to the "+slot.workLabel; }
     else if(h<12){ x=slot.workPos.x; z=slot.workPos.z; pose=slot.workActivity; label="at work — the "+slot.workLabel; }
     else if(slot.doErrand && h<13.4){
-      if(h<12.4){ pp=sampleWithJitter(slot.errandPoly,(h-12)/0.4,slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking to the Plaza"; }
+      if(h<12.4){ pp=sampleWithJitter(slot.errandPoly,walkT01(slot,"errand_out",day,slot.errandPoly,dt),slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking to the Plaza"; }
       else if(h<13.0){ x=PLAZA_CENTER.x; z=PLAZA_CENTER.z; pose="market"; label="on an errand at the Plaza market"; }
-      else { pp=sampleWithJitter(slot.errandPoly,1-(h-13.0)/0.4,slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking back to the "+slot.workLabel; }
+      else { pp=sampleWithJitter(slot.errandPoly,1-walkT01(slot,"errand_back",day,slot.errandPoly,dt),slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking back to the "+slot.workLabel; }
     }
     else if(h<18){ x=slot.workPos.x; z=slot.workPos.z; pose=slot.workActivity; label="at work — the "+slot.workLabel; }
-    else if(h<19){ pp=sampleWithJitter(slot.commutePoly,1-(h-18)/1,slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking home"; }
+    else if(h<19){ pp=sampleWithJitter(slot.commutePoly,1-walkT01(slot,"commute_back",day,slot.commutePoly,dt),slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking home"; }
     else if(slot.doEvening){
       if(slot.eveningPoly){
-        if(h<19.3){ pp=sampleWithJitter(slot.eveningPoly,(h-19)/0.3,slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking to the "+slot.eveningSite.label; }
+        if(h<19.3){ pp=sampleWithJitter(slot.eveningPoly,walkT01(slot,"evening_out",day,slot.eveningPoly,dt),slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking to the "+slot.eveningSite.label; }
         else if(h<20.7){ x=slot.eveningSite.x; z=slot.eveningSite.z; pose="evening"; label="at the "+slot.eveningSite.label+", of an evening"; }
-        else { pp=sampleWithJitter(slot.eveningPoly,1-(h-20.7)/0.3,slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking home"; }
+        else { pp=sampleWithJitter(slot.eveningPoly,1-walkT01(slot,"evening_back",day,slot.eveningPoly,dt),slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking home"; }
       } else { x=slot.eveningSite.x; z=slot.eveningSite.z; pose="evening"; label="at the campfire"; }
     }
     else { label="at home"; }
@@ -4831,7 +5146,7 @@ function updatePeople(dt, camX, camZ, alt){
   for(var i=0;i<ALL_PEOPLE_SLOTS.length;i++){
     var s = ALL_PEOPLE_SLOTS[i];
     if(day<s.notBeforeDay) continue;
-    if(s.kind==="routine") computeRoutinePosition(s, day); else computeExtraPosition(s, day);
+    if(s.kind==="routine") computeRoutinePosition(s, day, dt); else computeExtraPosition(s, day);
     applyFireCrowd(s, day); // PHASE 5: flee the fire zone via the street graph, then spectate
     s._distSq = (s._x-camX)*(s._x-camX)+(s._z-camZ)*(s._z-camZ);
     eligible.push(s);
@@ -4961,9 +5276,10 @@ window.__piFlyTo = function(x,z,alt){
 };
 function openPersonInspectorForSlot(slot){
   var bio = generateBio(slot);
-  piTierEl.textContent = "SIMULATED — a silence, filled"; piTierEl.classList.remove("documented");
+  piTierEl.textContent = "SIMULATED"; piTierEl.classList.remove("documented");
   piNameEl.textContent = bio.name;
-  piSummaryEl.innerHTML = '<span class="pi-label">ORIGIN &middot; ARRIVED &middot; TRADE</span>'+escapeHTML(bio.origin+" · "+bio.arrivedYear+" · "+bio.trade);
+  var summaryTxt = bio.origin+" · "+bio.arrivedYear+" · "+bio.trade+(bio.wage?(" · "+bio.wage):"");
+  piSummaryEl.innerHTML = '<span class="pi-label">ORIGIN &middot; ARRIVED &middot; TRADE'+(bio.wage?" &middot; WAGE":"")+'</span>'+escapeHTML(summaryTxt);
   var homeLink = '<a href="#" class="pi-fly" onclick="__piFlyTo('+slot.homePos.x.toFixed(1)+','+slot.homePos.z.toFixed(1)+',110);return false;">'+escapeHTML(slot.homeLabel)+'</a>';
   var detailHtml = '<span class="pi-label">HOME'+(slot.workPos?" &middot; WORK":"")+'</span>Boards at '+homeLink;
   if(slot.workPos){
@@ -5694,6 +6010,35 @@ var DIRECTOR_BEATS = (function(){
     beats.push({ simDay:doc.startDay+0.35, cls:"moment", pri:(doc.key==="brannan"?9:6),
       x:doc.x, z:doc.z, alt:120, headline:doc.chip, dateISO:simDateISO(dateFromSimDay(doc.startDay)),
       receipt:doc.receiptUrl||null });
+  });
+  // 2b. GAPS-2026-07-09 item 3 — 1849 bible-tier events promoted to map
+  // moments: the Hounds' attack on Little Chile (documentary distance per
+  // spec §15 — no gore, just the beat card + the district), the SFPD's
+  // Aug 13 1849 founding under Malachi Fallon, and the Euphemia's Oct 1849
+  // jail-ship purchase (she's already rendered as a storeship — see
+  // STORESHIP_INFO/openShipInspector — this just gives her purchase its
+  // own director beat too).
+  var LITTLE_CHILE_ZONE = DISTRICT_ZONES.filter(function(z){ return z.name==="LITTLE CHILE"; })[0];
+  EVENTS_RAW.forEach(function(e){
+    if(e.date==="1849-07-15" && /Hounds attack Little Chile/i.test(e.headline||"")){
+      beats.push({ simDay:e.simDay+0.25, cls:"moment", pri:8,
+        x:(LITTLE_CHILE_ZONE?LITTLE_CHILE_ZONE.cx:PLAZA_CENTER.x), z:(LITTLE_CHILE_ZONE?LITTLE_CHILE_ZONE.cz:PLAZA_CENTER.z), alt:180,
+        headline:e.headline, dateISO:e.date, receipt:(e.prov&&e.prov.url)||null });
+    }
+    if(e.date==="1849-07-16" && /Mass meeting at Portsmouth Square/i.test(e.headline||"")){
+      beats.push({ simDay:e.simDay+0.3, cls:"moment", pri:7, x:PLAZA_CENTER.x, z:PLAZA_CENTER.z, alt:220,
+        headline:"Citizens' posse enrolls at Portsmouth Square, the morning after the Hounds' raid", dateISO:e.date, receipt:(e.prov&&e.prov.url)||null });
+    }
+    if(e.date==="1849-08-13" && /Fallon/i.test(e.headline||"")){
+      beats.push({ simDay:e.simDay+0.3, cls:"moment", pri:7, x:PLAZA_CENTER.x, z:PLAZA_CENTER.z, alt:220,
+        headline:e.headline, dateISO:e.date, receipt:(e.prov&&e.prov.url)||null });
+    }
+    if(e.date==="1849-10-08" && /Euphemia/i.test(e.headline||"")){
+      var eup = STORESHIP_INFO["Euphemia"];
+      beats.push({ simDay:e.simDay+0.3, cls:"moment", pri:6,
+        x:(eup?eup.pos.x:PLAZA_CENTER.x), z:(eup?eup.pos.z:PLAZA_CENTER.z), alt:180,
+        headline:e.headline, dateISO:e.date, receipt:(e.prov&&e.prov.url)||null });
+    }
   });
   // 3a. newspaper launches from the spine (e.g. "Alta California newspaper
   // to launch", Jan 4 1849 — its extracted issues begin Dec 1849, so the
@@ -6631,6 +6976,8 @@ function animate(){
   updatePeople(dt, camera.position.x, camera.position.z, alt);
   updateSmoke(dt);
   updateDistrictZones(alt);
+  updateBuildingLabels(alt);
+  updateGridSwing();
   updateRain(dt, camera.position.x, camera.position.z, alt);
   updateFogBanks(dt);
   updatePaper();
