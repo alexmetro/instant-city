@@ -113,6 +113,19 @@
   .ship-label:hover{ background:rgba(241,230,201,0.98); }
   .building-label{ pointer-events:auto; cursor:pointer; }
   .building-label:hover{ background:rgba(241,230,201,0.98); }
+  /* PL-A leftover, completed: mid-zoom (250-900m) business glyph tier — a
+     small engraved-style parchment roundel per business building, findable
+     before true-scale signage reads at closer range (QA-GATE §3). */
+  .biz-glyph{
+    position:absolute; transform:translate(-50%,-50%);
+    width:22px; height:22px; border-radius:50%;
+    background:radial-gradient(circle at 35% 30%, #f1e6c9, #cdb37a 78%);
+    border:1px solid rgba(43,29,14,0.55);
+    box-shadow:0 1px 4px rgba(0,0,0,0.35);
+    opacity:0; transition:opacity .35s ease;
+    pointer-events:none;
+  }
+  .biz-glyph svg{ width:100%; height:100%; display:block; }
   #hud-loading{
     position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
     background:#101418; color:#e8dcb8; font-family:'Fraunces',Georgia,serif;
@@ -486,6 +499,8 @@
 <script src="prices-1846-49.js"></script>
 <script src="roster-1846-49.js"></script>
 <script src="catalog-occupations.js"></script>
+<script src="catalog-activities.js"></script>
+<script src="catalog-reactions.js"></script>
 <script>
 (function(){
 "use strict";
@@ -2235,6 +2250,17 @@ var CATALOG_OCC_ALL = (window.CATALOG_OCCUPATIONS && window.CATALOG_OCCUPATIONS.
 if(!window.CATALOG_OCCUPATIONS) console.warn("[verify] catalog-occupations.js failed to load — falling back to the legacy ad-hoc TRADES list. Run: node tools/build-catalog-js.js");
 var CATALOG_OCC = CATALOG_OCC_ALL.filter(function(o){ return o.worldSupport==="exists"; });
 var CATALOG_OCC_BY_ID = {}; CATALOG_OCC_ALL.forEach(function(o){ CATALOG_OCC_BY_ID[o.id]=o; });
+// PL-B item 1 (full dice engine): the two remaining behavior-spec.md §0
+// catalogs — activities (§2/§3, what the world offers + the dice's menu)
+// and event-type reaction affordances (§6, feeds the ticker/director, not
+// movement — loaded here so it's available, wired into the ticker/reaction
+// layer in a later pass).
+var CATALOG_ACT = (window.CATALOG_ACTIVITIES && window.CATALOG_ACTIVITIES.activities) || [];
+var CATALOG_ACT_BY_ID = {}; CATALOG_ACT.forEach(function(a){ CATALOG_ACT_BY_ID[a.id]=a; });
+if(!window.CATALOG_ACTIVITIES) console.warn("[verify] catalog-activities.js failed to load — the dice engine has no activities to sample. Run: node tools/build-catalog-js.js");
+var CATALOG_REACT = (window.CATALOG_REACTIONS && window.CATALOG_REACTIONS.eventReactions) || [];
+var CATALOG_REACT_BY_TYPE = {}; CATALOG_REACT.forEach(function(r){ CATALOG_REACT_BY_TYPE[r.type]=r; });
+if(!window.CATALOG_REACTIONS) console.warn("[verify] catalog-reactions.js failed to load — event reaction affordances unavailable. Run: node tools/build-catalog-js.js");
 // roster people are consumed sequentially (best-attested first — see the
 // builder's sort) into routine slots first, then extras, so real names use
 // up the persistent cast before density-fill anonymous slots reach for one.
@@ -3826,6 +3852,61 @@ function updateBuildingLabels(alt){
 }
 
 /* =====================================================================
+   PL-A LEFTOVER, COMPLETED — mid-zoom (250-900m) business glyph tier: a
+   small engraved-style parchment roundel per business/gambling/hotel
+   building (BIZ_GLYPH_SPOTS, populated later once buildBuildingTypeAccents
+   has typed every building). Fades in below zoomCartoFull(850), fully
+   opaque by ~450m, fades back out below buildingLabelAlwaysAlt(250) where
+   true-scale signage/architecture itself carries the identity instead —
+   same "signs are the wayfinding, chips are the fallback" discipline the
+   named-landmark labels above already follow.
+   ===================================================================== */
+var GLYPH_SVG = {
+  fork:  '<svg viewBox="0 0 16 16"><path d="M5 2v5M8 2v5M11 2v5M8 7v7" stroke="#2b1d0e" stroke-width="1.3" fill="none" stroke-linecap="round"/></svg>',
+  glass: '<svg viewBox="0 0 16 16"><path d="M5 3h6l-1.5 8h-3z" fill="none" stroke="#2b1d0e" stroke-width="1.2"/><path d="M6.5 13h3" stroke="#2b1d0e" stroke-width="1.2" stroke-linecap="round"/></svg>',
+  cards: '<svg viewBox="0 0 16 16"><rect x="4" y="4" width="6" height="8" rx="1" transform="rotate(-14 7 8)" fill="none" stroke="#2b1d0e" stroke-width="1.1"/><rect x="6.5" y="4" width="6" height="8" rx="1" fill="none" stroke="#2b1d0e" stroke-width="1.1"/></svg>',
+  bed:   '<svg viewBox="0 0 16 16"><rect x="3" y="7.5" width="10" height="4" fill="none" stroke="#2b1d0e" stroke-width="1.1"/><path d="M3 7.5V4h3v3.5" stroke="#2b1d0e" stroke-width="1.1" fill="none"/></svg>',
+  anvil: '<svg viewBox="0 0 16 16"><path d="M3 6.5h10l-2 2H6z" fill="none" stroke="#2b1d0e" stroke-width="1.1"/><rect x="6.5" y="8.5" width="3" height="3.5" fill="none" stroke="#2b1d0e" stroke-width="1.1"/></svg>',
+  barrel:'<svg viewBox="0 0 16 16"><rect x="5" y="2" width="6" height="12" rx="2.4" fill="none" stroke="#2b1d0e" stroke-width="1.1"/><path d="M5 6h6M5 10h6" stroke="#2b1d0e" stroke-width="1"/></svg>'
+};
+var BIZ_GLYPH_POOL = SCT(30), bizGlyphPool = [];
+(function buildBizGlyphPool(){
+  var hudEl = document.getElementById("hud");
+  for(var i=0;i<BIZ_GLYPH_POOL;i++){
+    var el = document.createElement("div");
+    el.className = "biz-glyph";
+    hudEl.appendChild(el);
+    bizGlyphPool.push(el);
+  }
+})();
+var _bizGlyphV = new THREE.Vector3();
+var BIZ_GLYPH_ALT_FULL = 450, BIZ_GLYPH_ALT_NEAR = CFG.buildingLabelAlwaysAlt, BIZ_GLYPH_ALT_FAR = CFG.zoomCartoFull;
+function updateBizGlyphs(alt){
+  if(alt>BIZ_GLYPH_ALT_FAR || alt<BIZ_GLYPH_ALT_NEAR || BIZ_GLYPH_SPOTS.length===0){
+    bizGlyphPool.forEach(function(el){ el.style.opacity = 0; });
+    return;
+  }
+  var fadeOpacity = alt>BIZ_GLYPH_ALT_FULL ? smoothstep(BIZ_GLYPH_ALT_FAR, BIZ_GLYPH_ALT_FULL, alt)
+                   : smoothstep(BIZ_GLYPH_ALT_NEAR, BIZ_GLYPH_ALT_NEAR+80, alt);
+  var cands = BIZ_GLYPH_SPOTS.slice().sort(function(a,b){
+    return (Math.hypot(a.x-camera.position.x,a.z-camera.position.z)) - (Math.hypot(b.x-camera.position.x,b.z-camera.position.z));
+  }).slice(0, BIZ_GLYPH_POOL);
+  for(var i=0;i<BIZ_GLYPH_POOL;i++){
+    var el = bizGlyphPool[i], spot = cands[i];
+    if(!spot){ el.style.opacity = 0; continue; }
+    _bizGlyphV.set(spot.x, spot.y+spot.h+0.6, spot.z);
+    _bizGlyphV.applyMatrix4(camera.matrixWorldInverse);
+    if(_bizGlyphV.z>-1){ el.style.opacity=0; continue; }
+    _bizGlyphV.set(spot.x, spot.y+spot.h+0.6, spot.z).project(camera);
+    if(_bizGlyphV.x<-1.05||_bizGlyphV.x>1.05||_bizGlyphV.y<-1.05||_bizGlyphV.y>1.05){ el.style.opacity=0; continue; }
+    if(el._glyph!==spot.glyph){ el.innerHTML = GLYPH_SVG[spot.glyph]||""; el._glyph = spot.glyph; }
+    el.style.opacity = fadeOpacity*0.92;
+    el.style.left = ((_bizGlyphV.x*0.5+0.5)*window.innerWidth)+"px";
+    el.style.top = ((-_bizGlyphV.y*0.5+0.5)*window.innerHeight)+"px";
+  }
+}
+
+/* =====================================================================
    A1: DETAIL DISPLACEMENT PATCH — a 600m/128x128 plane that rides along
    under the camera (x/z only), adding a high-frequency NW-SE dune-ripple
    micro-relief purely as a bump-shaded overlay: it does NOT try to
@@ -4032,6 +4113,16 @@ function updateFarScatter(alt){
    individual building footprints, since they're merged into one static
    mesh) rather than every lot — "a few," per the brief, not everywhere.
    ===================================================================== */
+// PL-B item 4 (grit): laundry lines toggle visible only on the (fill:true)
+// weekly wash day, so their presence reads as an active household task
+// rather than permanent scenery — hoisted so updateLaundryDay() (called
+// from the main animate loop) can reach them.
+var laundryRopeMesh = null, laundryClothMesh = null;
+function isWashDay(day){ return DOW_NAMES[dateFromSimDay(Math.floor(day)).getUTCDay()]==="Monday"; }
+function updateLaundryDay(day){
+  var on = isWashDay(day);
+  if(laundryClothMesh) laundryClothMesh.visible = on; // the ropes stay up permanently; only the hanging wash appears/disappears
+}
 (function buildVillageClutter(){
   var clutterAnchors = [
     gridToWorld(GEO.streetsU.montgomery-14, GEO.streetsV.clay+9),
@@ -4201,12 +4292,12 @@ function updateFarScatter(alt){
   if(ropePositions.length>0){
     var ropeGeo = new THREE.BufferGeometry();
     ropeGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(ropePositions),3));
-    var ropeMesh = new THREE.LineSegments(ropeGeo, new THREE.LineBasicMaterial({ color:0x3a3226 }));
-    scene.add(ropeMesh);
+    laundryRopeMesh = new THREE.LineSegments(ropeGeo, new THREE.LineBasicMaterial({ color:0x3a3226 }));
+    scene.add(laundryRopeMesh);
   }
   if(clothGeoms.length>0){
-    var clothMesh = new THREE.Mesh(mergeGeoms(clothGeoms), new THREE.MeshPhongMaterial({ vertexColors:true, side:THREE.DoubleSide, flatShading:true, specular:0x000000, shininess:0 }));
-    scene.add(clothMesh);
+    laundryClothMesh = new THREE.Mesh(mergeGeoms(clothGeoms), new THREE.MeshPhongMaterial({ vertexColors:true, side:THREE.DoubleSide, flatShading:true, specular:0x000000, shininess:0 }));
+    scene.add(laundryClothMesh);
   }
 
   /* ---- worn dirt paths: darker decal strips from yards toward the plaza ---- */
@@ -4888,6 +4979,22 @@ var ORIGINS = [
   { key:"chinese",     label:"Chinese",               weight:0.4, earliestDay:eventDateToSimDay("1849-01-01") }
 ];
 var ORIGINS_BY_KEY = {}; ORIGINS.forEach(function(o){ ORIGINS_BY_KEY[o.key]=o; });
+// PL-A leftover, completed: origins already drove name banks (NAME_BANKS
+// below); this is the missing "subtle appearance tint" half — a gentle
+// per-origin RGB multiply (kept close to 1,1,1 on purpose) applied via
+// InstancedMesh.setColorAt in updatePeople(), read as a hint of complexion
+// diversity across the documented origin mix rather than a costume marker.
+// fill:true aesthetic judgment; not a sourced statistic.
+var ORIGIN_TINT = {
+  american:   new THREE.Color(1.00,1.00,1.00),
+  californio: new THREE.Color(1.03,0.96,0.88),
+  black:      new THREE.Color(0.86,0.76,0.67),
+  hawaiian:   new THREE.Color(1.02,0.93,0.80),
+  french:     new THREE.Color(1.00,0.99,0.96),
+  chilean:    new THREE.Color(1.01,0.94,0.85),
+  australian: new THREE.Color(0.99,0.98,0.96),
+  chinese:    new THREE.Color(1.00,0.96,0.85)
+};
 /* gender ratio: 70% male pre-rush (Jan 1847 count, 321/459), easing toward the
    ~97-98% male 1849 peak (Harbor Master's log / Annals), then back to ~84% by
    1853 (Ladies' Protection & Relief Society figure) — demographics-society.md §1. */
@@ -5140,6 +5247,31 @@ var WORKSITE_BEACH = (function(){
   var p = ln ? { x:lerp(ln.landX,ln.waterX,0.55), z:ln.z } : { x:WORKSITE_WHARF.x, z:WORKSITE_WHARF.z };
   return { key:"beach", label:"beach", x:p.x, z:p.z, activity:"fish" };
 })();
+// PL-B item 4 (grit): candidate ground-sleeping spots for the 1849
+// street-sleeper population (see sleepsRough on EXTRA slots) — clustered
+// near the Plaza and the Clay St landing, the two documented centers of
+// the transient/broke-on-arrival crowd (economy-daily-life.md §1.5).
+var STREET_SLEEPER_CANDIDATES = (function(){
+  var pts = [];
+  function addAround(cx,cz,n,rad){
+    for(var i=0;i<n;i++){
+      var a = rngBuild()*Math.PI*2, r = 6+rngBuild()*rad;
+      var x=cx+Math.cos(a)*r, z=cz+Math.sin(a)*r;
+      if(terrainHeight(x,z)>1) pts.push({x:x,z:z});
+    }
+  }
+  addAround(PLAZA_CENTER.x, PLAZA_CENTER.z, 16, 55);
+  addAround(WORKSITE_WHARF.x, WORKSITE_WHARF.z, 10, 40);
+  return pts;
+})();
+function nearestSleeperSpot(x,z){
+  var best=null, bd=1e18;
+  for(var i=0;i<STREET_SLEEPER_CANDIDATES.length;i++){
+    var p = STREET_SLEEPER_CANDIDATES[i], d=(p.x-x)*(p.x-x)+(p.z-z)*(p.z-z);
+    if(d<bd){ bd=d; best=p; }
+  }
+  return best || { x:PLAZA_CENTER.x, z:PLAZA_CENTER.z };
+}
 var CONSTRUCTION_SITES = growthBuildingCandidates.slice(0, Math.min(30, growthBuildingCandidates.length))
   .map(function(c,i){ return { key:"construction_"+i, label:"a house going up nearby", x:c.x, z:c.z, activity:"construction" }; });
 function pickConstructionSite(rng){
@@ -5178,6 +5310,117 @@ function pickAnyShopSite(rng){
   return { key:"shop_"+s.word+"_r", label:SIGN_WORD_LABEL[s.word]||s.word.toLowerCase(), x:s.x, z:s.z, activity:"stationary" };
 }
 var CITY_HOTEL_SPOT = NAMED_BUILDING_SPOTS.filter(function(s){ return s.name==="City Hotel"; })[0] || null;
+
+/* =========================================================================
+   PL-A LEFTOVER, COMPLETED — TYPE-DIFFERENTIATED BUILDINGS. placeBuilding()
+   places every building identically (systems-inventory's own finding: "the
+   app currently places all buildings generically with zero functional
+   typing at all"). Rather than perform that surgery inside placeBuilding
+   itself — its merged buildingsMesh geometry has fire-system vStart/vEnd
+   slices per building that must stay exactly as recorded (Dec 24 1849 burn
+   depends on them) — this is a SEPARATE accent pass, entirely additive:
+   assign a .type to every already-placed VILLAGE_BUILDING_SPOTS entry,
+   then bake small extra geometry into its OWN new static meshes (never
+   touching buildingsMesh/windowsMesh). Houses get no accent at all —
+   "houses stay domestic" per the brief.
+   ========================================================================= */
+// PL-A leftover, completed — mid-zoom (250-900m) business glyph tier: which
+// engraved-style icon each business-typed building gets, keyed off its
+// signed trade word where one exists (fork=food trades, barrel=goods/
+// chandlery, anvil=smith trades, bed=lodging, cards=gambling); unnamed
+// generic "business" spots (the scattered ~16% roll below) get a
+// deterministic fallback so the same building always shows the same icon.
+var GLYPH_FOR_WORD = { GROCER:"fork", PROVISIONS:"fork", "DRY GOODS":"barrel", "TIN SHOP":"anvil", "SHIP CHANDLERY":"barrel", BOARDING:"bed" };
+var GLYPH_FALLBACK_POOL = ["fork","glass","barrel","anvil"];
+var BIZ_GLYPH_SPOTS = []; // {x,z,y,h,glyph} — fed to the DOM glyph-label pool below
+(function buildBuildingTypeAccents(){
+  var signedByPos = {};
+  SIGN_BUILDING_SPOTS.forEach(function(s){ signedByPos[s.x.toFixed(1)+"_"+s.z.toFixed(1)] = s.word; });
+  var accentGeoms = [], glowGeoms = [];
+  var rundownMargin = 40; // "just past the surveyed edge" — same reading buildVillage's own squatter-hut placement already uses
+  VILLAGE_BUILDING_SPOTS.forEach(function(spot){
+    var type = "house";
+    if(GAMBLING_BUILDING_NAMES[spot.name]) type = "gambling";
+    else if(spot.name==="City Hotel") type = "hotel";
+    else if(!spot.name && signedByPos[spot.x.toFixed(1)+"_"+spot.z.toFixed(1)]) type = "business";
+    else if(!spot.name && distOutsideBox(spot.x, spot.z, VILLAGE_BOX) > rundownMargin) type = "rundown";
+    else if(!spot.name && rngBuild() < 0.16) type = "business"; // a scattering of unnamed shopfronts beyond the 6 signed trades
+    spot.type = type;
+    if(type==="house") return; // no accent — domestic buildings stay as placeBuilding() made them
+
+    var word = signedByPos[spot.x.toFixed(1)+"_"+spot.z.toFixed(1)];
+    var glyph = type==="gambling" ? "cards" : type==="hotel" ? "bed" : type==="rundown" ? null :
+      (word && GLYPH_FOR_WORD[word]) || GLYPH_FALLBACK_POOL[Math.floor(rngBuild()*GLYPH_FALLBACK_POOL.length)];
+    if(glyph) BIZ_GLYPH_SPOTS.push({ x:spot.x, z:spot.z, y:spot.y, h:spot.h, glyph:glyph });
+
+    var s = Math.sin(spot.rot), c = Math.cos(spot.rot);
+    function localToWorld(lx,ly,lz){ return new THREE.Vector3(spot.x+lx*c+lz*s, spot.y+ly, spot.z-lx*s+lz*c); }
+
+    if(type==="business"){
+      // false front: a raised flat parapet above the roofline on the front face
+      var frontZ = spot.d/2+0.05, frontW = spot.w*0.94, frontH = spot.h*0.55;
+      var front = new THREE.PlaneGeometry(frontW, frontH).toNonIndexed();
+      colorizeUniform(front, new THREE.Color(0x9c8f6e));
+      front.rotateY(spot.rot);
+      var fp = localToWorld(0, spot.h+frontH*0.5, frontZ);
+      front.translate(fp.x, fp.y, fp.z);
+      accentGeoms.push(front);
+      // wider door threshold — a broader dark board at grade, front-and-center
+      var doorW = new THREE.PlaneGeometry(1.8,1.0).toNonIndexed();
+      colorizeUniform(doorW, new THREE.Color(0x3a3226));
+      doorW.rotateY(spot.rot);
+      var dp = localToWorld(0, 0.5, frontZ+0.01);
+      doorW.translate(dp.x,dp.y,dp.z);
+      accentGeoms.push(doorW);
+      // evening glow — a wide warm shop-window band, lit only at night (see updateDayNight, windowsMesh's own opacity driver)
+      var glow = new THREE.PlaneGeometry(1.6,0.7).toNonIndexed();
+      colorizeUniform(glow, new THREE.Color(0xffcf8a));
+      glow.rotateY(spot.rot);
+      var gp = localToWorld(spot.w*0.28, spot.h*0.5, frontZ+0.015);
+      glow.translate(gp.x,gp.y,gp.z);
+      glowGeoms.push(glow);
+    } else if(type==="gambling"){
+      // lantern pair flanking the doorway
+      [-1,1].forEach(function(side){
+        var wp = localToWorld(side*spot.w*0.32, spot.h*0.5, spot.d/2+0.15);
+        var lant = new THREE.BoxGeometry(0.16,0.22,0.16).toNonIndexed();
+        colorizeUniform(lant, new THREE.Color(0xffd27a));
+        lant.translate(wp.x, wp.y, wp.z);
+        glowGeoms.push(lant);
+      });
+    } else if(type==="hotel"){
+      // porch hint: a shallow roofed overhang across the front face, two posts
+      var porchW = spot.w*0.9, porchD = 1.3, porchH = 0.15;
+      var porch = makeBoxLocal(porchW, porchH, porchD, new THREE.Color(0x746048));
+      bake(porch, localToWorld(0, spot.h*0.62, spot.d/2+porchD/2), spot.rot);
+      accentGeoms.push(porch);
+      [-1,1].forEach(function(pi){
+        var post = new THREE.CylinderGeometry(0.06,0.06,spot.h*0.62,6).toNonIndexed();
+        colorizeUniform(post, new THREE.Color(0x5a4432));
+        var pp = localToWorld(pi*porchW*0.45, spot.h*0.31, spot.d/2+porchD-0.1);
+        post.translate(pp.x, pp.y, pp.z);
+        accentGeoms.push(post);
+      });
+    } else if(type==="rundown"){
+      // town-edge grit: a patched, grayed weather-board reads rundown against the plaza's tidier core
+      var patch = new THREE.PlaneGeometry(spot.w*0.5, spot.h*0.6).toNonIndexed();
+      colorizeUniform(patch, new THREE.Color(0x565044));
+      patch.rotateY(spot.rot+0.06);
+      var pp2 = localToWorld(spot.w*0.15, spot.h*0.4, spot.d/2+0.03);
+      patch.translate(pp2.x, pp2.y, pp2.z);
+      accentGeoms.push(patch);
+    }
+  });
+  if(accentGeoms.length>0){
+    window.buildingTypeAccentMesh = new THREE.Mesh(mergeGeoms(accentGeoms), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, side:THREE.DoubleSide, transparent:true, specular:0x000000, shininess:0}));
+    scene.add(window.buildingTypeAccentMesh);
+  }
+  if(glowGeoms.length>0){
+    window.buildingGlowAccentMesh = new THREE.Mesh(mergeGeoms(glowGeoms), new THREE.MeshBasicMaterial({vertexColors:true, transparent:true, opacity:0}));
+    scene.add(window.buildingGlowAccentMesh);
+  }
+})();
+
 var WORKSITE_CHURCH = { key:"chapel", label:(CHURCH_SPOT&&CHURCH_SPOT.name)||"the chapel", x:(CHURCH_SPOT?CHURCH_SPOT.x:PLAZA_CENTER.x), z:(CHURCH_SPOT?CHURCH_SPOT.z:PLAZA_CENTER.z), activity:"stationary" };
 var VENUE_KEY_RESOLVERS = {
   wharf: function(){ return WORKSITE_WHARF; },
@@ -5205,6 +5448,188 @@ function worksiteForOccupation(occ, rng){
     if(resolver){ var w = resolver(rng); if(w) return w; }
   }
   return WORKSITE_PLAZA_MARKET;
+}
+
+/* =========================================================================
+   PL-B item 1 — THE FULL DICE ENGINE (behavior-spec.md §3), replacing PL-A's
+   flat per-slot coinflips (a fixed 40% doErrand, a fixed saloonWeight
+   formula decided ONCE at slot-build time and never revisited) with a real
+   per-CALENDAR-DAY weighted sample against data/catalog-activities.json:
+
+     weight = catalogBase(1.0) x occupationFit x traitModifiers x needPressure x timeWindow/era x genderPropriety
+
+   Every roll is hash(seed, person, day, slot) — a fresh cyrb128+sfc32
+   derivation per (person,day,slotKey) key rather than accumulated RNG
+   state, so a date jump/rewind reproduces the identical pick with no
+   history replay (counter-based, per the spec's "rewind is exact").
+   Needs (food, sociability — behavior-spec.md §1) rise one unit per day
+   until an activity that relieves them is picked, Sims-style; rest is
+   handled by the existing universal night-sleep branch below, not by this
+   pool (everyone sleeps; there is no "choice" to model there).
+   ========================================================================= */
+function diceRng(personId, day, slotKey){
+  var h = cyrb128(seedHashValue()+"|p"+personId+"|d"+Math.floor(day)+"|"+slotKey);
+  return sfc32(h[0],h[1],h[2],h[3]);
+}
+function diceRoll(personId, day, slotKey){ return diceRng(personId,day,slotKey)(); }
+
+// fill:true — SS California's Feb 28 1849 debut is the only documented
+// steamer date this app has; the monthly 28th-of-the-month repeat is an
+// approximation (the real schedule slipped with weather/repairs) used only
+// to drive the write_letters/watch_ships_arrive/mail spike windows the
+// catalog itself flags (timeWindow.spike==="steamer_day").
+var STEAMER_DAY0 = eventDateToSimDay("1849-02-28");
+function isSteamerDay(day){ return day>=STEAMER_DAY0 && dateFromSimDay(Math.floor(day)).getUTCDate()===28; }
+var DOW_NAMES = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+
+// occupation-fit (fill:true, no direct citation — "your trade colors your
+// leisure taste" is an era-consistent design judgment, not a documented
+// statistic): a light multiplier on top of the trait/need/era weight.
+var OCC_CATEGORY_ACTIVITY_BOOST = {
+  vice_economy:  { drink_at_saloon:1.6, gamble_cards:1.7 },
+  clergy:        { attend_church_sunday:1.8, read_newspaper_at_exchange:1.2 },
+  press:         { read_newspaper_at_exchange:1.8 },
+  civic:         { attend_town_meeting:1.6, read_newspaper_at_exchange:1.2 },
+  commerce:      { attend_auction_spectate:1.4, read_newspaper_at_exchange:1.3 },
+  maritime:      { watch_ships_arrive:1.5, drink_at_saloon:1.2 },
+  agriculture_subsistence: { fish_recreational:1.3 },
+  professional:  { read_newspaper_at_exchange:1.3, attend_town_meeting:1.2 }
+};
+// which need axis each activity relieves, and by how much (fill:true shape,
+// tuned by the reconciler's statistical spot-check, not itself sourced).
+var NEED_RELIEF = {
+  eat_meal:{food:1.0}, drink_at_saloon:{social:0.8}, gamble_cards:{social:0.35},
+  visit_friend:{social:1.0}, gossip_street:{social:0.6}, watch_music_dance:{social:0.7},
+  promenade_stroll:{social:0.3}, watch_ships_arrive:{social:0.2},
+  attend_auction_spectate:{social:0.2}, read_newspaper_at_exchange:{social:0.25},
+  attend_town_meeting:{social:0.3}, play_music_instrument:{social:0.4}
+};
+// the catalog's traitModifiers keys are "<axisFamilyWord>:<poleName>" (e.g.
+// "drinker:heavy", "idler:idle") — two pole spellings ("heavy","idle")
+// don't match this app's own rolled trait-value strings ("heavy-drinker",
+// "idler") verbatim; every other pole spells identically. Since all ten
+// pole values across the five axes are unique strings, matching a
+// normalized pole against the person's five rolled values (regardless of
+// the axis-family word prefix) is sufficient — no per-axis lookup needed.
+var TRAIT_POLE_ALIAS = { heavy:"heavy-drinker", idle:"idler" };
+function traitModifierFor(act, traits){
+  if(!act.traitModifiers) return 1;
+  var poles = [traits.drink, traits.work, traits.faith, traits.social, traits.temperament];
+  var m = 1;
+  Object.keys(act.traitModifiers).forEach(function(k){
+    var pole = k.split(":")[1]; pole = TRAIT_POLE_ALIAS[pole] || pole;
+    if(poles.indexOf(pole)!==-1) m *= act.traitModifiers[k];
+  });
+  return m;
+}
+function activityEraCol(day){ return day>=ERA_1849_DAY ? "1849" : "1846-1848"; }
+// sleep_rest and attend_church_sunday are handled by the fixed night/Sunday
+// branches in computeRoutinePosition — excluded from the free-choice pools
+// below so they're never double-resolved.
+function poolFor(tags){
+  return CATALOG_ACT.filter(function(a){
+    if(a.id==="sleep_rest" || a.id==="attend_church_sunday") return false;
+    return a.timeWindow && a.timeWindow.timeOfDay && a.timeWindow.timeOfDay.some(function(t){ return tags.indexOf(t)!==-1; });
+  });
+}
+// the app's two existing "free choice" windows: the midday break (~12-13.4h)
+// and the evening-out window (~19-20.7h) — catalog activities are matched
+// into whichever pool their own timeWindow.timeOfDay tags fall into (some,
+// e.g. promenade_stroll/visit_friend, land in both and so can be picked in
+// either window).
+var MIDDAY_POOL = poolFor(["morning","midday","afternoon"]);
+var EVENING_POOL = poolFor(["evening","night"]);
+function pickActivity(pool, slot, day, slotKey){
+  var era = activityEraCol(day);
+  var dow = DOW_NAMES[dateFromSimDay(Math.floor(day)).getUTCDay()];
+  var steamer = isSteamerDay(day);
+  var occBoost = (slot.occ && OCC_CATEGORY_ACTIVITY_BOOST[slot.occ.category]) || null;
+  var candidates = [], total = 0;
+  for(var i=0;i<pool.length;i++){
+    var a = pool[i];
+    if(!a.eraAvailability || !a.eraAvailability[era]) continue; // "the activity doesn't exist yet" — hard gate, not a skew
+    if(a.timeWindow.daysOfWeek!=="all" && a.timeWindow.daysOfWeek.indexOf(dow)===-1) continue;
+    var w = 1.0;
+    w *= traitModifierFor(a, slot.traits);
+    w *= slot.gender==="male" ? a.genderPropriety.m : a.genderPropriety.f;
+    if(occBoost && occBoost[a.id]) w *= occBoost[a.id];
+    var relief = NEED_RELIEF[a.id];
+    if(relief){
+      if(relief.food) w *= (1+slot.needs.food*relief.food*0.7);
+      if(relief.social) w *= (1+slot.needs.social*relief.social*0.6);
+    }
+    if(a.timeWindow.spike==="steamer_day" && steamer) w *= 3.2;
+    if(w<=0) continue;
+    candidates.push({a:a, w:w}); total += w;
+  }
+  if(total<=0) return null;
+  var r = diceRoll(slot.id, day, slotKey)*total;
+  for(var j=0;j<candidates.length;j++){ r -= candidates[j].w; if(r<=0) return candidates[j].a; }
+  return candidates[candidates.length-1].a;
+}
+// resolves a chosen activity's venueNeeds against the SAME VENUE_KEY_RESOLVERS
+// table occupations already use — behavior-spec.md's "venueNeeds bind
+// people to the venues that exist" rule applies equally to leisure choices.
+function venueForActivity(act, slot, day, slotKey){
+  var need = act.venueNeeds || [];
+  for(var i=0;i<need.length;i++){
+    var resolver = VENUE_KEY_RESOLVERS[need[i]];
+    if(resolver){
+      var rng = diceRng(slot.id, day, slotKey+"_venue"+i);
+      var w = resolver(rng);
+      if(w) return w;
+    }
+  }
+  return WORKSITE_PLAZA_MARKET;
+}
+// pose to render while performing each activity, reusing the existing
+// POSE_BOB vocabulary rather than inventing new animation states.
+var ACT_POSE = {
+  eat_meal:"market", fetch_water:"idle", wash_bathe:"idle", warm_by_fire:"idle",
+  drink_at_saloon:"evening", gamble_cards:"evening", watch_music_dance:"evening", play_music_instrument:"evening",
+  read_by_water:"idle", promenade_stroll:"idle", visit_friend:"idle", write_letters:"stationary",
+  fish_recreational:"fish", watch_ships_arrive:"stationary", smoke_pipe_idle:"idle",
+  attend_auction_spectate:"stationary", gossip_street:"idle", attend_town_meeting:"stationary",
+  attend_funeral:"stationary", attend_wedding_celebration:"evening", read_newspaper_at_exchange:"stationary"
+};
+// resolved once per calendar day per routine slot (cached on slot._scheduleDay),
+// not every frame — the dice pick itself is cheap but deterministic-per-day,
+// so there is nothing gained by re-rolling every tick.
+function resolveDailySchedule(slot, day){
+  var dayKey = Math.floor(day);
+  if(slot._scheduleDay === dayKey) return;
+  slot._scheduleDay = dayKey;
+  slot.needs.food += 1; slot.needs.social += 1; // "rise until acted on" (behavior-spec.md §3)
+
+  var isTent = slot.home && slot.home.type==="tent";
+  var campfireSite = { x:slot.homePos.x, z:slot.homePos.z, label:"the campfire" };
+
+  var mAct = pickActivity(MIDDAY_POOL, slot, day, "midday");
+  if(mAct){
+    var mSite = isTent ? campfireSite : venueForActivity(mAct, slot, day, "midday");
+    var mPoly = isTent ? null : buildRoutePoly(slot.workPos.x,slot.workPos.z, mSite.x,mSite.z);
+    slot._midday = { act:mAct, site:mSite, poly:mPoly };
+    var mr = NEED_RELIEF[mAct.id];
+    if(mr){
+      if(mr.food) slot.needs.food = Math.max(0, slot.needs.food - mr.food*2.2);
+      if(mr.social) slot.needs.social = Math.max(0, slot.needs.social - mr.social*1.6);
+    }
+  } else slot._midday = null;
+
+  var goEveningRoll = diceRoll(slot.id, day, "evening_go");
+  var eveningBias = 0.28 + (slot.traits.social==="gregarious"?0.14:0) + (slot.traits.drink==="heavy-drinker"?0.10:0) + Math.min(0.25, slot.needs.social*0.05);
+  slot._doEvening = goEveningRoll < clamp(eveningBias, 0.05, 0.85);
+  if(slot._doEvening){
+    var eAct = pickActivity(EVENING_POOL, slot, day, "evening");
+    if(eAct){
+      var eSite = isTent ? campfireSite : venueForActivity(eAct, slot, day, "evening");
+      var ePoly = isTent ? null : buildRoutePoly(slot.workPos.x,slot.workPos.z, eSite.x,eSite.z);
+      var isDrunkWalk = eAct.id==="drink_at_saloon" && slot.traits.drink==="heavy-drinker" && diceRoll(slot.id,day,"drunk")<0.4;
+      slot._evening = { act:eAct, site:eSite, poly:ePoly, isDrunkWalk:isDrunkWalk };
+      var er = NEED_RELIEF[eAct.id];
+      if(er && er.social) slot.needs.social = Math.max(0, slot.needs.social - er.social*1.6);
+    } else slot._evening = null;
+  } else slot._evening = null;
 }
 
 /* =========================================================================
@@ -5343,41 +5768,53 @@ var ALL_PEOPLE_SLOTS = (function(){
     var sundayGoesToChurch = traits.faith==="pious" && rngBuild()<0.55;
     var churchPoly = (sundayGoesToChurch && CHURCH_SPOT) ? buildRoutePoly(homePos.x,homePos.z, CHURCH_SPOT.x, CHURCH_SPOT.z) : null;
 
-    var doErrand = rngBuild()<0.4;
-    var doEvening = rngBuild()<(0.25 + (traits.social==="gregarious"?0.15:0) + (traits.drink==="heavy-drinker"?0.1:0));
-    var eveningSite, eveningPoly, isDrunkWalk=false;
-    if(home.type==="tent"){ eveningSite = { x:homePos.x, z:homePos.z, label:"the campfire" }; eveningPoly = null; }
-    else {
-      // behavior-spec.md item 3 (venues as smart objects): a trait-weighted
-      // dice for the saloon/gambling house vs. a quieter boarding-house
-      // evening, rather than a flat 35% split (GAPS-2026-07-09 item 3's
-      // original gambling-quarter note, now dealt per-person instead of
-      // per-population).
-      var saloonWeight = clamp(0.35 + (traits.drink==="heavy-drinker"?0.35:0) + (traits.social==="gregarious"?0.1:0) - (traits.drink==="temperate"?0.15:0), 0.05, 0.85);
-      var goSaloon = rngBuild() < saloonWeight;
-      var gambling = goSaloon ? pickGamblingSite() : null;
-      var saloon = gambling || pickShopSite("BOARDING") || { x:PLAZA_CENTER.x, z:PLAZA_CENTER.z, label:"the Plaza" };
-      eveningSite = { x:saloon.x, z:saloon.z, label:saloon.label };
-      eveningPoly = buildRoutePoly(workPos.x,workPos.z, eveningSite.x,eveningSite.z);
-      // "occasional drunk stumbling home" — a heavy-drinker who went to a
-      // gambling house/saloon sometimes weaves on the walk back (rendered
-      // in computeRoutinePosition's evening_back branch).
-      isDrunkWalk = !!gambling && traits.drink==="heavy-drinker" && rngBuild()<0.4;
+    // PL-B item 1: the midday-break/evening-out free choices are now
+    // resolved PER CALENDAR DAY by the dice engine (resolveDailySchedule,
+    // above) reading data/catalog-activities.json — nothing to decide once
+    // at build time beyond the needs state they read.
+    var needs = { food:0, social:0 };
+
+    // PL-B item 3 (families): a synthetic, era-honest household-fill layer
+    // (behavior-spec.md §1's "household... where demographics permit") —
+    // no source documents any specific person's spouse/children, so this is
+    // fill:true flavor text on the bio card, never a second simulated body.
+    // Boarding-house dwellers stay bachelors (the era's own housing form);
+    // only cottage-dwellers roll for a family, at an era-honest rate: much
+    // higher 1846-48 (demographics-society.md's more-mixed early gender
+    // ratio) than the bachelor-dominated 1849 rush.
+    var family = null;
+    if(!home.boarding && home.type!=="tent"){
+      var familyChance = era==="1846-1848" ? 0.42 : 0.07;
+      if(rngBuild() < familyChance){
+        var fBank = NAME_BANKS[origin.key] || NAME_BANKS.american;
+        var spouseFirst = fBank.first[Math.floor(rngBuild()*fBank.first.length)];
+        var nChildRoll = rngBuild();
+        var nChildren = nChildRoll<0.45?0 : nChildRoll<0.75?1 : nChildRoll<0.93?2 : 3;
+        family = { spouseFirst:spouseFirst, children:nChildren };
+      }
     }
+
+    // PL-A leftover (origins drive name banks + subtle appearance tint):
+    // a gentle per-origin multiply on the merged coat+skin+hat geometry's
+    // vertex colors via InstancedMesh.setColorAt — deliberately kept close
+    // to (1,1,1) so it reads as a hint of skin-tone/complexion diversity
+    // across documented origin groups, not a costume marker. fill:true
+    // aesthetic judgment, not a sourced statistic.
+    var originTint = ORIGIN_TINT[origin.key] || ORIGIN_TINT.american;
 
     var rosterFirstDay = (rosterPerson && rosterPerson.first) ? eventDateToSimDay(rosterPerson.first) : null;
     var rosterLastDay  = (rosterPerson && rosterPerson.last)  ? eventDateToSimDay(rosterPerson.last)  : null;
 
     slots.push({
       id:id++, kind:"routine", origin:origin, gender:isMale?"male":"female", variant:variant,
-      occ:occ, roster:rosterPerson, traits:traits, isDrunkWalk:isDrunkWalk,
+      occ:occ, roster:rosterPerson, traits:traits, needs:needs, family:family, originTint:originTint,
       sundayGoesToChurch:sundayGoesToChurch, churchPoly:churchPoly,
       lateralJitter:(rngBuild()-0.5)*2.2, clusterOffset:{ x:(rngBuild()-0.5)*3.6, z:(rngBuild()-0.5)*3.6 },
       isLanternCandidate: rngBuild()<0.32,
       home:home, homePos:homePos, homeLabel:homeLabelFor(home),
       work:work, workPos:workPos, workLabel:work.label, workActivity:work.activity,
       commutePoly:commutePoly, errandPoly:errandPoly, sundayPoly:sundayPoly,
-      doErrand:doErrand, doEvening:doEvening, eveningSite:eveningSite, eveningPoly:eveningPoly,
+      _midday:null, _doEvening:false, _evening:null, _scheduleDay:-1,
       notBeforeDay: Math.max(rosterFirstDay!=null?rosterFirstDay:0, origin.earliestDay, home.revealDay||0),
       notAfterDay: rosterLastDay,
       bio:null, _x:homePos.x, _z:homePos.z, _distSq:1e18, _now:"", _pose:"idle"
@@ -5401,11 +5838,21 @@ var ALL_PEOPLE_SLOTS = (function(){
     var wanderPoly = isMissionTraveler ? buildPolyline(MISSION_ROAD_PTS, false) : buildWanderPoly(rngBuild);
     var rosterFirstDay2 = (rosterPerson2 && rosterPerson2.first) ? eventDateToSimDay(rosterPerson2.first) : null;
     var rosterLastDay2  = (rosterPerson2 && rosterPerson2.last)  ? eventDateToSimDay(rosterPerson2.last)  : null;
+    var traits2 = rollTraits(rngBuild);
+    // PL-B item 4 (grit): 1849 street-sleepers — trait+arrival-weighted, per
+    // the brief. Only extras whose ORIGIN cohort's earliest presence is
+    // already in the 1849 rush are eligible at all (the documented
+    // young-single-men-broke-on-arrival profile); idle/restless poles raise
+    // the odds further (fill:true shape — no census of WHO slept rough,
+    // only that large numbers did, economy-daily-life.md §1.5).
+    var roughEligible = origin2.earliestDay >= ERA_1849_DAY;
+    var roughChance = roughEligible ? (0.05 + (traits2.work==="idler"?0.10:0) + (traits2.temperament==="restless"?0.08:0)) : 0;
+    var sleepsRough = rngBuild() < roughChance;
     slots.push({
       id:id++, kind:"extra", origin:origin2, gender:isMale2?"male":"female", variant:variant2,
-      occ:null, roster:rosterPerson2, traits:rollTraits(rngBuild),
+      occ:null, roster:rosterPerson2, traits:traits2, originTint: ORIGIN_TINT[origin2.key]||ORIGIN_TINT.american,
       speed:0.8+rngBuild()*0.7, phaseOffset: rngBuild()*wanderPoly.total*2, lateralJitter:(rngBuild()-0.5)*2.0,
-      isLanternCandidate: rngBuild()<0.32,
+      isLanternCandidate: rngBuild()<0.32, sleepsRough:sleepsRough, _sleepYaw:rngBuild()*Math.PI*2,
       wanderPoly:wanderPoly, homePos:{x:wanderPoly.segs[0].a.x, z:wanderPoly.segs[0].a.z},
       homeLabel: isMissionTraveler ? "on the Mission road" : ("about "+nearestStreetPair(wanderPoly.segs[0].a.x, wanderPoly.segs[0].a.z)+" Streets"),
       work:null, workPos:null, workLabel:null,
@@ -5451,9 +5898,39 @@ var PERSON_VARIANTS = [
   { coat:0x36402e, hat:0x262c1e, female:false },
   { coat:0x3a332c, hat:0xcabf98, female:true  }
 ];
+/* PL-B items 3 (subtle origin tint) + 4 (wet-season mud on the lower body):
+   r128 (this app's pinned three.js) predates InstancedMesh.setColorAt
+   (added r131), so both per-instance origin tint AND the mud band are done
+   by hand: a manually-authored InstancedBufferAttribute (instanceTint,
+   written per-frame in updatePeople like every other per-instance value in
+   this file) plus a small onBeforeCompile shader patch that (a) multiplies
+   the baked vertex color by that per-instance tint and (b) darkens/browns
+   any vertex below a local-Y "hem" threshold by uMud — driven straight off
+   the SAME weatherState.wet signal that already tints terrain/streets, so
+   people visibly muddy in the exact rainy stretches the ground already does. */
+var personMudUniform = { value: 0 };
+function patchPersonMaterial(mesh){
+  mesh.material.onBeforeCompile = function(shader){
+    shader.uniforms.uMud = personMudUniform;
+    shader.vertexShader = shader.vertexShader
+      .replace("#include <common>", "#include <common>\nattribute vec3 instanceTint;\nvarying vec3 vInstanceTint;\nvarying float vLocalY;")
+      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvInstanceTint = instanceTint;\nvLocalY = position.y;");
+    shader.fragmentShader = shader.fragmentShader
+      .replace("#include <common>", "#include <common>\nuniform float uMud;\nvarying vec3 vInstanceTint;\nvarying float vLocalY;")
+      .replace("#include <color_fragment>", "#include <color_fragment>\ndiffuseColor.rgb *= vInstanceTint;\n{ float band = 1.0 - smoothstep(0.0, 0.55, vLocalY); float m = band*uMud; diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.30,0.24,0.16), m*0.55); }");
+  };
+  mesh.material.needsUpdate = true;
+}
 var personMeshes = PERSON_VARIANTS.map(function(v){
   var geo = makePersonGeo(new THREE.Color(v.coat), new THREE.Color(v.hat), v.female);
+  var tintArr = new Float32Array(PEOPLE_CAP*3);
+  for(var i=0;i<tintArr.length;i++) tintArr[i] = 1; // default: no tint until updatePeople writes this frame's active instances
+  var tintAttr = new THREE.InstancedBufferAttribute(tintArr, 3);
+  if(tintAttr.setUsage) tintAttr.setUsage(THREE.DynamicDrawUsage); else tintAttr.dynamic = true;
+  geo.setAttribute("instanceTint", tintAttr);
   var mesh = new THREE.InstancedMesh(geo, new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), PEOPLE_CAP);
+  mesh._tintAttr = tintAttr;
+  patchPersonMaterial(mesh);
   mesh.count = 0; scene.add(mesh); return mesh;
 });
 var personMeshSlots = [[],[],[],[]]; // instanceId -> slot, rebuilt every frame in updatePeople()
@@ -5462,6 +5939,21 @@ var lanternGlowMesh = new THREE.InstancedMesh(
   colorizeUniform(new THREE.BoxGeometry(0.09,0.13,0.09).toNonIndexed(), new THREE.Color(0xffd27a)),
   new THREE.MeshBasicMaterial({vertexColors:true, transparent:true, opacity:0}), LANTERN_CAP);
 lanternGlowMesh.count = 0; scene.add(lanternGlowMesh);
+
+// PL-B item 4 (grit): street-sleepers — a blanket-wrapped huddle + a head,
+// lying flat, rendered as its own tiny instanced mesh rather than trying to
+// lay the upright coat-cone person figure on its side.
+function makeStreetSleeperGeo(){
+  var body = makeBoxLocal(1.5,0.32,0.55, new THREE.Color(0x4a4034)); // base already sits at y=0 (makeBoxLocal's own pivot)
+  var head = new THREE.SphereGeometry(0.16,6,5).toNonIndexed();
+  head.translate(0.6,0.28,0);
+  colorizeUniform(head, SKIN_TONE);
+  return mergeGeoms([body, head]);
+}
+var STREET_SLEEPER_CAP = 20;
+var streetSleeperMesh = new THREE.InstancedMesh(makeStreetSleeperGeo(),
+  new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), STREET_SLEEPER_CAP);
+streetSleeperMesh.count = 0; scene.add(streetSleeperMesh);
 
 /* ---- 5. lazy deterministic biography — crystallizes on first observation,
    seeded from (URL seed, LIFE VARIANT, slot id) so it's identical on every
@@ -5491,6 +5983,17 @@ var TRADE_WAGE_ITEM = {
   clerk: /^clerk hire$/i,
   cook: /^domestic labor$/i, domestic_servant: /^domestic labor$/i
 };
+// PL-B item 3 (families): renders the fill:true household layer set at
+// slot-build time (see ALL_PEOPLE_SLOTS) as one quiet clause on the bio
+// card — never a second simulated body, never on-screen commentary.
+function familyLineFor(slot){
+  if(!slot.family) return "";
+  var possessive = slot.gender==="male" ? "his" : "her";
+  var spouseWord = slot.gender==="male" ? "wife" : "husband";
+  var kids = slot.family.children;
+  var kidsPhrase = kids===0 ? "" : (kids===1 ? ", and their young child" : (", and their "+kids+" children"));
+  return " Keeps house with "+possessive+" "+spouseWord+", "+slot.family.spouseFirst+kidsPhrase+".";
+}
 function generateBio(slot){
   if(slot.bio) return slot.bio;
   var rng = personRng(slot.id);
@@ -5509,7 +6012,7 @@ function generateBio(slot){
       arrivedYear: dateFromSimDay(rp.first ? eventDateToSimDay(rp.first) : Math.max(slot.notBeforeDay,0)).getUTCFullYear(),
       trade: rpOcc ? rpOcc.label : (rp.role || "—"),
       role: rp.role || null, mentions: rp.mentions || null,
-      agenda: null,
+      agenda: null, family: familyLineFor(slot),
       wage: wageRec2 ? formatPrice(wageRec2) : null
     };
     return slot.bio;
@@ -5526,7 +6029,7 @@ function generateBio(slot){
     name:name, origin:slot.origin.label, arrivedYear:dateFromSimDay(arrivedDay).getUTCFullYear(),
     trade: occ ? occ.label : "laborer",
     role: null, mentions: null,
-    agenda:AGENDAS[Math.floor(rng()*AGENDAS.length)],
+    agenda:AGENDAS[Math.floor(rng()*AGENDAS.length)], family: familyLineFor(slot),
     wage: wageRec ? formatPrice(wageRec) : null
   };
   return slot.bio;
@@ -5550,7 +6053,8 @@ var POSE_BOB = {
   fish:         { freq:0.9, amp:0.03,  yOff:-0.04 },
   stationary:   { freq:1.4, amp:0.05,  yOff:0 },
   construction: { freq:1.6, amp:0.06,  yOff:-0.02 },
-  idle:         { freq:0.8, amp:0.02,  yOff:0 }
+  idle:         { freq:0.8, amp:0.02,  yOff:0 },
+  sleep:        { freq:0.3, amp:0.01,  yOff:0 }
 };
 function isSundayForDay(day){ return dateFromSimDay(Math.floor(day)).getUTCDay()===0; }
 function sampleWithJitter(poly, t01, lateralJitter){
@@ -5592,6 +6096,7 @@ function walkT01(slot, segBase, day, poly, dt){
   return slot._walkT;
 }
 function computeRoutinePosition(slot, day, dt){
+  resolveDailySchedule(slot, day); // PL-B item 1: today's dice-picked midday/evening activity, cached per calendar day
   var h = (day-Math.floor(day))*24;
   var sunday = isSundayForDay(day);
   var pose="idle", label="at home", x=slot.homePos.x, z=slot.homePos.z, dx=0, dz=1, pp;
@@ -5618,27 +6123,37 @@ function computeRoutinePosition(slot, day, dt){
     else if(h<6.5){ label="waking for the day"; }
     else if(h<7.5){ pp=sampleWithJitter(slot.commutePoly,walkT01(slot,"commute_out",day,slot.commutePoly,dt),slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking to the "+slot.workLabel; }
     else if(h<12){ x=slot.workPos.x; z=slot.workPos.z; pose=slot.workActivity; label="at work — the "+slot.workLabel; }
-    else if(slot.doErrand && h<13.4){
-      if(h<12.4){ pp=sampleWithJitter(slot.errandPoly,walkT01(slot,"errand_out",day,slot.errandPoly,dt),slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking to the Plaza"; }
-      else if(h<13.0){ x=PLAZA_CENTER.x; z=PLAZA_CENTER.z; pose="market"; label="on an errand at the Plaza market"; }
-      else { pp=sampleWithJitter(slot.errandPoly,1-walkT01(slot,"errand_back",day,slot.errandPoly,dt),slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking back to the "+slot.workLabel; }
+    else if(slot._midday && h<13.4){
+      // PL-B item 1/2 (dice engine + needs visible): today's midday choice
+      // was sampled from data/catalog-activities.json against this
+      // person's traits/needs/era (resolveDailySchedule) — eat_meal is by
+      // far the most common pick (food need rises daily until satisfied),
+      // but auctions, the newspaper office, letter-writing (spiking on
+      // steamer days), fishing, and gossip all compete for the slot.
+      var m = slot._midday, mPose = ACT_POSE[m.act.id] || "stationary";
+      if(m.poly){
+        if(h<12.4){ pp=sampleWithJitter(m.poly,walkT01(slot,"errand_out",day,m.poly,dt),slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking to "+(m.site.label||m.act.label.toLowerCase()); }
+        else if(h<13.0){ x=m.site.x; z=m.site.z; pose=mPose; label=m.act.label+(m.site.label?(" — "+m.site.label):""); }
+        else { pp=sampleWithJitter(m.poly,1-walkT01(slot,"errand_back",day,m.poly,dt),slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking back to the "+slot.workLabel; }
+      } else { x=m.site.x; z=m.site.z; pose=mPose; label=m.act.label+" at the campfire"; }
     }
     else if(h<18){ x=slot.workPos.x; z=slot.workPos.z; pose=slot.workActivity; label="at work — the "+slot.workLabel; }
     else if(h<19){ pp=sampleWithJitter(slot.commutePoly,1-walkT01(slot,"commute_back",day,slot.commutePoly,dt),slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking home"; }
-    else if(slot.doEvening){
-      if(slot.eveningPoly){
-        if(h<19.3){ pp=sampleWithJitter(slot.eveningPoly,walkT01(slot,"evening_out",day,slot.eveningPoly,dt),slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking to the "+slot.eveningSite.label; }
-        else if(h<20.7){ x=slot.eveningSite.x; z=slot.eveningSite.z; pose="evening"; label="at the "+slot.eveningSite.label+", of an evening"; }
+    else if(slot._doEvening && slot._evening){
+      var e = slot._evening, ePose = ACT_POSE[e.act.id] || "evening";
+      if(e.poly){
+        if(h<19.3){ pp=sampleWithJitter(e.poly,walkT01(slot,"evening_out",day,e.poly,dt),slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking to "+(e.site.label||e.act.label.toLowerCase()); }
+        else if(h<20.7){ x=e.site.x; z=e.site.z; pose=ePose; label=e.act.label+(e.site.label?(" — "+e.site.label):"")+", of an evening"; }
         else {
-          // "occasional drunk stumbling home" (item 3, trait-weighted): an
-          // extra oscillating perpendicular weave on top of the normal
-          // lateral jitter, only for the heavy-drinker slots the dice
-          // already picked at slot-build time (isDrunkWalk).
-          var weaveJit = slot.isDrunkWalk ? slot.lateralJitter + Math.sin(peopleClock*3.1+slot.id*1.7)*1.6 : slot.lateralJitter;
-          pp=sampleWithJitter(slot.eveningPoly,1-walkT01(slot,"evening_back",day,slot.eveningPoly,dt),weaveJit); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk";
-          label = slot.isDrunkWalk ? "stumbling home" : "walking home";
+          // "occasional drunk stumbling home" (trait-weighted, re-rolled
+          // daily by resolveDailySchedule): an extra oscillating
+          // perpendicular weave on top of the normal lateral jitter, only
+          // when today's dice picked drink_at_saloon for a heavy-drinker.
+          var weaveJit = e.isDrunkWalk ? slot.lateralJitter + Math.sin(peopleClock*3.1+slot.id*1.7)*1.6 : slot.lateralJitter;
+          pp=sampleWithJitter(e.poly,1-walkT01(slot,"evening_back",day,e.poly,dt),weaveJit); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk";
+          label = e.isDrunkWalk ? "stumbling home" : "walking home";
         }
-      } else { x=slot.eveningSite.x; z=slot.eveningSite.z; pose="evening"; label="at the campfire"; }
+      } else { x=e.site.x; z=e.site.z; pose=ePose; label=e.act.label+" at the campfire"; }
     }
     else { label="at home"; }
   }
@@ -5659,6 +6174,18 @@ function computeRoutinePosition(slot, day, dt){
   slot._x=x; slot._z=z; slot._dx=dx||0; slot._dz=dz||1; slot._pose=pose; slot._now=label;
 }
 function computeExtraPosition(slot, day){
+  var h=(day-Math.floor(day))*24;
+  // PL-B item 4 (grit): a street-sleeper extra beds down rough near the
+  // Plaza/wharf through the deep-night hours instead of vanishing into the
+  // "asleep, somewhere in town" label everyone else gets — rendered by
+  // updatePeople() into the dedicated streetSleeperMesh (pose "sleep").
+  if(slot.sleepsRough && day>=ERA_1849_DAY && (h<5.5||h>=22.5)){
+    if(!slot._sleepSpot) slot._sleepSpot = nearestSleeperSpot(slot.homePos.x, slot.homePos.z);
+    slot._x = slot._sleepSpot.x; slot._z = slot._sleepSpot.z;
+    slot._dx = Math.cos(slot._sleepYaw); slot._dz = Math.sin(slot._sleepYaw); slot._pose = "sleep";
+    slot._now = "sleeping rough near "+nearestStreetPair(slot._x,slot._z)+" Streets";
+    return;
+  }
   var poly = slot.wanderPoly;
   var dist = peopleClock*slot.speed + slot.phaseOffset;
   var period=poly.total*2, m=((dist%period)+period)%period;
@@ -5670,7 +6197,6 @@ function computeExtraPosition(slot, day){
   slot._x = p.x + (-dz/len)*slot.lateralJitter;
   slot._z = p.z + (dx/len)*slot.lateralJitter;
   slot._dx=dx; slot._dz=dz; slot._pose="walk";
-  var h=(day-Math.floor(day))*24;
   slot._now = (h<5.5||h>=22.5) ? "asleep, somewhere in town" : "about the streets";
 }
 function peopleTargetCount(day, alt){
@@ -5693,10 +6219,12 @@ function updatePeople(dt, camX, camZ, alt){
   if(!ambientOn){
     personMeshes.forEach(function(m){ m.count=0; });
     lanternGlowMesh.count = 0;
+    streetSleeperMesh.count = 0;
     updateDocumentedMoments(alt);
     return;
   }
   var day = simDay;
+  personMudUniform.value = weatherState.wet; // PL-B item 4: same wet-season signal the ground/streets already tint on
   var eligible = [];
   resetFleeBudget(); // PHASE 5: cap new flee-route computations per frame
   for(var i=0;i<ALL_PEOPLE_SLOTS.length;i++){
@@ -5713,26 +6241,37 @@ function updatePeople(dt, camX, camZ, alt){
   var active = eligible.slice(0, targetN);
   if(followedSlot && day>=followedSlot.notBeforeDay && active.indexOf(followedSlot)===-1) active.push(followedSlot);
 
-  var counts=[0,0,0,0], slotArrays=[[],[],[],[]], lanternCount=0;
+  var counts=[0,0,0,0], slotArrays=[[],[],[],[]], lanternCount=0, sleeperCount=0;
   var showLanterns = nightFactor>0.5;
   active.forEach(function(s){
-    var vi = s.variant, idx = counts[vi]++;
     var h = terrainHeight(s._x,s._z);
     var yaw = (s._dx||s._dz) ? Math.atan2(s._dx,s._dz) : 0;
+    // PL-B item 4: sleep-pose instances render lying flat into their own
+    // tiny mesh instead of the upright coat-cone person figure.
+    if(s._pose==="sleep" && sleeperCount<STREET_SLEEPER_CAP){
+      setShipInstance(streetSleeperMesh, sleeperCount, s._x, h+0.03, s._z, s._sleepYaw||0, 1);
+      sleeperCount++;
+      return;
+    }
+    var vi = s.variant, idx = counts[vi]++;
     var pb = POSE_BOB[s._pose] || POSE_BOB.walk;
     var bob = Math.sin(peopleClock*pb.freq + s.id*0.7)*pb.amp + pb.yOff;
     setShipInstance(personMeshes[vi], idx, s._x, h+bob, s._z, yaw, 1);
     slotArrays[vi][idx] = s;
+    var tint = s.originTint || ORIGIN_TINT.american, ta = personMeshes[vi]._tintAttr.array;
+    ta[idx*3]=tint.r; ta[idx*3+1]=tint.g; ta[idx*3+2]=tint.b;
     if(showLanterns && s.isLanternCandidate && lanternCount<LANTERN_CAP){
       setShipInstance(lanternGlowMesh, lanternCount, s._x+Math.sin(yaw+1.4)*0.26, h+0.78, s._z+Math.cos(yaw+1.4)*0.26, 0, 1);
       lanternCount++;
     }
   });
-  personMeshes.forEach(function(m,vi){ m.count=counts[vi]; m.instanceMatrix.needsUpdate=true; });
+  personMeshes.forEach(function(m,vi){ m.count=counts[vi]; m.instanceMatrix.needsUpdate=true; m._tintAttr.needsUpdate=true; });
   personMeshSlots = slotArrays;
   lanternGlowMesh.count = lanternCount;
   lanternGlowMesh.instanceMatrix.needsUpdate = true;
   lanternGlowMesh.material.opacity = nightFactor;
+  streetSleeperMesh.count = sleeperCount;
+  streetSleeperMesh.instanceMatrix.needsUpdate = true;
 
   if(followedSlot && personInspectorEl.classList.contains("on") && piNowEl){
     piNowEl.innerHTML = '<span class="pi-label">NOW</span>'+escapeHTML(followedSlot._now||"—");
@@ -5846,6 +6385,7 @@ function openPersonInspectorForSlot(slot){
     detailHtml += '; works the <a href="#" class="pi-fly" onclick="__piFlyTo('+slot.workPos.x.toFixed(1)+','+slot.workPos.z.toFixed(1)+',110);return false;">'+escapeHTML(slot.workLabel)+'</a>';
   }
   detailHtml += bio.role ? (". Printed in the record as \""+escapeHTML(bio.role)+"\".") : (". "+escapeHTML(bio.agenda)+".");
+  if(bio.family) detailHtml += escapeHTML(bio.family);
   piDetailEl.innerHTML = detailHtml;
   piNowEl.innerHTML = '<span class="pi-label">NOW</span>'+escapeHTML(slot._now||"—");
   piReceiptWrapEl.style.display = "none";
@@ -6989,6 +7529,7 @@ function updateDayNight(){
 
   nightFactor = 1-dayT;
   windowsMesh.material.opacity = clamp01(nightFactor*1.3-0.15);
+  if(window.buildingGlowAccentMesh) window.buildingGlowAccentMesh.material.opacity = clamp01(nightFactor*1.3-0.15);
 
   // dim the water toward indigo at night
   var wDim = lerp(0.18, 1, dayT);
@@ -7510,6 +8051,7 @@ function animate(){
   updateLevelingSite();
   updateTicker();
   updateFire(dt);      // PHASE 5 — the Dec 24 1849 Great Fire + aftermath/rebuild
+  updateLaundryDay(simDay); // PL-B item 4 — laundry lines only carry wash on the (fill:true) weekly wash day
 
   timeOfDay = (timeOfDay + dt/DAY_CYCLE_SECONDS) % 1;
   updateDayNight();
@@ -7539,6 +8081,7 @@ function animate(){
   updateSmoke(dt);
   updateDistrictZones(alt);
   updateBuildingLabels(alt);
+  updateBizGlyphs(alt);
   updateGridSwing();
   updateRain(dt, camera.position.x, camera.position.z, alt);
   updateFogBanks(dt);
