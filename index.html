@@ -1699,7 +1699,13 @@ function pushBuildingGeo(list, geo){ list.push(geo); buildingVertCursor += geo.a
     var sizeMul = opts.sizeMul || 1;
     var w = (4.5+rngBuild()*3.5)*sizeMul, d = (3.8+rngBuild()*3)*sizeMul, h = (2.6+rngBuild()*1.6)*Math.min(sizeMul*(opts.tall?1.6:1), 2.4);
     registerPlacement(x,z, Math.hypot(w,d)/2); // shared placement index — later spawners (tents/growth/outposts) now see this footprint
-    var rot = rotBase + (rngBuild()-0.5)*0.12 + VIOGET_SKEW; // aligned to the tilted grid, not true north
+    // ORGANIC LAYOUT (2026-07-10): pre-1847 Yerba Buena was scattered — survey
+    // on paper, not ground — so ordinary construction gets generous off-grid
+    // jitter; the Dec 1849 fire block (opts.denseRow) is a documented,
+    // specific post-survey frontage row and stays disciplined/aligned, same
+    // as the O'Farrell grid-swing logic elsewhere treats post-survey work.
+    var jitterDeg = opts.denseRow ? 3 : 12;
+    var rot = rotBase + (rngBuild()-0.5)*2*(jitterDeg*Math.PI/180) + VIOGET_SKEW; // aligned to the tilted grid, not true north
     var isAdobe = opts.forceFrame ? false : rngBuild()<0.55;
     var bodyColor = new THREE.Color(isAdobe? adobeColors[Math.floor(rngBuild()*adobeColors.length)] : frameColors[Math.floor(rngBuild()*frameColors.length)]);
     var roofColor = new THREE.Color(isAdobe? roofColorsAdobe[Math.floor(rngBuild()*roofColorsAdobe.length)] : roofColorsFrame[Math.floor(rngBuild()*roofColorsFrame.length)]);
@@ -1767,12 +1773,26 @@ function pushBuildingGeo(list, geo){ list.push(geo); buildingVertCursor += geo.a
       if(bx===PLAZA_BX && bz===PLAZA_BZ) continue; // Portsmouth Square — kept open
 
       var n = Math.max(0, Math.round(blockDensity(bx,bz) + (rngBuild()-0.5)*1.3));
+      // ORGANIC LAYOUT (2026-07-10): uneven occupancy, not a filled-in grid —
+      // some lots go doubled-up (a second structure crowded near the last),
+      // others stay empty, rather than every lot getting one evenly-spaced
+      // building. Setback also varies per building (2-10m equivalent inset
+      // from the block edge, "margin" below) instead of one fixed depth, so
+      // some buildings sit near the street and others sit mid-lot.
+      var lastP = null;
       for(var k=0;k<n;k++){
-        var margin = 9;
-        var u = lerp(uVals[bx]+margin, uVals[bx+1]-margin, rngBuild());
-        var v = lerp(vVals[bz]+margin, vVals[bz+1]-margin, rngBuild());
-        var p = gridToWorld(u,v);
+        var p;
+        if(lastP && rngBuild()<0.28){
+          var jog = 8+rngBuild()*10, jang = rngBuild()*Math.PI*2;
+          p = { x: lastP.x+Math.cos(jang)*jog, z: lastP.z+Math.sin(jang)*jog };
+        } else {
+          var margin = 2+rngBuild()*8; // varied setback: 2-10m from the block/street edge, some mid-lot
+          var u = lerp(uVals[bx]+margin, uVals[bx+1]-margin, rngBuild());
+          var v = lerp(vVals[bz]+margin, vVals[bz+1]-margin, rngBuild());
+          p = gridToWorld(u,v);
+        }
         placeBuilding(p.x, p.z, rngBuild()<0.5?0:Math.PI/2);
+        lastP = p;
       }
     }
   }
@@ -3017,9 +3037,26 @@ var growthBuildingCandidates = (function(){
     // growth lots, tents, outposts).
     if(!canPlace(p.x,p.z,4,{streetMargin:2})) continue;
     registerPlacement(p.x,p.z,4);
-    out.push({ x:p.x, z:p.z, rot:rngBuild()*Math.PI*2, priority: dPlaza+rngBuild()*70 });
+    // rotBase: grid-facing (0 or 90) rather than fully random — this is new
+    // construction going up on real lots, not tumbleweed. Final rot (with
+    // era-appropriate jitter) is assigned below, after sorting, since that's
+    // what fixes each candidate's reveal order/era.
+    out.push({ x:p.x, z:p.z, rotBase: rngBuild()<0.5?0:Math.PI/2, priority: dPlaza+rngBuild()*70 });
   }
   out.sort(function(a,b){ return a.priority-b.priority; });
+  // ORGANIC LAYOUT (2026-07-10): candidates are revealed strictly in sorted
+  // order as the population curve grows the town (see growRevealStaged()),
+  // so index-in-array is a good proxy for "built before/after the survey."
+  // preSurveyCount approximates how many growth buildings would already be
+  // standing by the time O'Farrell's Feb-Aug 1847 survey lands (reuses the
+  // same swing-window dates as the street-grid rotation above); buildings
+  // revealed before that trend match the founding village's scattered
+  // off-grid character, buildings after trend toward the surveyed grid.
+  var preSurveyCount = growthTargets(populationAt(OFARRELL_SWING_END)).buildings;
+  out.forEach(function(c, idx){
+    var jitterDeg = idx < preSurveyCount ? 12 : 3;
+    c.rot = c.rotBase + (rngBuild()-0.5)*2*(jitterDeg*Math.PI/180) + VIOGET_SKEW;
+  });
   return out;
 })();
 /* tent candidates: Happy Valley (south of the cove) + the western hillsides
@@ -4760,7 +4797,10 @@ var SIGN_BUILDING_SPOTS = []; // {x,z,y,rot,w,d,word} — reused by Phase 4's ho
     var p = behindSpot(spot, 6+rngBuild()*4, (rngBuild()-0.5)*spot.w*1.6);
     var h = terrainHeight(p.x,p.z);
     if(h<=1) return;
-    shedMatrices.push({ x:p.x, z:p.z, h:h, rot: spot.rot+(rngBuild()-0.5)*0.4 });
+    // ORGANIC LAYOUT (2026-07-10): outbuildings sat at whatever angle was
+    // convenient for the yard, not squared up with the house — independent
+    // of spot.rot rather than a small jitter off it.
+    shedMatrices.push({ x:p.x, z:p.z, h:h, rot: rngBuild()*Math.PI*2 });
   });
   if(shedMatrices.length>0){
     var shedMesh = new THREE.InstancedMesh(makeYardShedGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, side:THREE.DoubleSide, specular:0x000000, shininess:0}), shedMatrices.length);
@@ -4815,6 +4855,104 @@ var SIGN_BUILDING_SPOTS = []; // {x,z,y,rot,w,d,word} — reused by Phase 4's ho
     mountSignBoard(spot, word, priceLine);
     SIGN_BUILDING_SPOTS.push({ x:spot.x, z:spot.z, y:spot.y, rot:spot.rot, w:spot.w, d:spot.d, word:word });
   });
+})();
+
+/* =====================================================================
+   ORGANIC LAYOUT — YARD FENCES + DOOR-PATHS (2026-07-10): per-building lot
+   texture the town was missing — split-rail yard fences around ~40% of
+   houses (reusing buildVillageClutter's fence-prefab language, but scoped
+   per-lot and always partial/irregular rather than a closed box) and worn
+   door-to-street paths that approach at an angled jog rather than square
+   perpendicular. Anchored to VILLAGE_BUILDING_SPOTS, same as the yard
+   objects above.
+   ===================================================================== */
+(function buildYardFencesAndPaths(){
+  function makeYardFenceSegGeo(){
+    var parts = [], postColor = new THREE.Color(0x5c4a35), railColor = new THREE.Color(0x6b5640);
+    [-1.4,1.4].forEach(function(px){
+      var post = makeBoxLocal(0.12,0.85,0.12, postColor); post.translate(px,0,0); parts.push(post);
+    });
+    [0.28,0.55].forEach(function(py){
+      var rail = makeBoxLocal(2.9,0.07,0.07, railColor); rail.translate(-1.45,py,0); parts.push(rail);
+    });
+    return mergeGeoms(parts);
+  }
+
+  // ---- split-rail yard fences: ~40% of houses, 2-3 of 4 sides chosen at
+  // random with dropped rails for gaps/gates — an irregular partial
+  // enclosure, never a neat closed box. ----
+  var fenceMatrices = [];
+  VILLAGE_BUILDING_SPOTS.forEach(function(spot){
+    if(rngBuild()>=0.40) return;
+    var yawSkew = spot.rot + (rngBuild()-0.5)*0.5; // strung up by eye, not surveyed
+    var hx = spot.w*0.5+2+rngBuild()*2, hz = spot.d*0.5+2+rngBuild()*2;
+    var s = Math.sin(yawSkew), c = Math.cos(yawSkew);
+    function toWorld(lx,lz){ return { x: spot.x + lx*c + lz*s, z: spot.z - lx*s + lz*c }; }
+    var sides = [
+      { a:[-hx,-hz], b:[hx,-hz] },
+      { a:[hx,-hz],  b:[hx,hz]  },
+      { a:[hx,hz],   b:[-hx,hz] },
+      { a:[-hx,hz],  b:[-hx,-hz] }
+    ];
+    var nSides = 2+Math.floor(rngBuild()*2); // 2-3 of 4 sides -- always partial
+    var chosen = sides.slice().sort(function(){ return rngBuild()-0.5; }).slice(0, nSides);
+    chosen.forEach(function(side){
+      var a = toWorld(side.a[0],side.a[1]), b = toWorld(side.b[0],side.b[1]);
+      var dx=b.x-a.x, dz=b.z-a.z, len=Math.hypot(dx,dz);
+      var segN = Math.max(1, Math.round(len/2.9));
+      var yaw = Math.atan2(dx,dz);
+      for(var i=0;i<segN;i++){
+        if(rngBuild()<0.18) continue; // a missing rail -- gate, gap, wear
+        var t=(i+0.5)/segN, fx=a.x+dx*t, fz=a.z+dz*t, fh=terrainHeight(fx,fz);
+        if(fh<=1) continue;
+        fenceMatrices.push({x:fx,z:fz,h:fh,rotY:yaw});
+      }
+    });
+  });
+  if(fenceMatrices.length>0){
+    var fenceMesh2 = new THREE.InstancedMesh(makeYardFenceSegGeo(), new THREE.MeshPhongMaterial({ color:0xffffff, vertexColors:true, flatShading:true, specular:0x000000, shininess:0 }), fenceMatrices.length);
+    (function(){
+      var m4=new THREE.Matrix4();
+      fenceMatrices.forEach(function(f,i){
+        var q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), f.rotY);
+        m4.compose(new THREE.Vector3(f.x,f.h,f.z), q, new THREE.Vector3(1,1,1));
+        fenceMesh2.setMatrixAt(i,m4);
+      });
+      fenceMesh2.instanceMatrix.needsUpdate = true;
+    })();
+    scene.add(fenceMesh2);
+  }
+
+  // ---- worn door-paths: a strip from each door toward the nearest street,
+  // jogged sideways along the street's own direction so it meets the road
+  // at a natural angle rather than square perpendicular. ----
+  function nearestStreetPoint(x,z){
+    var best=null, bestD=Infinity;
+    PLACEMENT_STREET_SEGS.forEach(function(seg){
+      var dx=seg.x1-seg.x0, dz=seg.z1-seg.z0, len2=dx*dx+dz*dz;
+      var t = len2>0 ? ((x-seg.x0)*dx+(z-seg.z0)*dz)/len2 : 0;
+      t = clamp(t,0,1);
+      var px=seg.x0+dx*t, pz=seg.z0+dz*t, d=Math.hypot(x-px,z-pz);
+      if(d<bestD){ var invLen=1/Math.sqrt(len2||1); bestD=d; best={x:px,z:pz,dirx:dx*invLen,dirz:dz*invLen}; }
+    });
+    return best;
+  }
+  var doorPathGeoms = [], doorPathColor = new THREE.Color(0x6e5b3c);
+  VILLAGE_BUILDING_SPOTS.forEach(function(spot){
+    if(rngBuild()>=0.35) return;
+    var faceDist = spot.d*0.5+0.3;
+    var doorX = spot.x+Math.sin(spot.rot)*faceDist, doorZ = spot.z+Math.cos(spot.rot)*faceDist;
+    var sp = nearestStreetPoint(doorX,doorZ);
+    if(!sp || bestDistCheck(sp,doorX,doorZ)>26) return;
+    var jog = (rngBuild()-0.5)*10; // meters along the street's own direction -- avoids a square approach
+    var tx = sp.x+sp.dirx*jog, tz = sp.z+sp.dirz*jog;
+    drapeGroundStrip(doorX,doorZ, tx,tz, 0.9+rngBuild()*0.5, doorPathColor, 8, doorPathGeoms);
+  });
+  function bestDistCheck(sp,x,z){ return Math.hypot(sp.x-x, sp.z-z); }
+  if(doorPathGeoms.length>0){
+    var doorPathMesh = new THREE.Mesh(mergeGeoms(doorPathGeoms), new THREE.MeshPhongMaterial({ vertexColors:true, flatShading:true, transparent:true, opacity:0.65, specular:0x000000, shininess:0 }));
+    scene.add(doorPathMesh);
+  }
 })();
 
 /* =====================================================================
