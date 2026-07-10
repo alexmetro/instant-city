@@ -1132,17 +1132,23 @@ function farFromVillage(x,z,margin){ return distOutsideBox(x,z,VILLAGE_BOX) > ma
    Road, per the task brief) on top of the universal rut/edge treatment. */
 function paintRoadVariation(geo, width, len, seed, mottle){
   var pos = geo.attributes.position, col = geo.attributes.color;
-  var rutCol = new THREE.Color(0x2b2013), wearCol = new THREE.Color(0xdccb98), hoofCol = new THREE.Color(0x241a10);
+  var rutCol = new THREE.Color(0x241a0f), wearCol = new THREE.Color(0xdccb98), hoofCol = new THREE.Color(0x241a10);
+  // CLOSE-RANGE LEGIBILITY FIX (2026-07-10): a crisp dark rim right at the
+  // true edge (where the strip meets sand) so the Vioget grid reads as a
+  // distinct shape in mobile screenshots at 100-400m, on top of the
+  // existing worn-lighter band just inboard of it.
+  var edgeRimCol = new THREE.Color(0x2a1d10);
   var c = new THREE.Color();
   for(var i=0;i<pos.count;i++){
     var lx = pos.getX(i), lz = pos.getZ(i);
     var uAcross = lx/((width||1)/2);
     c.setRGB(col.getX(i), col.getY(i), col.getZ(i));
     var rutDist = Math.min(Math.abs(uAcross-0.38), Math.abs(uAcross+0.38));
-    c.lerp(rutCol, (1-smoothstep(0,0.11,rutDist))*0.24);
+    c.lerp(rutCol, (1-smoothstep(0,0.13,rutDist))*0.4); // was 0.11/0.24 — wider + darker so ruts survive altitude/JPEG compression
     var edgeDist = 1-Math.abs(uAcross);
     var edgeNoise = hash2(lz*0.6+seed, uAcross*4.3+seed*1.7);
     c.lerp(wearCol, (1-smoothstep(0,0.24,edgeDist))*(0.35+edgeNoise*0.55)*0.3);
+    c.lerp(edgeRimCol, (1-smoothstep(0,0.05,edgeDist))*0.6);
     if(mottle){
       var blotch = hash2(Math.floor(lz*0.18+seed*11), Math.floor(uAcross*5+seed*7));
       if(blotch>0.7) c.lerp(hoofCol, (blotch-0.7)*2.0);
@@ -1528,8 +1534,14 @@ function canPlace(x,z,footprintR,opts){
    ===================================================================== */
 var streetsMesh, stubMesh; // hoisted for semantic-zoom crossfade (see SEMANTIC ZOOM below)
 (function buildStreets(){
-  var dirtColor = new THREE.Color(0x8a7350);
-  var stubNear = new THREE.Color(0x9c8862);
+  // CLOSE-RANGE LEGIBILITY FIX (2026-07-10): darkened from 0x8a7350 — against
+  // the village's dusty-trodden-earth ground tint (~0xcfb888, see
+  // terrainColor()'s village blend) the old dirtColor read as barely-there in
+  // mobile screenshots at 100-400m. This packed-earth tone keeps the same
+  // hue but pulls value/chroma down so the Vioget grid reads as a plainly
+  // darker strip rather than nearly matching the surrounding sand.
+  var dirtColor = new THREE.Color(0x5f4b30);
+  var stubNear = new THREE.Color(0x76603f);
   var stubFar  = new THREE.Color(0xcdb87f); // washes out toward bare sand at the tip
   var geoms = [], stubGeoms = [];
   var MAIN_W = 10;    // Montgomery/Kearny/Dupont/Stockton — the principal N-S streets (true-scale
@@ -4806,6 +4818,45 @@ var SIGN_BUILDING_SPOTS = []; // {x,z,y,rot,w,d,word} — reused by Phase 4's ho
 })();
 
 /* =====================================================================
+   GROUNDING CONTACT SHADOWS (close-range legibility fix, 2026-07-10):
+   buildings and (later) people previously sat on the ground with no
+   contact shading at all — floating on close-range screenshots. No real
+   shadow-mapping (far too costly for this many instanced draws); instead
+   one shared soft dark radial-gradient decal, dropped flat on the ground
+   as a plain textured plane. Buildings get a STATIC InstancedMesh (one
+   draw call, baked once here since VILLAGE_BUILDING_SPOTS never moves);
+   people reuse the same texture on a small per-frame InstancedMesh set
+   further down (personShadowMesh, updated inside updatePeople() since
+   that loop already visits every active person once per frame for free).
+   ===================================================================== */
+function makeContactShadowTexture(){
+  var cv = document.createElement("canvas"); cv.width=cv.height=64;
+  var ctx = cv.getContext("2d");
+  var g = ctx.createRadialGradient(32,32,0,32,32,32);
+  g.addColorStop(0,"rgba(18,14,9,0.55)"); g.addColorStop(0.55,"rgba(18,14,9,0.30)"); g.addColorStop(1,"rgba(18,14,9,0)");
+  ctx.fillStyle = g; ctx.fillRect(0,0,64,64);
+  return new THREE.CanvasTexture(cv);
+}
+var CONTACT_SHADOW_TEX = makeContactShadowTexture();
+var buildingShadowMesh = (function(){
+  var geo = new THREE.PlaneGeometry(1,1); geo.rotateX(-Math.PI/2);
+  var mat = new THREE.MeshBasicMaterial({ map:CONTACT_SHADOW_TEX, transparent:true, depthWrite:false, opacity:0.9 });
+  var mesh = new THREE.InstancedMesh(geo, mat, Math.max(1, VILLAGE_BUILDING_SPOTS.length));
+  var m4 = new THREE.Matrix4(), q = new THREE.Quaternion();
+  VILLAGE_BUILDING_SPOTS.forEach(function(spot, i){
+    var w = (spot.w||4)*1.3, d = (spot.d||4)*1.3; // a touch bigger than the footprint so it reads as a base shadow, not a floor tile
+    q.setFromAxisAngle(new THREE.Vector3(0,1,0), spot.rot||0);
+    m4.compose(new THREE.Vector3(spot.x, spot.y+0.04, spot.z), q, new THREE.Vector3(w,1,d));
+    mesh.setMatrixAt(i, m4);
+  });
+  mesh.count = VILLAGE_BUILDING_SPOTS.length;
+  mesh.instanceMatrix.needsUpdate = true;
+  mesh.renderOrder = -1; // paint before the streets/scatter/etc. it sits under so it never wins a coplanar depth tie
+  scene.add(mesh);
+  return mesh;
+})();
+
+/* =====================================================================
    PHYSICAL SIGNAGE FOR NAMED LANDMARKS (coordinator directive): the plaza's
    documented establishments (El Dorado, Parker House, City Hotel, etc.)
    previously only had a DOM label chip — no in-world identity below the
@@ -6053,7 +6104,6 @@ var ALL_PEOPLE_SLOTS = (function(){
     var isMissionTraveler = ei<6 && typeof MISSION_ROAD_PTS!=="undefined" && MISSION_ROAD_PTS.length>1;
     var wanderPoly = isMissionTraveler ? buildPolyline(MISSION_ROAD_PTS, false) : buildWanderPoly(rngBuild);
     var rosterFirstDay2 = (rosterPerson2 && rosterPerson2.first) ? eventDateToSimDay(rosterPerson2.first) : null;
-    var rosterLastDay2  = (rosterPerson2 && rosterPerson2.last)  ? eventDateToSimDay(rosterPerson2.last)  : null;
     var traits2 = rollTraits(rngBuild);
     // PL-B item 4 (grit): 1849 street-sleepers — trait+arrival-weighted, per
     // the brief. Only extras whose ORIGIN cohort's earliest presence is
@@ -6073,7 +6123,20 @@ var ALL_PEOPLE_SLOTS = (function(){
       homeLabel: isMissionTraveler ? "on the Mission road" : ("about "+nearestStreetPair(wanderPoly.segs[0].a.x, wanderPoly.segs[0].a.z)+" Streets"),
       work:null, workPos:null, workLabel:null,
       notBeforeDay: Math.max(rosterFirstDay2!=null?rosterFirstDay2:0, origin2.earliestDay),
-      notAfterDay: rosterLastDay2,
+      // BUGFIX (close-range legibility pass, 2026-07-10): extras are
+      // anonymous ambient density-fill (see comment at their loop's top) —
+      // a roster name is cosmetic flavor for the inspector card, not their
+      // sole identity. Binding notAfterDay to that ONE real person's own
+      // last-documented-mention date was wiping out the entire town: since
+      // the 600-entry roster never exhausts against the 90-200 extra slots,
+      // every extra got a real roster figure, and NOT ONE roster entry's
+      // "last" date extends past sim day ~906 (~Jan 1849) — so every extra
+      // (plus every routine slot, same mechanism) hard-expired before the
+      // 1849 gold rush even started, leaving the entire back half of the
+      // timeline's streets and plaza completely empty of people on every
+      // platform. Extras never expire this way; notBeforeDay (arrival
+      // floor) is untouched.
+      notAfterDay: null,
       bio:null, _x:wanderPoly.segs[0].a.x, _z:wanderPoly.segs[0].a.z, _distSq:1e18, _now:"about the streets", _pose:"walk"
     });
   }
@@ -6155,6 +6218,19 @@ var lanternGlowMesh = new THREE.InstancedMesh(
   colorizeUniform(new THREE.BoxGeometry(0.09,0.13,0.09).toNonIndexed(), new THREE.Color(0xffd27a)),
   new THREE.MeshBasicMaterial({vertexColors:true, transparent:true, opacity:0}), LANTERN_CAP);
 lanternGlowMesh.count = 0; scene.add(lanternGlowMesh);
+
+// grounding contact shadow for every active walking/standing figure (see the
+// "GROUNDING CONTACT SHADOWS" block above, which builds the static building
+// version + the shared CONTACT_SHADOW_TEX); capacity matches PEOPLE_CAP since
+// at most that many person-instances are ever active in a frame.
+var personShadowMesh = (function(){
+  var geo = new THREE.PlaneGeometry(1,1); geo.rotateX(-Math.PI/2);
+  var mat = new THREE.MeshBasicMaterial({ map:CONTACT_SHADOW_TEX, transparent:true, depthWrite:false, opacity:0.75 });
+  var mesh = new THREE.InstancedMesh(geo, mat, PEOPLE_CAP);
+  mesh.count = 0; mesh.renderOrder = -1; scene.add(mesh);
+  return mesh;
+})();
+var _personShadowM4 = new THREE.Matrix4(), _personShadowQ = new THREE.Quaternion();
 
 // PL-B item 4 (grit): street-sleepers — a blanket-wrapped huddle + a head,
 // lying flat, rendered as its own tiny instanced mesh rather than trying to
@@ -6436,6 +6512,7 @@ function updatePeople(dt, camX, camZ, alt){
     personMeshes.forEach(function(m){ m.count=0; });
     lanternGlowMesh.count = 0;
     streetSleeperMesh.count = 0;
+    personShadowMesh.count = 0;
     updateDocumentedMoments(alt);
     return;
   }
@@ -6457,11 +6534,19 @@ function updatePeople(dt, camX, camZ, alt){
   var active = eligible.slice(0, targetN);
   if(followedSlot && day>=followedSlot.notBeforeDay && active.indexOf(followedSlot)===-1) active.push(followedSlot);
 
-  var counts=[0,0,0,0], slotArrays=[[],[],[],[]], lanternCount=0, sleeperCount=0;
+  var counts=[0,0,0,0], slotArrays=[[],[],[],[]], lanternCount=0, sleeperCount=0, shadowCount=0;
   var showLanterns = nightFactor>0.5;
   active.forEach(function(s){
     var h = terrainHeight(s._x,s._z);
     var yaw = (s._dx||s._dz) ? Math.atan2(s._dx,s._dz) : 0;
+    // grounding contact shadow (see personShadowMesh, built above) — every
+    // rendered figure gets one, walking or asleep, so nobody floats.
+    if(shadowCount<PEOPLE_CAP){
+      _personShadowQ.setFromAxisAngle(_UP, yaw);
+      _personShadowM4.compose(new THREE.Vector3(s._x, h+0.02, s._z), _personShadowQ, new THREE.Vector3(0.55, 1, s._pose==="sleep"?1.3:0.32));
+      personShadowMesh.setMatrixAt(shadowCount, _personShadowM4);
+      shadowCount++;
+    }
     // PL-B item 4: sleep-pose instances render lying flat into their own
     // tiny mesh instead of the upright coat-cone person figure.
     if(s._pose==="sleep" && sleeperCount<STREET_SLEEPER_CAP){
@@ -6488,6 +6573,8 @@ function updatePeople(dt, camX, camZ, alt){
   lanternGlowMesh.material.opacity = nightFactor;
   streetSleeperMesh.count = sleeperCount;
   streetSleeperMesh.instanceMatrix.needsUpdate = true;
+  personShadowMesh.count = shadowCount;
+  personShadowMesh.instanceMatrix.needsUpdate = true;
 
   if(followedSlot && personInspectorEl.classList.contains("on") && piNowEl){
     piNowEl.innerHTML = '<span class="pi-label">NOW</span>'+escapeHTML(followedSlot._now||"—");
