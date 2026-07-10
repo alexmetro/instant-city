@@ -4597,17 +4597,41 @@ function rainYearIntensity(day){
   return (rainYearStart>=1849) ? 1.55 : 1.0; // 1849-50 mud winter vs. normal placeholder
 }
 function isRainySeasonMonth(m){ return m>=10 || m<=2; } // Nov(10)-Mar(2)
-var weatherState = { wet:0, summerFog:0, rainy:false };
+/* THE MUD WINTER (GAPS-2026-07-10 top-build #3; round-1 item 10; claims
+   clm:env:30 / clm:env:31 / clm:timeline:77 / clm:timeline:172 / clm:econ:80).
+   Documented, hard-dated: rains "commenced on the 2nd of November" 1849 and
+   fell "almost daily"; mud to five feet; horses/mules/drays "literally
+   swallowed up"; residents improvised crossings from planks, tobacco-boxes,
+   barrels, packing cases (weather-climate.md §2, Annals via FoundSF "State
+   of Streets 1849"). Era-gated STRICTLY to that documented window — ramps in
+   from Nov 2 1849 as the daily rains accumulate, would ramp out toward the
+   season's end (Mar 1850) if the sim ran past its current Dec-31-1849 end.
+   Everything below (wet floor, deep-mud street tint, puddle decals, plank/
+   crate crossing props) keys off this one factor. */
+var MUD_WINTER_START = eventDateToSimDay("1849-11-02"); // timeline-spine.md 1849-11-02
+var MUD_WINTER_END   = eventDateToSimDay("1850-03-01"); // rainy season tail (Nov-Mar)
+function mudWinterFactor(day){
+  if(day < MUD_WINTER_START || day > MUD_WINTER_END) return 0;
+  var rampIn  = smoothstep(MUD_WINTER_START, MUD_WINTER_START+12, day); // ~2 weeks of daily rain to churn the streets
+  var rampOut = 1 - smoothstep(MUD_WINTER_END-20, MUD_WINTER_END, day);
+  return rampIn*rampOut;
+}
+var weatherState = { wet:0, summerFog:0, rainy:false, mud:0 };
 function updateWeather(){
   var d = dateFromSimDay(simDay);
   var m = d.getUTCMonth();
   var rainy = isRainySeasonMonth(m);
   var noise = fbm(simDay*0.35, 7.3, 3);
   var wet = rainy ? clamp01((noise-0.30)*1.9)*rainYearIntensity(simDay) : 0;
+  var mudF = mudWinterFactor(simDay);
+  // "rains fell almost daily" (Annals): during the documented mud winter the
+  // dice still vary intensity, but wetness never drops to a dry street.
+  if(mudF>0) wet = Math.max(wet, mudF*(0.35 + 0.4*clamp01((noise-0.2)*1.6)));
   var summer = (!rainy && m>=4 && m<=8) ? clamp01((fbm(simDay*0.5,41.7,3)-0.32)*2.4) : 0;
   weatherState.wet = clamp01(wet);
   weatherState.summerFog = summer;
   weatherState.rainy = rainy;
+  weatherState.mud = mudF;
 }
 
 /* rain streaks — a small world-space box of falling points that rides
@@ -4677,11 +4701,14 @@ function updateFogBanks(dt){
    treatment the old streetsMesh/stubMesh materials did. */
 var GROUND_DRY = new THREE.Color(0xffffff), GROUND_WET = new THREE.Color(0xc9c2ac);
 var STREET_DRY = new THREE.Color(0xffffff), STREET_MUD = new THREE.Color(0x8a6f4a);
+var STREET_MUD_DEEP = new THREE.Color(0x655039); // churned 1849-50 deep mud (clm:env:30 "mud to five feet" — depicted as tone, not geometry)
 var _wetTint = new THREE.Color();
 function updateWetTint(){
   var wet = weatherState.wet;
-  terrainMat.color.copy(GROUND_DRY).lerp(GROUND_WET, wet*0.4);
-  _wetTint.copy(STREET_DRY).lerp(STREET_MUD, wet*0.6);
+  var mudF = weatherState.mud;
+  terrainMat.color.copy(GROUND_DRY).lerp(GROUND_WET, Math.max(wet*0.4, mudF*0.5));
+  _wetTint.copy(STREET_DRY).lerp(STREET_MUD, Math.max(wet*0.6, mudF*0.85));
+  if(mudF>0) _wetTint.lerp(STREET_MUD_DEEP, mudF*0.55); // documented winter reads darker than an ordinary wet day
   splatWorldMat.color.copy(_wetTint);
   splatTownMat.color.copy(_wetTint);
 }
@@ -7734,6 +7761,457 @@ var QUAIL_SITES = (function(){
   while(sites.length<QUAIL_COVEYS){ var fx=PLAZA_CENTER.x-600-sites.length*90, fz=PLAZA_CENTER.z+220; sites.push({x:fx,z:fz,h:terrainHeight(fx,fz)}); }
   return sites.map(function(s){ return { x:s.x, z:s.z, flushT:-1, hidden:false, hideUntil:0 }; });
 })();
+
+/* =========================================================================
+   RECONCILER TRANCHE 2026-07-10 (GAPS-2026-07-10 top-builds #2/#3/#4):
+   1. RANCH/PASTURE VENUE + CATTLE (item A / build #2) — the documented
+      pastoral zones at Mission Dolores (peninsula-1846.md §2: the Mission's
+      grazing lands; catalog-fauna cattle_beef: documented, rarity 1,
+      hide-and-tallow economy through the window, beef volume "rising
+      sharply from 1849") and the Presidio vicinity (peninsula-1846.md §1:
+      Mofras' "soldiers-rancheros" — soldier-ranchers — with families).
+      A grazing venue advertises work here so the 5 formerly-orphaned
+      occupations (farmer, rancher_ranchero, dairyman, hunter,
+      vaquero_herder — catalog venueNeeds ranch/region/natural, previously
+      resolver-less) route to real ground instead of the Plaza default.
+      Cattle are TECHNIQUES §10 tethered-idle instances: static graze spots,
+      phase-offset head-down/head-up sine (vertex shader, same aPart
+      pattern as the hitched horses), slow drift between graze points.
+   2. MUD-WINTER STREET PROPS (build #3) — see the MUD WINTER block up in
+      the weather section for the documented window + citations; here live
+      the puddle decals (contact-shadow mesh pattern) and the plank/crate/
+      barrel crossing props ("a few planks, tobacco-boxes... barrels of
+      spoiled provisions, or any other available object" — Annals via
+      FoundSF; clm:econ:80). Strictly era-gated to weatherState.mud > 0.
+   3. FAUNA BATCH (build #4) — per catalog-fauna.json verdicts, all
+      documented, rarity 1-2: pelican_cormorant (Ayala named Alcatraz for
+      them, 1775), heron_egret (Mission Bay marsh "inconceivably thick"
+      with them, richest pre-1850), ship_dock_rat (explosion from late
+      1849), stray_feral_dog (documented general problem), cat (mouser
+      imports against the rat surge, late 1849). NO other species (elk
+      absent, whales a documented absence, per the same catalog).
+   All instanced; true scale; dice/steering, never scripts; no narration.
+   ========================================================================= */
+
+/* ---- 1a. the pastures: seeded search for open, flat, road-free ground
+   near each outpost. Placement is a GUESS within the documented zone (the
+   record puts grazing at the Mission lands / Presidio vicinity, not at a
+   surveyed lot) — flagged per QA-GATE §1. ---- */
+function findPastureCenter(ox, oz, angA, angB, dMin, dMax){
+  for(var d=dMin; d<=dMax; d+=25){
+    for(var a=angA; a<=angB; a+=0.22){
+      var x = ox + Math.cos(a)*d, z = oz + Math.sin(a)*d;
+      if(terrainHeight(x,z)>2 && terrainHeight(x,z)<45 && terrainSlopeDeg(x,z)<12 && !nearAnyRoad(x,z,14)) return {x:x, z:z};
+    }
+  }
+  return null;
+}
+function buildGrazePoints(cx,cz,r,n){
+  var pts = scatterSample(n, cx, cz, r, function(x,z,h){ return h>1.5 && h<60 && terrainSlopeDeg(x,z)<16 && !nearAnyRoad(x,z,6); }, n*30);
+  while(pts.length<3){ var fa=pts.length*2.1; pts.push({x:cx+Math.cos(fa)*r*0.4, z:cz+Math.sin(fa)*r*0.4, h:terrainHeight(cx,cz)}); }
+  return pts;
+}
+// SE of the Mission complex (clear of the orchard to the W, the rancheria
+// to the NW, and the road in from the NE); inland S/E of the Presidio quad.
+var PASTURE_MISSION = findPastureCenter(OUTPOSTS.mission.x, OUTPOSTS.mission.z, 0.15, 1.65, 170, 340) || { x:OUTPOSTS.mission.x+210, z:OUTPOSTS.mission.z+170 };
+var PASTURE_PRESIDIO = findPastureCenter(OUTPOSTS.presidio.x, OUTPOSTS.presidio.z, 0.3, 2.8, 150, 320) || { x:OUTPOSTS.presidio.x+180, z:OUTPOSTS.presidio.z+120 };
+var MISSION_GRAZE_PTS  = buildGrazePoints(PASTURE_MISSION.x,  PASTURE_MISSION.z,  90, 12);
+var PRESIDIO_GRAZE_PTS = buildGrazePoints(PASTURE_PRESIDIO.x, PASTURE_PRESIDIO.z, 55, 6);
+
+/* ---- 1b. corrals — the venue's visible built form (post-and-rail, the
+   standard Californio rancho corral; period-plausible fill, no surveyed
+   corral position survives). One merged static mesh. ---- */
+(function buildRanchCorrals(){
+  var geoms = [];
+  var postC = new THREE.Color(0x6b563e), railC = new THREE.Color(0x7d6748);
+  function corralAt(cx,cz,w,d){
+    registerPlacement(cx,cz,Math.hypot(w,d)/2+1);
+    var perim = [[-w/2,-d/2],[w/2,-d/2],[w/2,d/2],[-w/2,d/2]];
+    for(var s=0;s<4;s++){
+      var A=perim[s], B=perim[(s+1)%4];
+      var len = Math.hypot(B[0]-A[0], B[1]-A[1]);
+      var nSeg = Math.max(2, Math.round(len/2.8));
+      for(var i=0;i<=nSeg;i++){
+        var t=i/nSeg, px=cx+lerp(A[0],B[0],t), pz=cz+lerp(A[1],B[1],t);
+        var post = makeBoxLocal(0.14,1.3,0.14, postC);
+        bake(post, new THREE.Vector3(px, terrainHeight(px,pz), pz), rngBuild()*0.3);
+        geoms.push(post);
+        if(i<nSeg && !(s===2 && i===Math.floor(nSeg/2))){ // one open gate on the far side
+          var t2=(i+1)/nSeg, qx=cx+lerp(A[0],B[0],t2), qz=cz+lerp(A[1],B[1],t2);
+          var mx=(px+qx)/2, mz=(pz+qz)/2, my=terrainHeight(mx,mz);
+          var segLen=Math.hypot(qx-px,qz-pz), yaw=Math.atan2(qx-px,qz-pz);
+          [0.55,1.02].forEach(function(rh){
+            var rail = makeBoxLocal(0.07,0.09,segLen*1.02, railC);
+            rail.translate(0,rh,0);
+            bake(rail, new THREE.Vector3(mx,my,mz), yaw);
+            geoms.push(rail);
+          });
+        }
+      }
+    }
+  }
+  corralAt(PASTURE_MISSION.x, PASTURE_MISSION.z, 14, 11);
+  corralAt(PASTURE_PRESIDIO.x, PASTURE_PRESIDIO.z, 9, 8);
+  var m = new THREE.Mesh(mergeGeoms(geoms), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}));
+  scene.add(m);
+})();
+
+/* ---- 1c. the venue itself + resolver bindings. Registered BEFORE
+   ALL_PEOPLE_SLOTS builds (below), so worksiteForOccupation() routes the
+   5 occupations here from the first spawn. "region"/"natural" (farmer's
+   truck-farm periphery, the hunter's ground) resolve to the outer lands —
+   the dune-scrub belt the quail coveys already inhabit (fauna-1846.md §3.1:
+   quail "constantly to be found for sale alive" = a real hunted stock). ---- */
+var WORKSITE_RANCH_MISSION  = { key:"ranch_mission",  label:"the Mission grazing grounds", x:PASTURE_MISSION.x,  z:PASTURE_MISSION.z,  activity:"stationary" };
+var WORKSITE_RANCH_PRESIDIO = { key:"ranch_presidio", label:"the Presidio pastures",       x:PASTURE_PRESIDIO.x, z:PASTURE_PRESIDIO.z, activity:"stationary" };
+var WORKSITE_OUTERLANDS = (function(){
+  var q = QUAIL_SITES.length ? QUAIL_SITES[0] : null;
+  return { key:"outerlands", label:"the outer lands", x:(q? q.x+25 : PLAZA_CENTER.x-650), z:(q? q.z+15 : PLAZA_CENTER.z+220), activity:"stationary" };
+})();
+VENUE_KEY_RESOLVERS.ranch   = function(rng){ return (rng && rng()<0.25) ? WORKSITE_RANCH_PRESIDIO : WORKSITE_RANCH_MISSION; };
+VENUE_KEY_RESOLVERS.region  = function(){ return WORKSITE_OUTERLANDS; };
+VENUE_KEY_RESOLVERS.natural = function(){ return WORKSITE_OUTERLANDS; };
+
+/* ---- 1d. the cattle. True scale: ~2.3m nose-to-rump, ~1.26m shoulder
+   (small Californio range cattle, not modern feedlot stock). Head+neck
+   built LOW — grazing is the neutral pose; the shader's slow sine raises
+   it (head-down/head-up, per-instance phase so the herd never locksteps). ---- */
+function makeCattleGeo(){
+  var hide = new THREE.Color(0x6d4b33), hideDark = new THREE.Color(0x4c352a), horn = new THREE.Color(0xc9bda0);
+  var parts = [];
+  [[-0.20,-0.60],[0.20,-0.60],[-0.20,0.55],[0.20,0.55]].forEach(function(o){
+    var leg = makeBoxLocal(0.11,0.70,0.11, hideDark); leg.translate(o[0],0,o[1]);
+    parts.push({g:leg,p:0});
+  });
+  var body = makeBoxLocal(0.60,0.56,1.72, hide); body.translate(0,0.68,0);
+  parts.push({g:body,p:0});
+  var neck = makeBoxLocal(0.20,0.50,0.24, hide); neck.rotateX(2.2); neck.translate(0,1.05,0.82);
+  parts.push({g:neck,p:1});
+  var head = makeBoxLocal(0.20,0.30,0.26, hideDark); head.translate(0,0.40,1.20);
+  parts.push({g:head,p:1});
+  [-1,1].forEach(function(sgn){
+    var h = makeBoxLocal(0.20,0.05,0.05, horn); h.translate(sgn*0.17,0.66,1.12);
+    parts.push({g:h,p:1});
+  });
+  var tail = makeBoxLocal(0.06,0.46,0.08, hideDark); tail.translate(0,0.44,-0.92);
+  parts.push({g:tail,p:2});
+  return mergeGeomsParts(parts);
+}
+var CATTLE_CAP = 30, CATTLE_MISSION_MAX = 24;
+var CATTLE_BOOM_DAY = eventDateToSimDay("1849-02-01"); // beef-on-the-hoof volume "rising sharply from 1849" (catalog-fauna cattle_beef; Monterey Co. Historical Society)
+function cattleTargetCounts(day){
+  return { mission: day>=CATTLE_BOOM_DAY ? 24 : 16, presidio: 5 };
+}
+var cattleMesh = (function(){
+  var geo = makeCattleGeo();
+  var phaseArr = new Float32Array(CATTLE_CAP);
+  for(var i=0;i<CATTLE_CAP;i++) phaseArr[i] = rngBuild()*Math.PI*2;
+  geo.setAttribute("instancePhase", new THREE.InstancedBufferAttribute(phaseArr,1));
+  var mat = new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0});
+  mat.onBeforeCompile = function(shader){
+    shader.uniforms.uFaunaTime = faunaTimeUniform;
+    shader.vertexShader = shader.vertexShader
+      .replace("#include <common>", "#include <common>\nattribute float aPart;\nattribute float instancePhase;\nuniform float uFaunaTime;")
+      .replace("#include <begin_vertex>", "#include <begin_vertex>\nfloat cowHead = step(0.5,aPart)*(1.0-step(1.5,aPart));\nfloat cowTail = step(1.5,aPart);\ntransformed.y += cowHead*((0.5+0.5*sin(uFaunaTime*0.3+instancePhase))*0.42 - 0.12);\ntransformed.x += cowTail*sin(uFaunaTime*2.5+instancePhase*1.9)*0.08;");
+  };
+  var mesh = new THREE.InstancedMesh(geo, mat, CATTLE_CAP);
+  mesh.count = 0; scene.add(mesh);
+  return mesh;
+})();
+var CATTLE = (function(){
+  var out = [];
+  for(var i=0;i<CATTLE_CAP;i++){
+    var mission = i<CATTLE_MISSION_MAX;
+    var pts = mission ? MISSION_GRAZE_PTS : PRESIDIO_GRAZE_PTS;
+    var p0 = pts[i % pts.length];
+    out.push({ herd:(mission?"mission":"presidio"), herdIdx:(mission?i:i-CATTLE_MISSION_MAX), pts:pts,
+      x:p0.x+(rngBuild()-0.5)*10, z:p0.z+(rngBuild()-0.5)*10, tx:p0.x, tz:p0.z,
+      phase:rngBuild()*Math.PI*2, baseYaw:rngBuild()*Math.PI*2, scale:0.92+rngBuild()*0.14,
+      grazing:true, until:rngBuild()*120 });
+  }
+  return out;
+})();
+
+/* ---- 2. mud-winter street props (strictly gated on weatherState.mud) ---- */
+function makePuddleTexture(){
+  var cv=document.createElement("canvas"); cv.width=cv.height=64;
+  var ctx=cv.getContext("2d");
+  var g=ctx.createRadialGradient(32,32,2,32,32,32);
+  g.addColorStop(0,"rgba(255,255,255,0.92)"); g.addColorStop(0.6,"rgba(255,255,255,0.7)"); g.addColorStop(1,"rgba(255,255,255,0)");
+  ctx.fillStyle=g; ctx.fillRect(0,0,64,64);
+  return new THREE.CanvasTexture(cv);
+}
+var PUDDLE_CAP = 64;
+var puddleMesh = (function(){
+  var geo = new THREE.CircleGeometry(1,10); geo.rotateX(-Math.PI/2);
+  var mat = new THREE.MeshBasicMaterial({ map:makePuddleTexture(), color:0x4e4a42, transparent:true, opacity:0, depthWrite:false });
+  var mesh = new THREE.InstancedMesh(geo, mat, PUDDLE_CAP);
+  var m4=new THREE.Matrix4(), q=new THREE.Quaternion(), v=new THREE.Vector3(), s=new THREE.Vector3();
+  var n=0;
+  for(var i=0;i<STREET_GRAPH.nodes.length && n<PUDDLE_CAP;i++){
+    var nd = STREET_GRAPH.nodes[i];
+    if(nd.key.indexOf("camp_")===0 || nd.key.indexOf("mroad_")===0 || nd.key==="mission") continue;
+    if(Math.hypot(nd.x-PLAZA_CENTER.x, nd.z-PLAZA_CENTER.z)>250) continue;
+    for(var k=0;k<2 && n<PUDDLE_CAP;k++){
+      var px = nd.x+(rngBuild()-0.5)*10, pz = nd.z+(rngBuild()-0.5)*10;
+      var py = terrainHeight(px,pz);
+      if(py<0.5) continue;
+      var sx = 1.0+rngBuild()*1.5;
+      q.setFromAxisAngle(_UP, rngBuild()*Math.PI);
+      v.set(px, py+0.07, pz); s.set(sx, 1, sx*(0.5+rngBuild()*0.3));
+      m4.compose(v,q,s);
+      mesh.setMatrixAt(n++, m4);
+    }
+  }
+  mesh.count = n; mesh.instanceMatrix.needsUpdate = true;
+  mesh.visible = false;
+  scene.add(mesh);
+  return mesh;
+})();
+var mudPlankMesh = (function(){
+  // "16 to 24 feet long" period planks (infrastructure.md, sidewalks/planking);
+  // sunken crates/barrels = the documented improvised paving (clm:econ:80).
+  var geoms = [];
+  var crateC = new THREE.Color(0x8a6f4f), barrelC = new THREE.Color(0x74583c);
+  var nodes = STREET_GRAPH.nodes.filter(function(nd){
+    return /^[a-z]+_[a-z]+$/.test(nd.key) && nd.key.indexOf("camp_")!==0 &&
+      Math.hypot(nd.x-PLAZA_CENTER.x, nd.z-PLAZA_CENTER.z)<230 && terrainHeight(nd.x,nd.z)>0.5;
+  }).slice(0,12);
+  nodes.forEach(function(nd){
+    for(var k=0;k<2;k++){
+      var px = nd.x+(rngBuild()-0.5)*8, pz = nd.z+(rngBuild()-0.5)*8;
+      var yw = rngBuild()*Math.PI;
+      var len = 4.9+rngBuild()*2.4; // 16-24 ft
+      for(var pI=0;pI<2;pI++){
+        var tone = new THREE.Color(0x9a835f).lerp(new THREE.Color(0x77664a), rngBuild());
+        var plank = makeBoxLocal(0.34,0.07,len, tone);
+        var ox = Math.cos(yw)*(pI*0.44), oz = -Math.sin(yw)*(pI*0.44);
+        bake(plank, new THREE.Vector3(px+ox, terrainHeight(px+ox,pz+oz)+0.09, pz+oz), yw+(rngBuild()-0.5)*0.08);
+        geoms.push(plank);
+      }
+    }
+    if(rngBuild()<0.45){ // half-sunk packing case
+      var cx2 = nd.x+(rngBuild()-0.5)*9, cz2 = nd.z+(rngBuild()-0.5)*9;
+      var crate = makeBoxLocal(0.85,0.8,0.85, crateC);
+      bake(crate, new THREE.Vector3(cx2, terrainHeight(cx2,cz2)-0.32, cz2), rngBuild()*Math.PI);
+      geoms.push(crate);
+    }
+    if(rngBuild()<0.3){ // half-sunk barrel of spoiled provisions
+      var bx = nd.x+(rngBuild()-0.5)*9, bz = nd.z+(rngBuild()-0.5)*9;
+      var barrel = new THREE.CylinderGeometry(0.32,0.32,0.8,8).toNonIndexed();
+      barrel.translate(0,0.4,0);
+      colorizeUniform(barrel, barrelC);
+      bake(barrel, new THREE.Vector3(bx, terrainHeight(bx,bz)-0.28, bz), 0);
+      geoms.push(barrel);
+    }
+  });
+  var m = new THREE.Mesh(mergeGeoms(geoms), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}));
+  m.visible = false;
+  scene.add(m);
+  return m;
+})();
+
+/* ---- 3a. pelicans — small formation gliding the cove shoreline (boid-lite:
+   a leader on a fixed offshore polyline, followers in a phase-offset V; the
+   full flock solver is not warranted for 6 birds). ---- */
+function makePelicanGeo(){
+  var bodyC = new THREE.Color(0x8a8072), wingC = new THREE.Color(0x6f675a), headC = new THREE.Color(0xd8cfae), billC = new THREE.Color(0xb99a68);
+  var body = makeBoxLocal(0.22,0.18,0.62, bodyC);
+  var head = makeBoxLocal(0.10,0.10,0.12, headC); head.translate(0,0.16,0.34);
+  var bill = makeBoxLocal(0.05,0.035,0.42, billC); bill.translate(0,0.15,0.55);
+  function wingTri(sign){
+    var pos = new Float32Array([ 0,0.14,0.18,  sign*1.05,0.20,-0.10,  0,0.14,-0.22 ]);
+    var g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.BufferAttribute(pos,3));
+    return colorizeUniform(g, wingC);
+  }
+  return mergeGeoms([body,head,bill,wingTri(1),wingTri(-1)]); // ~2.2m span — true brown-pelican scale
+}
+var PELICAN_N = 6;
+var pelicanMesh = new THREE.InstancedMesh(makePelicanGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0, side:THREE.DoubleSide}), PELICAN_N);
+pelicanMesh.count = 0; scene.add(pelicanMesh);
+var PELICAN_PATH = (function(){
+  var pts = [];
+  for(var i=0;i<waterfrontBeachLines.length;i+=3){
+    var ln = waterfrontBeachLines[i];
+    pts.push({ x: ln.waterX+70+(i%2)*18, z: ln.z });
+  }
+  function extend(p0,p1,d){ var dx=p0.x-p1.x, dz=p0.z-p1.z, L=Math.hypot(dx,dz)||1; return {x:p0.x+dx/L*d+60, z:p0.z+dz/L*d}; }
+  if(pts.length>=2){
+    pts.unshift(extend(pts[0],pts[1],280));
+    pts.push(extend(pts[pts.length-1],pts[pts.length-2],280));
+  } else {
+    pts = [{x:WORKSITE_WHARF.x+160,z:WORKSITE_WHARF.z-420},{x:WORKSITE_WHARF.x+230,z:WORKSITE_WHARF.z+420}];
+  }
+  return buildPolyline(pts,false);
+})();
+var PELICANS = { s: PELICAN_PATH.total*0.3, dir: 1, speed: 8.5 };
+
+/* ---- 3b. herons — static-with-twitch waders at the Mission Creek/Mission
+   Bay marsh edge ("inconceivably thick" bird life, FoundSF via
+   fauna-1846.md §3.3; richest 1846-~1850, i.e. this whole sim window).
+   Site found by marching from the Mission to the nearest waterline. ---- */
+function makeHeronGeo(){
+  var bodyC = new THREE.Color(0x7f8b94), darkC = new THREE.Color(0x5b656d), billC = new THREE.Color(0xb8a960);
+  var parts = [];
+  [[-0.05],[0.05]].forEach(function(o){
+    var leg = makeBoxLocal(0.025,0.46,0.025, darkC); leg.translate(o[0],0,0);
+    parts.push(leg);
+  });
+  var body = makeBoxLocal(0.15,0.17,0.42, bodyC); body.translate(0,0.44,0);
+  parts.push(body);
+  var neck = makeBoxLocal(0.05,0.34,0.06, bodyC); neck.rotateX(-0.35); neck.translate(0,0.58,0.16);
+  parts.push(neck);
+  var head = makeBoxLocal(0.07,0.07,0.10, darkC); head.translate(0,0.92,0.28);
+  parts.push(head);
+  var bill = makeBoxLocal(0.025,0.025,0.20, billC); bill.translate(0,0.945,0.42);
+  parts.push(bill);
+  return mergeGeoms(parts); // ~1.0m standing — true great-blue/egret scale
+}
+var HERON_N = 3;
+var heronMesh = new THREE.InstancedMesh(makeHeronGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), HERON_N);
+heronMesh.count = 0; scene.add(heronMesh);
+var HERON_SPOTS = (function(){
+  // The baked terrain keeps the Mission Bay marsh as a low near-waterline
+  // flat (h ~0-1.5m) ENE of the Mission rather than as open water — so the
+  // "marsh edge" is the nearest low flat, found by marching bearings from
+  // the Mission until the ground drops below ~0.9m.
+  var best = null;
+  for(var a=0;a<28;a++){
+    var ang = a/28*Math.PI*2;
+    for(var d=150; d<=3400; d+=25){
+      var x = OUTPOSTS.mission.x+Math.cos(ang)*d, z = OUTPOSTS.mission.z+Math.sin(ang)*d;
+      var hh = terrainHeight(x,z);
+      if(hh<0.9){
+        if(hh>-0.5 && (!best || d<best.d)) best = {x:x, z:z, d:d};
+        break;
+      }
+    }
+  }
+  if(!best) return [];
+  var spots = [];
+  for(var i=0;i<HERON_N;i++){
+    for(var t=0;t<40;t++){
+      var sx = best.x+(rngBuild()-0.5)*70, sz = best.z+(rngBuild()-0.5)*70;
+      var sh = terrainHeight(sx,sz);
+      if(sh>0.05 && sh<1.4){ spots.push({x:sx, z:sz, yaw:rngBuild()*Math.PI*2}); break; }
+    }
+  }
+  return spots;
+})();
+
+/* ---- 3c. ship/dock rats — tiny fast darters at the wharf/storeship
+   ground, night-biased; population "out of control by late 1849" (Fern
+   Hill / sfgenealogy rat-catchers, catalog ship_dock_rat: documented,
+   hard, dated). Gated: none before Aug 1849, ramping to full by Dec. ---- */
+function makeRatGeo(){
+  var c = new THREE.Color(0x3f3a36), c2 = new THREE.Color(0x2e2a27);
+  var body = makeBoxLocal(0.07,0.055,0.20, c);
+  var tail = makeBoxLocal(0.02,0.02,0.16, c2); tail.translate(0,0.02,-0.17);
+  return mergeGeoms([body,tail]); // ~0.36m nose-to-tail-tip — true ship-rat scale
+}
+var RAT_CAP = 10;
+var ratMesh = new THREE.InstancedMesh(makeRatGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), RAT_CAP);
+ratMesh.count = 0; scene.add(ratMesh);
+var RAT_SURGE_DAY = eventDateToSimDay("1849-08-01");
+function ratTargetCount(day){
+  if(day < RAT_SURGE_DAY) return 0;
+  var eraF = clamp01((day-RAT_SURGE_DAY)/120); // full infestation by Dec 1849
+  return Math.round(eraF*(2 + 8*nightFactor)); // night-biased
+}
+var RAT_ANCHORS = (function(){
+  var out = [];
+  function landward(x,z){ for(var k=0;k<50;k++){ if(terrainHeight(x,z)>0.25) return {x:x,z:z}; x-=3; } return null; }
+  Object.keys(STORESHIP_INFO).forEach(function(k){ var a=landward(STORESHIP_INFO[k].pos.x, STORESHIP_INFO[k].pos.z); if(a) out.push(a); });
+  out.push({x:WORKSITE_WHARF.x-6, z:WORKSITE_WHARF.z+3});
+  var ch = pickShopSite("SHIP CHANDLERY"); if(ch) out.push({x:ch.x, z:ch.z});
+  return out.length ? out : [{x:PLAZA_CENTER.x, z:PLAZA_CENTER.z}];
+})();
+var RATS = (function(){
+  var out = [];
+  for(var i=0;i<RAT_CAP;i++){
+    var a = RAT_ANCHORS[i % RAT_ANCHORS.length];
+    out.push({ anchor:a, x:a.x+(rngBuild()-0.5)*6, z:a.z+(rngBuild()-0.5)*6, tx:a.x, tz:a.z, pausing:true, until:rngBuild()*3 });
+  }
+  return out;
+})();
+
+/* ---- 3d. cats — the documented mouser imports (sold off ships at $10-50
+   against the rat surge; catalog cat), tethered-idle near the storeships/
+   warehouses + occasional dart. From late 1849 only. ---- */
+function makeCatGeo(){
+  var c = new THREE.Color(0x5e564a), c2 = new THREE.Color(0x453e35);
+  var haunch = makeBoxLocal(0.14,0.26,0.16, c); haunch.translate(0,0,-0.08);
+  var chest = makeBoxLocal(0.12,0.22,0.14, c); chest.translate(0,0.02,0.08);
+  var head = makeBoxLocal(0.10,0.10,0.10, c2); head.translate(0,0.24,0.10);
+  var tail = makeBoxLocal(0.035,0.035,0.22, c2); tail.translate(0,0.015,-0.24);
+  return mergeGeoms([haunch,chest,head,tail]); // ~0.34m sitting — true cat scale
+}
+var CAT_CAP = 3;
+var catMesh = new THREE.InstancedMesh(makeCatGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), CAT_CAP);
+catMesh.count = 0; scene.add(catMesh);
+var CAT_ARRIVAL_DAY = eventDateToSimDay("1849-10-01");
+var CAT_FULL_DAY = eventDateToSimDay("1849-12-01");
+function catTargetCount(day){
+  if(day < CAT_ARRIVAL_DAY) return 0;
+  return day >= CAT_FULL_DAY ? 3 : 2;
+}
+var CATS = (function(){
+  var out = [];
+  for(var i=0;i<CAT_CAP;i++){
+    var a = RAT_ANCHORS[(i*2+1) % RAT_ANCHORS.length]; // cats sit where the rats are
+    out.push({ hx:a.x+(rngBuild()-0.5)*8, hz:a.z+(rngBuild()-0.5)*8, x:0, z:0, tx:0, tz:0,
+      yaw:rngBuild()*Math.PI*2, sitting:true, until:rngBuild()*40, phase:rngBuild()*Math.PI*2 });
+  }
+  out.forEach(function(c){ c.x=c.hx; c.z=c.hz; c.tx=c.hx; c.tz=c.hz; });
+  return out;
+})();
+
+/* ---- 3e. stray/feral dogs — documented general town problem ("in common
+   with other cities... at the time", catalog stray_feral_dog); the hog-
+   wander pattern between street anchors, faster gait, sniff-idle. Count
+   scales with the town (fill:true) — 2 in the village era, 4 by 1849. ---- */
+function makeDogGeo(){
+  var c = new THREE.Color(0x8a7a5c), c2 = new THREE.Color(0x55483a);
+  var parts = [];
+  [[-0.08,-0.22],[0.08,-0.22],[-0.08,0.20],[0.08,0.20]].forEach(function(o){
+    var leg = makeBoxLocal(0.06,0.30,0.06, c2); leg.translate(o[0],0,o[1]);
+    parts.push(leg);
+  });
+  var body = makeBoxLocal(0.20,0.24,0.62, c); body.translate(0,0.28,0);
+  parts.push(body);
+  var head = makeBoxLocal(0.14,0.16,0.18, c2); head.translate(0,0.44,0.38);
+  parts.push(head);
+  var tail = makeBoxLocal(0.05,0.05,0.22, c2); tail.rotateX(-0.7); tail.translate(0,0.44,-0.32);
+  parts.push(tail);
+  return mergeGeoms(parts); // ~0.9m nose-to-tail, ~0.55m shoulder
+}
+var DOG_CAP = 4;
+var dogMesh = new THREE.InstancedMesh(makeDogGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), DOG_CAP);
+dogMesh.count = 0; scene.add(dogMesh);
+var DOG_GROW1 = eventDateToSimDay("1848-06-01"), DOG_GROW2 = eventDateToSimDay("1849-06-01");
+function dogTargetCount(day){ return day>=DOG_GROW2 ? 4 : (day>=DOG_GROW1 ? 3 : 2); }
+var DOG_PATCHES = (function(){
+  var pts = [];
+  for(var i=0;i<STREET_GRAPH.nodes.length && pts.length<8;i++){
+    var n = STREET_GRAPH.nodes[i];
+    if(n.key.indexOf("camp_")===0 || n.key==="mission" || n.key.indexOf("mroad_")===0) continue;
+    var d = Math.hypot(n.x-PLAZA_CENTER.x, n.z-PLAZA_CENTER.z);
+    if(d>25 && d<320 && rngBuild()<0.45 && terrainHeight(n.x,n.z)>1)
+      pts.push({ x:n.x+(rngBuild()-0.5)*8, z:n.z+(rngBuild()-0.5)*8 });
+  }
+  while(pts.length<4) pts.push({ x:PLAZA_CENTER.x+(rngBuild()-0.5)*140, z:PLAZA_CENTER.z+(rngBuild()-0.5)*140 });
+  return pts;
+})();
+var DOGS = (function(){
+  var out = [];
+  for(var i=0;i<DOG_CAP;i++){
+    var p0 = DOG_PATCHES[i % DOG_PATCHES.length];
+    out.push({ x:p0.x+(rngBuild()-0.5)*6, z:p0.z+(rngBuild()-0.5)*6, tx:p0.x, tz:p0.z,
+      phase:rngBuild()*Math.PI*2, speed:0.8+rngBuild()*0.25, sniffing:true, until:rngBuild()*20 });
+  }
+  return out;
+})();
 var _faunaM4 = new THREE.Matrix4(); // scratch
 function updateFauna(dt){
   faunaClock += dt;
@@ -7832,6 +8310,145 @@ function updateFauna(dt){
   }
   quailMesh.count = qIdx;
   quailMesh.instanceMatrix.needsUpdate = true;
+
+  // ---- cattle grazing at the Mission/Presidio pastures (GAPS item A) ----
+  var cN = 0;
+  if(alt<=1100){
+    var ct = cattleTargetCounts(simDay);
+    for(var ci=0; ci<CATTLE.length && cN<CATTLE_CAP; ci++){
+      var cow = CATTLE[ci];
+      if(cow.herdIdx >= (cow.herd==="mission" ? ct.mission : ct.presidio)) continue;
+      if(cow.grazing){
+        if(faunaClock > cow.until){
+          cow.grazing = false;
+          var cpick = cow.pts[Math.floor(hash2(ci*2.7, Math.floor(faunaClock*0.05))*cow.pts.length) % cow.pts.length];
+          cow.tx = cpick.x + (hash2(ci*1.3, faunaClock)*10-5);
+          cow.tz = cpick.z + (hash2(ci*3.1, faunaClock)*10-5);
+        }
+      } else {
+        var cdx = cow.tx-cow.x, cdz = cow.tz-cow.z, cdd = Math.hypot(cdx,cdz);
+        if(cdd < 0.6){ cow.grazing = true; cow.until = faunaClock + 50 + hash2(ci, faunaClock)*130; }
+        else { cow.x += (cdx/cdd)*0.32*dt; cow.z += (cdz/cdd)*0.32*dt; }
+      }
+      var cyaw = cow.grazing ? cow.baseYaw + Math.sin(faunaClock*0.11+cow.phase)*0.4
+                             : Math.atan2(cow.tx-cow.x, cow.tz-cow.z);
+      if(!cow.grazing) cow.baseYaw = cyaw;
+      setPersonInstance(cattleMesh, cN++, cow.x, terrainHeight(cow.x,cow.z), cow.z, cyaw, 0, 0, cow.scale);
+    }
+  }
+  cattleMesh.count = cN; cattleMesh.visible = cN>0;
+  cattleMesh.instanceMatrix.needsUpdate = true;
+
+  // ---- stray dogs (hog-wander pattern, faster gait; sniff-idle) ----
+  var dogN = nearGround ? Math.min(dogTargetCount(simDay), DOG_CAP) : 0;
+  for(var di=0; di<dogN; di++){
+    var dog = DOGS[di];
+    if(dog.sniffing){
+      if(faunaClock > dog.until){
+        dog.sniffing = false;
+        var dpick = DOG_PATCHES[Math.floor(hash2(di*3.7, Math.floor(faunaClock*0.09))*DOG_PATCHES.length) % DOG_PATCHES.length];
+        dog.tx = dpick.x + (hash2(di*1.9, faunaClock)*8-4);
+        dog.tz = dpick.z + (hash2(di*2.3, faunaClock)*8-4);
+      }
+    } else {
+      var ddx2 = dog.tx-dog.x, ddz2 = dog.tz-dog.z, ddd = Math.hypot(ddx2,ddz2);
+      if(ddd < 0.5){ dog.sniffing = true; dog.until = faunaClock + 6 + hash2(di, faunaClock)*18; }
+      else { dog.x += (ddx2/ddd)*dog.speed*dt; dog.z += (ddz2/ddd)*dog.speed*dt; }
+    }
+    var dyaw = dog.sniffing ? (Math.atan2(dog.tx-dog.x||0.1, dog.tz-dog.z||0.1) + Math.sin(faunaClock*0.7+dog.phase)*0.5)
+                            : Math.atan2(dog.tx-dog.x, dog.tz-dog.z);
+    var dlean = dog.sniffing ? 0.22 + Math.sin(faunaClock*2.6+dog.phase)*0.10 : Math.sin(faunaClock*6.0+dog.phase)*0.04;
+    setPersonInstance(dogMesh, di, dog.x, terrainHeight(dog.x,dog.z), dog.z, dyaw, dlean, 0, 1);
+  }
+  dogMesh.count = dogN; dogMesh.visible = dogN>0;
+  dogMesh.instanceMatrix.needsUpdate = true;
+
+  // ---- ship/dock rats (night-biased darters; late-1849 surge) ----
+  var ratN = (alt<=380) ? Math.min(ratTargetCount(simDay), RAT_CAP) : 0;
+  for(var ri2=0; ri2<ratN; ri2++){
+    var rat = RATS[ri2];
+    if(rat.pausing){
+      if(faunaClock > rat.until){
+        rat.pausing = false;
+        var rtx = rat.anchor.x + (hash2(ri2*4.1, faunaClock)*16-8);
+        var rtz = rat.anchor.z + (hash2(ri2*2.9, faunaClock)*16-8);
+        if(terrainHeight(rtx,rtz) > 0.15){ rat.tx = rtx; rat.tz = rtz; }
+        else { rat.tx = rat.anchor.x; rat.tz = rat.anchor.z; }
+      }
+    } else {
+      var rdx = rat.tx-rat.x, rdz = rat.tz-rat.z, rdd = Math.hypot(rdx,rdz);
+      if(rdd < 0.25){ rat.pausing = true; rat.until = faunaClock + 0.8 + hash2(ri2, faunaClock)*3.2; }
+      else { rat.x += (rdx/rdd)*3.4*dt; rat.z += (rdz/rdd)*3.4*dt; }
+    }
+    var ryaw = Math.atan2(rat.tx-rat.x||0.05, rat.tz-rat.z||0.05);
+    setPersonInstance(ratMesh, ri2, rat.x, terrainHeight(rat.x,rat.z), rat.z, ryaw, 0, 0, 1);
+  }
+  ratMesh.count = ratN; ratMesh.visible = ratN>0;
+  ratMesh.instanceMatrix.needsUpdate = true;
+
+  // ---- cats (tethered-idle mousers + occasional dart; late 1849) ----
+  var catN = (alt<=380) ? Math.min(catTargetCount(simDay), CAT_CAP) : 0;
+  for(var kci=0; kci<catN; kci++){
+    var cat = CATS[kci];
+    if(cat.sitting){
+      if(faunaClock > cat.until){
+        cat.sitting = false;
+        cat.tx = cat.hx + (hash2(kci*5.3, faunaClock)*12-6);
+        cat.tz = cat.hz + (hash2(kci*3.9, faunaClock)*12-6);
+        if(terrainHeight(cat.tx,cat.tz) <= 0.15){ cat.tx = cat.hx; cat.tz = cat.hz; }
+      }
+    } else {
+      var kdx = cat.tx-cat.x, kdz = cat.tz-cat.z, kdd = Math.hypot(kdx,kdz);
+      if(kdd < 0.2){ cat.sitting = true; cat.until = faunaClock + 25 + hash2(kci, faunaClock)*55; }
+      else { cat.x += (kdx/kdd)*2.6*dt; cat.z += (kdz/kdd)*2.6*dt; cat.yaw = Math.atan2(kdx,kdz); }
+    }
+    var kyaw = cat.sitting ? cat.yaw + Math.sin(faunaClock*0.2+cat.phase)*0.35 : cat.yaw;
+    setPersonInstance(catMesh, kci, cat.x, terrainHeight(cat.x,cat.z), cat.z, kyaw, 0, 0, 1);
+  }
+  catMesh.count = catN; catMesh.visible = catN>0;
+  catMesh.instanceMatrix.needsUpdate = true;
+
+  // ---- pelican formation gliding the cove shoreline ----
+  var pelN = (alt<=1600) ? PELICAN_N : 0;
+  if(pelN>0){
+    PELICANS.s += PELICANS.dir*PELICANS.speed*dt;
+    if(PELICANS.s > PELICAN_PATH.total+48) PELICANS.dir = -1;
+    if(PELICANS.s < -48) PELICANS.dir = 1;
+    for(var pi2=0; pi2<pelN; pi2++){
+      var back = pi2*8.5;
+      var lat = (pi2%2 ? 1 : -1)*Math.ceil(pi2/2)*3.4;
+      var ps = clamp(PELICANS.s - PELICANS.dir*back, 0, PELICAN_PATH.total);
+      var pp = pointOnPolyline(PELICAN_PATH, ps);
+      var plen = Math.hypot(pp.dx,pp.dz)||1;
+      var px2 = pp.x + (-pp.dz/plen)*lat, pz2 = pp.z + (pp.dx/plen)*lat;
+      var pyaw = Math.atan2(PELICANS.dir*pp.dx, PELICANS.dir*pp.dz);
+      var py2 = 6.5 + Math.sin(faunaClock*0.5+pi2*1.1)*1.0;
+      var flapEnv = Math.max(0, Math.sin(faunaClock*0.22+pi2*1.9)); // glide, with periodic flap bursts
+      var proll = Math.sin(faunaClock*0.8+pi2*0.7)*0.10 + (flapEnv>0.86 ? Math.sin(faunaClock*7.0+pi2)*0.35*((flapEnv-0.86)/0.14) : 0);
+      setPersonInstance(pelicanMesh, pi2, px2, py2, pz2, pyaw, 0, proll, 1);
+    }
+  }
+  pelicanMesh.count = pelN; pelicanMesh.visible = pelN>0;
+  pelicanMesh.instanceMatrix.needsUpdate = true;
+
+  // ---- herons at the Mission Creek marsh edge (static-with-twitch) ----
+  var hnN = 0;
+  if(HERON_SPOTS.length && alt<=800){
+    for(var hi2=0; hi2<HERON_SPOTS.length && hnN<HERON_N; hi2++){
+      var hs = HERON_SPOTS[hi2];
+      var hyaw2 = hs.yaw + Math.sin(faunaClock*0.07+hi2*2.1)*0.5;
+      var dip = Math.pow(Math.max(0, Math.sin(faunaClock*0.16+hi2*2.7)), 12)*0.55; // rare strike-dip at the mud
+      setPersonInstance(heronMesh, hnN++, hs.x, terrainHeight(hs.x,hs.z), hs.z, hyaw2, dip, 0, 0.95+((hi2*13)%10)*0.01);
+    }
+  }
+  heronMesh.count = hnN; heronMesh.visible = hnN>0;
+  heronMesh.instanceMatrix.needsUpdate = true;
+
+  // ---- mud-winter props (strictly gated on the documented window) ----
+  var mudF = weatherState.mud;
+  puddleMesh.visible = mudF>0.03 && alt<=1000;
+  if(puddleMesh.visible) puddleMesh.material.opacity = mudF*0.5*(1-nightFactor*0.55);
+  mudPlankMesh.visible = mudF>0.05;
 }
 
 var HOME_BUILDING_SPOTS = VILLAGE_BUILDING_SPOTS.map(function(spot){
@@ -7941,6 +8558,7 @@ function pickSkinTone(originKey, rng){
 var POOL_M=0, POOL_F=1, POOL_CHILD=2, POOL_SEATED=3, POOL_STOOPED=4, POOL_CARRY=5;
 var ALL_PEOPLE_SLOTS = (function(){
   var slots = [], id = 0, missionAssigned = 0, MISSION_TARGET = 5;
+  var ranchAssigned = 0, RANCH_TARGET = 3; // GAPS-2026-07-10 item A: keep a small herder presence at the pastures
 
   for(var ri=0; ri<ROUTINE_CAP; ri++){
     var originKey = pickWeighted(ALL_ORIGIN_KEYS, ORIGINS_BY_KEY);
@@ -7951,6 +8569,13 @@ var ALL_PEOPLE_SLOTS = (function(){
     var rosterPerson = nextRosterPerson();
     var era = eraColumnForDay(origin.earliestDay);
     var occ = (rosterPerson && rosterPerson.occ) ? CATALOG_OCC_BY_ID[rosterPerson.occ] : pickCatalogOccupation(era, origin.key, rngBuild);
+    // vaquero is the standard Californio cattle-herding role of the pre-rush
+    // economy (catalog vaquero_herder: documented, demographics-society.md §2)
+    // — same guaranteed-minimum pattern as MISSION_TARGET below; never
+    // overrides a roster person's documented role (roster principle, §0).
+    if(!(rosterPerson && rosterPerson.occ) && origin.key==="californio" && ranchAssigned<RANCH_TARGET && CATALOG_OCC_BY_ID["vaquero_herder"]){
+      occ = CATALOG_OCC_BY_ID["vaquero_herder"]; ranchAssigned++; // occupation unknown in the record -> distribution fill is legitimate (§0)
+    }
     var isMale = isMaleForOccupation(occ, genderMaleFrac(origin.earliestDay), rngBuild);
     if(rosterPerson && rosterPerson.gender==="f") isMale = false;
     // TECHNIQUES §1: silhouette + wardrobe palette + discrete skin tone +
@@ -10001,7 +10626,29 @@ window.__P1850 = {
       quail:quailMesh.count, muckPatches:HOG_MUCK_PATCHES.length,
       hogPos:HOGS.slice(0,3).map(function(hg){ return {x:Math.round(hg.x), z:Math.round(hg.z)}; }),
       horsePos:(window.HITCHING_RAILS||[]).slice(0,3).map(function(r){ return {x:Math.round(r.x), z:Math.round(r.z)}; }),
-      quailSite:QUAIL_SITES.length?{x:Math.round(QUAIL_SITES[0].x), z:Math.round(QUAIL_SITES[0].z)}:null };
+      quailSite:QUAIL_SITES.length?{x:Math.round(QUAIL_SITES[0].x), z:Math.round(QUAIL_SITES[0].z)}:null,
+      // reconciler tranche 2026-07-10 (GAPS #2/#4)
+      cattle:cattleMesh.count, cattleTargets:cattleTargetCounts(simDay),
+      pelicans:pelicanMesh.count, herons:heronMesh.count, rats:ratMesh.count, ratTarget:ratTargetCount(simDay),
+      cats:catMesh.count, catTarget:catTargetCount(simDay), dogs:dogMesh.count, dogTarget:dogTargetCount(simDay),
+      heronSite:HERON_SPOTS.length?{x:Math.round(HERON_SPOTS[0].x), z:Math.round(HERON_SPOTS[0].z)}:null,
+      ratAnchors:RAT_ANCHORS.map(function(a){ return {x:Math.round(a.x), z:Math.round(a.z)}; }),
+      wharf:{x:Math.round(WORKSITE_WHARF.x), z:Math.round(WORKSITE_WHARF.z)} };
+  },
+  get ranch(){
+    return { pastureMission:{x:Math.round(PASTURE_MISSION.x), z:Math.round(PASTURE_MISSION.z)},
+      pasturePresidio:{x:Math.round(PASTURE_PRESIDIO.x), z:Math.round(PASTURE_PRESIDIO.z)},
+      grazePts:{mission:MISSION_GRAZE_PTS.length, presidio:PRESIDIO_GRAZE_PTS.length},
+      workersRouted:(function(){
+        var n=0, ids={farmer:1,rancher_ranchero:1,dairyman:1,hunter:1,vaquero_herder:1};
+        ALL_PEOPLE_SLOTS.forEach(function(s){ if(s.occ && ids[s.occ.id]) n++; });
+        return n;
+      })() };
+  },
+  get mud(){
+    return { factor:weatherState.mud, wet:weatherState.wet, puddles:puddleMesh.count,
+      puddlesVisible:puddleMesh.visible, planksVisible:mudPlankMesh.visible,
+      window:{ start:MUD_WINTER_START, end:MUD_WINTER_END } };
   },
   get clusters(){
     var n=0, anchors={};
@@ -10571,7 +11218,7 @@ function animate(){
   updateFarScatter(alt);
   updatePeople(dt, camera.position.x, camera.position.z, alt);
   updateArrivals();
-  updateFauna(dt);   // TECHNIQUES §10 — hogs / gulls / hitched horses / quail (era- and verdict-gated)
+  updateFauna(dt);   // TECHNIQUES §10 — hogs / gulls / hitched horses / quail + reconciler tranche: cattle / dogs / rats / cats / pelicans / herons / mud-winter props (era- and verdict-gated)
   updateWharfBoats(waterUniforms.uTime.value); // TECHNIQUES §4.3 — moored craft bobbing at the wharf head
   updateSmoke(dt);
   updateDistrictZones(alt);
