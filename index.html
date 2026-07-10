@@ -42,7 +42,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>San Francisco · 1846 — The Instant City</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -527,9 +527,9 @@
     <span class="tdate" id="ticker-date"></span><span id="ticker-text"></span>
   </div>
   <div class="panel" id="hud-hint">
-    drag &mdash; pan the ground &nbsp;&middot;&nbsp; right-drag / shift-drag &mdash; orbit<br>
+    drag &mdash; orbit &nbsp;&middot;&nbsp; right-drag / shift-drag &mdash; pan the ground<br>
     <b>WASD</b> / arrows &mdash; fly (hold <b>Shift</b> to sprint) &nbsp;&middot;&nbsp; <b>Q</b> / <b>E</b> &mdash; rotate &nbsp;&middot;&nbsp; <b>R</b> / <b>F</b> &mdash; altitude<br>
-    scroll / pinch &mdash; zoom &nbsp;&middot;&nbsp; click/tap a person or ship &mdash; inspect &nbsp;&middot;&nbsp; <b>Esc</b> &mdash; release follow<br>
+    scroll / pinch &mdash; zoom &nbsp;&middot;&nbsp; tap/click &mdash; inspect &nbsp;&middot;&nbsp; double-tap/dblclick &mdash; fly to &nbsp;&middot;&nbsp; <b>Esc</b> &mdash; release follow<br>
     <b>G</b> &mdash; then/now ghost &nbsp;&middot;&nbsp; <b>T</b> &mdash; sunrise/sunset &nbsp;&middot;&nbsp; <b>P</b> &mdash; documented-only<br>
     <b>Space</b> &mdash; pause &nbsp;&middot;&nbsp; <b>1 2 3</b> &mdash; day / week / month per second &nbsp;&middot;&nbsp; <b>N</b> &mdash; the paper<br>
     <b>V</b> &mdash; watch mode (the auto-director takes the camera)
@@ -4211,8 +4211,8 @@ function updatePulse(dt){
   pulseMat.opacity = (1-t)*0.85;
 }
 function flyTo(x,z,alt){
-  desired.target = new THREE.Vector3(x, groundHeight(x,z), z);
-  desired.distance = clamp(alt||260, CFG.minAltitude, CFG.maxAltitude);
+  CAM.focusT = new THREE.Vector3(x, groundHeight(x,z), z);
+  setZoomMeters(alt||260);
   pulseAt(x,z);
 }
 
@@ -7367,7 +7367,7 @@ function openPersonInspectorForSlot(slot){
   piReceiptWrapEl.style.display = "none";
   personInspectorEl.classList.add("on");
   followedSlot = slot; followedDocumented = null;
-  desired.distance = clamp(70, CFG.minAltitude, CFG.maxAltitude);
+  setZoomMeters(70);
 }
 function openPersonInspectorForDocumented(doc){
   piTierEl.textContent = "DOCUMENTED"; piTierEl.classList.add("documented");
@@ -7381,7 +7381,7 @@ function openPersonInspectorForDocumented(doc){
   } else piReceiptWrapEl.style.display = "none";
   personInspectorEl.classList.add("on");
   followedDocumented = doc; followedSlot = null;
-  desired.distance = clamp(90, CFG.minAltitude, CFG.maxAltitude);
+  setZoomMeters(90);
 }
 function closePersonInspector(){
   personInspectorEl.classList.remove("on");
@@ -8424,9 +8424,9 @@ function updateDirector(dt){
     } else {
       // shot grammar: wide establishing -> push-in, slow drift throughout
       var pushT = smoothstep(0, 5.5, elapsed);
-      desired.target = new THREE.Vector3(b.x, groundHeight(b.x,b.z), b.z);
-      desired.distance = clamp(lerp(b.alt*2.7, b.alt, pushT), CFG.minAltitude, CFG.maxAltitude);
-      desired.azimuth += (b.cls==="fire" ? 0.055 : 0.035)*dt;
+      CAM.focusT = new THREE.Vector3(b.x, groundHeight(b.x,b.z), b.z);
+      setZoomMeters(clamp(lerp(b.alt*2.7, b.alt, pushT), CFG.minAltitude, CFG.maxAltitude));
+      CAM.yawT += (b.cls==="fire" ? 0.055 : 0.035)*dt;
       return;
     }
   }
@@ -8450,12 +8450,12 @@ function updateDirector(dt){
   }
   // idle: slow golden-hour orbit of the current center of activity
   var ic = idleActivityCenter();
-  desired.target = new THREE.Vector3(
-    lerp(desired.target.x, ic.x, clamp01(dt*0.5)),
+  CAM.focusT = new THREE.Vector3(
+    lerp(CAM.focusT.x, ic.x, clamp01(dt*0.5)),
     groundHeight(ic.x,ic.z),
-    lerp(desired.target.z, ic.z, clamp01(dt*0.5)));
-  desired.distance = lerp(desired.distance, ic.alt, clamp01(dt*0.4));
-  desired.azimuth += 0.03*dt;
+    lerp(CAM.focusT.z, ic.z, clamp01(dt*0.5)));
+  setZoomMeters(lerp(getZoomMeters(), ic.alt, clamp01(dt*0.4)));
+  CAM.yawT += 0.03*dt;
   if(nightFactor>0.9) timeOfDay = (timeOfDay + dt*3/DAY_CYCLE_SECONDS)%1; // drift deep night toward the golden hours
 }
 
@@ -8465,6 +8465,15 @@ window.__P1850 = {
   get date(){ return simDateISO(dateFromSimDay(simDay)); },
   get simDay(){ return simDay; },
   get calls(){ return renderer.info.render.calls; },
+  render: function(){ renderer.render(scene, camera); },
+  tick: function(dt){ return applyCameraRig(dt||0.1); }, // manual frame-advance — CDP-automated tabs can report
+                                                          // document.hidden=true and never fire rAF at all, so QA
+                                                          // scripts can call this directly to advance the camera
+                                                          // chase without depending on requestAnimationFrame.
+  get cam(){ return { x:camera.position.x, y:camera.position.y, z:camera.position.z,
+    t:CAM.t, tT:CAM.tT, yaw:CAM.yaw, yawT:CAM.yawT, pitchOff:CAM.pitchOff, pitchOffT:CAM.pitchOffT, radius:CAM.radius,
+    focus:{x:CAM.focus.x,y:CAM.focus.y,z:CAM.focus.z}, focusT:{x:CAM.focusT.x,y:CAM.focusT.y,z:CAM.focusT.z},
+    alt:lastKnownAlt }; },
   get fire(){ return { glow:fireGlow, burning:_fireBurningCount, flames:flameMesh.count }; },
   get crowd(){
     var fleeing=0, watching=0;
@@ -8557,114 +8566,103 @@ function updateDayNight(){
 }
 
 /* =====================================================================
-   CAMERA RIG  (custom spring-damper; no OrbitControls)
+   CAMERA RIG + INPUT — Annals-kingdom architecture (ported verbatim from
+   research/annals-nav-reference.md, 2026-07-10; see field notes there).
+   REPLACES the previous spring-damper rig, momentum-coast system, and
+   split mouse/touch/wheel/gesture handling entirely. This was the fix for
+   the P0 usability bug: iPad trackpad pinch used to hijack Safari's page
+   zoom, unrecoverably, because our old input layer never listened for
+   the Safari-only gesturestart/gesturechange/gestureend events.
+
+   One normalized zoom scalar (CAM.tT, target; CAM.t, smoothed) drives
+   radius AND pitch together — 0 = fully zoomed in (CFG.minAltitude),
+   1 = fully zoomed out (CFG.maxAltitude), same convention the old
+   elevationForDistance() used internally, so the semantic-zoom bands
+   (labels/declutter/district-tint) keep exactly the same meaning as
+   before. yawT/yaw (orbit azimuth), pitchOffT/pitchOff (manual tilt,
+   same tuned range as before), and focusT/focus (pan target, world xz)
+   each chase their target with the same single-pole smoothing — no
+   velocity/spring state anywhere, so nothing can fight the drag.
    ===================================================================== */
-var rig = {
-  target: new THREE.Vector3(PLAZA_CENTER.x, VILLAGE_Y+2, PLAZA_CENTER.z),
-  targetVel: new THREE.Vector3(),
-  distance: 1600, distanceVel: 0,
-  azimuth: 0.65, azimuthVel: 0,
-  pitchOffset: 0, pitchOffsetVel: 0
+function tFromRadius(r){
+  r = clamp(r, CFG.minAltitude, CFG.maxAltitude);
+  return (Math.log(r)-Math.log(CFG.minAltitude))/(Math.log(CFG.maxAltitude)-Math.log(CFG.minAltitude));
+}
+function radiusFromT(t){
+  return Math.exp(lerp(Math.log(CFG.minAltitude), Math.log(CFG.maxAltitude), clamp(t,0,1)));
+}
+function getZoomMeters(){ return radiusFromT(CAM.tT); }
+function setZoomMeters(m){ CAM.tT = tFromRadius(m); }
+
+var CAM = {
+  tT: tFromRadius(1600), t: tFromRadius(1600),
+  yawT: 0.65, yaw: 0.65,
+  pitchOffT: 0, pitchOff: 0,
+  focusT: new THREE.Vector3(PLAZA_CENTER.x, VILLAGE_Y+2, PLAZA_CENTER.z),
+  focus: new THREE.Vector3(PLAZA_CENTER.x, VILLAGE_Y+2, PLAZA_CENTER.z),
+  radius: 1600 // cached each frame (meters) — read by panBy/wheel/pinch for their screen->world scale
 };
-var desired = {
-  target: rig.target.clone(),
-  distance: rig.distance,
-  azimuth: rig.azimuth,
-  pitchOffset: 0
-};
-// manual-tilt range (right-drag / two-finger vertical) — widened beyond the
-// old +-0.35 so it can also reach the cinematic low angle by hand, not just
-// via the CINEMATIC_TILT_OFFSET toggle below (both share this range).
-var PITCH_OFFSET_MIN = -0.62, PITCH_OFFSET_MAX = 0.35;
-var CINEMATIC_TILT_OFFSET = -0.62; // toggle target: eases the baseline maps-like
-                                    // pitch down toward the old dramatic low angle
+
+// manual-tilt range (orbit-drag / two-finger vertical) — same tuned bounds
+// as before (usability fix, 2026-07-09): wide enough to reach the cinematic
+// low angle by hand, but the auto curve below never drifts there on its own.
+var PITCH_OFF_MIN = -0.62, PITCH_OFF_MAX = 0.35;
+var CINEMATIC_TILT_OFFSET = -0.62;
 var cinematicTilt = false;
 function setCinematicTilt(on){
   cinematicTilt = on;
-  desired.pitchOffset = on ? CINEMATIC_TILT_OFFSET : 0;
+  CAM.pitchOffT = on ? CINEMATIC_TILT_OFFSET : 0;
   var btn = document.getElementById("hud-tilt-toggle");
   if(btn) btn.classList.toggle("on", on);
   var row = document.getElementById("hm-tilt");
   if(row) row.classList.toggle("active", on);
 }
 
-/* MAPS-LIKE PITCH (usability fix, 2026-07-09): the default camera elevation
-   angle must stay "mostly top-down with a slight tilt" at every altitude —
-   like Google/Apple Maps — and NEVER auto-pitch toward horizon-parallel just
-   because the user zoomed in. The previous curve eased from 78° (steep,
-   near max altitude) down to 14° (near horizon-parallel) at min altitude,
-   so zooming in alone dumped the user into a near-ground-parallel view with
-   no opt-in — that's what buried the town behind stacked name chips in the
-   field report. Now: 55-70° across the whole max-altitude..~150m band, and
-   only a gentle ease down to 45° at min altitude (still nowhere near
-   horizon-parallel). The genuinely cinematic low angle is opt-in only —
-   manual orbit (right-drag / two-finger vertical) and the tilt toggle both
-   still work via rig.pitchOffset / TILT_TOGGLE on top of this baseline. */
-function elevationForDistance(dist){
-  var t = clamp((Math.log(dist)-Math.log(CFG.minAltitude))/(Math.log(CFG.maxAltitude)-Math.log(CFG.minAltitude)),0,1);
-  var tLow = (Math.log(150)-Math.log(CFG.minAltitude))/(Math.log(CFG.maxAltitude)-Math.log(CFG.minAltitude));
-  if(t>=tLow){
-    return lerp(55*Math.PI/180, 70*Math.PI/180, (t-tLow)/(1-tLow));
-  }
-  return lerp(45*Math.PI/180, 55*Math.PI/180, t/tLow);
+/* MAPS-LIKE PITCH (usability fix, 2026-07-09, preserved verbatim): camera
+   elevation stays "mostly top-down with a slight tilt" at every altitude —
+   like Google/Apple Maps — and never auto-pitches toward horizon-parallel
+   just because the user zoomed in. 55-70° across the max-altitude..~150m
+   band, easing to 45° at min altitude. Now parameterized directly on CAM.t
+   (the same normalized value the old elevationForDistance() derived from
+   distance internally) instead of re-deriving it from a radius. */
+var ELEV_T_LOW = (Math.log(150)-Math.log(CFG.minAltitude))/(Math.log(CFG.maxAltitude)-Math.log(CFG.minAltitude));
+function elevationForT(t){
+  if(t>=ELEV_T_LOW) return lerp(55*Math.PI/180, 70*Math.PI/180, (t-ELEV_T_LOW)/(1-ELEV_T_LOW));
+  return lerp(45*Math.PI/180, 55*Math.PI/180, t/ELEV_T_LOW);
 }
 
-function springScalar(state, key, velKey, target, stiffness, damping, dt){
-  var accel = (target-state[key])*stiffness - state[velKey]*damping;
-  state[velKey] += accel*dt;
-  state[key] += state[velKey]*dt;
-}
-function springVec(state, key, velKey, target, stiffness, damping, dt){
-  var v = state[velKey], p = state[key];
-  var ax = (target.x-p.x)*stiffness - v.x*damping;
-  var ay = (target.y-p.y)*stiffness - v.y*damping;
-  var az = (target.z-p.z)*stiffness - v.z*damping;
-  v.x += ax*dt; v.y += ay*dt; v.z += az*dt;
-  p.x += v.x*dt; p.y += v.y*dt; p.z += v.z*dt;
-}
+// single-pole exponential smoothing, frame-rate independent — replaces the
+// old spring-damper entirely; every input path only ever writes the *T
+// (target) fields below, this is the one place values chase them.
+function chase(cur, target, dt, rate){ return cur + (target-cur)*(1-Math.exp(-rate*dt)); }
 
 function applyCameraRig(dt){
-  // Apple-Maps-feel touch/mouse recipe: pan/pinch/rotate gestures (and the
-  // post-release pan/zoom momentum coast) write DIRECTLY into both rig.* and
-  // desired.* every frame (see updateGestureMomentum() + the pointer/touch
-  // handlers below) — so by the time the springs below run, rig already
-  // equals desired for whichever axis is gesture-driven and the spring
-  // contributes exactly nothing (no fighting the drag, no rubber-band lag).
-  // Programmatic moves (WASD fly, Follow mode, flyTo(), keyboard Q/E/R/F)
-  // never touch rig.* directly, so they still get the full smoothing.
-  updateGestureMomentum(dt);
+  CAM.t = chase(CAM.t, CAM.tT, dt, 8);
+  CAM.yaw = chase(CAM.yaw, CAM.yawT, dt, 10);
+  CAM.pitchOff = chase(CAM.pitchOff, CAM.pitchOffT, dt, 8);
+  CAM.focus.x = chase(CAM.focus.x, CAM.focusT.x, dt, 9);
+  CAM.focus.y = chase(CAM.focus.y, CAM.focusT.y, dt, 9);
+  CAM.focus.z = chase(CAM.focus.z, CAM.focusT.z, dt, 9);
 
-  springScalar(rig,"distance","distanceVel", desired.distance, 10, 7, dt);
-  springScalar(rig,"azimuth","azimuthVel", desired.azimuth, 12, 8, dt);
-  springScalar(rig,"pitchOffset","pitchOffsetVel", desired.pitchOffset, 6, 6, dt);
-  springVec(rig,"target","targetVel", desired.target, 9, 7, dt);
+  CAM.radius = radiusFromT(CAM.t);
+  var elev = clamp(elevationForT(CAM.t) + CAM.pitchOff, 8*Math.PI/180, 85*Math.PI/180);
 
-  rig.distance = clamp(rig.distance, CFG.minAltitude, CFG.maxAltitude);
+  var horizR = CAM.radius*Math.cos(elev);
+  var camX = CAM.focus.x + horizR*Math.sin(CAM.yaw);
+  var camZ = CAM.focus.z + horizR*Math.cos(CAM.yaw);
+  var camY = CAM.focus.y + CAM.radius*Math.sin(elev);
 
-  var elev = elevationForDistance(rig.distance) + rig.pitchOffset;
-  elev = clamp(elev, 8*Math.PI/180, 85*Math.PI/180);
-
-  var horizR = rig.distance*Math.cos(elev);
-  var camX = rig.target.x + horizR*Math.sin(rig.azimuth);
-  var camZ = rig.target.z + horizR*Math.cos(rig.azimuth);
-  var camY = rig.target.y + rig.distance*Math.sin(elev);
-
-  // terrain collision: keep a minimum clearance above the ground.
-  // BUG FIX (2026-07-10, walk-mode P0): this floor was 4.5m (eye height of
-  // someone riding on a truck bed, not standing) — the audit's own S3/round-1
-  // finding, still open in round 2. A person's eye height is ~1.7m; this is
-  // just the hard collision clamp (the min-zoom orbit distance/pitch curve
-  // that shapes the overall close-up framing is separate and untouched here
-  // — that whole layer is being replaced by the incoming nav rebuild).
+  // camera floor (Annals arch. point H): never dips under the terrain
+  // regardless of pitch/zoom combination.
   var groundAtCam = groundHeight(camX,camZ);
-  var minY = groundAtCam + 1.7;
+  var minY = groundAtCam + 3.5;
   if(camY<minY) camY = minY;
 
-  var groundAtTarget = groundHeight(rig.target.x, rig.target.z);
-  if(rig.target.y < groundAtTarget-2) rig.target.y = groundAtTarget-2;
+  var groundAtFocus = groundHeight(CAM.focus.x, CAM.focus.z);
+  if(CAM.focus.y < groundAtFocus-2) CAM.focus.y = groundAtFocus-2;
 
   camera.position.set(camX,camY,camZ);
-  camera.lookAt(rig.target.x, rig.target.y, rig.target.z);
+  camera.lookAt(CAM.focus.x, CAM.focus.y, CAM.focus.z);
 
   // dynamic distance+height fog: closer/thicker near the ground, receding at altitude
   var alt = camY-groundAtCam;
@@ -8687,322 +8685,179 @@ function applyCameraRig(dt){
 }
 
 /* =====================================================================
-   INPUT  (Pointer Events only; no OrbitControls)
-   CONTROLS REBUILD (2026-07-09): mouse, touch, and pen all arrive as
-   PointerEvents on ONE path now — the previous build additionally kept a
-   parallel touchstart/touchmove/touchend listener set "for touch," but
-   pointer events already fire for touch too, so every touch drag/pinch was
-   being applied TWICE on real touchscreens (once via pointermove, once via
-   touchmove). Removing the touch* listeners and tracking every active
-   pointer by id (a Map) is what makes this genuinely one input model
-   instead of two that happened to agree in the emulator.
-   Left-drag/1-finger-touch PANS the ground ("grab the ground" feel, the
-   primary gesture); right-drag/shift-drag (mouse/pen only) ORBITs;
-   2 touch pointers = pinch-zoom + twist-rotate + vertical-drag tilt.
-   Scroll still zooms (cursor-anchored, see the wheel handler above).
-   Q/E rotate azimuth, R/F move altitude (WASD keeps flying). A small
-   movement threshold on pointerdown->pointerup distinguishes a genuine
-   click/tap (select a person/ship) from a drag, at every altitude.
+   INPUT  (Pointer Events only — unified mouse/touch/pen; Safari gesture
+   events handled separately since they never reach the wheel handler)
+   1 pointer: button 0 orbits (yawT/pitchOffT), any other button pans.
+   2 pointers: pinch-zoom (tT) AND centroid-pan (panBy) simultaneously,
+   continuously re-baselined each move for 1:1 tracking.
+   Pointer up with <5px total movement = tap -> inspect; a second tap
+   within 350ms and <36px of the first = fly-to via ground raycast (mouse
+   dblclick is the same path — PointerEvents fire for mouse too).
    ===================================================================== */
-var TAP_MAX_MOVE = 10;   // px — tap/select vs. drag threshold (mouse + touch)
-var TAP_MAX_MS = 300;    // ms
-var PAN_SAMPLE_WINDOW_MS = 80;   // velocity is sampled over this trailing window
-var PAN_STOP_SPEED = 5;          // m/s — coast stops below this ("5 m/s equivalent")
-var ZOOM_STOP_SPEED = 2;         // distance-units/s — pinch-zoom coast stop floor
-var pointers = new Map();   // pointerId -> {x,y,type} — every currently-down pointer, mouse+touch+pen alike
-var primaryId = null;       // the single pointer driving pan/orbit + tap detection
-var pinchIds = null;        // [idA, idB] once a 2nd touch pointer joins the primary one
-var input = { mode:null, downX:0, downY:0, moved:0, downTime:0 }; // mode: null | "pan" | "orbit" | "pinch"
-function touchMid(t0,t1){ return { x:(t0.clientX+t1.clientX)/2, y:(t0.clientY+t1.clientY)/2 }; }
-function touchDist(t0,t1){ return Math.hypot(t0.clientX-t1.clientX, t0.clientY-t1.clientY); }
-function touchAngle(t0,t1){ return Math.atan2(t1.clientY-t0.clientY, t1.clientX-t0.clientX); }
+var TAP_MAX_MS = 500;      // ms — single tap must release within this to count as a tap at all
+var DBLTAP_MAX_MS = 350;   // ms — gap between two taps to count as a double-tap/dblclick
+var DBLTAP_MAX_DIST = 36;  // px — distance between the two taps
+var ptrs = new Map();      // pointerId -> {x,y,type,button}
+var tapState = { downX:0, downY:0, downTime:0, moved:0 };
+var lastTap = { time:-9999, x:0, y:0 };
+var orbitActive = false, panActive = false;
+var pinch = null; // {ids:[idA,idB], d, cx, cy} once a 2nd pointer joins
 canvas.addEventListener("contextmenu", function(e){ e.preventDefault(); });
 
-/* Ray-casts a screen point to the horizontal plane through rig.target —
-   exact regardless of camera tilt (unlike a flat meters-per-pixel
-   approximation, which undershoots once the rig is pitched down, since a
-   screen-vertical drag then corresponds to a world-space direction that
-   is NOT purely horizontal). Basis for both 1:1 pan and the pinch-anchor
-   correction below (touch-feel refinement, 2026-07).
-   PAN DEAD-ZONE FIX (2026-07-09, audit C1): at the shallow ~14° pitch used
-   at min altitude, a screen ray from the upper portion of the viewport
-   points above the horizon and NEVER crosses the target-height plane
-   forward of the camera (t<=0) — the old code returned null there and the
-   caller no-op'd, which is exactly why dragging near the top of the screen
-   silently ate the gesture. Never return null now: when the true plane
-   intersection is behind the camera or numerically unstable (ray nearly
-   parallel to the plane), fall back to a large-but-finite point far along
-   the ray's horizontal direction instead, so every drag produces *some*
-   (bounded, see applyPanPixels) world delta rather than a dead one. */
-var PAN_SKY_FALLBACK_DIST = 6000; // m — "far horizon" stand-in when the ray misses the ground plane
-function screenPointToGround(sx,sy){
+/* screen dx/dy (pan gesture delta) -> world xz delta, scaled by current
+   zoom radius and rotated through yaw so it always tracks the ground
+   plane regardless of heading (Annals arch. point C, verbatim). */
+function panBy(dx, dy){
+  var sc = CAM.radius*0.0016;
+  var sinY = Math.sin(CAM.yaw), cosY = Math.cos(CAM.yaw);
+  var worldDX = -cosY*dx + sinY*dy;
+  var worldDZ =  sinY*dx + cosY*dy;
+  var half = CFG.worldSize/2;
+  var nx = clamp(CAM.focusT.x + worldDX*sc, -half, half);
+  var nz = clamp(CAM.focusT.z + worldDZ*sc, -half, half);
+  CAM.focusT.x = nx; CAM.focusT.z = nz;
+  CAM.focusT.y = groundHeight(nx, nz);
+}
+
+/* Heightfield ray-march with bisection refine (Annals arch. point G) —
+   replaces the old virtual-plane raycast. Marches the actual terrain
+   instead of a flat plane through the focus point, so it never misses at
+   grazing angles; returns null past the world edge or if the ray never
+   comes down to meet the ground (looking at open sky). */
+function groundHit(sx, sy){
   var ndcX = (sx/window.innerWidth)*2-1, ndcY = -(sy/window.innerHeight)*2+1;
   var ray = new THREE.Raycaster();
   ray.setFromCamera({x:ndcX,y:ndcY}, camera);
-  var planeY = rig.target.y, oy = ray.ray.origin.y, dyDir = ray.ray.direction.y;
-  var t = Math.abs(dyDir) > 1e-6 ? (planeY-oy)/dyDir : -1;
-  if(t<0 || t>PAN_SKY_FALLBACK_DIST*4){
-    var horiz = Math.max(1e-4, Math.hypot(ray.ray.direction.x, ray.ray.direction.z));
-    t = PAN_SKY_FALLBACK_DIST/horiz;
-  }
-  return { x: ray.ray.origin.x + ray.ray.direction.x*t, z: ray.ray.origin.z + ray.ray.direction.z*t };
-}
-/* "Grab the ground" — exact version: the world point that projected to
-   (prevX,prevY) is moved so it now projects to (curX,curY), by shifting
-   rig.target/desired.target (both, no spring) by (worldAt(prev)-worldAt(cur)).
-   screenPointToGround() no longer misses (see fix above), so this always
-   applies a delta; a magnitude clamp (scaled to current view distance)
-   keeps a "sky grab" from ever flinging the camera an unbounded distance
-   when the fallback point swings wildly between two samples. */
-function applyPanPixels(prevX, prevY, curX, curY){
-  var before = screenPointToGround(prevX, prevY);
-  var after = screenPointToGround(curX, curY);
-  var dx = before.x-after.x, dz = before.z-after.z;
-  var mag = Math.hypot(dx,dz);
-  var maxDelta = Math.max(300, rig.distance*4);
-  if(mag > maxDelta){ var s = maxDelta/mag; dx *= s; dz *= s; }
-  rig.target.x += dx;
-  rig.target.z += dz;
-  desired.target.copy(rig.target);
-}
-
-/* ---- pan gesture state (mouse left-drag + touch 1-finger) — shared by
-   both input paths so they feel identical, per the touch-feel directive. ---- */
-var panGesture = { active:false, samples:[] };
-var panCoast = { active:false, vx:0, vz:0 };
-function panGestureStart(){
-  panGesture.active = true;
-  panGesture.samples = [{ t:performance.now(), x:rig.target.x, z:rig.target.z }];
-  panCoast.active = false; // grabbing again always cancels any running glide
-}
-function panGestureSample(){
-  var now = performance.now();
-  panGesture.samples.push({ t:now, x:rig.target.x, z:rig.target.z });
-  while(panGesture.samples.length>2 && now-panGesture.samples[0].t>PAN_SAMPLE_WINDOW_MS) panGesture.samples.shift();
-}
-function panGestureEnd(){
-  panGesture.active = false;
-  var s = panGesture.samples;
-  if(s.length>=2){
-    var a=s[0], b=s[s.length-1], dtS=(b.t-a.t)/1000;
-    if(dtS>0.008){
-      panCoast.vx = clamp((b.x-a.x)/dtS, -4000, 4000);
-      panCoast.vz = clamp((b.z-a.z)/dtS, -4000, 4000);
-      panCoast.active = Math.hypot(panCoast.vx,panCoast.vz) > PAN_STOP_SPEED;
+  var ro = ray.ray.origin, rd = ray.ray.direction;
+  if(Math.abs(rd.y) < 1e-6) return null;
+  var maxDist = CFG.worldSize*3, step = 40;
+  var prevT = 0;
+  for(var t=step; t<=maxDist; t+=step){
+    var py = ro.y+rd.y*t, px = ro.x+rd.x*t, pz = ro.z+rd.z*t;
+    if(py - terrainHeight(px,pz) <= 0){
+      var lo=prevT, hi=t;
+      for(var i=0;i<14;i++){
+        var mid=(lo+hi)*0.5;
+        var mx=ro.x+rd.x*mid, mz=ro.z+rd.z*mid, my=ro.y+rd.y*mid;
+        if(my-terrainHeight(mx,mz) > 0) lo=mid; else hi=mid;
+      }
+      var fx=ro.x+rd.x*hi, fz=ro.z+rd.z*hi;
+      if(Math.abs(fx)>CFG.worldSize/2 || Math.abs(fz)>CFG.worldSize/2) return null;
+      return { x:fx, z:fz };
     }
+    prevT = t;
   }
-}
-
-/* ---- pinch gesture state (touch 2-finger: zoom + rotate, with an
-   engage threshold on rotation and an anchored zoom focal point) ---- */
-var pinchGesture = { active:false, anchorWorld:null, midX:0, midY:0, lastMidY:0, startDist:0, startRigDistance:0,
-  rotAccum:0, rotEngaged:false, lastAngle:0, samples:[] };
-var zoomCoast = { active:false, vDist:0 };
-function pinchGestureStart(t0,t1){
-  pinchGesture.active = true;
-  zoomCoast.active = false;
-  var mid = touchMid(t0,t1);
-  pinchGesture.midX=mid.x; pinchGesture.midY=mid.y; pinchGesture.lastMidY=mid.y;
-  pinchGesture.startDist = Math.max(1, touchDist(t0,t1));
-  pinchGesture.startRigDistance = rig.distance;
-  pinchGesture.rotAccum = 0; pinchGesture.rotEngaged = false;
-  pinchGesture.lastAngle = touchAngle(t0,t1);
-  pinchGesture.anchorWorld = screenPointToGround(mid.x, mid.y);
-  pinchGesture.samples = [{ t:performance.now(), dist:rig.distance }];
-}
-function pinchGestureMove(t0,t1){
-  var mid = touchMid(t0,t1);
-  var dist = touchDist(t0,t1);
-  var ang = touchAngle(t0,t1);
-
-  // PINCH -> ZOOM: log-space ratio of current/initial finger distance, 1:1
-  var ratio = dist/pinchGesture.startDist;
-  var newDistance = clamp(pinchGesture.startRigDistance/ratio, CFG.minAltitude, CFG.maxAltitude);
-  rig.distance = newDistance; desired.distance = newDistance;
-
-  // TWIST -> ROTATE: only engages past ~10° accumulated (avoids accidental
-  // spin while a pinch/pan is underway); 1:1 once engaged
-  var dAng = ang-pinchGesture.lastAngle;
-  while(dAng>Math.PI) dAng -= Math.PI*2; while(dAng<-Math.PI) dAng += Math.PI*2;
-  if(!pinchGesture.rotEngaged){
-    pinchGesture.rotAccum += Math.abs(dAng);
-    if(pinchGesture.rotAccum > 10*Math.PI/180) pinchGesture.rotEngaged = true;
-  } else {
-    rig.azimuth += dAng; desired.azimuth = rig.azimuth;
-  }
-  pinchGesture.lastAngle = ang;
-
-  // TILT: two-finger vertical drag of the midpoint, independent of
-  // pinch/twist (cheap, kept from the original touch-only pass — now
-  // shared by the unified pointer path below).
-  var dyMid = mid.y - pinchGesture.lastMidY;
-  desired.pitchOffset = clamp(desired.pitchOffset - dyMid*0.0018, PITCH_OFFSET_MIN, PITCH_OFFSET_MAX);
-  pinchGesture.lastMidY = mid.y;
-
-  // ANCHOR CORRECTION: after the zoom/rotate above, re-project the world
-  // point that was under the initial pinch midpoint and nudge the target
-  // (same applyPanPixels helper pan uses) so it lands back under the
-  // CURRENT midpoint — keeps the pinch focal point fixed under the fingers.
-  if(pinchGesture.anchorWorld){
-    var elevNow = clamp(elevationForDistance(rig.distance)+rig.pitchOffset, 8*Math.PI/180, 85*Math.PI/180);
-    var horizR = rig.distance*Math.cos(elevNow);
-    var camX = rig.target.x + horizR*Math.sin(rig.azimuth);
-    var camZ = rig.target.z + horizR*Math.cos(rig.azimuth);
-    var camY = rig.target.y + rig.distance*Math.sin(elevNow);
-    camera.position.set(camX,camY,camZ);
-    camera.lookAt(rig.target.x, rig.target.y, rig.target.z);
-    camera.updateMatrixWorld(true);
-    var aw = pinchGesture.anchorWorld;
-    var proj = new THREE.Vector3(aw.x, Math.max(terrainHeight(aw.x,aw.z),rig.target.y-50), aw.z).project(camera);
-    var curSX = (proj.x*0.5+0.5)*window.innerWidth, curSY = (-proj.y*0.5+0.5)*window.innerHeight;
-    applyPanPixels(curSX, curSY, mid.x, mid.y); // "what's now at curSX,curSY should end up at the midpoint"
-  }
-
-  var now = performance.now();
-  pinchGesture.samples.push({ t:now, dist:rig.distance });
-  while(pinchGesture.samples.length>2 && now-pinchGesture.samples[0].t>PAN_SAMPLE_WINDOW_MS) pinchGesture.samples.shift();
-}
-function pinchGestureEnd(){
-  pinchGesture.active = false;
-  var s = pinchGesture.samples;
-  if(s.length>=2){
-    var a=s[0], b=s[s.length-1], dtS=(b.t-a.t)/1000;
-    if(dtS>0.008){
-      zoomCoast.vDist = clamp((b.dist-a.dist)/dtS, -6000, 6000);
-      zoomCoast.active = Math.abs(zoomCoast.vDist) > ZOOM_STOP_SPEED;
-    }
-  }
-}
-
-/* called once/frame from applyCameraRig(), BEFORE the springs: advances any
-   active pan/zoom momentum glide, writing rig.target/rig.distance and
-   desired.target/desired.distance together so the springs downstream see
-   zero error and stay out of the way. */
-function updateGestureMomentum(dt){
-  if(panCoast.active){
-    var dtMs = dt*1000;
-    panCoast.vx *= Math.pow(0.9985, dtMs);
-    panCoast.vz *= Math.pow(0.9985, dtMs);
-    rig.target.x += panCoast.vx*dt; rig.target.z += panCoast.vz*dt;
-    desired.target.x = rig.target.x; desired.target.z = rig.target.z;
-    if(Math.hypot(panCoast.vx,panCoast.vz) < PAN_STOP_SPEED) panCoast.active = false;
-  }
-  if(zoomCoast.active){
-    var dtMs2 = dt*1000;
-    zoomCoast.vDist *= Math.pow(0.997, dtMs2);
-    rig.distance = clamp(rig.distance + zoomCoast.vDist*dt, CFG.minAltitude, CFG.maxAltitude);
-    desired.distance = rig.distance;
-    if(Math.abs(zoomCoast.vDist) < ZOOM_STOP_SPEED) zoomCoast.active = false;
-  }
-}
-
-function pointersOfType(type){
-  var out = [];
-  pointers.forEach(function(p){ if(p.type===type) out.push(p.id); });
-  return out;
+  return null;
 }
 
 canvas.addEventListener("pointerdown", function(e){
   canvas.setPointerCapture(e.pointerId);
-  pointers.set(e.pointerId, { x:e.clientX, y:e.clientY, type:e.pointerType, id:e.pointerId });
+  ptrs.set(e.pointerId, { x:e.clientX, y:e.clientY, type:e.pointerType, button:e.button });
 
-  if(e.pointerType==="touch" && pointersOfType("touch").length>=2){
-    // a 2nd touch just landed -> hand off from single-finger pan to pinch
-    if(primaryId!==null && panGesture.active) panGestureEnd();
-    var ids = pointersOfType("touch").slice(0,2);
-    pinchIds = ids; primaryId = null; input.mode = "pinch"; input.moved = 999;
-    var p0 = pointers.get(ids[0]), p1 = pointers.get(ids[1]);
-    pinchGestureStart({clientX:p0.x,clientY:p0.y}, {clientX:p1.x,clientY:p1.y});
+  if(ptrs.size===2){
+    var ids = Array.from(ptrs.keys());
+    var p0 = ptrs.get(ids[0]), p1 = ptrs.get(ids[1]);
+    pinch = { ids:ids, d:Math.hypot(p1.x-p0.x,p1.y-p0.y), cx:(p0.x+p1.x)/2, cy:(p0.y+p1.y)/2 };
+    orbitActive = false; panActive = false;
     return;
   }
+  if(ptrs.size>2) return; // ignore a 3rd+ pointer
 
-  primaryId = e.pointerId;
-  input.downX=e.clientX; input.downY=e.clientY; input.moved=0; input.downTime=performance.now();
-  if(e.pointerType!=="touch" && (e.button===2 || e.shiftKey)){
-    input.mode = "orbit"; // right-drag/shift-drag (mouse/pen only) -> orbit
-  } else {
-    input.mode = "pan";   // left-drag or 1-finger-touch (primary, 1:1+momentum) -> pan
-    panGestureStart();
-  }
+  tapState.downX=e.clientX; tapState.downY=e.clientY; tapState.downTime=performance.now(); tapState.moved=0;
+  if(e.button===0){ orbitActive = true; panActive = false; }
+  else { panActive = true; orbitActive = false; }
 });
 canvas.addEventListener("pointermove", function(e){
-  if(!pointers.has(e.pointerId)) return;
-  var prev = pointers.get(e.pointerId);
-  var prevX = prev.x, prevY = prev.y;
-  pointers.set(e.pointerId, { x:e.clientX, y:e.clientY, type:e.pointerType, id:e.pointerId });
+  if(!ptrs.has(e.pointerId)) return;
+  var prev = ptrs.get(e.pointerId);
+  var dx = e.clientX-prev.x, dy = e.clientY-prev.y;
+  ptrs.set(e.pointerId, { x:e.clientX, y:e.clientY, type:e.pointerType, button:prev.button });
 
-  if(input.mode==="pinch" && pinchIds){
-    var p0 = pointers.get(pinchIds[0]), p1 = pointers.get(pinchIds[1]);
-    if(p0 && p1) pinchGestureMove({clientX:p0.x,clientY:p0.y}, {clientX:p1.x,clientY:p1.y});
+  if(pinch && (e.pointerId===pinch.ids[0] || e.pointerId===pinch.ids[1])){
+    var p0 = ptrs.get(pinch.ids[0]), p1 = ptrs.get(pinch.ids[1]);
+    if(!p0 || !p1) return;
+    var d = Math.hypot(p1.x-p0.x, p1.y-p0.y);
+    var cx = (p0.x+p1.x)/2, cy = (p0.y+p1.y)/2;
+    CAM.tT = clamp(CAM.tT + (pinch.d-d)*0.0016, 0, 1);
+    panBy(cx-pinch.cx, cy-pinch.cy);
+    pinch.d = d; pinch.cx = cx; pinch.cy = cy; // continuous re-baseline = 1:1 tracking
     return;
   }
-  if(e.pointerId!==primaryId) return;
 
-  input.moved = Math.hypot(e.clientX-input.downX, e.clientY-input.downY);
-  if(input.mode==="pan"){
-    applyPanPixels(prevX, prevY, e.clientX, e.clientY);
-    panGestureSample();
-  } else if(input.mode==="orbit"){
-    desired.azimuth -= (e.clientX-prevX)*0.0045;
-    desired.pitchOffset = clamp(desired.pitchOffset - (e.clientY-prevY)*0.0022, PITCH_OFFSET_MIN, PITCH_OFFSET_MAX);
+  if(orbitActive){
+    CAM.yawT -= dx*0.0052;
+    CAM.pitchOffT = clamp(CAM.pitchOffT + dy*0.0034, PITCH_OFF_MIN, PITCH_OFF_MAX);
+  } else if(panActive){
+    panBy(dx, dy);
   }
+  var moveDist = Math.hypot(e.clientX-tapState.downX, e.clientY-tapState.downY);
+  if(moveDist>tapState.moved) tapState.moved = moveDist;
 });
-function endPointer(e){
-  pointers.delete(e.pointerId);
+function ptrEnd(e){
+  ptrs.delete(e.pointerId);
 
-  if(pinchIds && (e.pointerId===pinchIds[0] || e.pointerId===pinchIds[1])){
-    pinchGestureEnd();
-    pinchIds = null;
-    var remaining = pointersOfType("touch");
-    if(remaining.length>=1){
-      // dropped from 2 fingers to 1 -> hand off to a fresh single-finger pan
-      primaryId = remaining[0];
-      var p = pointers.get(primaryId);
-      input.mode = "pan"; input.downX=p.x; input.downY=p.y; input.moved=999; input.downTime=performance.now();
-      panGestureStart();
-    } else {
-      input.mode = null;
-    }
+  if(pinch && (e.pointerId===pinch.ids[0] || e.pointerId===pinch.ids[1])){
+    pinch = null;
+    var remaining = Array.from(ptrs.keys());
+    if(remaining.length===1){
+      var p = ptrs.get(remaining[0]);
+      tapState.downX=p.x; tapState.downY=p.y; tapState.downTime=performance.now(); tapState.moved=999;
+      orbitActive = (p.button===0); panActive = !orbitActive;
+    } else { orbitActive = false; panActive = false; }
     return;
   }
+  if(!orbitActive && !panActive) return;
+  orbitActive = false; panActive = false;
 
-  if(e.pointerId===primaryId){
-    if(input.mode==="pan") panGestureEnd();
-    var wasTap = input.moved<=TAP_MAX_MOVE && (performance.now()-input.downTime)<TAP_MAX_MS;
-    input.mode = null; primaryId = null;
-    if(wasTap) trySelectAtScreenXY(e.clientX, e.clientY);
+  if(tapState.moved<=5 && (performance.now()-tapState.downTime)<TAP_MAX_MS){
+    var now = performance.now();
+    var isDbl = (now-lastTap.time)<DBLTAP_MAX_MS && Math.hypot(e.clientX-lastTap.x, e.clientY-lastTap.y)<DBLTAP_MAX_DIST;
+    if(isDbl){
+      lastTap.time = -9999; // consumed; don't chain into a triple-tap
+      var hit = groundHit(e.clientX, e.clientY);
+      if(hit){
+        CAM.focusT.set(hit.x, groundHeight(hit.x,hit.z), hit.z);
+        CAM.tT = clamp(CAM.tT - 0.18, 0, 1); // double-tap/dblclick -> fly-to + zoom in a step
+        pulseAt(hit.x, hit.z);
+      }
+    } else {
+      lastTap.time = now; lastTap.x = e.clientX; lastTap.y = e.clientY;
+      trySelectAtScreenXY(e.clientX, e.clientY);
+    }
   }
 }
-canvas.addEventListener("pointerup", endPointer);
-canvas.addEventListener("pointercancel", endPointer);
-/* Cursor-anchored wheel zoom (audit C2/C3): factor is clamped per-event so
-   a single high-resolution wheel/trackpad burst can't jump the view by
-   orders of magnitude, and — porting the same anchor-correction recipe
-   pinchGestureMove() already uses for touch — the world point under the
-   cursor is kept fixed on screen by nudging rig.target after the distance
-   change, rather than only ever zooming toward rig.target. distance is set
-   directly (bypassing the spring, same as pinch) so the anchor correction
-   is computed against the actual post-zoom camera, not a lagging target —
-   the spring lag was the source of the old focal-point drift. */
+canvas.addEventListener("pointerup", ptrEnd);
+canvas.addEventListener("pointercancel", ptrEnd);
+
+/* wheel: magnitude-scaled (not sign-stepped, so trackpads don't slam);
+   ctrl+wheel IS trackpad-pinch in Chromium/Firefox (higher gain); zoom-in
+   drifts the focus toward the cursor's ground point (Annals arch. point D,
+   verbatim). passive:false is required for preventDefault to work — this
+   is what stops a Windows-precision-trackpad pinch from page-zooming. */
 canvas.addEventListener("wheel", function(e){
   e.preventDefault();
-  var factor = clamp(Math.exp(e.deltaY*0.0016), 0.85, 1.18);
-  var anchor = screenPointToGround(e.clientX, e.clientY);
-  var newDistance = clamp(rig.distance*factor, CFG.minAltitude, CFG.maxAltitude);
-  rig.distance = newDistance; desired.distance = newDistance;
-
-  var elevNow = clamp(elevationForDistance(rig.distance)+rig.pitchOffset, 8*Math.PI/180, 85*Math.PI/180);
-  var horizR = rig.distance*Math.cos(elevNow);
-  var camX = rig.target.x + horizR*Math.sin(rig.azimuth);
-  var camZ = rig.target.z + horizR*Math.cos(rig.azimuth);
-  var camY = rig.target.y + rig.distance*Math.sin(elevNow);
-  camera.position.set(camX,camY,camZ);
-  camera.lookAt(rig.target.x, rig.target.y, rig.target.z);
-  camera.updateMatrixWorld(true);
-  var proj = new THREE.Vector3(anchor.x, rig.target.y, anchor.z).project(camera);
-  var curSX = (proj.x*0.5+0.5)*window.innerWidth, curSY = (-proj.y*0.5+0.5)*window.innerHeight;
-  applyPanPixels(curSX, curSY, e.clientX, e.clientY); // "what's now at curSX,curSY should end up back under the cursor"
+  var dy = e.deltaY;
+  if(e.deltaMode===1) dy *= 33; else if(e.deltaMode===2) dy *= window.innerHeight;
+  var step = clamp(dy*(e.ctrlKey ? 0.0028 : 0.00048), -0.09, 0.09);
+  if(step<0){
+    var hit = groundHit(e.clientX, e.clientY);
+    if(hit) CAM.focusT.lerp(new THREE.Vector3(hit.x, groundHeight(hit.x,hit.z), hit.z), clamp(-step*3.2, 0, 0.2));
+  }
+  CAM.tT = clamp(CAM.tT + step, 0, 1);
 }, { passive:false });
+
+/* Safari-only trackpad-pinch path (Annals arch. point E, verbatim) — THE
+   iPad-trackpad fix: Safari never fires wheel events for a trackpad pinch,
+   only these proprietary gesture events, and zooms the whole PAGE
+   unrecoverably unless all three are preventDefault'd. */
+var gestT = null;
+canvas.addEventListener("gesturestart", function(e){ e.preventDefault(); gestT = CAM.tT; });
+canvas.addEventListener("gesturechange", function(e){
+  e.preventDefault();
+  if(gestT===null) return;
+  CAM.tT = clamp(gestT - Math.log2(e.scale || 1)*0.5, 0, 1);
+});
+canvas.addEventListener("gestureend", function(e){ e.preventDefault(); gestT = null; });
 
 window.addEventListener("resize", function(){
   camera.aspect = window.innerWidth/window.innerHeight;
@@ -9055,23 +8910,19 @@ document.getElementById("hud-tilt-toggle").addEventListener("click", function(){
 })();
 
 /* =====================================================================
-   B: WASD FLY + Q/E ROTATE + R/F ALTITUDE — reuses the existing
-   target+distance+azimuth spring rig rather than a separate free camera:
-   WASD/arrows nudge desired.target relative to the camera's current
-   heading (so movement feels camera-relative, and the existing
-   spring-damper still smooths accel/decel exactly like mouse pan does).
-   CONTROLS OVERHAUL: Q/E now rotate azimuth (were altitude); R/F took
-   over altitude (the scroll wheel's multiplicative up/down). Works
-   alongside the mouse/touch controls above — same desired.* targets, so
-   nothing fights.
+   B: WASD FLY + Q/E ROTATE + R/F ALTITUDE — drives the same CAM.focusT/
+   yawT/tT targets as every other input path, so nothing fights. Gated off
+   INPUT/TEXTAREA targets per the nav-rebuild keyboard rule (defensive —
+   this app has no text fields today, but keeps the contract honest).
    ===================================================================== */
 var keys = {};
-window.addEventListener("keydown", function(e){ keys[e.key.toLowerCase()] = true; });
+function isTypingTarget(t){ return t && (t.tagName==="INPUT" || t.tagName==="TEXTAREA"); }
+window.addEventListener("keydown", function(e){ if(isTypingTarget(e.target)) return; keys[e.key.toLowerCase()] = true; });
 window.addEventListener("keyup", function(e){ keys[e.key.toLowerCase()] = false; });
 window.addEventListener("blur", function(){ keys = {}; });
 var lastKnownAlt = 200;
 function applyKeyboardNav(dt){
-  var az = rig.azimuth;
+  var az = CAM.yaw;
   var fwd = new THREE.Vector3(-Math.sin(az),0,-Math.cos(az)); // where the camera is looking
   var right = new THREE.Vector3(Math.cos(az),0,-Math.sin(az));
   var moveF=0, moveR=0;
@@ -9083,22 +8934,18 @@ function applyKeyboardNav(dt){
     var invLen = 1/Math.max(1, Math.hypot(moveF,moveR));
     var speed = Math.max(lastKnownAlt,20)*1.6; // brisk fly speed, altitude-scaled
     if(keys["shift"]) speed *= 2.5;            // hold Shift to sprint
-    desired.target = desired.target.clone()
-      .addScaledVector(fwd, moveF*invLen*speed*dt)
-      .addScaledVector(right, moveR*invLen*speed*dt);
+    CAM.focusT.addScaledVector(fwd, moveF*invLen*speed*dt).addScaledVector(right, moveR*invLen*speed*dt);
   }
-  // CONTROLS OVERHAUL: Q/E rotate azimuth left/right; R/F move altitude down/up
+  // Q/E rotate azimuth left/right; R/F move altitude down/up
   var rotRate = 0;
   if(keys["e"]) rotRate += 1;
   if(keys["q"]) rotRate -= 1;
-  if(rotRate) desired.azimuth += rotRate*1.6*dt;
+  if(rotRate) CAM.yawT += rotRate*1.6*dt;
 
   var altRate = 0;
   if(keys["r"]) altRate += 1;
   if(keys["f"]) altRate -= 1;
-  if(altRate){
-    desired.distance = clamp(desired.distance*Math.exp(altRate*0.9*dt), CFG.minAltitude, CFG.maxAltitude);
-  }
+  if(altRate) setZoomMeters(clamp(getZoomMeters()*Math.exp(altRate*0.9*dt), CFG.minAltitude, CFG.maxAltitude));
 }
 
 /* =====================================================================
@@ -9146,13 +8993,13 @@ function animate(){
   // each frame (positions were refreshed by last frame's updatePeople());
   // the existing spring-damper camera rig does the rest, same as flyTo().
   if(followedSlot){
-    desired.target = new THREE.Vector3(followedSlot._x, groundHeight(followedSlot._x,followedSlot._z)+1.4, followedSlot._z);
+    CAM.focusT = new THREE.Vector3(followedSlot._x, groundHeight(followedSlot._x,followedSlot._z)+1.4, followedSlot._z);
   } else if(followedDocumented){
-    desired.target = new THREE.Vector3(followedDocumented.x, groundHeight(followedDocumented.x,followedDocumented.z)+1.4, followedDocumented.z);
+    CAM.focusT = new THREE.Vector3(followedDocumented.x, groundHeight(followedDocumented.x,followedDocumented.z)+1.4, followedDocumented.z);
   }
 
   applyKeyboardNav(dt);
-  updateDirector(dt);  // PHASE 5 — auto-director (drives desired.* in Watch mode)
+  updateDirector(dt);  // PHASE 5 — auto-director (drives CAM.*T in Watch mode)
   var alt = applyCameraRig(dt);
   lastKnownAlt = alt;
   updateHud(alt);
