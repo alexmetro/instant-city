@@ -8433,7 +8433,11 @@ function updateFauna(dt){
       var plen = Math.hypot(pp.dx,pp.dz)||1;
       var px2 = pp.x + (-pp.dz/plen)*lat, pz2 = pp.z + (pp.dx/plen)*lat;
       var pyaw = Math.atan2(PELICANS.dir*pp.dx, PELICANS.dir*pp.dz);
-      var py2 = 6.5 + Math.sin(faunaClock*0.5+pi2*1.1)*1.0;
+      // glide band: low over the open pre-rush cove, lifted above the
+      // ~20m mast forest once the ghost fleet packs the anchorage (no
+      // clipping through rigging — QA-GATE integration).
+      var pyBase = simDay>=GHOST_FLEET_START ? 26 : 10;
+      var py2 = pyBase + Math.sin(faunaClock*0.5+pi2*1.1)*1.5;
       var flapEnv = Math.max(0, Math.sin(faunaClock*0.22+pi2*1.9)); // glide, with periodic flap bursts
       var proll = Math.sin(faunaClock*0.8+pi2*0.7)*0.10 + (flapEnv>0.86 ? Math.sin(faunaClock*7.0+pi2)*0.35*((flapEnv-0.86)/0.14) : 0);
       setPersonInstance(pelicanMesh, pi2, px2, py2, pz2, pyaw, 0, proll, 1);
