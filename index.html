@@ -427,27 +427,82 @@
     padding:9px 12px;
   }
 
+  /* ---- cinematic tilt toggle (desktop-visible standalone button; on
+     narrow screens it moves into the ☰ menu sheet instead — see below) ---- */
+  #hud-tilt-toggle{
+    bottom:80px; left:16px; pointer-events:auto; cursor:pointer;
+    width:40px; height:40px; border-radius:50%; display:flex;
+    align-items:center; justify-content:center; font-size:1.05rem; padding:0;
+    user-select:none; transition:background .2s ease, color .2s ease;
+  }
+  #hud-tilt-toggle.on{ background:rgba(43,29,14,0.88); color:var(--parchment); }
+
+  /* ---- ☰ mobile chrome menu: everything that isn't one of the four
+     always-on mobile elements (clock chip / collapsed timeline tab / ticker
+     / this button) lives behind here instead of tiling the viewport ---- */
+  #hud-menu-toggle{
+    display:none; bottom:16px; left:16px; pointer-events:auto; cursor:pointer;
+    width:40px; height:40px; border-radius:50%; align-items:center; justify-content:center;
+    font-size:1.05rem; padding:0; z-index:13;
+  }
+  #hud-menu-sheet{
+    display:none; position:fixed; bottom:64px; left:16px; width:210px; z-index:13;
+    background:rgba(241,230,201,0.97); border:1px solid rgba(43,29,14,0.4);
+    box-shadow:0 2px 16px rgba(0,0,0,0.45); font-family:'Fraunces',Georgia,serif;
+    color:var(--ink); pointer-events:auto;
+  }
+  #hud-menu-sheet.open{ display:block; }
+  .hm-head{
+    display:flex; justify-content:space-between; align-items:center; padding:8px 12px;
+    font-size:0.62rem; letter-spacing:2.5px; border-bottom:1px solid rgba(43,29,14,0.3);
+    font-variant:small-caps; opacity:0.8;
+  }
+  .hm-close{ cursor:pointer; font-size:1.05rem; opacity:0.65; padding:4px 6px; margin:-4px -6px; }
+  .hm-row{
+    padding:11px 12px; font-size:0.72rem; letter-spacing:0.4px; cursor:pointer;
+    border-top:1px solid rgba(43,29,14,0.15); display:flex; justify-content:space-between; align-items:center;
+  }
+  .hm-row:first-of-type{ border-top:none; }
+  .hm-row::after{ content:"show"; font-size:0.55rem; opacity:0.5; letter-spacing:1.5px; font-variant:small-caps; }
+  .hm-row.active::after{ content:"hide"; opacity:0.85; }
+
   @media (max-width:520px){
-    /* narrow-screen HUD: the desktop layout puts seed/title/clock all in
-       the top ~16-56px band, which collides once the title's centered box
-       and the right-aligned clock both need real width on a ~390px phone.
-       Re-stack into clear rows instead of shrinking text until it's unusable.
-       Row plan: r1(8px) title+seed · r2(56px) clock+provenance · r3(100px)
-       paper-toggle · r4(140px) ghost — each toggle-only panel (provenance,
-       ghost) gets a lane that never shares screen space with a panel that
-       can be visible at the same time (UI audit U6). */
-    #hud-title{ padding:0.28em 0.8em; max-width:54vw; top:8px; }
+    /* MOBILE CHROME OVERHAUL (usability fix, 2026-07-09): the map is the
+       product — chrome must never cover more than a sliver of a phone
+       screen. Default visible set is now exactly FOUR elements: the
+       compact single-line clock chip (top), the collapsed timeline tab
+       and the ticker (bottom edge, non-overlapping), and the ☰ button
+       (bottom-left). Everything else (title, seed, paper masthead,
+       altitude readout, provenance flag, the controls hint, the tilt
+       toggle) is hidden by default and only reachable via the ☰ sheet,
+       which toggles a per-element .menu-forced class. The title still
+       gets its traditional few seconds of unobstructed branding on load
+       (opacity animation below) before folding away like the rest. */
+    #hud-title, #hud-seed, #paper-toggle, #hud-altitude, #hud-provenance,
+    #hud-hint, #hud-hint-toggle, #hud-tilt-toggle{ display:none; }
+    #hud-title{
+      display:block; padding:0.28em 0.8em; max-width:70vw; top:8px;
+      animation: hudTitleAutoHide 0.6s ease 4.4s forwards;
+    }
     #hud-title h1{ font-size:0.8rem; letter-spacing:1px; }
     #hud-title .sub{ font-size:0.44rem; letter-spacing:1px; margin-top:1px; }
-    #hud-seed{ top:8px; font-size:0.55rem; padding:0.25em 0.55em; }
-    #hud-clock{ top:56px; min-width:0; font-size:0.62rem; }
-    #hud-ghost{ top:140px; left:50%; }
-    #paper-toggle{ top:100px; }
-    #hud-provenance{ top:56px; left:16px; max-width:42vw; font-size:0.5rem; letter-spacing:1px; white-space:normal; }
-    #hud-altitude{ min-width:0; font-size:0.7rem; }
+    #hud-title.menu-forced{ display:block; animation:none; opacity:1; visibility:visible; pointer-events:auto; }
+    #hud-seed.menu-forced{ display:block; top:8px; right:16px; left:auto; font-size:0.55rem; padding:0.25em 0.55em; }
+    #hud-clock{ top:8px; left:16px; right:auto; min-width:0; font-size:0.66rem; text-align:left; padding:0.35em 0.85em; }
+    #hud-clock .date, #hud-clock .speed{ display:inline; }
+    #hud-clock .speed{ margin-left:0.6em; opacity:0.7; }
+    #hud-ghost{ top:56px; left:50%; }
+    #paper-toggle.menu-forced{ display:block; top:100px; right:16px; }
+    #hud-provenance.menu-forced{ display:block; top:56px; left:16px; max-width:60vw; font-size:0.55rem; letter-spacing:1px; white-space:normal; }
+    #hud-altitude.menu-forced{ display:block; min-width:0; font-size:0.7rem; bottom:64px; left:auto; right:16px; }
+    #hud-hint.menu-forced{ display:block; bottom:64px; right:16px; max-width:min(240px,64vw); }
     #paper-pane{ width:100vw; }
     #ship-inspector, #person-inspector, #building-inspector{ width:min(260px,72vw); }
+    #hud-menu-toggle{ display:flex; }
+    #hud-ticker{ max-width:min(60vw,420px); min-width:0; bottom:16px; }
+    #hud-scrubber{ bottom:56px; }
   }
+  @keyframes hudTitleAutoHide{ to{ opacity:0; visibility:hidden; pointer-events:none; } }
 </style>
 </head>
 <body>
@@ -522,6 +577,18 @@
 
   <div class="panel" id="hud-provenance">RECORD ONLY &nbsp;&middot;&nbsp; P</div>
   <div class="panel" id="hud-hint-toggle" title="controls">?</div>
+  <div class="panel" id="hud-tilt-toggle" title="cinematic low-angle tilt (toggle)">&#10192;</div>
+  <div class="panel" id="hud-menu-toggle" title="menu">&#9776;</div>
+  <div id="hud-menu-sheet">
+    <div class="hm-head">MENU <span class="hm-close" id="hm-close">&times;</span></div>
+    <div class="hm-row" id="hm-tilt" data-mode="tilt">Cinematic tilt</div>
+    <div class="hm-row" data-target="hud-title">Title</div>
+    <div class="hm-row" data-target="hud-seed">Seed</div>
+    <div class="hm-row" data-target="paper-toggle">Today's paper</div>
+    <div class="hm-row" data-target="hud-altitude">Altitude</div>
+    <div class="hm-row" data-target="hud-provenance">Record-only flag</div>
+    <div class="hm-row" data-target="hud-hint">Controls</div>
+  </div>
 </div>
 
 <div class="panel" id="hud-scrubber">
@@ -584,10 +651,13 @@ var CFG = {
                            // cartographic layer is invisible; above zoomCartoFull it's reversed.
   peopleMaxAltitude: 350, // Phase 4 §9: ambient people exist only below this altitude
                            // (statistics/the population curve stand in above it).
-  buildingLabelAlwaysAlt: 250 // coordinator directive: DOM building-name chips render
-                           // unconditionally only below this altitude; between this and
-                           // zoomCartoFull they show only on hover (desktop) — physical
-                           // signage (mountSignBoard) is the wayfinding there instead.
+  buildingLabelAlwaysAlt: 120 // LABEL TIER FIX (usability fix, 2026-07-09): DOM
+                           // building-NAME chips render only below this altitude
+                           // (was 250, with an always-on touch bypass above it —
+                           // that's what piled ~12 name chips on top of the town
+                           // on mobile). Between here and zoomCartoFull, only the
+                           // decluttered biz-glyph roundels (updateBizGlyphs) carry
+                           // building identity; physical signage covers the rest.
 };
 
 /* =====================================================================
@@ -3855,7 +3925,7 @@ function openBuildingInspector(spot){
   flyTo(spot.x, spot.z, 90);
 }
 var NAMED_BUILDING_SPOTS = VILLAGE_BUILDING_SPOTS.filter(function(s){ return !!s.name; });
-var BUILDING_LABEL_POOL = Math.min(14, NAMED_BUILDING_SPOTS.length);
+var BUILDING_LABEL_POOL = Math.min(4, NAMED_BUILDING_SPOTS.length); // decluttered hard cap (was 14)
 var buildingLabelPool = [];
 (function buildBuildingLabelPool(){
   var hudEl = document.getElementById("hud");
@@ -3871,23 +3941,18 @@ var buildingLabelPool = [];
   }
 })();
 var _bldgLabelV = new THREE.Vector3();
-// coordinator directive (building label discipline): between
-// buildingLabelAlwaysAlt and zoomCartoFull, a desktop chip shows only when
-// the mouse is near it — physical wall signage carries wayfinding there
-// instead. Touch has no hover concept, so it keeps the old always-on
-// behavior in that band (tap still needs a visible target).
-var _mouseX = -9999, _mouseY = -9999;
-window.addEventListener("pointermove", function(e){ _mouseX = e.clientX; _mouseY = e.clientY; }, {passive:true});
-var BUILDING_LABEL_HOVER_PX = 46;
+// LABEL TIER FIX (usability fix, 2026-07-09): name chips now belong ONLY to
+// the close-in band (<=buildingLabelAlwaysAlt, ~120m) on every input type —
+// the old "|| IS_TOUCH always-on up to zoomCartoFull(850)" bypass is what
+// let ~12 name chips pile up over the whole town on mobile at ~213m. Above
+// this altitude, updateBizGlyphs()'s decluttered roundels carry building
+// identity instead; runLabelDeclutter() below does the final screen-space
+// collision pass + cap on whatever this function marks visible.
 function updateBuildingLabels(alt){
-  // findability (QA-GATE §3): only worth showing once semantic zoom is in
-  // the true-scale band — at cartographic altitude the district tint (THE
-  // VILLAGE) already carries the plaza's identity.
-  if(alt > CFG.zoomCartoFull || NAMED_BUILDING_SPOTS.length===0){
-    buildingLabelPool.forEach(function(el){ el.style.opacity = 0; });
+  if(alt > CFG.buildingLabelAlwaysAlt || NAMED_BUILDING_SPOTS.length===0){
+    buildingLabelPool.forEach(function(el){ el.style.opacity = 0; el._spot = null; });
     return;
   }
-  var alwaysOn = alt<=CFG.buildingLabelAlwaysAlt || IS_TOUCH;
   // nearest-N by screen distance from camera target, cheap since N is tiny (<25)
   var cands = NAMED_BUILDING_SPOTS.slice().sort(function(a,b){
     return (Math.hypot(a.x-camera.position.x,a.z-camera.position.z)) - (Math.hypot(b.x-camera.position.x,b.z-camera.position.z));
@@ -3901,10 +3966,6 @@ function updateBuildingLabels(alt){
     _bldgLabelV.set(spot.x, spot.y+spot.h+1.4, spot.z).project(camera);
     if(_bldgLabelV.x<-1.05||_bldgLabelV.x>1.05||_bldgLabelV.y<-1.05||_bldgLabelV.y>1.05){ el.style.opacity=0; el._spot=null; continue; }
     var sx = (_bldgLabelV.x*0.5+0.5)*window.innerWidth, sy = (-_bldgLabelV.y*0.5+0.5)*window.innerHeight;
-    if(!alwaysOn){
-      var hovered = Math.hypot(sx-_mouseX, sy-_mouseY) <= BUILDING_LABEL_HOVER_PX;
-      if(!hovered){ el.style.opacity=0; el._spot=null; continue; }
-    }
     el.textContent = spot.name.toUpperCase();
     el.style.opacity = 0.9;
     el.style.left = sx+"px";
@@ -3931,7 +3992,7 @@ var GLYPH_SVG = {
   anvil: '<svg viewBox="0 0 16 16"><path d="M3 6.5h10l-2 2H6z" fill="none" stroke="#2b1d0e" stroke-width="1.1"/><rect x="6.5" y="8.5" width="3" height="3.5" fill="none" stroke="#2b1d0e" stroke-width="1.1"/></svg>',
   barrel:'<svg viewBox="0 0 16 16"><rect x="5" y="2" width="6" height="12" rx="2.4" fill="none" stroke="#2b1d0e" stroke-width="1.1"/><path d="M5 6h6M5 10h6" stroke="#2b1d0e" stroke-width="1"/></svg>'
 };
-var BIZ_GLYPH_POOL = SCT(30), bizGlyphPool = [];
+var BIZ_GLYPH_POOL = SCT(10), bizGlyphPool = []; // decluttered hard cap (was 30)
 (function buildBizGlyphPool(){
   var hudEl = document.getElementById("hud");
   for(var i=0;i<BIZ_GLYPH_POOL;i++){
@@ -3966,6 +4027,99 @@ function updateBizGlyphs(alt){
     el.style.left = ((_bizGlyphV.x*0.5+0.5)*window.innerWidth)+"px";
     el.style.top = ((-_bizGlyphV.y*0.5+0.5)*window.innerHeight)+"px";
   }
+}
+
+/* =====================================================================
+   SCREEN-SPACE LABEL DECLUTTER ENGINE (usability fix, 2026-07-09)
+
+   Every per-type update function above (updateBuildingLabels,
+   updateBizGlyphs) and the ship/documented-moment ones further down set
+   each pooled chip's opacity/left/top independently, every frame, purely
+   from ITS OWN altitude/distance rules — none of them know about each
+   other, so nothing ever stopped two chips from landing on the same
+   screen pixels and fusing into an opaque pile (the field-reported bug:
+   ~12 building-name chips stacked solid at 213m, hiding the whole town).
+
+   This pass runs once per frame, AFTER all of those, and resolves
+   collisions in screen space across every chip type at once:
+     priority: selected/followed (documented moments) > named landmark
+               (building names) > glyph roundel > ship
+   Overlap losers are hidden outright (never partially stacked — no
+   opacity blending between competing chips), building-related markers
+   (names+glyphs together) are hard-capped at LABEL_DECLUTTER_CAP even
+   with zero overlaps, and ties are broken by nearest-to-screen-center.
+   Hovered (desktop) or currently-open (tap, either input) chips are
+   always exempt from both the cap and the overlap test.
+
+   The DECISION (which elements are suppressed) is only recomputed at
+   ~5Hz (LABEL_DECLUTTER_INTERVAL) — cheap enough given the tiny pooled
+   element counts, but there's no need to re-run a full O(n^2) collision
+   pass 60x/sec for something that only needs to feel responsive, not
+   frame-perfect. The cached decision is still APPLIED every frame (so a
+   suppressed chip never gets a chance to flash back to full opacity in
+   the 1-2 frames before the next decision tick), it's just not
+   RECOMPUTED every frame.
+   ===================================================================== */
+var LABEL_DECLUTTER_CAP = 8;
+var LABEL_DECLUTTER_INTERVAL = 200; // ms (~5Hz)
+var LABEL_PAD = 3; // px slack before two chips count as "overlapping"
+var _declutterSuppressed = new WeakSet();
+var _lastDeclutterRun = 0;
+function _labelHalfSize(el, kind){
+  if(kind==="glyph") return { hw:13, hh:13 };
+  var len = (el.textContent||"").length;
+  return { hw: Math.min(120, 20+len*3.1), hh:11 };
+}
+function _declutterCollect(pool, kind, priority, buildingRelated, out){
+  pool.forEach(function(el){
+    var op = parseFloat(el.style.opacity);
+    if(!(op>0.05)) return;
+    var hs = _labelHalfSize(el, kind);
+    var x = parseFloat(el.style.left)||0, y = parseFloat(el.style.top)||0;
+    out.push({
+      el:el, priority:priority, buildingRelated:buildingRelated,
+      left:x-hs.hw, right:x+hs.hw, top:y-hs.hh, bottom:y+hs.hh, cx:x, cy:y,
+      exempt: el.matches(":hover")
+    });
+  });
+}
+function recomputeLabelDeclutter(){
+  var items = [];
+  _declutterCollect(documentedLabels, "text", 4, false, items);
+  _declutterCollect(buildingLabelPool, "text", 3, true, items);
+  _declutterCollect(bizGlyphPool, "glyph", 2, true, items);
+  _declutterCollect(shipLabelPool, "text", 1, false, items);
+  var cx = window.innerWidth/2, cy = window.innerHeight/2;
+  items.forEach(function(it){ var dx=it.cx-cx, dy=it.cy-cy; it.d2 = dx*dx+dy*dy; });
+  items.sort(function(a,b){
+    if(a.exempt!==b.exempt) return a.exempt ? -1 : 1;
+    if(a.priority!==b.priority) return b.priority-a.priority;
+    return a.d2-b.d2;
+  });
+  var accepted = [], buildingCount = 0;
+  var suppressed = new WeakSet();
+  items.forEach(function(it){
+    if(!it.exempt){
+      if(it.buildingRelated && buildingCount>=LABEL_DECLUTTER_CAP){ suppressed.add(it.el); return; }
+      for(var i=0;i<accepted.length;i++){
+        var a = accepted[i];
+        if(it.left<a.right+LABEL_PAD && it.right+LABEL_PAD>a.left && it.top<a.bottom+LABEL_PAD && it.bottom+LABEL_PAD>a.top){
+          suppressed.add(it.el); return;
+        }
+      }
+    }
+    accepted.push(it);
+    if(it.buildingRelated) buildingCount++;
+  });
+  _declutterSuppressed = suppressed;
+}
+function applyLabelDeclutter(now){
+  if(now-_lastDeclutterRun >= LABEL_DECLUTTER_INTERVAL){
+    _lastDeclutterRun = now;
+    recomputeLabelDeclutter();
+  }
+  function hide(pool){ pool.forEach(function(el){ if(_declutterSuppressed.has(el)) el.style.opacity = 0; }); }
+  hide(documentedLabels); hide(buildingLabelPool); hide(bizGlyphPool); hide(shipLabelPool);
 }
 
 /* =====================================================================
@@ -7644,10 +7798,41 @@ var desired = {
   azimuth: rig.azimuth,
   pitchOffset: 0
 };
+// manual-tilt range (right-drag / two-finger vertical) — widened beyond the
+// old +-0.35 so it can also reach the cinematic low angle by hand, not just
+// via the CINEMATIC_TILT_OFFSET toggle below (both share this range).
+var PITCH_OFFSET_MIN = -0.62, PITCH_OFFSET_MAX = 0.35;
+var CINEMATIC_TILT_OFFSET = -0.62; // toggle target: eases the baseline maps-like
+                                    // pitch down toward the old dramatic low angle
+var cinematicTilt = false;
+function setCinematicTilt(on){
+  cinematicTilt = on;
+  desired.pitchOffset = on ? CINEMATIC_TILT_OFFSET : 0;
+  var btn = document.getElementById("hud-tilt-toggle");
+  if(btn) btn.classList.toggle("on", on);
+  var row = document.getElementById("hm-tilt");
+  if(row) row.classList.toggle("active", on);
+}
 
+/* MAPS-LIKE PITCH (usability fix, 2026-07-09): the default camera elevation
+   angle must stay "mostly top-down with a slight tilt" at every altitude —
+   like Google/Apple Maps — and NEVER auto-pitch toward horizon-parallel just
+   because the user zoomed in. The previous curve eased from 78° (steep,
+   near max altitude) down to 14° (near horizon-parallel) at min altitude,
+   so zooming in alone dumped the user into a near-ground-parallel view with
+   no opt-in — that's what buried the town behind stacked name chips in the
+   field report. Now: 55-70° across the whole max-altitude..~150m band, and
+   only a gentle ease down to 45° at min altitude (still nowhere near
+   horizon-parallel). The genuinely cinematic low angle is opt-in only —
+   manual orbit (right-drag / two-finger vertical) and the tilt toggle both
+   still work via rig.pitchOffset / TILT_TOGGLE on top of this baseline. */
 function elevationForDistance(dist){
   var t = clamp((Math.log(dist)-Math.log(CFG.minAltitude))/(Math.log(CFG.maxAltitude)-Math.log(CFG.minAltitude)),0,1);
-  return lerp(14*Math.PI/180, 78*Math.PI/180, t);
+  var tLow = (Math.log(150)-Math.log(CFG.minAltitude))/(Math.log(CFG.maxAltitude)-Math.log(CFG.minAltitude));
+  if(t>=tLow){
+    return lerp(55*Math.PI/180, 70*Math.PI/180, (t-tLow)/(1-tLow));
+  }
+  return lerp(45*Math.PI/180, 55*Math.PI/180, t/tLow);
 }
 
 function springScalar(state, key, velKey, target, stiffness, damping, dt){
@@ -7871,7 +8056,7 @@ function pinchGestureMove(t0,t1){
   // pinch/twist (cheap, kept from the original touch-only pass — now
   // shared by the unified pointer path below).
   var dyMid = mid.y - pinchGesture.lastMidY;
-  desired.pitchOffset = clamp(desired.pitchOffset - dyMid*0.0018, -0.35, 0.35);
+  desired.pitchOffset = clamp(desired.pitchOffset - dyMid*0.0018, PITCH_OFFSET_MIN, PITCH_OFFSET_MAX);
   pinchGesture.lastMidY = mid.y;
 
   // ANCHOR CORRECTION: after the zoom/rotate above, re-project the world
@@ -7979,7 +8164,7 @@ canvas.addEventListener("pointermove", function(e){
     panGestureSample();
   } else if(input.mode==="orbit"){
     desired.azimuth -= (e.clientX-prevX)*0.0045;
-    desired.pitchOffset = clamp(desired.pitchOffset - (e.clientY-prevY)*0.0022, -0.35, 0.35);
+    desired.pitchOffset = clamp(desired.pitchOffset - (e.clientY-prevY)*0.0022, PITCH_OFFSET_MIN, PITCH_OFFSET_MAX);
   }
 });
 function endPointer(e){
@@ -8058,6 +8243,35 @@ window.addEventListener("resize", function(){
   var toggle = document.getElementById("hud-hint-toggle");
   var hint = document.getElementById("hud-hint");
   toggle.addEventListener("click", function(){ hint.classList.toggle("show"); });
+})();
+
+/* cinematic tilt toggle (⟀): standalone button on desktop, a menu row on
+   narrow screens (see the ☰ menu wiring below — same setCinematicTilt()). */
+document.getElementById("hud-tilt-toggle").addEventListener("click", function(){
+  setCinematicTilt(!cinematicTilt);
+});
+
+/* ---- ☰ mobile chrome menu: opens a small sheet listing every panel that's
+   hidden by default on narrow screens (title/seed/paper/altitude/
+   provenance/hint) plus the cinematic tilt toggle, each as a tap-to-show/
+   hide row. Purely additive — on wider viewports the underlying #hud-*
+   elements are unaffected by .menu-forced (no matching CSS rule there). ---- */
+(function(){
+  var menuBtn = document.getElementById("hud-menu-toggle");
+  var sheet = document.getElementById("hud-menu-sheet");
+  var closeBtn = document.getElementById("hm-close");
+  menuBtn.addEventListener("click", function(e){ e.stopPropagation(); sheet.classList.toggle("open"); });
+  closeBtn.addEventListener("click", function(e){ e.stopPropagation(); sheet.classList.remove("open"); });
+  document.querySelectorAll(".hm-row[data-target]").forEach(function(row){
+    var target = document.getElementById(row.dataset.target);
+    row.addEventListener("click", function(){
+      var on = target.classList.toggle("menu-forced");
+      row.classList.toggle("active", on);
+    });
+  });
+  document.getElementById("hm-tilt").addEventListener("click", function(){
+    setCinematicTilt(!cinematicTilt);
+  });
 })();
 
 /* =====================================================================
@@ -8170,6 +8384,7 @@ function animate(){
   updateDistrictZones(alt);
   updateBuildingLabels(alt);
   updateBizGlyphs(alt);
+  applyLabelDeclutter(performance.now()); // must run after every per-type label/glyph/ship update above
   updateGridSwing();
   updateRain(dt, camera.position.x, camera.position.z, alt);
   updateFogBanks(dt);
