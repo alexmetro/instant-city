@@ -257,6 +257,27 @@
   }
   #hud-provenance.on{ opacity:0.95; }
 
+  /* ---- PHASE 5: THE FATES ---- */
+  #beat-card{
+    position:fixed; left:50%; bottom:64px; transform:translateX(-50%) translateY(14px);
+    max-width:min(640px,88vw); text-align:center; z-index:7;
+    background:linear-gradient(180deg, rgba(241,230,201,0.95), rgba(228,214,178,0.95));
+    border:1px solid rgba(43,29,14,0.55); border-left:4px solid var(--ink);
+    box-shadow:0 3px 18px rgba(0,0,0,0.5); padding:10px 24px 9px;
+    font-family:'Fraunces',Georgia,serif; color:var(--ink);
+    opacity:0; transition:opacity .5s ease, transform .5s ease; pointer-events:none;
+  }
+  #beat-card.on{ opacity:0.97; transform:translateX(-50%) translateY(0); pointer-events:auto; }
+  #beat-card .bc-class{ display:block; font-size:0.56rem; letter-spacing:3.5px; opacity:0.7; }
+  #beat-card .bc-quote{ display:block; font-size:0.95rem; font-weight:600; line-height:1.35; margin:3px 0 2px; }
+  #beat-card .bc-date{ display:inline-block; font-size:0.6rem; letter-spacing:2px; opacity:0.75; margin-right:1.1em; }
+  #beat-card a{ font-size:0.6rem; color:var(--ink); letter-spacing:0.8px; }
+  /* Watch mode (V): everything hides but the date, the beat card, the ticker */
+  body.watch-mode #hud-title, body.watch-mode #hud-seed, body.watch-mode #hud-altitude,
+  body.watch-mode #hud-hint, body.watch-mode #hud-hint-toggle, body.watch-mode #paper-toggle,
+  body.watch-mode #hud-ghost, body.watch-mode #hud-provenance, body.watch-mode #ship-inspector,
+  body.watch-mode #person-inspector, body.watch-mode #horizon-ring{ display:none !important; }
+
   /* ---- touch/mobile ---- */
   #hud-hint-toggle{
     display:none; bottom:16px; right:16px; pointer-events:auto; cursor:pointer;
@@ -292,7 +313,7 @@
 <div id="hud">
   <div class="panel" id="hud-title">
     <h1>SAN FRANCISCO &middot; 1846</h1>
-    <span class="sub">the instant city &mdash; phase one, the ground</span>
+    <span class="sub">the instant city &mdash; phase five, the fates</span>
   </div>
   <div class="panel" id="hud-seed">SEED <span id="seed-val">1846</span></div>
   <div class="panel" id="hud-ghost">THEN / NOW &mdash; 2026 SHORELINE GHOST</div>
@@ -312,7 +333,8 @@
     <b>WASD</b> / arrows &mdash; fly (hold <b>Shift</b> to sprint) &nbsp;&middot;&nbsp; <b>Q</b> / <b>E</b> &mdash; rotate &nbsp;&middot;&nbsp; <b>R</b> / <b>F</b> &mdash; altitude<br>
     scroll / pinch &mdash; zoom &nbsp;&middot;&nbsp; click/tap a person or ship &mdash; inspect &nbsp;&middot;&nbsp; <b>Esc</b> &mdash; release follow<br>
     <b>G</b> &mdash; then/now ghost &nbsp;&middot;&nbsp; <b>T</b> &mdash; sunrise/sunset &nbsp;&middot;&nbsp; <b>P</b> &mdash; documented-only<br>
-    <b>Space</b> &mdash; pause &nbsp;&middot;&nbsp; <b>1 2 3</b> &mdash; day / week / month per second &nbsp;&middot;&nbsp; <b>N</b> &mdash; the paper
+    <b>Space</b> &mdash; pause &nbsp;&middot;&nbsp; <b>1 2 3</b> &mdash; day / week / month per second &nbsp;&middot;&nbsp; <b>N</b> &mdash; the paper<br>
+    <b>V</b> &mdash; watch mode (the auto-director takes the camera)
   </div>
 
   <div class="panel" id="paper-toggle" title="open today's paper (N)">
@@ -346,6 +368,12 @@
 
   <div class="panel" id="hud-provenance">SHOWING: THE RECORD ONLY &nbsp;&middot;&nbsp; P to restore</div>
   <div class="panel" id="hud-hint-toggle" title="controls">?</div>
+</div>
+
+<div id="beat-card">
+  <span class="bc-class" id="bc-class"></span>
+  <span class="bc-quote" id="bc-quote"></span>
+  <span class="bc-date" id="bc-date"></span><a id="bc-receipt" href="#" target="_blank" rel="noopener">view the original page &rarr;</a>
 </div>
 
 <div id="paper-pane">
@@ -1161,6 +1189,7 @@ var VILLAGE_BUILDING_SPOTS = []; // {x,z,y,rot,w,d,vStart,vEnd,name?} per placed
 var buildingVertCursor = 0; // running vertex count across buildingGeoms as they're pushed, so each
                              // placeBuilding() call can record its own [vStart,vEnd) slice of the
                              // eventual merged buffer without a second full pass over the array.
+var windowVertCursor = 0;   // same, for the separate merged window-glow mesh.
 function pushBuildingGeo(list, geo){ list.push(geo); buildingVertCursor += geo.attributes.position.count; return geo; }
 (function buildVillage(){
   var uVals = [GEO.streetsU.stockton, GEO.streetsU.dupont, GEO.streetsU.kearny, GEO.streetsU.montgomery];
@@ -1176,16 +1205,14 @@ function pushBuildingGeo(list, geo){ list.push(geo); buildingVertCursor += geo.a
   function blockDensity(bx,bz){
     // true-scale pass: buildings shrank (below), so counts are raised a bit
     // to keep the same lived-in read rather than looking sparser.
-    // 2026-07 Phase 5 bump: the blocks immediately ringing the Plaza (where
-    // the Dec 24 1849 Great Fire's ~50-building footprint falls) are raised
-    // further — economy-daily-life.md §"gambling houses" alone names 7+
-    // distinct establishments crowded onto these few blocks by 1849, denser
-    // than this sim's general "few dozen structures total" village decision
-    // (spec §5.5) allows for elsewhere. Cited in the Phase 5 QA-gate report
-    // as a deliberate, sourced local density increase, not a global one.
-    if(bx===2 && bz===PLAZA_BZ) return 6.4;   // Montgomery between Clay & Washington
+    // (Phase 5 note: the Dec 24 1849 fire block gets its own explicit dense
+    // fill pass below — buildFireBlock() — rather than a global bump here;
+    // the Alta's fire report documents continuous ROWS of buildings on that
+    // one block, which the general "few dozen structures" village decision
+    // deliberately doesn't produce elsewhere.)
+    if(bx===2 && bz===PLAZA_BZ) return 4.6;   // Montgomery between Clay & Washington
     var dPlaza = Math.abs(bx-PLAZA_BX)+Math.abs(bz-PLAZA_BZ);
-    if(dPlaza<=1) return 5.2;                  // faces the Plaza directly (fire footprint)
+    if(dPlaza<=1) return 3.6;                  // faces the Plaza directly
     if(dPlaza===2) return 1.9;                 // one ring further out
     return 0.5;                                // thinning to almost nothing at the grid's edge
   }
@@ -1201,29 +1228,35 @@ function pushBuildingGeo(list, geo){ list.push(geo); buildingVertCursor += geo.a
     return geo;
   }
 
-  function placeBuilding(x,z,rotBase){
+  function placeBuilding(x,z,rotBase,opts){
+    opts = opts || {};
     var y = terrainHeight(x,z);
     if(y<=1){ console.warn("[verify] village building below land threshold (h="+y.toFixed(2)+") at", x.toFixed(0), z.toFixed(0)); return; }
+
+    var vStart = buildingVertCursor;         // Phase 5: this building's slice of the merged buffer
+    var wStart = windowVertCursor;           // ...and its window-glow slice (flattened with it on burn)
 
     // true-scale pass (design addendum): a 50-vara lot is ~41.9m square, so a
     // single-story frame/adobe cottage/shanty of ~4.5-8m x 3.8-6.8m lets
     // several structures actually fit along a lot edge, instead of one
-    // building dominating the whole lot.
-    var w = 4.5+rngBuild()*3.5, d = 3.8+rngBuild()*3, h = 2.6+rngBuild()*1.6;
+    // building dominating the whole lot. Named plaza landmarks (opts.sizeMul)
+    // get a bounded bump: the Alta's own fire report calls the El Dorado "a
+    // new four story, commodious public edifice" and the Parker House was the
+    // town's grandest — still honest-scale, never inflated for visibility.
+    var sizeMul = opts.sizeMul || 1;
+    var w = (4.5+rngBuild()*3.5)*sizeMul, d = (3.8+rngBuild()*3)*sizeMul, h = (2.6+rngBuild()*1.6)*Math.min(sizeMul*(opts.tall?1.6:1), 2.4);
     var rot = rotBase + (rngBuild()-0.5)*0.12 + VIOGET_SKEW; // aligned to the tilted grid, not true north
-    var isAdobe = rngBuild()<0.55;
+    var isAdobe = opts.forceFrame ? false : rngBuild()<0.55;
     var bodyColor = new THREE.Color(isAdobe? adobeColors[Math.floor(rngBuild()*adobeColors.length)] : frameColors[Math.floor(rngBuild()*frameColors.length)]);
     var roofColor = new THREE.Color(isAdobe? roofColorsAdobe[Math.floor(rngBuild()*roofColorsAdobe.length)] : roofColorsFrame[Math.floor(rngBuild()*roofColorsFrame.length)]);
 
-    VILLAGE_BUILDING_SPOTS.push({ x:x, z:z, y:y, rot:rot, w:w, d:d });
-
     var body = makeBoxLocal(w,h,d,bodyColor);
     bake(body, new THREE.Vector3(x,y,z), rot);
-    buildingGeoms.push(body);
+    pushBuildingGeo(buildingGeoms, body);
 
     var roof = makeGableRoof(w,d,0.6, 1.1+rngBuild()*1.3, roofColor);
     bake(roof, new THREE.Vector3(x,y+h,z), rot);
-    buildingGeoms.push(roof);
+    pushBuildingGeo(buildingGeoms, roof);
 
     // a couple of warm window glints (lit only at night)
     var darkInset = bodyColor.clone().multiplyScalar(0.35);
@@ -1234,18 +1267,19 @@ function pushBuildingGeo(list, geo){ list.push(geo); buildingVertCursor += geo.a
       var wg = makeBoxLocal(0.6,0.6,0.06, new THREE.Color(0xffffff));
       attachToBuilding(wg, new THREE.Vector3(offsetX, h*0.5, side*(d/2+0.02)), rot, new THREE.Vector3(x,y,z));
       windowGeoms.push(wg);
+      windowVertCursor += wg.attributes.position.count;
 
       // A6: a dark inset frame sitting a hair behind the glow quad, so the
       // window reads as a real dark recess by day and lights up at night.
       var inset = makeBoxLocal(0.72,0.72,0.05, darkInset);
       attachToBuilding(inset, new THREE.Vector3(offsetX, h*0.5, side*(d/2+0.005)), rot, new THREE.Vector3(x,y,z));
-      buildingGeoms.push(inset);
+      pushBuildingGeo(buildingGeoms, inset);
     }
     // A6: a dark door inset, centered on the front (south-ish) face
     var doorFace = rngBuild()<0.5? -1:1;
     var door = makeBoxLocal(1.1, 1.9, 0.08, darkInset);
     attachToBuilding(door, new THREE.Vector3((rngBuild()-0.5)*w*0.3, 0.95, doorFace*(d/2+0.01)), rot, new THREE.Vector3(x,y,z));
-    buildingGeoms.push(door);
+    pushBuildingGeo(buildingGeoms, door);
 
     // A6: ~1 in 6 buildings gets a lean-to shed addition against one side
     if(rngBuild()<0.16){
@@ -1253,19 +1287,25 @@ function pushBuildingGeo(list, geo){ list.push(geo); buildingVertCursor += geo.a
       var leanSide = rngBuild()<0.5? -1:1;
       var lean = makeBoxLocal(lw, lh, ld, bodyColor.clone().multiplyScalar(0.88));
       attachToBuilding(lean, new THREE.Vector3(leanSide*(w/2+lw/2-0.3), 0, 0), rot, new THREE.Vector3(x,y,z));
-      buildingGeoms.push(lean);
+      pushBuildingGeo(buildingGeoms, lean);
     }
     // A6: a handful of buildings get a chimney (+ a drifting smoke wisp emitter)
     if(chimneySpots.length<3 && rngBuild()<0.22){
       var chH = h*0.55;
       var chimney = makeBoxLocal(0.55,chH,0.55, new THREE.Color(0x6b5a4c));
       attachToBuilding(chimney, new THREE.Vector3(w*0.28, h, d*0.22), rot, new THREE.Vector3(x,y,z));
-      buildingGeoms.push(chimney);
+      pushBuildingGeo(buildingGeoms, chimney);
       var top = new THREE.Vector3(w*0.28, h+chH, d*0.22);
       var q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), rot);
       top.applyQuaternion(q);
       chimneySpots.push({ x:x+top.x, y:y+top.y, z:z+top.z });
     }
+
+    // Phase 5: record the building's full vertex slices + landmark identity
+    // for the fire system's footprint selection and burn/collapse/rebuild.
+    VILLAGE_BUILDING_SPOTS.push({ x:x, z:z, y:y, rot:rot, w:w, d:d, h:h,
+      vStart:vStart, vEnd:buildingVertCursor, wStart:wStart, wEnd:windowVertCursor,
+      name:opts.name||null, isIgnition:!!opts.isIgnition, fireproof:!!opts.fireproof });
   }
 
   for(var bx=0; bx<uVals.length-1; bx++){
@@ -1290,6 +1330,67 @@ function pushBuildingGeo(list, geo){ list.push(geo); buildingVertCursor += geo.a
     gridToWorld(uVals[1]-40, vVals[0]-70),
     gridToWorld(uVals[2]+30, vVals[5]+80)
   ].forEach(function(p){ placeBuilding(p.x, p.z, rngBuild()<0.5?0:Math.PI/2); });
+
+  /* -----------------------------------------------------------------------
+     PHASE 5 — THE FIRE BLOCK. The Dec 24 1849 Great Fire's documented
+     footprint, built to the Alta California's own Dec 26 1849 account
+     (corpus DAC18491226, "APPALLING AND DESTRUCTIVE CONFLAGRATION!!"):
+     one block, bounded by Kearny (west, facing Portsmouth Square),
+     Montgomery (east), Clay and Washington — the fire began at Dennison's
+     Exchange on the Kearny frontage, took the Parker House and El Dorado,
+     ran down Washington St, and was arrested at Burgoyne & Co.'s unfinished
+     brick store at Washington & Montgomery and at Delmonico's at Clay &
+     Kearny. NOTE: placement follows the PRIMARY source (the Alta puts
+     Dennison's between Parker House and the United States Restaurant on
+     the plaza-facing frontage); economy-daily-life.md's secondary-source
+     "Kearny between Clay and Jackson" is set aside where they conflict.
+     The Alta names ~30 establishments in continuous rows on this one block
+     (~50 buildings with the arcade/outbuildings), so this block alone is
+     densely filled — a documented local density, not scale inflation.
+     Individual lot positions within the frontages are approximate (the
+     record gives order-along-the-row, not lot numbers).
+     ----------------------------------------------------------------------- */
+  (function buildFireBlock(){
+    var kU = uVals[2], mU = uVals[3];            // kearny, montgomery
+    var cV = vVals[2], wV = vVals[3];            // clay, washington
+    function put(u,v,rot,opts){ var p = gridToWorld(u,v); placeBuilding(p.x,p.z,rot,opts); }
+
+    // Kearny frontage, plaza-facing row — order per the Alta's loss list
+    put(kU+8,  wV-9,  Math.PI/2, { name:"El Dorado",            sizeMul:1.45, tall:true, forceFrame:true });
+    put(kU+8,  wV-23, Math.PI/2, { name:"Parker House",         sizeMul:1.55, tall:true, forceFrame:true });
+    put(kU+8,  wV-36, Math.PI/2, { name:"Dennison's Exchange",  sizeMul:1.25, forceFrame:true, isIgnition:true });
+    put(kU+8,  wV-48, Math.PI/2, { name:"United States Restaurant", sizeMul:1.15, forceFrame:true });
+    put(kU+8,  wV-58, Math.PI/2, { name:"Hughs, Noel & Crenshaw", forceFrame:true });
+    put(kU+8,  cV+16, Math.PI/2, { name:"Florence Saloon", forceFrame:true });
+    put(kU+8,  cV+7,  Math.PI/2, { name:"Delmonico's",          sizeMul:1.2, forceFrame:true, fireproof:true }); // saved by its own roof crew (Alta)
+
+    // Washington St frontage, running toward Montgomery — incl. the
+    // Merchants' Exchange the authorities blew up, and the unfinished
+    // Burgoyne & Co. brick store that finally stayed the fire.
+    put(kU+20, wV-8, 0, { name:"B. Ayres store", forceFrame:true });            // "in rear of the El Dorado" — 1st demolition
+    put(kU+32, wV-8, 0, { name:"Rosenbaum & Schaeffer", forceFrame:true });
+    put(kU+46, wV-8, 0, { name:"Merchants' Exchange",   sizeMul:1.3, forceFrame:true }); // Dunbar & Gibbs — 2nd demolition
+    put(kU+60, wV-8, 0, { name:"Washington Arcade", forceFrame:true });
+    put(kU+72, wV-8, 0, { name:"Central House", forceFrame:true });
+    put(kU+84, wV-8, 0, { name:"Geurschard & Van Beuren", sizeMul:1.15, forceFrame:true }); // 3rd demolition, by the Alcalde's order
+    put(kU+98, wV-8, 0, { name:"Baltimore Restaurant", forceFrame:true });
+    put(mU-8,  wV-8, 0, { name:"Burgoyne & Co. (brick, unfinished)", sizeMul:1.3, fireproof:true });
+
+    // interior + Clay-side fill to the documented ~50-building count
+    for(var i=0;i<30;i++){
+      var u = lerp(kU+16, mU-14, rngBuild());
+      var v = lerp(cV+12, wV-18, rngBuild());
+      put(u, v, rngBuild()<0.5?0:Math.PI/2, { forceFrame:true });
+    }
+
+    // scorched survivors just OUTSIDE the footprint (blanket crews kept
+    // them wet, per the Alta): the Verandah opposite the El Dorado, and
+    // the Bella Union / Haley House / Miners' Bank row across Washington.
+    put(kU-9,  wV+9,  Math.PI/2, { name:"Verandah", sizeMul:1.15, forceFrame:true }); // kept out of the open Plaza block itself
+    put(kU-24, wV+9,  0, { name:"Miners' Bank", forceFrame:true });
+    put(kU-38, wV+9,  0, { name:"Bella Union", sizeMul:1.25, forceFrame:true });
+    put(kU-52, wV+9,  0, { name:"Haley House", sizeMul:1.15, forceFrame:true });
+  })();
 
   buildingsMesh = new THREE.Mesh(mergeGeoms(buildingGeoms), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, transparent:true, side:THREE.DoubleSide, specular:0x000000, shininess:0}));
   scene.add(buildingsMesh);
@@ -1498,7 +1599,15 @@ window.addEventListener("keydown", function(e){
 });
 function updateSimClock(dt){
   if(simSpeedKey!==0){
-    simDay = clamp(simDay + SIM_SPEEDS[simSpeedKey]*dt, 0, SIM_END_DAY);
+    var step = SIM_SPEEDS[simSpeedKey]*dt;
+    // PHASE 5 — fire-day sub-day simulation: while the sim clock is inside
+    // the Dec 24 1849 fire window, cap the effective rate at ~1 sim-hour
+    // per 3 real seconds so the fire is watchable; and never let a coarse
+    // step (week/s, month/s) jump the window entirely — land on its
+    // opening instead. fireClockStep() is defined with the fire system
+    // further down (function declarations hoist across this closure).
+    step = fireClockStep(step, dt);
+    simDay = clamp(simDay + step, 0, SIM_END_DAY);
     if(simDay>=SIM_END_DAY) setSimSpeed(0); // the currently-extracted era ends here — hold, don't run away
   }
   var d = dateFromSimDay(simDay);
@@ -1513,7 +1622,13 @@ function updateSimClock(dt){
    ========================================================================= */
 var EVENTS_RAW = window.EVENTS_1846_49 || [];
 if(!window.EVENTS_1846_49) console.warn("[verify] events-1846-49.js failed to load — ships/ticker will be empty. Run: node tools/build-events.js");
-EVENTS_RAW.forEach(function(e){ e.simDay = eventDateToSimDay(e.date); });
+EVENTS_RAW.forEach(function(e){
+  e.simDay = eventDateToSimDay(e.date);
+  // PHASE 5 fix: spine 'arrival' records carry a ship but no extraction
+  // type (the SS California and Niantic, both 1849 anchors) — normalize so
+  // the ship system, ticker, and director all see them as arrivals.
+  if(!e.type && e.class==="arrival" && e.ship) e.type = "ship_arrival";
+});
 
 /* =========================================================================
    3. SHIPS ON THEIR TRUE DATES
@@ -1951,6 +2066,12 @@ var growthBuildingCandidates = (function(){
     if(h<=1.2) continue;
     var dPlaza = Math.hypot(p.x-PLAZA_CENTER.x, p.z-PLAZA_CENTER.z);
     if(dPlaza<30) continue; // keep the plaza itself open
+    // PHASE 5: keep growth stock out of the Dec 24 1849 fire block — that
+    // block is explicitly built (buildFireBlock) and must burn as a unit;
+    // an instanced growth cottage standing unburned in the ruins would
+    // contradict the documented footprint.
+    if(u>GEO.streetsU.kearny-8 && u<GEO.streetsU.montgomery+8 &&
+       v>GEO.streetsV.clay-8 && v<GEO.streetsV.washington+8) continue;
     out.push({ x:p.x, z:p.z, rot:rngBuild()*Math.PI*2, priority: dPlaza+rngBuild()*70 });
   }
   out.sort(function(a,b){ return a.priority-b.priority; });
@@ -2325,6 +2446,13 @@ tickerPanelEl.addEventListener("click", function(){
   if(!lastTickerShown) return;
   var evDateISO = simDateISO(dateFromSimDay(lastTickerShown.simDay));
   var dateKey = latestIssueOnOrBefore(evDateISO);
+  // PHASE 5: a paper reports an event AFTER it happens — for fire-class
+  // events, prefer the first issue within a week AFTER the event (the Dec 24
+  // 1849 fire's report is the Dec 26 Alta) over the issue that preceded it.
+  if(lastTickerShown.class==="fire"){
+    var after = issueWithinDaysAfter(evDateISO, 7);
+    if(after && simDay >= eventDateToSimDay(after)) dateKey = after;
+  }
   if(!dateKey) return;
   pendingScrollHeadline = lastTickerShown.headline;
   paperView = "feed";
@@ -2349,7 +2477,7 @@ var FEED_BY_DATE = window.FEED_BY_DATE || {};
 var WORLD_KNOWN = window.WORLD_KNOWN || [];
 if(!window.FEED_BY_DATE) console.warn("[verify] feed-1846-49.js failed to load — run: node tools/build-feed.js");
 var FEED_DATES = Object.keys(FEED_BY_DATE).sort();
-var MASTHEAD_NAME = { C:"THE CALIFORNIAN", CS:"THE CALIFORNIA STAR", CSC:"THE CALIFORNIA STAR & CALIFORNIAN" };
+var MASTHEAD_NAME = { C:"THE CALIFORNIAN", CS:"THE CALIFORNIA STAR", CSC:"THE CALIFORNIA STAR & CALIFORNIAN", DAC:"THE ALTA CALIFORNIA" };
 var SUSPENSION_ISSUE_DATE = "1848-05-24"; // the Californian's farewell-to-the-mines issue (data/feed confirms a business_close item that date: "Californian newspaper suspends publication amid gold rush")
 
 function issueUrl(src){ return "https://cdnc.ucr.edu/?a=d&d=" + src; }
@@ -2357,6 +2485,16 @@ function todayISOFromSimDay(day){ return simDateISO(dateFromSimDay(day)); }
 function escapeHTML(s){ return (s||"").replace(/[&<>]/g, function(c){ return c==="&"?"&amp;":(c==="<"?"&lt;":"&gt;"); }); }
 function formatIssueDateLabel(dateKey){
   return new Date(dateKey+"T00:00:00Z").toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric",timeZone:"UTC"});
+}
+/* first real issue date strictly after iso and within `days` days, or null —
+   Phase 5: used to route event click-throughs to the issue that REPORTED
+   the event (e.g. Dec 24 1849 fire -> the Dec 26 Alta). */
+function issueWithinDaysAfter(iso, days){
+  var limit = simDateISO(new Date(Date.parse(iso+"T00:00:00Z") + days*86400000));
+  for(var i=0;i<FEED_DATES.length;i++){
+    if(FEED_DATES[i]>iso) return FEED_DATES[i]<=limit ? FEED_DATES[i] : null;
+  }
+  return null;
 }
 /* latest real issue date <= iso, or null if before the first issue (Aug 15 1846) */
 function latestIssueOnOrBefore(iso){
@@ -4038,7 +4176,8 @@ function computeExtraPosition(slot, day){
   slot._now = (h<5.5||h>=22.5) ? "asleep, somewhere in town" : "about the streets";
 }
 function peopleTargetCount(day, alt){
-  if(alt>CFG.peopleMaxAltitude) return 0;
+  var fireCrowd = day>=FIRE.day0 && day<=FIRE.day1+3/24;
+  if(alt>(fireCrowd?750:CFG.peopleMaxAltitude)) return 0;
   var pop = populationAt(day);
   var base = clamp(Math.round(pop/45), 6, PEOPLE_CAP);
   var h = (day-Math.floor(day))*24;
@@ -4047,7 +4186,12 @@ function peopleTargetCount(day, alt){
 }
 function updatePeople(dt, camX, camZ, alt){
   peopleClock += dt;
-  var ambientOn = (alt<=CFG.peopleMaxAltitude) && !provenanceOnly;
+  // PHASE 5: while the Great Fire burns, the crowd IS the documented story
+  // ("a stampede of six thousand human beings") — lift the ambient-people
+  // altitude gate so the exodus/spectators read from the director's fire
+  // shot. Instance cap unchanged, so the perf budget holds.
+  var fireCrowdActive = simDay>=FIRE.day0 && simDay<=FIRE.day1+3/24;
+  var ambientOn = (alt<=(fireCrowdActive?750:CFG.peopleMaxAltitude)) && !provenanceOnly;
   if(!ambientOn){
     personMeshes.forEach(function(m){ m.count=0; });
     lanternGlowMesh.count = 0;
@@ -4056,10 +4200,12 @@ function updatePeople(dt, camX, camZ, alt){
   }
   var day = simDay;
   var eligible = [];
+  resetFleeBudget(); // PHASE 5: cap new flee-route computations per frame
   for(var i=0;i<ALL_PEOPLE_SLOTS.length;i++){
     var s = ALL_PEOPLE_SLOTS[i];
     if(day<s.notBeforeDay) continue;
     if(s.kind==="routine") computeRoutinePosition(s, day); else computeExtraPosition(s, day);
+    applyFireCrowd(s, day); // PHASE 5: flee the fire zone via the street graph, then spectate
     s._distSq = (s._x-camX)*(s._x-camX)+(s._z-camZ)*(s._z-camZ);
     eligible.push(s);
   }
@@ -4478,6 +4624,634 @@ window.addEventListener("keydown", function(e){
   }
 });
 
+/* =========================================================================
+   PHASE 5 — "THE FATES": THE FIRST GREAT FIRE (Dec 24, 1849)
+   Everything below is driven by the spine record (data/events.jsonl,
+   1849-12-24, confidence hard) and the Alta California's own report of
+   Dec 26, 1849 (corpus DAC18491226, "APPALLING AND DESTRUCTIVE
+   CONFLAGRATION!!"): fire discovered "at about one quarter before 6
+   o'clock" at Dennison's Exchange; "the morning was still, scarcely a
+   breath of air" (weather-climate.md confirms: NO wind — spread was
+   building-to-building through flimsy wood-and-cloth structures); powder
+   demolitions by order of the authorities (Ayres' store, the Merchants'
+   Exchange, Geurschard & Van Beuren); "At about 12 M., the last burning
+   building came down." Six hours, ~50 buildings, one block.
+   ========================================================================= */
+var FIRE = (function(){
+  var kU=GEO.streetsU.kearny, mU=GEO.streetsU.montgomery, cV=GEO.streetsV.clay, wV=GEO.streetsV.washington;
+  var igniteDay = eventDateToSimDay("1849-12-24") + 5.75/24;  // 5:45 a.m., per the Alta
+  var endDay    = eventDateToSimDay("1849-12-24") + 12.1/24;  // "at about 12 M. ... at an end"
+  var center = gridToWorld((kU+mU)/2, (cV+wV)/2);
+  // demolition schedule, hours after ignition — the Alta's narrative order:
+  // Ayres' store during the El Dorado's burning, the Merchants' Exchange
+  // next, Geurschard & Van Beuren as the fire neared Montgomery St.
+  var DEMO_HOURS = { "B. Ayres store":2.1, "Merchants' Exchange":3.3, "Geurschard & Van Beuren":4.6 };
+  var SCORCH_NAMES = { "Verandah":1, "Miners' Bank":1, "Bella Union":1, "Haley House":1, "Delmonico's":1, "Burgoyne & Co. (brick, unfinished)":1 };
+  function inFootprint(x,z,margin){
+    var g = worldToGridApprox(x,z);
+    var m = margin||6;
+    return g.u>kU-m && g.u<mU+m && g.v>cV-m && g.v<wV+m;
+  }
+  var ignitionSpot = null;
+  VILLAGE_BUILDING_SPOTS.forEach(function(s){ if(s.isIgnition) ignitionSpot = s; });
+  if(!ignitionSpot) ignitionSpot = { x:gridToWorld(kU+8,wV-36).x, z:gridToWorld(kU+8,wV-36).z };
+
+  var burn = [], scorch = [];
+  VILLAGE_BUILDING_SPOTS.forEach(function(s){
+    if(s.vStart==null) return; // pre-Phase-5 record without a vertex slice (shouldn't happen)
+    if(s.name && SCORCH_NAMES[s.name]){ scorch.push({ spot:s, scorchH: 1.2 + Math.hypot(s.x-ignitionSpot.x, s.z-ignitionSpot.z)/40 }); return; }
+    if(!inFootprint(s.x,s.z,6) || s.fireproof) return;
+    var dIgn = Math.hypot(s.x-ignitionSpot.x, s.z-ignitionSpot.z);
+    var jit = hash2(s.x*0.117, s.z*0.117);
+    var igniteH = s.isIgnition ? 0 : clamp(0.25 + dIgn/26 + jit*0.6, 0.2, 4.8); // ~26 m/h no-wind crawl across the block
+    var demoH = s.name!=null ? DEMO_HOURS[s.name] : undefined;
+    var burnDur = 0.8 + jit*0.7;
+    var collapseH = (demoH!=null) ? demoH : Math.min(igniteH + burnDur, 6.1);
+    if(demoH!=null) igniteH = Math.min(igniteH, demoH - 0.15);
+    burn.push({ spot:s, igniteH:igniteH, collapseH:collapseH, demo:(demoH!=null), jit:jit, groundY:s.y });
+  });
+  burn.sort(function(a,b){ return a.igniteH-b.igniteH; });
+  console.log("[verify] fire footprint:", burn.length, "buildings burn,", scorch.length, "scorched survivors (record: ~50 destroyed).");
+
+  return {
+    day0: igniteDay, day1: endDay,
+    rebuildDay: eventDateToSimDay("1849-12-26"),  // "Rebuilding begins Dec 26" (spine)
+    rebuildDur: 12,                                // sim-days to full re-raise; partially risen by the era's Dec 31 end — the town rebuilt fast
+    cx: center.x, cz: center.z,
+    burn: burn, scorch: scorch, inFootprint: inFootprint,
+    spectatorSpots: [ // the documented crowd: "Portsmouth square ... was crowded with anxious spectators"
+      gridToWorld(GEO.streetsU.dupont+22, cV+14), gridToWorld(GEO.streetsU.dupont+30, (cV+wV)/2),
+      gridToWorld(GEO.streetsU.dupont+22, wV-14), gridToWorld(GEO.streetsU.dupont+48, (cV+wV)/2 - 8)
+    ]
+  };
+})();
+var fireGlow = 0;            // 0..1 — drives firelight, sky tint (read by updateDayNight)
+var FIRE_RATE = (1/24)/3;    // sim-days per real second while the fire burns: 1 sim-hour / 3 s
+
+function fireClockStep(step, dt){
+  if(simDay < FIRE.day0-1e-4 && simDay + step > FIRE.day0){
+    return (FIRE.day0 - simDay) + FIRE_RATE*dt*0.25; // never skip the fire: land on its opening
+  }
+  if(simDay >= FIRE.day0-1e-4 && simDay < FIRE.day1) return Math.min(step, FIRE_RATE*dt);
+  return step;
+}
+
+/* ---- baseline snapshots of the burn/scorch buildings' vertex slices ---- */
+(function snapshotFireSlices(){
+  var bPos = buildingsMesh.geometry.attributes.position.array;
+  var bCol = buildingsMesh.geometry.attributes.color.array;
+  var wPos = windowsMesh.geometry.attributes.position.array;
+  function snap(rec){
+    var s = rec.spot;
+    rec.basePos = bPos.slice(s.vStart*3, s.vEnd*3);
+    rec.baseCol = bCol.slice(s.vStart*3, s.vEnd*3);
+    rec.baseWin = (s.wEnd>s.wStart) ? wPos.slice(s.wStart*3, s.wEnd*3) : null;
+  }
+  FIRE.burn.forEach(snap);
+  FIRE.scorch.forEach(snap);
+})();
+
+/* ---- charred-ground patch over the burned block ---- */
+var charPatch = (function(){
+  var kU=GEO.streetsU.kearny, mU=GEO.streetsU.montgomery, cV=GEO.streetsV.clay, wV=GEO.streetsV.washington;
+  var g = new THREE.PlaneGeometry(Math.abs(mU-kU)-10, Math.abs(wV-cV)-8, 1, 1);
+  g.rotateX(-Math.PI/2); g.rotateY(VIOGET_SKEW);
+  var m = new THREE.MeshBasicMaterial({ color:0x191108, transparent:true, opacity:0, depthWrite:false });
+  var mesh = new THREE.Mesh(g,m);
+  mesh.position.set(FIRE.cx, terrainHeight(FIRE.cx,FIRE.cz)+0.28, FIRE.cz);
+  scene.add(mesh);
+  return mesh;
+})();
+
+/* ---- flame billboards: ONE InstancedMesh (QA-gate: instanced where >10) ---- */
+var FLAME_CAP = IS_TOUCH ? 64 : 110;
+var flameMesh = (function(){
+  var cv = document.createElement("canvas"); cv.width=64; cv.height=96;
+  var ctx = cv.getContext("2d");
+  var grad = ctx.createRadialGradient(32,66,4, 32,58,54);
+  grad.addColorStop(0,"rgba(255,244,190,0.95)");
+  grad.addColorStop(0.25,"rgba(255,180,70,0.85)");
+  grad.addColorStop(0.55,"rgba(240,90,20,0.5)");
+  grad.addColorStop(1,"rgba(140,30,5,0)");
+  ctx.fillStyle=grad; ctx.fillRect(0,0,64,96);
+  var tex = new THREE.CanvasTexture(cv);
+  var geo = new THREE.PlaneGeometry(3.0,5.2); geo.translate(0,2.2,0);
+  var mat = new THREE.MeshBasicMaterial({ map:tex, transparent:true, depthWrite:false,
+    blending:THREE.AdditiveBlending, side:THREE.DoubleSide, fog:false });
+  var mesh = new THREE.InstancedMesh(geo, mat, FLAME_CAP);
+  mesh.count = 0; mesh.frustumCulled = false; scene.add(mesh);
+  return mesh;
+})();
+
+/* ---- embers + smoke: one Points system each, hard-capped ---- */
+var EMBER_CAP = IS_TOUCH ? 140 : 260;
+var emberPts = [], emberMesh = (function(){
+  var pos = new Float32Array(EMBER_CAP*3);
+  var geo = new THREE.BufferGeometry(); geo.setAttribute("position", new THREE.BufferAttribute(pos,3));
+  for(var i=0;i<EMBER_CAP;i++){ pos[i*3+1]=-9999; emberPts.push({ life:0, ttl:0, x:0,y:0,z:0, vx:0,vy:0,vz:0 }); }
+  var mat = new THREE.PointsMaterial({ color:0xffa24a, size:1.5, transparent:true, opacity:0.9,
+    blending:THREE.AdditiveBlending, depthWrite:false, sizeAttenuation:true });
+  var m = new THREE.Points(geo, mat); m.visible=false; m.frustumCulled=false; scene.add(m);
+  return m;
+})();
+var FSMOKE_CAP = IS_TOUCH ? 90 : 150;
+var fsmokePts = [], fsmokeMesh = (function(){
+  var cv = document.createElement("canvas"); cv.width=cv.height=64;
+  var ctx=cv.getContext("2d");
+  var g2=ctx.createRadialGradient(32,32,0,32,32,32);
+  g2.addColorStop(0,"rgba(70,60,50,0.5)"); g2.addColorStop(0.6,"rgba(70,60,50,0.2)"); g2.addColorStop(1,"rgba(70,60,50,0)");
+  ctx.fillStyle=g2; ctx.fillRect(0,0,64,64);
+  var tex = new THREE.CanvasTexture(cv);
+  var pos = new Float32Array(FSMOKE_CAP*3);
+  var geo = new THREE.BufferGeometry(); geo.setAttribute("position", new THREE.BufferAttribute(pos,3));
+  for(var i=0;i<FSMOKE_CAP;i++){ pos[i*3+1]=-9999; fsmokePts.push({ life:0, ttl:0, x:0,y:0,z:0, vx:0,vy:0,vz:0 }); }
+  var mat = new THREE.PointsMaterial({ map:tex, color:0x574c40, size:11, transparent:true, opacity:0.55,
+    depthWrite:false, sizeAttenuation:true, fog:true });
+  var m = new THREE.Points(geo, mat); m.visible=false; m.frustumCulled=false; scene.add(m);
+  return m;
+})();
+
+/* ---- firelight + gunpowder demolition puffs ---- */
+var fireLight = new THREE.PointLight(0xff7a30, 0, 460, 2);
+fireLight.visible = false; scene.add(fireLight);
+var demoPuffs = FIRE.burn.filter(function(b){ return b.demo; }).map(function(b){
+  var m = new THREE.Mesh(new THREE.SphereGeometry(1, 10, 8),
+    new THREE.MeshBasicMaterial({ color:0xd9c9a6, transparent:true, opacity:0, depthWrite:false, fog:false }));
+  m.visible=false; scene.add(m);
+  return { rec:b, mesh:m, fired:false, t:-1 };
+});
+
+/* ---- per-frame fire update ---- */
+var _fireApplied = false;    // any vertex slice currently differs from baseline
+var _fireBurningCount = 0;
+function restoreFireSlices(){
+  var bPos = buildingsMesh.geometry.attributes.position, bCol = buildingsMesh.geometry.attributes.color;
+  var wPos = windowsMesh.geometry.attributes.position;
+  FIRE.burn.concat(FIRE.scorch).forEach(function(rec){
+    var s = rec.spot;
+    bPos.array.set(rec.basePos, s.vStart*3);
+    bCol.array.set(rec.baseCol, s.vStart*3);
+    if(rec.baseWin) wPos.array.set(rec.baseWin, s.wStart*3);
+  });
+  bPos.needsUpdate = true; bCol.needsUpdate = true; wPos.needsUpdate = true;
+  demoPuffs.forEach(function(p){ p.fired=false; p.t=-1; p.mesh.visible=false; });
+  _fireApplied = false;
+}
+var _flameM4 = new THREE.Matrix4(), _flameQ = new THREE.Quaternion(), _flameV = new THREE.Vector3(), _flameS = new THREE.Vector3();
+var _flameAxisY = new THREE.Vector3(0,1,0);
+var _fireClock = 0, _fireWasActive = false;
+function updateFire(dt){
+  _fireClock += dt;
+  var active = simDay>=FIRE.day0 && simDay<=FIRE.day1;
+  // The fire broke out at a quarter before six on a December morning — the
+  // visual day/night cycle is otherwise decoupled from sim hours (Phase 2
+  // decision), so pin it to the pre-dawn dark as the fire opens; dawn then
+  // breaks naturally over the burn ("The morning was still...").
+  if(active && !_fireWasActive && simSpeedKey!==0) timeOfDay = 0.185;
+  _fireWasActive = active;
+  var windowDays = simDay>=FIRE.day0-0.05 && simDay<=FIRE.rebuildDay+FIRE.rebuildDur+1;
+  if(!windowDays){
+    if(_fireApplied && simDay<FIRE.day0) restoreFireSlices(); // jumped back before the fire
+    fireGlow = 0; flameMesh.count = 0; flameMesh.instanceMatrix.needsUpdate = true;
+    emberMesh.visible = false; fsmokeMesh.visible = false; fireLight.visible = false;
+    charPatch.material.opacity = (simDay>FIRE.day1) ? 0.35 : 0; // char stays through the era's end
+    return;
+  }
+  var tH = (simDay-FIRE.day0)*24; // hours since ignition (negative before)
+  var bPos = buildingsMesh.geometry.attributes.position, bCol = buildingsMesh.geometry.attributes.color;
+  var wPos = windowsMesh.geometry.attributes.position;
+  var burning = [];
+  var rebuildT = simDay>=FIRE.rebuildDay ? (simDay-FIRE.rebuildDay) : -1;
+
+  FIRE.burn.forEach(function(rec,bi){
+    var s = rec.spot;
+    var phase; // 0 normal, 1 burning, 2 collapsed, 3 rebuilding
+    if(tH < rec.igniteH) phase = 0;
+    else if(tH < rec.collapseH*1 && tH>=rec.igniteH) phase = 1;
+    else phase = 2;
+    var rise = 0;
+    if(phase===2 && rebuildT>=0){
+      var stagger = rec.jit*5; // lots re-raise over days, not in lockstep
+      rise = smoothstep(stagger, stagger+FIRE.rebuildDur*0.7, rebuildT);
+      if(rise>0.02) phase = 3;
+    }
+    if(phase===1) burning.push(rec);
+
+    var n = s.vEnd - s.vStart;
+    var i3, y0, k;
+    if(phase===0){
+      bPos.array.set(rec.basePos, s.vStart*3);
+      bCol.array.set(rec.baseCol, s.vStart*3);
+      if(rec.baseWin) wPos.array.set(rec.baseWin, s.wStart*3);
+    } else if(phase===1){
+      var f = 0.5+0.5*Math.sin(_fireClock*11 + rec.jit*40);
+      var heat = clamp01((tH-rec.igniteH)/0.4);
+      for(k=0;k<n;k++){
+        i3 = k*3;
+        bCol.array[s.vStart*3+i3]   = lerp(rec.baseCol[i3],   1.0, heat*(0.6+0.4*f));
+        bCol.array[s.vStart*3+i3+1] = lerp(rec.baseCol[i3+1], 0.42, heat*(0.7+0.3*f));
+        bCol.array[s.vStart*3+i3+2] = lerp(rec.baseCol[i3+2], 0.10, heat);
+      }
+      bPos.array.set(rec.basePos, s.vStart*3);
+    } else {
+      // collapsed char mound, optionally re-rising as fresh pine (phase 3)
+      var ember = phase===2 ? Math.max(0, 1-(tH-rec.collapseH)/2) * (0.5+0.5*Math.sin(_fireClock*7+rec.jit*30)) : 0;
+      var squash = 0.07 + 0.93*(phase===3 ? rise : 0);
+      for(k=0;k<n;k++){
+        i3 = k*3;
+        y0 = rec.basePos[i3+1];
+        bPos.array[s.vStart*3+i3]   = rec.basePos[i3];
+        bPos.array[s.vStart*3+i3+1] = rec.groundY + (y0-rec.groundY)*squash;
+        bPos.array[s.vStart*3+i3+2] = rec.basePos[i3+2];
+        if(phase===3){
+          bCol.array[s.vStart*3+i3]   = lerp(0.10, 0.86, rise);
+          bCol.array[s.vStart*3+i3+1] = lerp(0.08, 0.77, rise);
+          bCol.array[s.vStart*3+i3+2] = lerp(0.06, 0.55, rise);
+        } else {
+          bCol.array[s.vStart*3+i3]   = 0.10 + ember*0.55;
+          bCol.array[s.vStart*3+i3+1] = 0.08 + ember*0.16;
+          bCol.array[s.vStart*3+i3+2] = 0.06 + ember*0.03;
+        }
+      }
+      if(rec.baseWin){
+        var wn = s.wEnd - s.wStart;
+        for(k=0;k<wn;k++){
+          i3 = k*3;
+          wPos.array[s.wStart*3+i3]   = rec.baseWin[i3];
+          wPos.array[s.wStart*3+i3+1] = rec.groundY + (rec.baseWin[i3+1]-rec.groundY)*squash;
+          wPos.array[s.wStart*3+i3+2] = rec.baseWin[i3+2];
+        }
+      }
+    }
+  });
+  // scorched survivors: heat-darkened faces, never collapsed (the Alta:
+  // blanket crews on the roofs kept them; Burgoyne's brick stopped the fire)
+  FIRE.scorch.forEach(function(rec){
+    var s = rec.spot, n = s.vEnd-s.vStart;
+    var sc = clamp01((tH-rec.scorchH)/0.8)*0.45;
+    for(var k=0;k<n;k++){
+      var i3=k*3;
+      bCol.array[s.vStart*3+i3]   = rec.baseCol[i3]*(1-sc) + 0.12*sc;
+      bCol.array[s.vStart*3+i3+1] = rec.baseCol[i3+1]*(1-sc) + 0.10*sc;
+      bCol.array[s.vStart*3+i3+2] = rec.baseCol[i3+2]*(1-sc) + 0.08*sc;
+    }
+  });
+  bPos.needsUpdate = true; bCol.needsUpdate = true; wPos.needsUpdate = true;
+  _fireApplied = true;
+  _fireBurningCount = burning.length;
+
+  // demolition puffs — "blown up by order of the city authorities"
+  demoPuffs.forEach(function(p){
+    if(!p.fired && tH >= p.rec.collapseH){ p.fired=true; p.t=0; p.mesh.visible=true;
+      p.mesh.position.set(p.rec.spot.x, p.rec.groundY+3, p.rec.spot.z); }
+    if(p.fired && p.t>=0){
+      p.t += dt;
+      var pt = p.t/1.2;
+      if(pt>=1){ p.t=-1; p.mesh.visible=false; }
+      else { var sc = lerp(3,26,pt); p.mesh.scale.set(sc,sc*0.8,sc); p.mesh.material.opacity = 0.8*(1-pt); }
+    }
+    if(p.fired && simDay<FIRE.day0){ p.fired=false; p.mesh.visible=false; } // rewind safety
+  });
+
+  // flames — up to 3 per burning building, biggest on the named landmarks
+  var fi = 0;
+  for(var b=0; b<burning.length && fi<FLAME_CAP; b++){
+    var rec = burning[b], s = rec.spot;
+    var nFl = s.name ? 3 : (s.w>6 ? 2 : 1);
+    for(var q=0; q<nFl && fi<FLAME_CAP; q++, fi++){
+      var jx = (hash2(s.x+q*7, s.z)-0.5)*s.w*0.8, jz = (hash2(s.x, s.z+q*5)-0.5)*s.d*0.8;
+      var flick = 0.75 + 0.45*Math.sin(_fireClock*9 + q*2.4 + rec.jit*50) * (0.6+0.4*hash2(q,rec.jit*99));
+      var scl = flick * (s.name ? 1.5 : 1.0) * (0.8 + s.h/5);
+      _flameQ.setFromAxisAngle(_flameAxisY, Math.atan2(camera.position.x-(s.x+jx), camera.position.z-(s.z+jz)));
+      _flameV.set(s.x+jx, rec.groundY + s.h*0.45, s.z+jz);
+      _flameS.set(scl,scl,scl);
+      _flameM4.compose(_flameV,_flameQ,_flameS);
+      flameMesh.setMatrixAt(fi,_flameM4);
+    }
+  }
+  flameMesh.count = fi;
+  flameMesh.instanceMatrix.needsUpdate = true;
+
+  // embers + smoke (real-time particles; smolder lingers ~12h after the end)
+  var smolder = clamp01(1-(simDay-FIRE.day1)*24/12);
+  var anySource = burning.length>0 || (tH>0 && smolder>0);
+  emberMesh.visible = burning.length>0;
+  fsmokeMesh.visible = anySource;
+  if(burning.length>0){
+    var ePos = emberMesh.geometry.attributes.position;
+    for(var e=0;e<EMBER_CAP;e++){
+      var em = emberPts[e];
+      em.life -= dt;
+      if(em.life<=0){
+        var src = burning[Math.floor(Math.random()*burning.length)].spot;
+        em.x = src.x+(Math.random()-0.5)*src.w; em.z = src.z+(Math.random()-0.5)*src.d;
+        em.y = terrainHeight(src.x,src.z)+src.h*0.8;
+        em.vx = (Math.random()-0.5)*2.5; em.vz = (Math.random()-0.5)*2.5; em.vy = 5+Math.random()*9;
+        em.ttl = em.life = 1.5+Math.random()*2.5;
+      }
+      em.x += em.vx*dt; em.y += em.vy*dt; em.z += em.vz*dt; em.vy *= (1-0.25*dt);
+      ePos.setXYZ(e, em.x, em.y, em.z);
+    }
+    ePos.needsUpdate = true;
+  }
+  if(anySource){
+    var sources = burning.length>0 ? burning : FIRE.burn;
+    var sPos = fsmokeMesh.geometry.attributes.position;
+    fsmokeMesh.material.color.setHex(burning.length>0 ? 0x4a4038 : 0x8d857a);
+    fsmokeMesh.material.opacity = burning.length>0 ? 0.55 : 0.3*smolder;
+    for(var sm=0;sm<FSMOKE_CAP;sm++){
+      var sp = fsmokePts[sm];
+      sp.life -= dt;
+      if(sp.life<=0){
+        var ssrc = sources[Math.floor(Math.random()*sources.length)].spot;
+        sp.x = ssrc.x; sp.z = ssrc.z; sp.y = terrainHeight(ssrc.x,ssrc.z)+ssrc.h;
+        sp.vx = 1.2+Math.random()*1.4; sp.vz = (Math.random()-0.5)*1.6; sp.vy = 7+Math.random()*8;
+        sp.ttl = sp.life = 4+Math.random()*4;
+      }
+      sp.x += sp.vx*dt; sp.y += sp.vy*dt; sp.z += sp.vz*dt;
+      sPos.setXYZ(sm, sp.x, sp.y, sp.z);
+    }
+    sPos.needsUpdate = true;
+  }
+
+  // firelight + global glow (sky tint at night comes via updateDayNight)
+  fireGlow = clamp01(burning.length/10);
+  var demoFlash = 0;
+  demoPuffs.forEach(function(p){ if(p.t>=0 && p.t<0.35) demoFlash = Math.max(demoFlash, 1-p.t/0.35); });
+  fireLight.visible = fireGlow>0.01 || demoFlash>0;
+  if(fireLight.visible){
+    var cx=0, cz=0;
+    if(burning.length){ burning.forEach(function(r){ cx+=r.spot.x; cz+=r.spot.z; }); cx/=burning.length; cz/=burning.length; }
+    else { cx=FIRE.cx; cz=FIRE.cz; }
+    fireLight.position.set(cx, terrainHeight(cx,cz)+26, cz);
+    fireLight.intensity = (2.6*fireGlow*(0.8+0.2*Math.sin(_fireClock*13)) + demoFlash*5) * (0.55+0.45*nightFactor);
+  }
+
+  // charred ground fades in under the burn, stays as the scar
+  var charT = clamp01(tH/5);
+  charPatch.material.opacity = 0.5*charT * (rebuildT>0 ? lerp(1,0.7,clamp01(rebuildT/FIRE.rebuildDur)) : 1);
+}
+
+/* ---- the crowd: flee the fire zone via the street graph, then watch from
+   the Plaza (the Alta: "Portsmouth square ... crowded with anxious
+   spectators"). Called per-slot from updatePeople(); at most a few new
+   graph routes are computed per frame so the exodus spreads naturally. ---- */
+var _fleeBudget = 0;
+function resetFleeBudget(){ _fleeBudget = 12; }
+function applyFireCrowd(slot, day){
+  if(day < FIRE.day0 || day > FIRE.day1 + 3/24){
+    if(slot._spect){ slot._fleePoly=null; slot._spect=null; }
+    return;
+  }
+  if(!slot._spect){
+    var inZone = FIRE.inFootprint(slot._x, slot._z, 26);
+    var near = Math.hypot(slot._x-FIRE.cx, slot._z-FIRE.cz) < 330;
+    if((inZone || near) && _fleeBudget>0){
+      _fleeBudget--;
+      var spot = FIRE.spectatorSpots[slot.id % FIRE.spectatorSpots.length];
+      slot._spect = spot;
+      slot._fleePoly = buildRoutePoly(slot._x, slot._z, spot.x, spot.z);
+      slot._fleeStart = peopleClock;
+      slot._spOffX = (hash2(slot.id*0.37,1.7)-0.5)*14;
+      slot._spOffZ = (hash2(slot.id*0.53,4.1)-0.5)*14;
+    }
+    if(!slot._spect) return;
+  }
+  var walked = (peopleClock - slot._fleeStart) * 7.0; // a run — people move in real time while the fire clock runs slow, so this is what reads as flight at the fire's 1h/3s pace
+  if(slot._fleePoly && walked < slot._fleePoly.total){
+    var p = pointOnPolyline(slot._fleePoly, walked);
+    slot._x = p.x; slot._z = p.z; slot._dx = p.dx; slot._dz = p.dz;
+    slot._pose = "walk"; slot._now = "fleeing the fire";
+  } else {
+    slot._x = slot._spect.x + slot._spOffX; slot._z = slot._spect.z + slot._spOffZ;
+    slot._dx = FIRE.cx - slot._x; slot._dz = FIRE.cz - slot._z;
+    slot._pose = "market"; slot._now = "watching the fire from the Plaza";
+  }
+}
+
+/* =========================================================================
+   PHASE 5 — AUTO-DIRECTOR + WATCH MODE (V)
+   Event bus with spine priorities (fire 10, Brannan 9, a paper's first
+   issue 7, ship arrival 4 first-of-month-only, month-change idle 2);
+   shot grammar = eased fly-to (the existing spring rig), wide establishing
+   then push-in, hold 8-18s; per-class cooldowns; parchment lower-third
+   quoting the actual headline with date + receipt. Manual input suspends
+   the director for 30s. Watch mode hides all HUD but date/beat-card/ticker.
+   ========================================================================= */
+var WATCH = { on:false };
+var DIRECTOR = { suspendUntil:0, beat:null, beatStart:0, cursor:0, pending:[], cooldownUntil:{}, lastMonthKey:"" };
+var CLS_META = {
+  fire:  { kicker:"THE FIRST GREAT FIRE",  hold:26, cooldown:5,  stale:1.2 },
+  minorfire:{ kicker:"FIRE",               hold:10, cooldown:30, stale:3 },
+  moment:{ kicker:"A DOCUMENTED MOMENT",   hold:16, cooldown:20, stale:4 },
+  paper: { kicker:"THE PRESS",             hold:12, cooldown:30, stale:10 },
+  ship:  { kicker:"SHIP ARRIVAL",          hold:9,  cooldown:20, stale:5 },
+  month: { kicker:"THE TOWN",              hold:8,  cooldown:40, stale:8 }
+};
+var DIRECTOR_BEATS = (function(){
+  var beats = [];
+  // 1. fires from the spine (the Dec 24 1849 Great Fire holds through its whole burn)
+  EVENTS_RAW.forEach(function(e){
+    if(e.class!=="fire") return;
+    if(e.date==="1849-12-24"){
+      beats.push({ simDay:FIRE.day0-0.02, cls:"fire", pri:10, x:FIRE.cx, z:FIRE.cz, alt:250,
+        holdUntilDay:FIRE.day1+1.2/24, headline:"APPALLING AND DESTRUCTIVE CONFLAGRATION!! — Loss of property exceeding $1,000,000!!",
+        dateISO:e.date, receipt:"https://cdnc.ucr.edu/?a=d&d=DAC18491226.1.2" });
+    } else {
+      beats.push({ simDay:e.simDay, cls:"minorfire", pri:6, x:PLAZA_CENTER.x, z:PLAZA_CENTER.z, alt:420,
+        headline:e.headline, dateISO:e.date, receipt:(e.prov&&e.prov.url)||null });
+    }
+  });
+  // 2. Brannan (9) + Leidesdorff (6) documented moments
+  DOCUMENTED_MOMENTS.forEach(function(doc){
+    beats.push({ simDay:doc.startDay+0.35, cls:"moment", pri:(doc.key==="brannan"?9:6),
+      x:doc.x, z:doc.z, alt:120, headline:doc.chip, dateISO:simDateISO(dateFromSimDay(doc.startDay)),
+      receipt:doc.receiptUrl||null });
+  });
+  // 3a. newspaper launches from the spine (e.g. "Alta California newspaper
+  // to launch", Jan 4 1849 — its extracted issues begin Dec 1849, so the
+  // masthead scan below wouldn't surface the launch itself)
+  EVENTS_RAW.forEach(function(e){
+    if(e.type!=="business_open" || !/newspaper/i.test(e.headline||"")) return;
+    beats.push({ simDay:e.simDay+0.4, cls:"paper", pri:7, x:PLAZA_CENTER.x, z:PLAZA_CENTER.z, alt:480,
+      headline:e.headline, dateISO:e.date, receipt:null });
+  });
+  // 3b. first issue of each paper (masthead first-appearance in the real issue list)
+  var seenMast = {};
+  FEED_DATES.forEach(function(dk){
+    var issue = FEED_BY_DATE[dk];
+    if(seenMast[issue.masthead]) return;
+    seenMast[issue.masthead] = true;
+    var first = issue.items[0];
+    beats.push({ simDay:eventDateToSimDay(dk)+0.4, cls:"paper", pri:7, x:PLAZA_CENTER.x, z:PLAZA_CENTER.z, alt:480,
+      headline:"First issue: "+(MASTHEAD_NAME[issue.masthead]||issue.masthead),
+      dateISO:dk, receipt:(first&&first.prov&&first.prov.src)?issueUrl(first.prov.src):null });
+  });
+  // 4. ship arrivals — first documented arrival of each month only
+  var monthSeen = {};
+  shipVisits.slice().sort(function(a,b){ return (a.arrive==null?1e9:a.arrive)-(b.arrive==null?1e9:b.arrive); })
+    .forEach(function(v){
+      if(v.arrive==null) return;
+      var mk = simDateISO(dateFromSimDay(v.arrive)).slice(0,7);
+      if(monthSeen[mk]) return;
+      monthSeen[mk] = true;
+      beats.push({ simDay:v.arrive+0.3, cls:"ship", pri:4, visit:v, alt:260,
+        headline:"Arrived: the "+v.ship, dateISO:simDateISO(dateFromSimDay(v.arrive)), receipt:null });
+    });
+  beats.sort(function(a,b){ return a.simDay-b.simDay; });
+  return beats;
+})();
+var bcClassEl = document.getElementById("bc-class"), bcQuoteEl = document.getElementById("bc-quote"),
+    bcDateEl = document.getElementById("bc-date"), bcReceiptEl = document.getElementById("bc-receipt"),
+    beatCardEl = document.getElementById("beat-card");
+function showBeatCard(b){
+  bcClassEl.textContent = (CLS_META[b.cls]||{}).kicker || b.cls.toUpperCase();
+  bcQuoteEl.textContent = "“"+b.headline+"”";
+  bcDateEl.textContent = new Date(b.dateISO+"T00:00:00Z").toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric",timeZone:"UTC"}).toUpperCase();
+  if(b.receipt){ bcReceiptEl.style.display=""; bcReceiptEl.href = b.receipt; }
+  else bcReceiptEl.style.display="none";
+  beatCardEl.classList.add("on");
+}
+function hideBeatCard(){ beatCardEl.classList.remove("on"); }
+function setWatchMode(on){
+  WATCH.on = on;
+  document.body.classList.toggle("watch-mode", on);
+  if(on && simSpeedKey===0) setSimSpeed(lastActiveSpeed||1);
+  if(!on){ DIRECTOR.beat=null; hideBeatCard(); }
+}
+window.addEventListener("keydown", function(e){
+  if(e.key==="v"||e.key==="V") setWatchMode(!WATCH.on);
+});
+function suspendDirector(){
+  if(!WATCH.on) return;
+  DIRECTOR.suspendUntil = performance.now()+30000;
+  if(DIRECTOR.beat && !DIRECTOR.beat.holdUntilDay){ DIRECTOR.beat=null; hideBeatCard(); }
+}
+["pointerdown","wheel","touchstart"].forEach(function(ev){ canvas.addEventListener(ev, suspendDirector, {passive:true}); });
+window.addEventListener("keydown", function(e){
+  var k = e.key.toLowerCase();
+  if("wasdqerf".indexOf(k)>=0 && k.length===1 || k.indexOf("arrow")===0) suspendDirector();
+});
+function anchoredShipCentroid(){
+  var n=0, x=0, z=0;
+  for(var i=0;i<shipVisits.length;i++){
+    var v = shipVisits[i];
+    if(v._state==="anchored" && v._anchorPos){ n++; x+=v._anchorPos.x; z+=v._anchorPos.z; }
+  }
+  return n>0 ? { count:n, x:x/n, z:z/n } : null;
+}
+function idleActivityCenter(){
+  // "center of activity": village early -> waterfront/anchorage as ships
+  // accumulate -> the tent districts in 1849
+  if(simDay>=HAPPY_VALLEY_REVEAL_DAY+40 && Math.floor(simDay/45)%2===1) return { x:900, z:950, alt:1050 };
+  var anch = anchoredShipCentroid();
+  if(anch && anch.count>=6) return { x:lerp(anch.x,PLAZA_CENTER.x,0.35), z:lerp(anch.z,PLAZA_CENTER.z,0.35), alt:950 };
+  return { x:PLAZA_CENTER.x, z:PLAZA_CENTER.z, alt:720 };
+}
+function lowerBoundBeats(day){
+  var lo=0, hi=DIRECTOR_BEATS.length;
+  while(lo<hi){ var mid=(lo+hi)>>1; if(DIRECTOR_BEATS[mid].simDay<day) lo=mid+1; else hi=mid; }
+  return lo;
+}
+function updateDirector(dt){
+  var now = performance.now();
+  // backward time-jump: resynchronize the cursor and drop stale pendings
+  if(DIRECTOR.cursor>0 && DIRECTOR_BEATS[DIRECTOR.cursor-1] && DIRECTOR_BEATS[DIRECTOR.cursor-1].simDay > simDay + 0.5){
+    DIRECTOR.cursor = lowerBoundBeats(simDay);
+    DIRECTOR.pending.length = 0;
+    DIRECTOR.beat = null; hideBeatCard();
+  }
+  while(DIRECTOR.cursor<DIRECTOR_BEATS.length && DIRECTOR_BEATS[DIRECTOR.cursor].simDay<=simDay){
+    DIRECTOR.pending.push(DIRECTOR_BEATS[DIRECTOR.cursor]); DIRECTOR.cursor++;
+  }
+  DIRECTOR.pending = DIRECTOR.pending.filter(function(b){
+    return (simDay - b.simDay) <= ((CLS_META[b.cls]||{}).stale||5);
+  });
+  if(!WATCH.on) return;
+  if(followedSlot || followedDocumented) return;          // a manual follow outranks the director
+  if(now < DIRECTOR.suspendUntil) return;                 // manual input holds for 30s
+
+  // month-change idle beat (priority 2): a wide re-establishing look
+  var mk = simDateISO(dateFromSimDay(simDay)).slice(0,7);
+  if(mk!==DIRECTOR.lastMonthKey){
+    DIRECTOR.lastMonthKey = mk;
+    var c = idleActivityCenter();
+    var mdate = dateFromSimDay(simDay);
+    DIRECTOR.pending.push({ simDay:simDay, cls:"month", pri:2, x:c.x, z:c.z, alt:c.alt,
+      headline: mdate.toLocaleDateString("en-US",{month:"long",year:"numeric",timeZone:"UTC"})+" — pop. ~"+Math.round(populationAt(simDay)).toLocaleString()+" souls",
+      dateISO: simDateISO(mdate), receipt:null });
+  }
+
+  // a top-priority beat (the fire) preempts whatever lower beat is playing
+  if(DIRECTOR.beat && DIRECTOR.beat.pri<9){
+    for(var pi=0; pi<DIRECTOR.pending.length; pi++){
+      if(DIRECTOR.pending[pi].pri>=9){ DIRECTOR.beat=null; hideBeatCard(); break; }
+    }
+  }
+  if(DIRECTOR.beat){
+    var b = DIRECTOR.beat;
+    var elapsed = (now-DIRECTOR.beatStart)/1000;
+    var done = b.holdUntilDay ? (simDay>b.holdUntilDay) : (elapsed > ((CLS_META[b.cls]||{}).hold||10));
+    if(done){
+      DIRECTOR.cooldownUntil[b.cls] = now + ((CLS_META[b.cls]||{}).cooldown||25)*1000;
+      DIRECTOR.beat = null; hideBeatCard();
+    } else {
+      // shot grammar: wide establishing -> push-in, slow drift throughout
+      var pushT = smoothstep(0, 5.5, elapsed);
+      desired.target = new THREE.Vector3(b.x, groundHeight(b.x,b.z), b.z);
+      desired.distance = clamp(lerp(b.alt*2.7, b.alt, pushT), CFG.minAltitude, CFG.maxAltitude);
+      desired.azimuth += (b.cls==="fire" ? 0.055 : 0.035)*dt;
+      return;
+    }
+  }
+  // pick the highest-priority pending beat off cooldown
+  var best = null;
+  for(var i=0;i<DIRECTOR.pending.length;i++){
+    var cand = DIRECTOR.pending[i];
+    if((DIRECTOR.cooldownUntil[cand.cls]||0) > now) continue;
+    if(!best || cand.pri>best.pri || (cand.pri===best.pri && cand.simDay<best.simDay)) best = cand;
+  }
+  if(best){
+    DIRECTOR.pending.splice(DIRECTOR.pending.indexOf(best),1);
+    if(best.visit){ // ship beats resolve their anchor position at trigger time
+      var ap = best.visit._anchorPos;
+      best.x = ap ? ap.x : 450; best.z = ap ? ap.z : 0;
+    }
+    DIRECTOR.beat = best;
+    DIRECTOR.beatStart = now;
+    showBeatCard(best);
+    return;
+  }
+  // idle: slow golden-hour orbit of the current center of activity
+  var ic = idleActivityCenter();
+  desired.target = new THREE.Vector3(
+    lerp(desired.target.x, ic.x, clamp01(dt*0.5)),
+    groundHeight(ic.x,ic.z),
+    lerp(desired.target.z, ic.z, clamp01(dt*0.5)));
+  desired.distance = lerp(desired.distance, ic.alt, clamp01(dt*0.4));
+  desired.azimuth += 0.03*dt;
+  if(nightFactor>0.9) timeOfDay = (timeOfDay + dt*3/DAY_CYCLE_SECONDS)%1; // drift deep night toward the golden hours
+}
+
+/* debug/verification handle (used by the Phase-5 QA pass; harmless in prod) */
+window.__P1850 = {
+  jump: function(iso){ simDay = clamp(eventDateToSimDay(iso), 0, SIM_END_DAY); },
+  get date(){ return simDateISO(dateFromSimDay(simDay)); },
+  get simDay(){ return simDay; },
+  get calls(){ return renderer.info.render.calls; },
+  get fire(){ return { glow:fireGlow, burning:_fireBurningCount, flames:flameMesh.count }; },
+  get crowd(){
+    var fleeing=0, watching=0;
+    ALL_PEOPLE_SLOTS.forEach(function(s){
+      if(s._now==="fleeing the fire") fleeing++;
+      else if(s._now==="watching the fire from the Plaza") watching++;
+    });
+    return { fleeing:fleeing, watching:watching };
+  },
+  watch: setWatchMode, speed: setSimSpeed,
+  get beat(){ return DIRECTOR.beat ? DIRECTOR.beat.cls+": "+DIRECTOR.beat.headline : null; }
+};
+
 /* =====================================================================
    DAY / NIGHT CYCLE
    ===================================================================== */
@@ -4510,6 +5284,13 @@ function updateDayNight(){
   var overcast = weatherState.wet*0.6;
   zenith.lerp(new THREE.Color(0x767d7c), overcast);
   horizon.lerp(new THREE.Color(0x9aa09c), overcast);
+  // PHASE 5: firelight tints the sky while the Great Fire burns — strongest
+  // against the pre-dawn dark (the fire broke out at 5:45 a.m.)
+  if(fireGlow>0.01){
+    var fg = fireGlow*(0.3+0.7*(1-dayT));
+    horizon.lerp(new THREE.Color(0xff6a28), fg*0.55);
+    zenith.lerp(new THREE.Color(0x4a1e08), fg*0.3);
+  }
   paintSky(zenith, horizon);
 
   var sunColor = cSunNight.clone().lerp(cSunDay, dayT);
@@ -4975,6 +5756,7 @@ function animate(){
   updateGrowth();
   updateWaterfrontLife();
   updateTicker();
+  updateFire(dt);      // PHASE 5 — the Dec 24 1849 Great Fire + aftermath/rebuild
 
   timeOfDay = (timeOfDay + dt/DAY_CYCLE_SECONDS) % 1;
   updateDayNight();
@@ -4992,6 +5774,7 @@ function animate(){
   }
 
   applyKeyboardNav(dt);
+  updateDirector(dt);  // PHASE 5 — auto-director (drives desired.* in Watch mode)
   var alt = applyCameraRig(dt);
   lastKnownAlt = alt;
   updateHud(alt);

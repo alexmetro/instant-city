@@ -1,5 +1,7 @@
 # Map-Asset QA Gate (standing — run before reporting ANY sprint that adds/changes world objects)
 
+**RECONCILIATION ENGINE (standing, est. 2026-07-09 — the discovery system; supersedes inspection as the primary audit):** data\claims.jsonl holds every representable assertion extracted from the research (regenerated as research grows). Builders maintain data\represented.jsonl (claim ids their sprints satisfy + how). The recurring RECONCILER pass diffs claims minus representations → ranked gap report (by icon score × era visibility) → gaps auto-queue as build items. Statistical claims get behavioral spot-checks (sample the sim, compare to the documented number). Discovery must never depend on the user noticing; absence is arithmetic.
+
 **INDEPENDENT AUDITOR (standing role, est. 2026-07-09):** every 2-3 sprints, a read-only auditor agent flies the running app (desktop + mobile emulation, multiple eras/altitudes/times) with this gate + the research as its rubric and writes AUDIT-<date>.md — prioritized, builder-actionable defects (P0/P1/P2). Audit findings are automatically queued as fix sprints. The auditor never edits code; builders never grade their own work.
 
 *Established 2026-07-09 by user directive. Every build brief must include this gate in its verification cycle. Findings go in the report; failures block "done."*
