@@ -3144,17 +3144,24 @@ function freeAnchorSlot(i){ anchorFreeSlots.push(i); }
    east from an inland point until the BAKED heightmap (not the analytic
    shorelineX() approximation, which is only a placement seed here) goes
    underwater, then push out 80-400m and re-check real depth so nothing
-   ever anchors in the shallows. Slots are grouped into offshore "rings";
-   each ring is visited in a bit-reversal-spread order along the shore so
-   the arc fills evenly across the whole waterfront as ship count grows
-   (ring by ring) instead of packing one end first — the outermost ring
-   is deliberately the sparsest, "a few singles further out."
+   ever anchors in the shallows. Slots are grouped into offshore "rings".
+   P0-2 fix (2026-07-10, screening #2 — "dense rafted anchorage
+   concentrated off the cove", not confetti): the along-shore fill order
+   used to be a bit-reversal spread, which fans slots evenly across the
+   ENTIRE ~1.68km cove length as soon as a handful of ships exist — every
+   framing read as scattered dots rather than the documented knot of hulls
+   off the town's own frontage. allocAnchorSlot() hands out increasing
+   indices to earliest-arriving ships, and ANCHOR_SLOTS is visited in
+   array order, so the fix is in the array's own ORDER: along-shore
+   samples are now sorted by distance from the town center (z=0, off
+   Clay/Montgomery — geography-shoreline.md's Yerba Buena Cove section;
+   the town's own Pacific-California frontage spans roughly z=-210..+210)
+   so the first ships to arrive cluster tightly off the town and only
+   spread up/down the cove as the fleet grows into the hundreds, matching
+   the anchorage's documented 1849 growth. Ring (offshore) distances are
+   also pulled in — period engravings show hulls rafted close together,
+   not spread a half-km out — and the outermost ring stays the sparsest.
    --------------------------------------------------------------------- */
-function bitReverse(x, bits){
-  var r = 0;
-  for(var i=0;i<bits;i++){ r=(r<<1)|(x&1); x>>=1; }
-  return r;
-}
 function findRealShoreX(z){
   var x = shorelineX(z)-260;
   for(var step=0; step<170; step++){
@@ -3165,23 +3172,18 @@ function findRealShoreX(z){
 }
 var ANCHOR_SLOTS = (function(){
   var zMin = -800, zMax = 880;              // Clark's Point down toward Rincon Point
-  // P0-2 fix (2026-07-10): SHIP_CAP+MAST_CAP raised to 800 (documented
-  // in-sim peak 566, Dec 1 1849) — nAlong and ring count widened to match
-  // so 800 ships get 800+ distinct moorings instead of wrapping onto a
-  // shared handful of slots (allocAnchorSlot's `i % ANCHOR_SLOTS.length`).
-  // Two new outer rings continue the existing "outermost ring is
-  // deliberately the sparsest, a few singles further out" spacing.
-  var nAlong = 150, bits = 8;                // 2^8=256 >= nAlong, for the spread order
-  var rings = [130, 215, 295, 375, 460, 610, 770];    // offshore-distance centers, widened for true-scale beams
-  var spreadK = [];
-  for(var idx=0; idx<(1<<bits) && spreadK.length<nAlong; idx++){
-    var k = bitReverse(idx, bits);
-    if(k<nAlong) spreadK.push(k);
-  }
+  var nAlong = 150;
+  var rings = [90, 150, 210, 275, 345, 420, 500];   // offshore-distance centers — tightened from 130-770 (P0-2 fix)
+  var alongIdx = [];
+  for(var k=0;k<nAlong;k++) alongIdx.push(k);
+  alongIdx.sort(function(a,b){ // center-out fill order, town frontage (z=0) first
+    var za = lerp(zMin, zMax, (a+0.5)/nAlong), zb = lerp(zMin, zMax, (b+0.5)/nAlong);
+    return Math.abs(za)-Math.abs(zb);
+  });
   var slots = [];
   for(var ring=0; ring<rings.length; ring++){
-    for(var si=0; si<spreadK.length; si++){
-      var k = spreadK[si];
+    for(var si=0; si<alongIdx.length; si++){
+      var k = alongIdx[si];
       var zBase = lerp(zMin, zMax, (k+0.5)/nAlong);
       var z = zBase + (hash2(k*3.1+ring*11.7, 4.2)-0.5)*((zMax-zMin)/nAlong)*0.9; // jittered spacing
       var shoreX = findRealShoreX(z);
@@ -3349,12 +3351,31 @@ function makeSchoonerSailGeo(){
   return g;
 }
 
+// P0-2 fix (2026-07-10, screening #2): this geometry was NEVER run through
+// SHIP_TRUE_SCALE (unlike every full-hull/brig/schooner builder above, which
+// all end with a .scale(SHIP_TRUE_SCALE.x,...) call) — so at raw dimensions
+// its "masts" topped out ~3.5m above the waterline (m1's 7m height, centered
+// on local y=0 with no baked offset, so half of it sat BELOW sea level to
+// begin with). Real masts on these hulls run ~16-21m per makeFullShipHullGeo's
+// own mMain (9.6 * SHIP_TRUE_SCALE.full ~= 19.8m to the cap, plus the yard
+// higher still) — the overflow tier's masts were rendering at roughly a
+// fifth of true height, AND half-submerged, which is why the cove read as
+// scattered dark hull boxes ("confetti") instead of "a forest of masts":
+// the one element that should have dominated the silhouette (tall thin
+// verticals) was the smallest, most invisible part of the instance. Fixed
+// by (a) baking the masts up from the hull's waterline instead of centering
+// them through it, and (b) applying the same true-scale multiplier as the
+// full-hull ships so the mast forest reads at the same height class as the
+// full-hull tier's own masts.
 function makeMastClusterGeo(){
-  var mastColor = new THREE.Color(0x4a3c2c), hullColor = new THREE.Color(0x352a1f);
-  var m1 = makeBoxLocal(0.3,7,0.3,mastColor);
-  var m2 = makeBoxLocal(0.22,5,0.22,mastColor); m2.translate(0,0,1.8);
-  var hullHint = makeBoxLocal(2.0,1.0,6,hullColor); hullHint.translate(0,-0.6,0);
-  return mergeGeoms([m1,m2,hullHint]);
+  var mastColor = new THREE.Color(0x2b2216), hullColor = new THREE.Color(0x2f251a);
+  var mMain = makeBoxLocal(0.32,9.6,0.32,mastColor); bake(mMain, new THREE.Vector3(0,5.3,0));
+  var mFore = makeBoxLocal(0.26,7.2,0.26,mastColor); bake(mFore, new THREE.Vector3(0,4.1,4.6));
+  var yMain = makeBoxLocal(5.0,0.16,0.16,mastColor); bake(yMain, new THREE.Vector3(0,7.6,0));
+  var hullHint = makeBoxLocal(2.4,1.4,7.0,hullColor); bake(hullHint, new THREE.Vector3(0,0.2,0));
+  var geo = mergeGeoms([mMain,mFore,yMain,hullHint]);
+  geo.scale(SHIP_TRUE_SCALE.full, SHIP_TRUE_SCALE.full, SHIP_TRUE_SCALE.full);
+  return geo;
 }
 
 var SHIP_HULL_BUILDERS = [makeFullShipHullGeo, makeBrigHullGeo, makeSchoonerHullGeo];
@@ -3727,9 +3748,28 @@ var tentCandidates = (function(){
   return out;
 })();
 
-function makeGrowthBuildingGeo(){
-  var body = makeBoxLocal(5,2.8,4, new THREE.Color(0xceb182));
-  var roof = makeGableRoof(5,4,0.45,1.3, new THREE.Color(0x6b4a34));
+// P0-4 DENSITY fix (2026-07-10, screening #2): the finished-building body
+// color (0xceb182) sat within ~10 RGB units of duneGold (0xc9ad6c) and sand
+// (0xd8c48c) — terrainColor()'s own ground palette — so at any altitude
+// where the 5x4m footprint reads as only a few px, the growth-building
+// layer camouflaged into the sand almost exactly like the tents did before
+// their documented fix, even though the growth/reveal DATA was already
+// correct (504/504 spawned at 1849-09-20, confirmed via __P1850.buildings).
+// This is the actual root cause of "same ~25 structures, unchanged" —
+// those 25 are the founding VILLAGE_BUILDING_SPOTS + fire-block, which use
+// a varied, more contrasting palette (adobeColors/frameColors below); the
+// growth layer was rendering literally invisible against its own ground.
+// Two alternating body/roof colorways (weathered grey-brown timber, deliberately
+// darker/cooler than sand — same fix direction as the tent canvas color)
+// give both contrast AND a break from single-color repetition.
+var GROWTH_BUILDING_COLORWAYS = [
+  { body:0x8c7350, roof:0x4c3a2a },
+  { body:0x796449, roof:0x5c4436 }
+];
+function makeGrowthBuildingGeo(variant){
+  var cw = GROWTH_BUILDING_COLORWAYS[variant||0];
+  var body = makeBoxLocal(5,2.8,4, new THREE.Color(cw.body));
+  var roof = makeGableRoof(5,4,0.45,1.3, new THREE.Color(cw.roof));
   bake(roof, new THREE.Vector3(0,2.8,0));
   return mergeGeoms([body,roof]);
 }
@@ -3751,7 +3791,10 @@ function makeConstructionFrameGeo(){
   return mergeGeoms(parts);
 }
 function makeConstructionWallsGeo(){
-  return makeBoxLocal(5,2.8,4, new THREE.Color(0xceb182)); // same body dims as the finished building, roof not yet raised
+  // P0-4 fix: was the same near-sand tan (0xceb182) as the old finished body;
+  // raw unweathered plank walls (pre-roof) read a shade greyer/paler than
+  // the finished colorways above, still clearly darker than sand/duneGold.
+  return makeBoxLocal(5,2.8,4, new THREE.Color(0xa8977a));
 }
 /* QA-GATE tents debt: the old tent was a single warm-tan cone (0xd8cba0)
    almost indistinguishable from the sand palette (sand 0xd8c48c, duneGold
@@ -3795,8 +3838,12 @@ function makeCampfireGeo(){
   var g = new THREE.ConeGeometry(0.32,0.5,6); g.translate(0,0.25,0);
   return colorizeUniform(g, new THREE.Color(0xffb060));
 }
-var growthBuildingMesh = new THREE.InstancedMesh(makeGrowthBuildingGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, transparent:true, side:THREE.DoubleSide, specular:0x000000, shininess:0}), growthBuildingCandidates.length);
+var growthBuildingMesh = new THREE.InstancedMesh(makeGrowthBuildingGeo(0), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, transparent:true, side:THREE.DoubleSide, specular:0x000000, shininess:0}), growthBuildingCandidates.length);
 growthBuildingMesh.count = 0; scene.add(growthBuildingMesh);
+// P0-4 fix: second colorway, alternated by candidate index in growRevealStaged()
+// below, purely for visual variety (breaks up the "stamped-out" single-tone read).
+var growthBuildingMesh2 = new THREE.InstancedMesh(makeGrowthBuildingGeo(1), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, transparent:true, side:THREE.DoubleSide, specular:0x000000, shininess:0}), growthBuildingCandidates.length);
+growthBuildingMesh2.count = 0; scene.add(growthBuildingMesh2);
 // staged-construction meshes (item 4): a candidate occupies exactly one of
 // these four meshes at a time, keyed by age-since-spawn (see
 // updateGrowth()'s staged-reveal loop) — never a scale-in blob.
@@ -3866,7 +3913,7 @@ function growRevealStaged(pool, spawned, targetCount, revealDayFn){
     var rDay = revealDayFn ? Math.min(simDay, revealDayFn(idx)) : simDay; // P0-1: backdate to when this site should truly have broken ground
     spawned.push({ x:c.x, z:c.z, h:terrainHeight(c.x,c.z), rot:c.rot, spawnDay:rDay, settled:false });
   }
-  var matN=0, frameN=0, wallN=0, doneN=0, workerN=0;
+  var matN=0, frameN=0, wallN=0, doneN=0, doneN2=0, workerN=0;
   var dayHour = (simDay-Math.floor(simDay))*24;
   var isDaylight = dayHour>=6.5 && dayHour<18;
   for(var i=0;i<spawned.length;i++){
@@ -3877,7 +3924,12 @@ function growRevealStaged(pool, spawned, targetCount, revealDayFn){
     if(frac<0.18){ setShipInstance(growthMaterialsMesh, matN++, b.x,b.h,b.z,b.rot,1); }
     else if(frac<0.45){ setShipInstance(growthFrameMesh, frameN++, b.x,b.h,b.z,b.rot,1); }
     else if(frac<0.8){ setShipInstance(growthWallsMesh, wallN++, b.x,b.h,b.z,b.rot,1); }
-    else { setShipInstance(growthBuildingMesh, doneN++, b.x,b.h,b.z,b.rot,1); b.settled = frac>=1; }
+    else {
+      // P0-4 fix: alternate the two colorways by candidate index for variety.
+      if(i%2===0) setShipInstance(growthBuildingMesh, doneN++, b.x,b.h,b.z,b.rot,1);
+      else setShipInstance(growthBuildingMesh2, doneN2++, b.x,b.h,b.z,b.rot,1);
+      b.settled = frac>=1;
+    }
     if(isDaylight && activeStage){
       for(var wk=0; wk<CONSTRUCTION_WORKERS_PER_SITE && workerN<constructionWorkerMesh.instanceMatrix.count; wk++){
         var wang = wk*2.4 + i*0.7;
@@ -3889,6 +3941,7 @@ function growRevealStaged(pool, spawned, targetCount, revealDayFn){
   growthMaterialsMesh.count = matN; growthMaterialsMesh.instanceMatrix.needsUpdate = true;
   growthFrameMesh.count = frameN; growthFrameMesh.instanceMatrix.needsUpdate = true;
   growthWallsMesh.count = wallN; growthWallsMesh.instanceMatrix.needsUpdate = true;
+  growthBuildingMesh2.count = doneN2; growthBuildingMesh2.instanceMatrix.needsUpdate = true;
   growthBuildingMesh.count = doneN; growthBuildingMesh.instanceMatrix.needsUpdate = true;
   constructionWorkerMesh.count = workerN; constructionWorkerMesh.instanceMatrix.needsUpdate = true;
 
@@ -7038,9 +7091,23 @@ lanternGlowMesh.count = 0; scene.add(lanternGlowMesh);
 // "GROUNDING CONTACT SHADOWS" block above, which builds the static building
 // version + the shared CONTACT_SHADOW_TEX); capacity matches PEOPLE_CAP since
 // at most that many person-instances are ever active in a frame.
+// P0-3 fix (2026-07-10, screening #2): the person body itself (a true-scale
+// ~1.5m coat cone) is not the problem — close-range testing (25m altitude)
+// shows it renders with plenty of color contrast (dark coat vs pale sand).
+// The screening's 100-150m framings are the "maps-like" near-top-down
+// camera pitch (elevationForT(), 45-55° at this altitude band), where a
+// 0.4m-wide, 1.5m-tall figure genuinely projects to ~1-2px — a true findability
+// failure per QA-GATE rule 3, which prescribes a semantic-zoom affordance
+// for anything this small rather than inflating the asset's own geometry
+// (grounding.md's scale rule). The contact shadow already IS that
+// affordance (same pattern as buildingShadowMesh) but was itself only
+// ~0.5m x 0.3m — also sub-pixel at altitude, so it wasn't helping. Enlarged
+// here (not the person mesh) so each walker registers as a legible dark
+// mark from above, the same trick top-down city-builders (SimCity/Cities:
+// Skylines "pop dot + shadow") use for crowd legibility at zoomed-out scale.
 var personShadowMesh = (function(){
   var geo = new THREE.PlaneGeometry(1,1); geo.rotateX(-Math.PI/2);
-  var mat = new THREE.MeshBasicMaterial({ map:CONTACT_SHADOW_TEX, transparent:true, depthWrite:false, opacity:0.75 });
+  var mat = new THREE.MeshBasicMaterial({ map:CONTACT_SHADOW_TEX, transparent:true, depthWrite:false, opacity:0.88 });
   var mesh = new THREE.InstancedMesh(geo, mat, PEOPLE_CAP);
   mesh.count = 0; mesh.renderOrder = -1; scene.add(mesh);
   return mesh;
@@ -7358,7 +7425,8 @@ function updatePeople(dt, camX, camZ, alt){
     // rendered figure gets one, walking or asleep, so nobody floats.
     if(shadowCount<PEOPLE_CAP){
       _personShadowQ.setFromAxisAngle(_UP, yaw);
-      _personShadowM4.compose(new THREE.Vector3(s._x, h+0.02, s._z), _personShadowQ, new THREE.Vector3(0.55, 1, s._pose==="sleep"?1.3:0.32));
+      // P0-3 fix: enlarged from (0.55,1,0.32) — see personShadowMesh comment above.
+      _personShadowM4.compose(new THREE.Vector3(s._x, h+0.02, s._z), _personShadowQ, new THREE.Vector3(1.3, 1, s._pose==="sleep"?2.0:0.95));
       personShadowMesh.setMatrixAt(shadowCount, _personShadowM4);
       shadowCount++;
     }
@@ -8651,6 +8719,49 @@ window.__P1850 = {
       if(v.arriveInferred && (st==="anchored"||st==="sailing_in"||st==="sailing_out")) inferred++;
     });
     return { anchored:anchored, sailing:sailing, anchoredInferredOnly:inferred };
+  },
+  get masts(){ return { cap:MAST_CAP, rendered:mastClusterMesh.count, shipCap:SHIP_CAP, anchorSlots:ANCHOR_SLOTS.length }; },
+  get buildings(){
+    return { villageSpots:VILLAGE_BUILDING_SPOTS.length, candidates:growthBuildingCandidates.length,
+      spawned:spawnedBuildings.length, target:growthTargets(populationAt(simDay)).buildings,
+      stages:{ materials:growthMaterialsMesh.count, frame:growthFrameMesh.count, walls:growthWallsMesh.count, done:growthBuildingMesh.count+growthBuildingMesh2.count } };
+  },
+  get people(){
+    return { cap:PEOPLE_CAP, target:peopleTargetCount(simDay,lastKnownAlt), alive:ALL_PEOPLE_SLOTS.length,
+      rendered:personMeshes.reduce(function(a,m){return a+m.count;},0), alt:lastKnownAlt };
+  },
+  _debugMesh: function(name){
+    var map = { growthBuildingMesh:growthBuildingMesh, tentMesh:tentMesh, mastClusterMesh:mastClusterMesh,
+      growthMaterialsMesh:growthMaterialsMesh, growthFrameMesh:growthFrameMesh, growthWallsMesh:growthWallsMesh,
+      personMesh0:personMeshes[0] };
+    var m = map[name]; if(!m) return null;
+    return { frustumCulled:m.frustumCulled, count:m.count,
+      boundingSphere: m.boundingSphere ? {x:m.boundingSphere.center.x,y:m.boundingSphere.center.y,z:m.boundingSphere.center.z,r:m.boundingSphere.radius} : null };
+  },
+  get plazaCenter(){ return { x:PLAZA_CENTER.x, z:PLAZA_CENTER.z }; },
+  probeTerrain: function(x,z){
+    return { h:terrainHeight(x,z), raw:sampleTerrainGrid(x,z), villageY:VILLAGE_Y,
+      dOut:distOutsideBox(x,z,VILLAGE_BOX), villageBox:VILLAGE_BOX };
+  },
+  get storeships(){ return STORESHIP_INFO; },
+  get geoDebug(){
+    return { streetsV:GEO.streetsV, streetsU:GEO.streetsU,
+      pacificW:gridToWorld(0,GEO.streetsV.pacific), californiaW:gridToWorld(0,GEO.streetsV.california),
+      clayW:gridToWorld(0,GEO.streetsV.clay), washingtonW:gridToWorld(0,GEO.streetsV.washington),
+      zNorthHeadland:GEO.zNorthHeadland, zSouthHeadland:GEO.zSouthHeadland };
+  },
+  get firstPerson(){
+    for(var i=0;i<ALL_PEOPLE_SLOTS.length;i++){
+      var s = ALL_PEOPLE_SLOTS[i];
+      if(s._x!=null && simDay>=s.notBeforeDay && (s.notAfterDay==null||simDay<=s.notAfterDay)) return { x:s._x, z:s._z, variant:s.variant, pose:s._pose };
+    }
+    return null;
+  },
+  _setFrustumCulled: function(name, val){
+    var map = { growthBuildingMesh:growthBuildingMesh, tentMesh:tentMesh, mastClusterMesh:mastClusterMesh,
+      growthMaterialsMesh:growthMaterialsMesh, growthFrameMesh:growthFrameMesh, growthWallsMesh:growthWallsMesh,
+      personMesh0:personMeshes[0] };
+    var m = map[name]; if(m) m.frustumCulled = val;
   }
 };
 

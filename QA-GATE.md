@@ -10,6 +10,8 @@
 
 *Established 2026-07-09 by user directive. Every build brief must include this gate in its verification cycle. Findings go in the report; failures block "done."*
 
+**DIRECTOR'S SCREENING — RELEASE GATE (est. 2026-07-10 after repeated builder-verified regressions reached the user):** no landing is reported to the user as fixed/done until the Director (main loop) has personally flown the pushed build in a REAL rendering browser and graded THE CANONICAL SIX framings: (1) town core ~150m day, (2) town core ~150m night, (3) full town ~500m day, (4) cove + waterfront ~500m, (5) overview ~1500m, (6) plaza close-in with camera moving (flicker check). Screenshots of all six accompany the report; visible regressions vs the prior landing's six = the landing is rejected before the user ever sees it. Builder self-verification remains required but is no longer sufficient — builders verify their fix; the screening verifies the whole picture. Sandbox caveat: builder-side screenshot claims from stalled-rAF sandbox tabs are treated as UNVERIFIED.
+
 For EVERY new or changed on-map asset class, answer all six:
 
 1. **PLACEMENT FIDELITY** — is it where the record puts it? Cite the research file + bearing/distance (peninsula-1846.md style). If placement is a guess, say so in the report.
