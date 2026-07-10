@@ -1,5 +1,7 @@
 # Map-Asset QA Gate (standing — run before reporting ANY sprint that adds/changes world objects)
 
+**INDEPENDENT AUDITOR (standing role, est. 2026-07-09):** every 2-3 sprints, a read-only auditor agent flies the running app (desktop + mobile emulation, multiple eras/altitudes/times) with this gate + the research as its rubric and writes AUDIT-<date>.md — prioritized, builder-actionable defects (P0/P1/P2). Audit findings are automatically queued as fix sprints. The auditor never edits code; builders never grade their own work.
+
 *Established 2026-07-09 by user directive. Every build brief must include this gate in its verification cycle. Findings go in the report; failures block "done."*
 
 For EVERY new or changed on-map asset class, answer all six:
@@ -10,6 +12,8 @@ For EVERY new or changed on-map asset class, answer all six:
 4. **LEGIBILITY OF SILHOUETTE** — at 3 distances (bubble ~100m, mid ~500m, far ~1500m): does it read as the thing it is? Not as boxes-in-a-parking-lot (ships), not as people (old hitching posts), not as filter noise (old ripple patch). Contrast against its background checked in BOTH day and night lighting.
 5. **INTEGRATION** — terrain-conformed (no floating, no submersion, no clipping through streets/buildings/other assets); respects masks (village box, streets, roads); appears/disappears at era-correct dates if time-bound.
 6. **PERF** — instanced where >10 copies; draw-call delta stated; 60fps maintained.
+
+7. **DENSITY & LIFE (no dead space)** — inside inhabited zones (village, waterfront, tent districts, Mission/Presidio clusters), any camera frame at 100-500m must contain visible evidence of life and use: people, worn ground, objects, smoke, animals, activity. Wide-open emptiness is REJECTED by default; it passes only if the record documents that spot as empty (then it should read as *meaningfully* empty: dunes, scrub, distance — not untextured void). The gaps BETWEEN things need as much authorship as the things: paths, litter of daily use, transitions. Test: pause at 5 random village/waterfront framings — if any reads as "boxes on a bare plane," the sprint fails this check.
 
 Report format per asset class: `ASSET — placement(src) / scale(dims,src) / findability(affordance) / silhouette(day+night verdict) / integration / +N draw calls`.
 

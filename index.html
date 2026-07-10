@@ -247,6 +247,8 @@
   #person-inspector .pi-field{ display:block; font-size:0.62rem; letter-spacing:0.6px; opacity:0.8; margin-top:6px; line-height:1.4; }
   #person-inspector .pi-label{ display:block; font-size:0.55rem; letter-spacing:1.5px; opacity:0.6; margin-top:7px; }
   #person-inspector a{ color:var(--ink); }
+  #person-inspector .pi-fly{ text-decoration:underline; cursor:pointer; }
+  #person-inspector #pi-now{ font-style:italic; opacity:0.95; }
   #person-inspector .pi-follow-hint{ display:block; margin-top:8px; font-size:0.58rem; opacity:0.55; font-style:italic; }
 
   #hud-provenance{
@@ -337,6 +339,7 @@
     <h3 id="pi-name">&mdash;</h3>
     <span class="pi-field" id="pi-summary"></span>
     <span class="pi-field" id="pi-detail"></span>
+    <span class="pi-field" id="pi-now"></span>
     <span class="pi-field" id="pi-receipt-wrap"><a id="pi-receipt" href="#" target="_blank" rel="noopener">view the original page &rarr;</a></span>
     <span class="pi-follow-hint">Esc &mdash; release</span>
   </div>
@@ -1149,14 +1152,21 @@ var windowGeoms = [];
 var buildingGeoms = [];
 var buildingsMesh; // hoisted for semantic-zoom crossfade (see SEMANTIC ZOOM below)
 var chimneySpots = []; // {x,y,z} — smoke-puff emitters (A6), capped at a few buildings
-var VILLAGE_BUILDING_SPOTS = []; // {x,z,y,rot,w,d} per placed building — reused by Phase 4's
-                                  // yard-object pass (sheds/outhouses/signage) and the ambient-people
-                                  // street-life system so both can anchor off real building placements
-                                  // instead of re-guessing lot positions.
+var VILLAGE_BUILDING_SPOTS = []; // {x,z,y,rot,w,d,vStart,vEnd,name?} per placed building — reused by
+                                  // Phase 4's yard-object pass (sheds/outhouses/signage), the
+                                  // ambient-people street-life system, AND Phase 5's fire system
+                                  // (vStart/vEnd index into buildingsMesh's merged vertex buffer so
+                                  // individual buildings can be burned/collapsed/rebuilt in place —
+                                  // see "PHASE 5 — THE FATES: THE FIRST GREAT FIRE" further down).
+var buildingVertCursor = 0; // running vertex count across buildingGeoms as they're pushed, so each
+                             // placeBuilding() call can record its own [vStart,vEnd) slice of the
+                             // eventual merged buffer without a second full pass over the array.
+function pushBuildingGeo(list, geo){ list.push(geo); buildingVertCursor += geo.attributes.position.count; return geo; }
 (function buildVillage(){
   var uVals = [GEO.streetsU.stockton, GEO.streetsU.dupont, GEO.streetsU.kearny, GEO.streetsU.montgomery];
   var vVals = [GEO.streetsV.pacific, GEO.streetsV.jackson, GEO.streetsV.clay, GEO.streetsV.washington, GEO.streetsV.sacramento, GEO.streetsV.california];
   var PLAZA_BX = 1, PLAZA_BZ = 2; // block between Dupont/Kearny x Clay/Washington
+  window._VILLAGE_GRID = { uVals:uVals, vVals:vVals, PLAZA_BX:PLAZA_BX, PLAZA_BZ:PLAZA_BZ }; // Phase 5 fire-footprint lookup
 
   var adobeColors = [0xcda86e, 0xd8bc84, 0xc39a5f];
   var frameColors = [0xe8e0c8, 0xc9a876, 0xa88a68, 0xdcd2ae];
@@ -1166,9 +1176,16 @@ var VILLAGE_BUILDING_SPOTS = []; // {x,z,y,rot,w,d} per placed building — reus
   function blockDensity(bx,bz){
     // true-scale pass: buildings shrank (below), so counts are raised a bit
     // to keep the same lived-in read rather than looking sparser.
-    if(bx===2 && bz===PLAZA_BZ) return 4.6;   // Montgomery between Clay & Washington
+    // 2026-07 Phase 5 bump: the blocks immediately ringing the Plaza (where
+    // the Dec 24 1849 Great Fire's ~50-building footprint falls) are raised
+    // further — economy-daily-life.md §"gambling houses" alone names 7+
+    // distinct establishments crowded onto these few blocks by 1849, denser
+    // than this sim's general "few dozen structures total" village decision
+    // (spec §5.5) allows for elsewhere. Cited in the Phase 5 QA-gate report
+    // as a deliberate, sourced local density increase, not a global one.
+    if(bx===2 && bz===PLAZA_BZ) return 6.4;   // Montgomery between Clay & Washington
     var dPlaza = Math.abs(bx-PLAZA_BX)+Math.abs(bz-PLAZA_BZ);
-    if(dPlaza<=1) return 3.6;                  // faces the Plaza directly
+    if(dPlaza<=1) return 5.2;                  // faces the Plaza directly (fire footprint)
     if(dPlaza===2) return 1.9;                 // one ring further out
     return 0.5;                                // thinning to almost nothing at the grid's edge
   }
@@ -1946,14 +1963,14 @@ var growthBuildingCandidates = (function(){
 var tentCandidates = (function(){
   function tentBiome(x,z,h){ return h>2 && h<78 && farFromVillage(x,z,35); }
   var clusters = [
-    { cx:900, cz:950, r:650 },                                  // Happy Valley, south of the cove
-    { cx:PLAZA_CENTER.x-260, cz:PLAZA_CENTER.z+220, r:380 },     // immediate village overflow
-    { cx:PLAZA_CENTER.x-900, cz:PLAZA_CENTER.z-260, r:700 }      // western hillside camps
+    { cx:900, cz:950, r:650, label:"Happy Valley" },                                  // Happy Valley, south of the cove
+    { cx:PLAZA_CENTER.x-260, cz:PLAZA_CENTER.z+220, r:380, label:"the town's edge camps" },     // immediate village overflow
+    { cx:PLAZA_CENTER.x-900, cz:PLAZA_CENTER.z-260, r:700, label:"the western hillside camps" }      // western hillside camps
   ];
   var out = [];
   clusters.forEach(function(c){
     scatterSample(480, c.cx, c.cz, c.r, tentBiome).forEach(function(p){
-      out.push({ x:p.x, z:p.z, rot:rngBuild()*Math.PI*2, priority:rngBuild() });
+      out.push({ x:p.x, z:p.z, rot:rngBuild()*Math.PI*2, priority:rngBuild(), label:c.label });
     });
   });
   out.sort(function(a,b){ return a.priority-b.priority; });
@@ -3109,6 +3126,8 @@ function updateFarScatter(alt){
    prefab LANGUAGE (small merged box shapes, InstancedMesh) rather than
    inventing a new visual vocabulary.
    ===================================================================== */
+var SIGN_BUILDING_SPOTS = []; // {x,z,y,rot,w,d,word} — reused by Phase 4's home/work
+                               // system so shop-trade routines have a real signed building to work at.
 (function buildYardObjects(){
   function behindSpot(spot, dist, lateral){
     // world offset "behind" a building relative to its own facing rotation,
@@ -3217,7 +3236,8 @@ function updateFarScatter(alt){
     return Math.hypot(a.x-PLAZA_CENTER.x,a.z-PLAZA_CENTER.z) - Math.hypot(b.x-PLAZA_CENTER.x,b.z-PLAZA_CENTER.z);
   }).slice(0, SIGN_WORDS.length);
   plazaSorted.forEach(function(spot, i){
-    var tex = makeSignTexture(SIGN_WORDS[i % SIGN_WORDS.length]);
+    var word = SIGN_WORDS[i % SIGN_WORDS.length];
+    var tex = makeSignTexture(word);
     var mat = new THREE.MeshBasicMaterial({ map:tex, side:THREE.DoubleSide, transparent:true });
     var geo = new THREE.PlaneGeometry(1.6,0.42);
     var mesh = new THREE.Mesh(geo, mat);
@@ -3225,6 +3245,7 @@ function updateFarScatter(alt){
     mesh.position.set(spot.x + Math.sin(spot.rot)*faceDist, spot.y+1.55, spot.z + Math.cos(spot.rot)*faceDist);
     mesh.rotation.y = spot.rot;
     scene.add(mesh);
+    SIGN_BUILDING_SPOTS.push({ x:spot.x, z:spot.z, y:spot.y, rot:spot.rot, w:spot.w, d:spot.d, word:word });
   });
 })();
 
@@ -3534,62 +3555,327 @@ function loopPoints(cx,cz,r,n){
   return pts;
 }
 var HAPPY_VALLEY_REVEAL_DAY = eventDateToSimDay("1849-01-05"); // tents/growth start reading as Happy Valley around here
-var PEOPLE_ROUTES = (function(){
-  var mV=GEO.streetsV, mU=GEO.streetsU;
-  var waterfrontPts = waterfrontBeachLines.slice().sort(function(a,b){return a.z-b.z;})
-    .filter(function(_,i){ return i%3===0; })
-    .map(function(ln){ return { x:lerp(ln.landX,ln.waterX,0.38), z:ln.z }; });
-  var northCoveC = { x:lerp(PLAZA_CENTER.x,-134,0.5), z:lerp(PLAZA_CENTER.z,-808,0.5) };
-  var missionLoopC = OUTPOSTS.mission;
-  var routes = [
-    { key:"plaza", label:"the Plaza", originPool:["american","californio","black","french"],
-      revealDay:0, weight:1.5, pts:loopPoints(PLAZA_CENTER.x,PLAZA_CENTER.z,42,8), loop:true },
-    { key:"montgomery", label:"Montgomery Street", originPool:["american","french","black"],
-      revealDay:0, weight:1.4, pts:[gridToWorld(mU.montgomery,mV.pacific), gridToWorld(mU.montgomery,mV.california)], loop:false },
-    { key:"kearny", label:"Kearny Street", originPool:["american","californio"],
-      revealDay:0, weight:0.8, pts:[gridToWorld(mU.kearny,mV.pacific), gridToWorld(mU.kearny,mV.california)], loop:false },
-    { key:"dupont_sacramento", label:"Dupont & Sacramento Streets", originPool:["chinese","american"],
-      revealDay:eventDateToSimDay("1849-01-01"), weight:0.5,
-      pts:[gridToWorld(mU.dupont,mV.pacific), gridToWorld(mU.dupont,mV.sacramento), gridToWorld(mU.montgomery,mV.sacramento)], loop:false },
-    { key:"waterfront", label:"the waterfront", originPool:["american","hawaiian","chilean","french"],
-      revealDay:0, weight:1.7, pts:waterfrontPts.length>1?waterfrontPts:[gridToWorld(mU.montgomery,mV.clay),gridToWorld(mU.montgomery,mV.washington)], loop:false },
-    { key:"northcove", label:"Sydney Town / Little Chile (Telegraph Hill foot)", originPool:["chilean","australian"],
-      revealDay:eventDateToSimDay("1848-10-25"), weight:1.0, pts:loopPoints(northCoveC.x,northCoveC.z,60,7), loop:true },
-    { key:"happyvalley", label:"Happy Valley", originPool:["american","chilean"],
-      revealDay:HAPPY_VALLEY_REVEAL_DAY, weight:1.3, pts:loopPoints(900,950,260,9), loop:true },
-    { key:"mission", label:"near the Mission", originPool:["californio","american"],
-      revealDay:0, weight:0.35, pts:loopPoints(missionLoopC.x,missionLoopC.z,55,6), loop:true }
-  ];
-  routes.forEach(function(r){ r.poly = buildPolyline(r.pts, r.loop); });
-  return routes;
-})();
 
-/* ---- 3. slot generation — a fixed pool of walker "identities" (spec §9's
-   persistent slots, scoped down to a walk-route + origin/gender assignment
-   rather than full households, given this build's timebox), built once at
-   load so a given slot index is stable across the whole session ---- */
+/* ---- 2b. STREET GRAPH — a waypoint graph over the real surveyed street
+   grid (every streetsU x streetsV intersection), plus the Plaza (wired to
+   its four bounding corners), the Clay St wharf/landing, the Mission-road
+   chain (reusing MISSION_ROAD_PTS' real low-ground route), and a spur from
+   each off-grid camp hub (Happy Valley, the town's-edge camps, the western
+   hillside camps, Sydney Town/Little Chile) to its nearest real street
+   node. People move ONLY via BFS/Dijkstra shortest path along these edges
+   — the fix for "doesn't respect streets... straight lines": the sole
+   straight-line segment allowed anywhere is the short spur from an exact
+   building/tent/worksite position to its nearest graph node (stepping from
+   your own door to the street), consistent with this village's tiny
+   50-vara-lot scale. ---- */
+var STREET_GRAPH = (function(){
+  var nodes = [], edgeList = [], idx = {};
+  function addNode(key,x,z){ idx[key] = nodes.length; nodes.push({key:key,x:x,z:z}); edgeList.push([]); return idx[key]; }
+  function addEdge(k1,k2){
+    var i1=idx[k1], i2=idx[k2];
+    if(i1==null||i2==null||i1===i2) return;
+    var d = Math.hypot(nodes[i1].x-nodes[i2].x, nodes[i1].z-nodes[i2].z);
+    edgeList[i1].push({to:i2,d:d}); edgeList[i2].push({to:i1,d:d});
+  }
+  var uKeys = Object.keys(GEO.streetsU), vKeys = Object.keys(GEO.streetsV);
+  uKeys.forEach(function(uk){ vKeys.forEach(function(vk){
+    var p = gridToWorld(GEO.streetsU[uk], GEO.streetsV[vk]);
+    addNode(uk+"_"+vk, p.x, p.z);
+  }); });
+  for(var ui=0; ui<uKeys.length; ui++){
+    for(var vi=0; vi<vKeys.length-1; vi++) addEdge(uKeys[ui]+"_"+vKeys[vi], uKeys[ui]+"_"+vKeys[vi+1]);
+  }
+  for(var vi2=0; vi2<vKeys.length; vi2++){
+    for(var ui2=0; ui2<uKeys.length-1; ui2++) addEdge(uKeys[ui2]+"_"+vKeys[vi2], uKeys[ui2+1]+"_"+vKeys[vi2]);
+  }
+  // Plaza (the open block) — wired to its four bounding corners so a
+  // walker can actually cut across the square rather than only skirt it.
+  addNode("plaza", PLAZA_CENTER.x, PLAZA_CENTER.z);
+  ["kearny_clay","kearny_washington","dupont_clay","dupont_washington"].forEach(function(k){ addEdge("plaza",k); });
+  // Clay St wharf/landing — the working waterfront's graph anchor.
+  var wharfV0 = (GEO.streetsV.clay+GEO.streetsV.washington)/2;
+  var wharfPt0 = gridToWorld(GEO.streetsU.montgomery, wharfV0);
+  addNode("wharf", wharfPt0.x, wharfPt0.z);
+  addEdge("wharf","montgomery_clay"); addEdge("wharf","montgomery_washington");
+  // Mission road — chain the real findLowRoute() points (MISSION_ROAD_PTS,
+  // built above) up to the point nearest Mission Dolores itself.
+  if(typeof MISSION_ROAD_PTS!=="undefined" && MISSION_ROAD_PTS.length>1){
+    var missionNearest=0, missionNearestD=1e18;
+    MISSION_ROAD_PTS.forEach(function(p,i){
+      var d=Math.hypot(p.x-OUTPOSTS.mission.x,p.z-OUTPOSTS.mission.z);
+      if(d<missionNearestD){ missionNearestD=d; missionNearest=i; }
+    });
+    var prevKey = null;
+    for(var mi=0; mi<=missionNearest; mi++){
+      var mkey = "mroad_"+mi;
+      addNode(mkey, MISSION_ROAD_PTS[mi].x, MISSION_ROAD_PTS[mi].z);
+      if(prevKey) addEdge(prevKey, mkey);
+      prevKey = mkey;
+    }
+    var startNode = idx["mroad_0"];
+    var bestK=null, bestD=1e18;
+    Object.keys(idx).forEach(function(k){
+      if(k.indexOf("mroad_")===0 || k==="plaza" || k==="wharf") return;
+      var n = nodes[idx[k]], d=Math.hypot(n.x-nodes[startNode].x, n.z-nodes[startNode].z);
+      if(d<bestD){ bestD=d; bestK=k; }
+    });
+    if(bestK) addEdge(bestK, "mroad_0");
+    addNode("mission", OUTPOSTS.mission.x, OUTPOSTS.mission.z);
+    addEdge("mission", "mroad_"+missionNearest);
+  } else {
+    addNode("mission", OUTPOSTS.mission.x, OUTPOSTS.mission.z);
+  }
+  // Off-grid camp hubs — squatter tracks, not surveyed streets: one direct
+  // spur each from the camp's center to its nearest real street node.
+  [
+    { key:"camp_happyvalley", x:900, z:950 },
+    { key:"camp_edge",        x:PLAZA_CENTER.x-260, z:PLAZA_CENTER.z+220 },
+    { key:"camp_western",     x:PLAZA_CENTER.x-900, z:PLAZA_CENTER.z-260 },
+    { key:"camp_northcove",   x:lerp(PLAZA_CENTER.x,-134,0.5), z:lerp(PLAZA_CENTER.z,-808,0.5) }
+  ].forEach(function(c){
+    addNode(c.key, c.x, c.z);
+    var bestK2=null, bestD2=1e18;
+    Object.keys(idx).forEach(function(k){
+      if(k===c.key || k.indexOf("camp_")===0) return;
+      var n=nodes[idx[k]], d=Math.hypot(n.x-c.x,n.z-c.z);
+      if(d<bestD2){ bestD2=d; bestK2=k; }
+    });
+    if(bestK2) addEdge(bestK2, c.key);
+  });
+  return { nodes:nodes, edges:edgeList, idx:idx };
+})();
+function nearestGraphNode(x,z){
+  var best=0, bestD=1e18;
+  for(var i=0;i<STREET_GRAPH.nodes.length;i++){
+    var n=STREET_GRAPH.nodes[i], d=(n.x-x)*(n.x-x)+(n.z-z)*(n.z-z);
+    if(d<bestD){ bestD=d; best=i; }
+  }
+  return best;
+}
+/* Dijkstra over the (tiny, well under 60-node) graph — a plain array scan
+   rather than a heap is plenty, since this only ever runs a few hundred
+   times total, all of it once at load while assigning homes/workplaces. */
+function graphPath(fromIdx, toIdx){
+  var n = STREET_GRAPH.nodes.length;
+  var dist = new Array(n).fill(Infinity), prev = new Array(n).fill(-1), visited = new Array(n).fill(false);
+  dist[fromIdx] = 0;
+  for(var iter=0; iter<n; iter++){
+    var u=-1, best=Infinity;
+    for(var i=0;i<n;i++) if(!visited[i] && dist[i]<best){ best=dist[i]; u=i; }
+    if(u===-1 || u===toIdx) break;
+    visited[u]=true;
+    STREET_GRAPH.edges[u].forEach(function(e){
+      var nd = dist[u]+e.d;
+      if(nd<dist[e.to]){ dist[e.to]=nd; prev[e.to]=u; }
+    });
+  }
+  if(dist[toIdx]===Infinity) return null;
+  var path=[toIdx];
+  while(prev[path[path.length-1]]!==-1) path.push(prev[path[path.length-1]]);
+  path.reverse();
+  return path;
+}
+/* Builds a walkable polyline from one exact world point to another, routed
+   via the street graph: a short direct spur onto the graph at each end,
+   then the shortest legal chain of street segments in between. */
+function buildRoutePoly(x0,z0,x1,z1){
+  var n0 = nearestGraphNode(x0,z0), n1 = nearestGraphNode(x1,z1);
+  var nodePath = graphPath(n0,n1);
+  var pts = [{x:x0,z:z0}];
+  if(nodePath){ nodePath.forEach(function(ni){ pts.push({x:STREET_GRAPH.nodes[ni].x, z:STREET_GRAPH.nodes[ni].z}); }); }
+  else { pts.push({x:STREET_GRAPH.nodes[n0].x, z:STREET_GRAPH.nodes[n0].z}); pts.push({x:STREET_GRAPH.nodes[n1].x, z:STREET_GRAPH.nodes[n1].z}); }
+  pts.push({x:x1,z:z1});
+  return buildPolyline(pts, false);
+}
+/* A "wander" polyline for ambient (non-routine) extras: a random walk of
+   street-graph hops from a random start node — no destination, but still
+   100% graph-legal, so density-filler people respect the grid too. */
+function buildWanderPoly(rng){
+  var cur = Math.floor(rng()*STREET_GRAPH.nodes.length), prev=-1;
+  var pts = [{x:STREET_GRAPH.nodes[cur].x, z:STREET_GRAPH.nodes[cur].z}];
+  var hops = 5+Math.floor(rng()*6);
+  for(var i=0;i<hops;i++){
+    var neigh = STREET_GRAPH.edges[cur];
+    if(!neigh || neigh.length===0) break;
+    var choices = neigh.filter(function(e){ return e.to!==prev; });
+    if(choices.length===0) choices = neigh;
+    var pick = choices[Math.floor(rng()*choices.length)];
+    prev = cur; cur = pick.to;
+    pts.push({x:STREET_GRAPH.nodes[cur].x, z:STREET_GRAPH.nodes[cur].z});
+  }
+  return buildPolyline(pts, false);
+}
+function worldToGridApprox(x,z){
+  var c=Math.cos(-VIOGET_SKEW), s=Math.sin(-VIOGET_SKEW);
+  return { u: x*c - z*s, v: x*s + z*c };
+}
+function nearestStreetPair(x,z){
+  var g = worldToGridApprox(x,z);
+  var bu=null,bud=1e18; Object.keys(GEO.streetsU).forEach(function(k){ var d=Math.abs(GEO.streetsU[k]-g.u); if(d<bud){bud=d;bu=k;} });
+  var bv=null,bvd=1e18; Object.keys(GEO.streetsV).forEach(function(k){ var d=Math.abs(GEO.streetsV[k]-g.v); if(d<bvd){bvd=d;bv=k;} });
+  return cap(bu)+" & "+cap(bv);
+}
+
+/* ---- 2c. HOMES & WORKPLACES — a home is a real VILLAGE_BUILDING_SPOTS
+   building (capacity-weighted; ~18% are boarding houses that hold many,
+   reflecting the era) or, once tents exist, a real tentCandidates lot; a
+   workplace is a real trade site: the Clay St landing, a signed shop
+   building (reusing the six signage boards already on real buildings), the
+   Plaza market, the beach (sailors/fishing), Mission Dolores, or a lot
+   that's currently mid-"raise" (construction gets workers). ---- */
+var SIGN_WORD_LABEL = { "GROCER":"grocer's", "DRY GOODS":"dry goods store", "PROVISIONS":"provisions store",
+  "BOARDING":"boarding house", "TIN SHOP":"tin shop", "SHIP CHANDLERY":"ship chandlery" };
+function pickShopSite(word){
+  for(var i=0;i<SIGN_BUILDING_SPOTS.length;i++){
+    if(SIGN_BUILDING_SPOTS[i].word===word){
+      var s = SIGN_BUILDING_SPOTS[i];
+      return { key:"shop_"+word, label:SIGN_WORD_LABEL[word]||word.toLowerCase(), x:s.x, z:s.z, rot:s.rot, activity:"stationary" };
+    }
+  }
+  return null;
+}
+var WORKSITE_PLAZA_MARKET = { key:"plazamarket", label:"Plaza market", x:PLAZA_CENTER.x, z:PLAZA_CENTER.z, activity:"market" };
+var WORKSITE_MISSION = { key:"mission", label:"Mission Dolores", x:OUTPOSTS.mission.x, z:OUTPOSTS.mission.z, activity:"stationary" };
+var WORKSITE_WHARF = (function(){
+  var wharfV = (GEO.streetsV.clay+GEO.streetsV.washington)/2;
+  var landPt = gridToWorld(GEO.streetsU.montgomery, wharfV);
+  var lastLandX = landPt.x, x = landPt.x;
+  for(var step=0; step<80; step++){ x+=3; if(terrainHeight(x,landPt.z)<0) break; lastLandX=x; }
+  return { key:"wharf", label:"Clay St landing", x:lastLandX-2, z:landPt.z, activity:"carry",
+    pairA:{x:lastLandX-6, z:landPt.z-2}, pairB:{x:lastLandX+7, z:landPt.z+1.5} };
+})();
+var WORKSITE_BEACH = (function(){
+  var ln = waterfrontBeachLines[Math.floor(waterfrontBeachLines.length*0.5)] || null;
+  var p = ln ? { x:lerp(ln.landX,ln.waterX,0.55), z:ln.z } : { x:WORKSITE_WHARF.x, z:WORKSITE_WHARF.z };
+  return { key:"beach", label:"beach", x:p.x, z:p.z, activity:"fish" };
+})();
+var CONSTRUCTION_SITES = growthBuildingCandidates.slice(0, Math.min(30, growthBuildingCandidates.length))
+  .map(function(c,i){ return { key:"construction_"+i, label:"a house going up nearby", x:c.x, z:c.z, activity:"construction" }; });
+function pickConstructionSite(rng){
+  return CONSTRUCTION_SITES.length ? CONSTRUCTION_SITES[Math.floor(rng()*CONSTRUCTION_SITES.length)] : WORKSITE_PLAZA_MARKET;
+}
+function worksiteForTrade(trade, rng){
+  switch(trade){
+    case "carpenter": case "brickmaker": case "blacksmith": return pickConstructionSite(rng);
+    case "teamster": case "drayman": case "stevedore": return rng()<0.75 ? WORKSITE_WHARF : WORKSITE_BEACH;
+    case "sailor ashore": return rng()<0.6 ? WORKSITE_BEACH : WORKSITE_WHARF;
+    case "grocer's hand": return pickShopSite("GROCER") || WORKSITE_PLAZA_MARKET;
+    case "outfitter": return pickShopSite("DRY GOODS") || WORKSITE_PLAZA_MARKET;
+    case "clerk": return rng()<0.5 ? (pickShopSite("DRY GOODS")||WORKSITE_PLAZA_MARKET) : WORKSITE_PLAZA_MARKET;
+    case "baker": return pickShopSite("PROVISIONS") || WORKSITE_PLAZA_MARKET;
+    case "cook": case "boarding-house cook": case "lodging-house keeper": case "washerwoman":
+      return pickShopSite("BOARDING") || WORKSITE_PLAZA_MARKET;
+    case "tinsmith": return pickShopSite("TIN SHOP") || WORKSITE_PLAZA_MARKET;
+    default: return WORKSITE_PLAZA_MARKET;
+  }
+}
+var HOME_BUILDING_SPOTS = VILLAGE_BUILDING_SPOTS.map(function(spot){
+  var boarding = rngBuild()<0.18;
+  return { x:spot.x, z:spot.z, y:spot.y, rot:spot.rot, w:spot.w, d:spot.d,
+    capacity: boarding ? (6+Math.floor(rngBuild()*5)) : (1+Math.floor(rngBuild()*3)),
+    used:0, boarding:boarding, type:"building" };
+});
+function dayForPopulationAtLeast(popTarget){
+  for(var i=0;i<POP_CURVE.length;i++){
+    if(POP_CURVE[i].pop>=popTarget){
+      if(i===0) return POP_CURVE[0].day;
+      var a=POP_CURVE[i-1], b=POP_CURVE[i];
+      return lerp(a.day, b.day, clamp((popTarget-a.pop)/(b.pop-a.pop),0,1));
+    }
+  }
+  return POP_CURVE[POP_CURVE.length-1].day;
+}
+var homeBuildingPtr = 0, homeTentPtr = 0;
+function nextHome(){
+  while(homeBuildingPtr<HOME_BUILDING_SPOTS.length){
+    var b = HOME_BUILDING_SPOTS[homeBuildingPtr];
+    if(b.used<b.capacity){ b.used++; return { spot:b, revealDay:0, type:"building" }; }
+    homeBuildingPtr++;
+  }
+  if(homeTentPtr<tentCandidates.length){
+    var t = tentCandidates[homeTentPtr];
+    homeTentPtr++;
+    return { spot:t, revealDay: dayForPopulationAtLeast(2200+7*homeTentPtr), type:"tent" };
+  }
+  return { spot:{x:PLAZA_CENTER.x,z:PLAZA_CENTER.z,w:3,d:3}, revealDay:0, type:"building" }; // pool exhausted (shouldn't happen at these counts)
+}
+function homeLabelFor(home){
+  if(home.type==="tent") return "a tent at "+(home.spot.label||"the camps");
+  var pair = nearestStreetPair(home.spot.x, home.spot.z);
+  return (home.spot.boarding ? "a boarding house near " : "a cottage near ") + pair + " Streets";
+}
+
+/* ---- 3. slot generation — built once at load so a given slot index is
+   stable across the whole session. ROUTINE slots (spec §9's persistent
+   population, ~60-120-strong) get a real HOME + WORK + daily schedule;
+   EXTRA slots are ambient density-fill with no fixed abode, wandering the
+   same street graph without a routine — "population honesty" (ask #5). ---- */
+var ALL_ORIGIN_KEYS = ORIGINS.map(function(o){ return o.key; });
+var ROUTINE_CAP = IS_TOUCH ? 60 : 100;
 var PEOPLE_CAP = IS_TOUCH ? 110 : 180;
 var ALL_PEOPLE_SLOTS = (function(){
-  var slots = [], id = 0;
-  var perRouteBase = IS_TOUCH ? 22 : 36;
-  PEOPLE_ROUTES.forEach(function(route){
-    var n = Math.max(3, Math.round(route.weight*perRouteBase));
-    for(var i=0;i<n;i++){
-      var originKey = pickWeighted(route.originPool, ORIGINS_BY_KEY);
-      var origin = ORIGINS_BY_KEY[originKey];
-      var anchorDay = Math.max(route.revealDay||0, origin.earliestDay);
-      var isMale = rngBuild() < genderMaleFrac(anchorDay);
-      var variant = isMale ? Math.floor(rngBuild()*3) : 3;
-      slots.push({
-        id: id++, route: route, origin: origin, gender: isMale?"male":"female", variant: variant,
-        speed: 0.85+rngBuild()*0.75,
-        phaseOffset: rngBuild() * (route.poly.loop? route.poly.total : route.poly.total*2),
-        isLanternCandidate: rngBuild()<0.32,
-        notBeforeDay: Math.max(origin.earliestDay, route.revealDay||0),
-        bio: null, _x:route.pts[0].x, _z:route.pts[0].z, _distSq:1e18
-      });
+  var slots = [], id = 0, missionAssigned = 0, MISSION_TARGET = 5;
+
+  for(var ri=0; ri<ROUTINE_CAP; ri++){
+    var originKey = pickWeighted(ALL_ORIGIN_KEYS, ORIGINS_BY_KEY);
+    var origin = ORIGINS_BY_KEY[originKey];
+    var trade = TRADES[Math.floor(rngBuild()*TRADES.length)];
+    var isMale = rngBuild() < genderMaleFrac(origin.earliestDay);
+    var variant = isMale ? Math.floor(rngBuild()*3) : 3;
+
+    var home = nextHome();
+    var work = worksiteForTrade(trade, rngBuild);
+    if(origin.key==="californio" && missionAssigned<MISSION_TARGET && rngBuild()<0.5){ work = WORKSITE_MISSION; missionAssigned++; }
+
+    var homePos = { x: home.spot.x + (rngBuild()-0.5)*(home.type==="tent"?2.2:(home.spot.w||3)*0.7),
+                    z: home.spot.z + (rngBuild()-0.5)*(home.type==="tent"?2.2:(home.spot.d||3)*0.7) };
+    var workPos = { x:work.x, z:work.z };
+
+    var commutePoly = buildRoutePoly(homePos.x,homePos.z, workPos.x,workPos.z);
+    var errandPoly  = buildRoutePoly(workPos.x,workPos.z, PLAZA_CENTER.x,PLAZA_CENTER.z);
+    var sundayPoly  = buildRoutePoly(homePos.x,homePos.z, PLAZA_CENTER.x,PLAZA_CENTER.z);
+
+    var doErrand = rngBuild()<0.4;
+    var doEvening = rngBuild()<0.25;
+    var eveningSite, eveningPoly;
+    if(home.type==="tent"){ eveningSite = { x:homePos.x, z:homePos.z, label:"the campfire" }; eveningPoly = null; }
+    else {
+      var saloon = pickShopSite("BOARDING") || { x:PLAZA_CENTER.x, z:PLAZA_CENTER.z, label:"the Plaza" };
+      eveningSite = { x:saloon.x, z:saloon.z, label:saloon.label };
+      eveningPoly = buildRoutePoly(workPos.x,workPos.z, eveningSite.x,eveningSite.z);
     }
-  });
+
+    slots.push({
+      id:id++, kind:"routine", origin:origin, gender:isMale?"male":"female", variant:variant, trade:trade,
+      lateralJitter:(rngBuild()-0.5)*2.2, clusterOffset:{ x:(rngBuild()-0.5)*3.6, z:(rngBuild()-0.5)*3.6 },
+      isLanternCandidate: rngBuild()<0.32,
+      home:home, homePos:homePos, homeLabel:homeLabelFor(home),
+      work:work, workPos:workPos, workLabel:work.label, workActivity:work.activity,
+      commutePoly:commutePoly, errandPoly:errandPoly, sundayPoly:sundayPoly,
+      doErrand:doErrand, doEvening:doEvening, eveningSite:eveningSite, eveningPoly:eveningPoly,
+      notBeforeDay: Math.max(origin.earliestDay, home.revealDay||0),
+      bio:null, _x:homePos.x, _z:homePos.z, _distSq:1e18, _now:"", _pose:"idle"
+    });
+  }
+
+  var EXTRA_POOL_SIZE = IS_TOUCH ? 90 : 200;
+  for(var ei=0; ei<EXTRA_POOL_SIZE; ei++){
+    var originKey2 = pickWeighted(ALL_ORIGIN_KEYS, ORIGINS_BY_KEY);
+    var origin2 = ORIGINS_BY_KEY[originKey2];
+    var isMale2 = rngBuild() < genderMaleFrac(origin2.earliestDay);
+    var variant2 = isMale2 ? Math.floor(rngBuild()*3) : 3;
+    var wanderPoly = buildWanderPoly(rngBuild);
+    slots.push({
+      id:id++, kind:"extra", origin:origin2, gender:isMale2?"male":"female", variant:variant2, trade:null,
+      speed:0.8+rngBuild()*0.7, phaseOffset: rngBuild()*wanderPoly.total*2, lateralJitter:(rngBuild()-0.5)*2.0,
+      isLanternCandidate: rngBuild()<0.32,
+      wanderPoly:wanderPoly, homePos:{x:wanderPoly.segs[0].a.x, z:wanderPoly.segs[0].a.z},
+      homeLabel:"about "+nearestStreetPair(wanderPoly.segs[0].a.x, wanderPoly.segs[0].a.z)+" Streets",
+      work:null, workPos:null, workLabel:null,
+      notBeforeDay: origin2.earliestDay,
+      bio:null, _x:wanderPoly.segs[0].a.x, _z:wanderPoly.segs[0].a.z, _distSq:1e18, _now:"about the streets", _pose:"walk"
+    });
+  }
   return slots;
 })();
 
@@ -3655,32 +3941,109 @@ function generateBio(slot){
   var arrivedDay = earliestDay + rng()*Math.max(1,(latestDay-earliestDay));
   slot.bio = {
     name:name, origin:slot.origin.label, arrivedYear:dateFromSimDay(arrivedDay).getUTCFullYear(),
-    trade:TRADES[Math.floor(rng()*TRADES.length)], home:slot.route.label,
+    trade: slot.trade || TRADES[Math.floor(rng()*TRADES.length)],
     agenda:AGENDAS[Math.floor(rng()*AGENDAS.length)]
   };
   return slot.bio;
 }
 
-/* ---- 6. per-frame walk + LOD selection ---- */
+/* ---- 6. DAILY SCHEDULE + per-frame walk/LOD selection. `h` below is the
+   hour-of-day read straight off the fractional part of simDay — the sim's
+   OWN calendar clock — not the separate fast real-time day/night lighting
+   cycle further down (updateDayNight/timeOfDay), which keeps the view
+   visually alive regardless of sim speed; the schedule is deliberately
+   tied to the SAME clock that drives ships/growth/weather so "follow a
+   person for a sim-day" reads as one coherent day: ~6am wake, walk to
+   work, work, a midday errand for some, walk home ~6pm, a few out for the
+   evening, sleep — reduced work + a Plaza gathering on Sundays. ---- */
 var peopleClock = 0;
-function walkerPosition(s, clock){
-  var poly = s.route.poly;
-  var dist = clock*s.speed + s.phaseOffset;
-  var d, forward=true;
-  if(poly.loop){ d = ((dist%poly.total)+poly.total)%poly.total; }
-  else {
-    var period=poly.total*2, m=((dist%period)+period)%period;
-    if(m<=poly.total){ d=m; forward=true; } else { d=period-m; forward=false; }
+var POSE_BOB = {
+  walk:         { freq:5.2, amp:0.045, yOff:0 },
+  carry:        { freq:2.6, amp:0.07,  yOff:-0.05 },
+  market:       { freq:1.1, amp:0.03,  yOff:0 },
+  evening:      { freq:1.0, amp:0.025, yOff:0 },
+  fish:         { freq:0.9, amp:0.03,  yOff:-0.04 },
+  stationary:   { freq:1.4, amp:0.05,  yOff:0 },
+  construction: { freq:1.6, amp:0.06,  yOff:-0.02 },
+  idle:         { freq:0.8, amp:0.02,  yOff:0 }
+};
+function isSundayForDay(day){ return dateFromSimDay(Math.floor(day)).getUTCDay()===0; }
+function sampleWithJitter(poly, t01, lateralJitter){
+  var p = pointOnPolyline(poly, clamp(t01,0,1)*poly.total);
+  var len = Math.hypot(p.dx,p.dz)||1;
+  return { x:p.x+(-p.dz/len)*lateralJitter, z:p.z+(p.dx/len)*lateralJitter, dx:p.dx, dz:p.dz };
+}
+function computeRoutinePosition(slot, day){
+  var h = (day-Math.floor(day))*24;
+  var sunday = isSundayForDay(day);
+  var pose="idle", label="at home", x=slot.homePos.x, z=slot.homePos.z, dx=0, dz=1, pp;
+
+  if(sunday){
+    if(h<7 || h>=21){ label="asleep at home"; }
+    else if(h<8){ label="waking, a Sunday"; }
+    else if(h<8.5){ pp=sampleWithJitter(slot.sundayPoly,(h-8)/0.5,slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking to the Plaza"; }
+    else if(h<12.5){ x=PLAZA_CENTER.x; z=PLAZA_CENTER.z; pose="market"; label="at the Plaza, Sunday gathering"; }
+    else if(h<13){ pp=sampleWithJitter(slot.sundayPoly,1-(h-12.5)/0.5,slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking home"; }
+    else { label="at home, the Sabbath"; }
+  } else {
+    if(h<5.5 || h>=21){ label="asleep at home"; }
+    else if(h<6.5){ label="waking for the day"; }
+    else if(h<7.5){ pp=sampleWithJitter(slot.commutePoly,(h-6.5)/1,slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking to the "+slot.workLabel; }
+    else if(h<12){ x=slot.workPos.x; z=slot.workPos.z; pose=slot.workActivity; label="at work — the "+slot.workLabel; }
+    else if(slot.doErrand && h<13.4){
+      if(h<12.4){ pp=sampleWithJitter(slot.errandPoly,(h-12)/0.4,slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking to the Plaza"; }
+      else if(h<13.0){ x=PLAZA_CENTER.x; z=PLAZA_CENTER.z; pose="market"; label="on an errand at the Plaza market"; }
+      else { pp=sampleWithJitter(slot.errandPoly,1-(h-13.0)/0.4,slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking back to the "+slot.workLabel; }
+    }
+    else if(h<18){ x=slot.workPos.x; z=slot.workPos.z; pose=slot.workActivity; label="at work — the "+slot.workLabel; }
+    else if(h<19){ pp=sampleWithJitter(slot.commutePoly,1-(h-18)/1,slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking home"; }
+    else if(slot.doEvening){
+      if(slot.eveningPoly){
+        if(h<19.3){ pp=sampleWithJitter(slot.eveningPoly,(h-19)/0.3,slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking to the "+slot.eveningSite.label; }
+        else if(h<20.7){ x=slot.eveningSite.x; z=slot.eveningSite.z; pose="evening"; label="at the "+slot.eveningSite.label+", of an evening"; }
+        else { pp=sampleWithJitter(slot.eveningPoly,1-(h-20.7)/0.3,slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking home"; }
+      } else { x=slot.eveningSite.x; z=slot.eveningSite.z; pose="evening"; label="at the campfire"; }
+    }
+    else { label="at home"; }
   }
+
+  if(pose==="carry" && slot.work && slot.work.pairA){
+    var cyc = ((peopleClock*0.11 + slot.id*0.31)%1+1)%1;
+    var ct = cyc<0.5 ? cyc*2 : (1-cyc)*2;
+    x = lerp(slot.work.pairA.x, slot.work.pairB.x, ct);
+    z = lerp(slot.work.pairA.z, slot.work.pairB.z, ct);
+    dx = slot.work.pairB.x-slot.work.pairA.x; dz = slot.work.pairB.z-slot.work.pairA.z;
+  } else if(pose==="market"||pose==="evening"||pose==="stationary"||pose==="construction"||pose==="idle"){
+    x += slot.clusterOffset.x*0.4; z += slot.clusterOffset.z*0.4;
+    if(!dx && !dz){ dx = slot.clusterOffset.x||0.1; dz = slot.clusterOffset.z||1; }
+  } else if(pose==="fish"){
+    x += slot.lateralJitter*1.4; dx = 1; dz = 0.15; // facing the bay, roughly east
+  }
+
+  slot._x=x; slot._z=z; slot._dx=dx||0; slot._dz=dz||1; slot._pose=pose; slot._now=label;
+}
+function computeExtraPosition(slot, day){
+  var poly = slot.wanderPoly;
+  var dist = peopleClock*slot.speed + slot.phaseOffset;
+  var period=poly.total*2, m=((dist%period)+period)%period;
+  var d, forward;
+  if(m<=poly.total){ d=m; forward=true; } else { d=period-m; forward=false; }
   var p = pointOnPolyline(poly,d);
-  return { x:p.x, z:p.z, dx: forward?p.dx:-p.dx, dz: forward?p.dz:-p.dz };
+  var dx = forward?p.dx:-p.dx, dz = forward?p.dz:-p.dz;
+  var len = Math.hypot(dx,dz)||1;
+  slot._x = p.x + (-dz/len)*slot.lateralJitter;
+  slot._z = p.z + (dx/len)*slot.lateralJitter;
+  slot._dx=dx; slot._dz=dz; slot._pose="walk";
+  var h=(day-Math.floor(day))*24;
+  slot._now = (h<5.5||h>=22.5) ? "asleep, somewhere in town" : "about the streets";
 }
 function peopleTargetCount(day, alt){
   if(alt>CFG.peopleMaxAltitude) return 0;
   var pop = populationAt(day);
   var base = clamp(Math.round(pop/45), 6, PEOPLE_CAP);
-  var rhythm = lerp(1.0, 0.07, smoothstep(0.5,0.95,nightFactor)); // day/night rhythm: streets empty late night
-  return Math.max(2, Math.round(base*rhythm));
+  var h = (day-Math.floor(day))*24;
+  var deepNight = (h<5.5 || h>=22.5) ? 0.06 : 1.0; // sim-schedule night: near-empty streets
+  return Math.max(2, Math.round(base*deepNight));
 }
 function updatePeople(dt, camX, camZ, alt){
   peopleClock += dt;
@@ -3696,14 +4059,14 @@ function updatePeople(dt, camX, camZ, alt){
   for(var i=0;i<ALL_PEOPLE_SLOTS.length;i++){
     var s = ALL_PEOPLE_SLOTS[i];
     if(day<s.notBeforeDay) continue;
-    var p = walkerPosition(s, peopleClock);
-    s._x=p.x; s._z=p.z; s._dx=p.dx; s._dz=p.dz;
-    s._distSq = (p.x-camX)*(p.x-camX)+(p.z-camZ)*(p.z-camZ);
+    if(s.kind==="routine") computeRoutinePosition(s, day); else computeExtraPosition(s, day);
+    s._distSq = (s._x-camX)*(s._x-camX)+(s._z-camZ)*(s._z-camZ);
     eligible.push(s);
   }
   eligible.sort(function(a,b){ return a._distSq-b._distSq; });
   var targetN = peopleTargetCount(day, alt);
   var active = eligible.slice(0, targetN);
+  if(followedSlot && day>=followedSlot.notBeforeDay && active.indexOf(followedSlot)===-1) active.push(followedSlot);
 
   var counts=[0,0,0,0], slotArrays=[[],[],[],[]], lanternCount=0;
   var showLanterns = nightFactor>0.5;
@@ -3711,7 +4074,8 @@ function updatePeople(dt, camX, camZ, alt){
     var vi = s.variant, idx = counts[vi]++;
     var h = terrainHeight(s._x,s._z);
     var yaw = (s._dx||s._dz) ? Math.atan2(s._dx,s._dz) : 0;
-    var bob = Math.sin(peopleClock*5.2 + s.id*0.7)*0.045;
+    var pb = POSE_BOB[s._pose] || POSE_BOB.walk;
+    var bob = Math.sin(peopleClock*pb.freq + s.id*0.7)*pb.amp + pb.yOff;
     setShipInstance(personMeshes[vi], idx, s._x, h+bob, s._z, yaw, 1);
     slotArrays[vi][idx] = s;
     if(showLanterns && s.isLanternCandidate && lanternCount<LANTERN_CAP){
@@ -3725,6 +4089,9 @@ function updatePeople(dt, camX, camZ, alt){
   lanternGlowMesh.instanceMatrix.needsUpdate = true;
   lanternGlowMesh.material.opacity = nightFactor;
 
+  if(followedSlot && personInspectorEl.classList.contains("on") && piNowEl){
+    piNowEl.innerHTML = '<span class="pi-label">NOW</span>'+escapeHTML(followedSlot._now||"—");
+  }
   updateDocumentedMoments(alt);
 }
 
@@ -3807,16 +4174,31 @@ var piTierEl = document.getElementById("pi-tier");
 var piNameEl = document.getElementById("pi-name");
 var piSummaryEl = document.getElementById("pi-summary");
 var piDetailEl = document.getElementById("pi-detail");
+var piNowEl = document.getElementById("pi-now");
 var piReceiptWrapEl = document.getElementById("pi-receipt-wrap");
 var piReceiptEl = document.getElementById("pi-receipt");
 var followedSlot = null, followedDocumented = null;
 document.getElementById("pi-close").addEventListener("click", closePersonInspector);
+/* Clicking a HOME/WORK name in the bio card flies the camera there (spec
+   ask #2) — releases follow-mode first so the per-frame follow-lock in
+   animate() doesn't immediately snap the target back onto the walker. */
+window.__piFlyTo = function(x,z,alt){
+  followedSlot = null; followedDocumented = null;
+  flyTo(x,z,alt);
+};
 function openPersonInspectorForSlot(slot){
   var bio = generateBio(slot);
   piTierEl.textContent = "SIMULATED — a silence, filled"; piTierEl.classList.remove("documented");
   piNameEl.textContent = bio.name;
   piSummaryEl.innerHTML = '<span class="pi-label">ORIGIN &middot; ARRIVED &middot; TRADE</span>'+escapeHTML(bio.origin+" · "+bio.arrivedYear+" · "+bio.trade);
-  piDetailEl.innerHTML = '<span class="pi-label">HOME &middot; AGENDA</span>'+escapeHTML(bio.home+". "+bio.agenda+".");
+  var homeLink = '<a href="#" class="pi-fly" onclick="__piFlyTo('+slot.homePos.x.toFixed(1)+','+slot.homePos.z.toFixed(1)+',110);return false;">'+escapeHTML(slot.homeLabel)+'</a>';
+  var detailHtml = '<span class="pi-label">HOME'+(slot.workPos?" &middot; WORK":"")+'</span>Boards at '+homeLink;
+  if(slot.workPos){
+    detailHtml += '; works the <a href="#" class="pi-fly" onclick="__piFlyTo('+slot.workPos.x.toFixed(1)+','+slot.workPos.z.toFixed(1)+',110);return false;">'+escapeHTML(slot.workLabel)+'</a>';
+  }
+  detailHtml += ". "+escapeHTML(bio.agenda)+".";
+  piDetailEl.innerHTML = detailHtml;
+  piNowEl.innerHTML = '<span class="pi-label">NOW</span>'+escapeHTML(slot._now||"—");
   piReceiptWrapEl.style.display = "none";
   personInspectorEl.classList.add("on");
   followedSlot = slot; followedDocumented = null;
