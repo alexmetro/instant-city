@@ -46,7 +46,7 @@
 <title>San Francisco · 1846 — The Instant City</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,400;0,600;1,400&family=Playfair+Display:wght@700;900&display=swap" rel="stylesheet">
 <style>
   :root{
     --ink:#2b1d0e;
@@ -155,7 +155,7 @@
     top:78px; right:16px; pointer-events:auto; cursor:pointer;
     font-size:0.66rem; letter-spacing:2px; text-align:right; user-select:none;
   }
-  #paper-toggle .pt-masthead{ display:block; font-weight:600; font-size:0.72rem; }
+  #paper-toggle .pt-masthead{ display:block; font-family:'Playfair Display',Georgia,serif; font-weight:900; font-size:0.8rem; letter-spacing:1px; }
   #paper-toggle .pt-hint{ display:block; opacity:0.6; font-size:0.55rem; margin-top:2px; }
 
   #paper-pane{
@@ -168,9 +168,31 @@
     font-family:'Fraunces', Georgia, serif; color:var(--ink);
   }
   #paper-pane.open{ transform:translateX(0); }
-  .pp-head{ position:relative; padding:16px 18px 10px; text-align:center; border-bottom:2px solid var(--ink); }
-  .pp-head h2{ margin:0; font-size:1.35rem; letter-spacing:1px; font-weight:600; }
-  .pp-head .pp-issue-date{ display:block; font-size:0.66rem; letter-spacing:2px; opacity:0.75; margin-top:3px; }
+  /* period rag-paper tint: a few faint foxing blooms + a hair of fractal
+     grain, multiplied over the parchment gradient. z-index:-1 keeps it
+     under the pane's own normal-flow content (see stacking note) while
+     staying above the pane's ancestor. Purely decorative, no pointer events. */
+  #paper-pane::before{
+    content:""; position:absolute; inset:0; z-index:-1; pointer-events:none;
+    background:
+      radial-gradient(circle at 14% 18%, rgba(110,80,35,0.06), transparent 7%),
+      radial-gradient(circle at 82% 9%, rgba(110,80,35,0.05), transparent 6%),
+      radial-gradient(circle at 42% 62%, rgba(110,80,35,0.055), transparent 8%),
+      radial-gradient(circle at 88% 78%, rgba(110,80,35,0.06), transparent 7%),
+      radial-gradient(circle at 22% 92%, rgba(110,80,35,0.05), transparent 6%),
+      url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)' opacity='0.05'/></svg>");
+    mix-blend-mode:multiply;
+  }
+  .pp-head{ position:relative; padding:16px 18px 14px; text-align:center; border-bottom:2px solid var(--ink); }
+  .pp-head::after{
+    content:""; position:absolute; left:22px; right:22px; bottom:-5px; height:1px;
+    background:rgba(43,29,14,0.45);
+  }
+  .pp-head h2{
+    margin:0; font-size:1.55rem; letter-spacing:1.5px; font-weight:900;
+    font-family:'Playfair Display', Georgia, serif; text-transform:uppercase;
+  }
+  .pp-head .pp-issue-date{ display:block; font-size:0.66rem; letter-spacing:2px; opacity:0.75; margin-top:6px; font-variant:small-caps; }
   .pp-close{
     position:absolute; top:10px; right:12px; cursor:pointer; font-size:1.1rem;
     line-height:1; opacity:0.6; user-select:none;
@@ -180,10 +202,10 @@
   .pp-tab{
     flex:1; padding:9px 4px; background:none; border:none; cursor:pointer;
     font-family:'Fraunces', Georgia, serif; letter-spacing:2.5px; font-size:0.62rem;
-    color:var(--ink); opacity:0.55; border-bottom:3px solid transparent;
+    font-variant:small-caps; color:var(--ink); opacity:0.55; border-bottom:3px solid transparent;
   }
   .pp-tab.active{ opacity:1; border-bottom-color:var(--ink); }
-  .pp-body{ flex:1 1 auto; overflow-y:auto; padding:14px 18px 24px; }
+  .pp-body{ flex:1 1 auto; overflow-y:auto; padding:14px 18px 24px; position:relative; }
   .pp-noissue, .pp-suspended{
     margin-top:18%; text-align:center; font-style:italic; font-size:0.95rem;
     line-height:1.6; padding:0 8px;
@@ -197,26 +219,49 @@
   .pp-nopaper-since{ text-align:center; font-size:0.65rem; letter-spacing:1.5px; opacity:0.65; margin-bottom:12px; }
 
   .bs-columns{ column-count:2; column-gap:1.4em; column-rule:1px solid rgba(43,29,14,0.25); }
-  .bs-item{ break-inside:avoid; margin-bottom:1em; }
-  .feed-item{ break-inside:avoid; margin-bottom:12px; padding:9px 10px; border:1px solid rgba(43,29,14,0.28); background:rgba(255,255,255,0.18); }
-  .fi-chip{
-    display:inline-block; font-size:0.52rem; letter-spacing:1.6px; padding:2px 6px;
-    border:1px solid var(--ink); opacity:0.8; margin-bottom:5px;
+  .bs-item{ break-inside:avoid; margin-bottom:1em; position:relative; }
+  /* printer's ornament in place of a box rule between broadsheet items */
+  .bs-item + .bs-item{ margin-top:0.3em; padding-top:1.1em; }
+  .bs-item + .bs-item::before{
+    content:"❧"; position:absolute; top:-0.15em; left:0; width:100%; text-align:center;
+    font-size:0.72rem; opacity:0.45; line-height:1;
   }
-  .fi-chip.ad{ background:var(--ink); color:var(--parchment); opacity:1; }
-  .fi-headline{ font-weight:600; margin:0 0 4px; font-size:0.88rem; line-height:1.3; }
-  .fi-headline.flyable{ cursor:pointer; text-decoration:underline; text-decoration-style:dotted; }
-  .fi-headline.flyable::after{ content:" ↗"; text-decoration:none; opacity:0.6; }
-  .fi-text{ font-size:0.8rem; line-height:1.42; margin:0; }
+  .feed-item{
+    break-inside:avoid; margin-bottom:14px; padding:10px 2px 12px; background:none;
+    border:none; border-top:1px solid rgba(43,29,14,0.3);
+  }
+  .feed-item:first-child{ border-top:none; padding-top:0; }
+  .fi-chip{
+    display:block; font-size:0.58rem; letter-spacing:2px; font-weight:600;
+    font-variant:small-caps; opacity:0.72; margin-bottom:6px; border:none; padding:0;
+  }
+  .fi-chip.ad{ font-style:italic; opacity:0.9; }
+  .fi-headline{
+    font-weight:700; margin:0 0 4px; font-size:0.92rem; line-height:1.3;
+    font-variant:small-caps; letter-spacing:0.3px;
+  }
+  .fi-headline.flyable{ cursor:pointer; }
+  .fi-headline.flyable::after{ content:" ☞"; opacity:0.5; font-size:0.85em; }
+  .fi-headline.flyable:hover{ text-decoration:underline; text-decoration-style:dotted; }
+  .fi-text{ font-size:0.8rem; line-height:1.44; margin:0; text-align:justify; hyphens:auto; -webkit-hyphens:auto; }
+  .bs-item:first-child .fi-text::first-letter, .feed-item:first-child .fi-text::first-letter{
+    float:left; font-family:'Playfair Display',Georgia,serif; font-weight:900;
+    font-size:2.5em; line-height:0.82; padding:0.03em 0.07em 0 0;
+  }
   .fi-receipt{ display:inline-block; margin-top:6px; font-size:0.6rem; letter-spacing:0.8px; opacity:0.7; color:var(--ink); }
   .fi-receipt:hover{ opacity:1; }
   .item-flash{ animation:ppFlash 1.4s ease 0s 2; }
   @keyframes ppFlash{ 0%,100%{ background:rgba(255,255,255,0.18);} 50%{ background:rgba(200,150,60,0.45);} }
   .pp-markets{
-    width:100%; margin-top:14px; border-collapse:collapse; break-inside:avoid;
-    font-size:0.68rem; border-top:1px solid rgba(43,29,14,0.35); border-bottom:1px solid rgba(43,29,14,0.35);
+    width:100%; margin-top:16px; border-collapse:collapse; break-inside:avoid;
+    font-size:0.68rem; border-top:3px double rgba(43,29,14,0.6); border-bottom:3px double rgba(43,29,14,0.6);
   }
-  .pp-markets caption{ text-align:left; font-size:0.6rem; letter-spacing:2.5px; opacity:0.7; padding:6px 0 4px; }
+  .pp-markets caption{ text-align:left; font-size:0.62rem; letter-spacing:2.5px; font-variant:small-caps; opacity:0.75; padding:6px 0 4px; }
+  .pp-markets th{
+    text-align:left; font-size:0.56rem; letter-spacing:1.5px; font-style:italic; font-weight:400;
+    opacity:0.65; padding:3px 6px 3px 0; border-bottom:1px solid rgba(43,29,14,0.3);
+  }
+  .pp-markets th:last-child{ text-align:right; }
   .pp-markets td{ padding:2px 6px 2px 0; border-top:1px solid rgba(43,29,14,0.12); }
   .pp-markets td:last-child{ text-align:right; white-space:nowrap; }
 
@@ -362,26 +407,43 @@
   /* ---- touch/mobile ---- */
   #hud-hint-toggle{
     display:none; bottom:16px; right:16px; pointer-events:auto; cursor:pointer;
-    width:32px; height:32px; border-radius:50%; align-items:center; justify-content:center;
+    width:40px; height:40px; border-radius:50%; align-items:center; justify-content:center;
     font-size:0.95rem; padding:0;
   }
   body.touch-device #hud-hint{ display:none; }
-  body.touch-device #hud-hint.show{ display:block; bottom:58px; max-width:210px; }
+  body.touch-device #hud-hint.show{ display:block; bottom:62px; max-width:210px; }
   body.touch-device #hud-hint-toggle{ display:flex; }
+
+  /* Enlarge tiny glyph tap targets to >=40px on touch without shifting their
+     visual position: equal padding + negative margin grows the hit box
+     outward while the glyph itself stays put (absolute-positioned parents
+     unaffected since offset is computed from the un-padded edge). */
+  body.touch-device .pi-close, body.touch-device .si-close, body.touch-device .pp-close{
+    padding:13px; margin:-13px;
+  }
+  body.touch-device #seed-reshuffle{ padding:11px; margin:-11px; display:inline-block; }
+  body.touch-device .scr-tab{ padding:10px 14px 9px; }
+  body.touch-device .ship-label, body.touch-device .building-label, body.touch-device .geo-label{
+    padding:9px 12px;
+  }
 
   @media (max-width:520px){
     /* narrow-screen HUD: the desktop layout puts seed/title/clock all in
        the top ~16-56px band, which collides once the title's centered box
        and the right-aligned clock both need real width on a ~390px phone.
-       Re-stack into two rows instead of shrinking text until it's unusable. */
+       Re-stack into clear rows instead of shrinking text until it's unusable.
+       Row plan: r1(8px) title+seed · r2(56px) clock+provenance · r3(100px)
+       paper-toggle · r4(140px) ghost — each toggle-only panel (provenance,
+       ghost) gets a lane that never shares screen space with a panel that
+       can be visible at the same time (UI audit U6). */
     #hud-title{ padding:0.28em 0.8em; max-width:54vw; top:8px; }
     #hud-title h1{ font-size:0.8rem; letter-spacing:1px; }
     #hud-title .sub{ font-size:0.44rem; letter-spacing:1px; margin-top:1px; }
     #hud-seed{ top:8px; font-size:0.55rem; padding:0.25em 0.55em; }
     #hud-clock{ top:56px; min-width:0; font-size:0.62rem; }
-    #hud-ghost{ top:56px; }
+    #hud-ghost{ top:140px; left:50%; }
     #paper-toggle{ top:100px; }
-    #hud-provenance{ top:100px; max-width:60vw; font-size:0.52rem; letter-spacing:1px; white-space:normal; }
+    #hud-provenance{ top:56px; left:16px; max-width:42vw; font-size:0.5rem; letter-spacing:1px; white-space:normal; }
     #hud-altitude{ min-width:0; font-size:0.7rem; }
     #paper-pane{ width:100vw; }
     #ship-inspector, #person-inspector, #building-inspector{ width:min(260px,72vw); }
@@ -396,7 +458,7 @@
     <h1>SAN FRANCISCO &middot; 1846</h1>
     <span class="sub">the instant city &mdash; phase five, the fates</span>
   </div>
-  <div class="panel" id="hud-seed">SEED <span id="seed-val">1846</span><span id="seed-reshuffle" title="new telling — re-deals simulated lives">&#10227;</span></div>
+  <div class="panel" id="hud-seed">SEED <span id="seed-val">1846</span><span id="seed-reshuffle" title="new telling — same events, a new cast">&#10227;</span></div>
   <div class="panel" id="hud-ghost">THEN / NOW &mdash; 2026 SHORELINE GHOST</div>
   <div class="panel" id="hud-clock">
     <span class="date" id="clock-date">&mdash;</span>
@@ -449,7 +511,7 @@
 
   <div class="panel" id="person-inspector">
     <span class="pi-close" id="pi-close">&times;</span>
-    <span class="pi-tier" id="pi-tier">SIMULATED</span>
+    <span class="pi-tier" id="pi-tier">UNRECORDED</span>
     <h3 id="pi-name">&mdash;</h3>
     <span class="pi-field" id="pi-summary"></span>
     <span class="pi-field" id="pi-detail"></span>
@@ -458,7 +520,7 @@
     <span class="pi-follow-hint">Esc &mdash; release</span>
   </div>
 
-  <div class="panel" id="hud-provenance">SHOWING: THE RECORD ONLY &nbsp;&middot;&nbsp; P to restore</div>
+  <div class="panel" id="hud-provenance">RECORD ONLY &nbsp;&middot;&nbsp; P</div>
   <div class="panel" id="hud-hint-toggle" title="controls">?</div>
 </div>
 
@@ -3599,7 +3661,7 @@ function marketsTableHTML(dateKey){
     var amt = formatPrice(p);
     return '<tr><td>'+escapeHTML(p.item)+'</td><td>'+escapeHTML(amt||"")+'</td></tr>';
   }).join("");
-  return '<table class="pp-markets"><caption>MARKETS</caption><tbody>'+rows+'</tbody></table>';
+  return '<table class="pp-markets"><caption>Prices Current</caption><thead><tr><th>Article</th><th>Price</th></tr></thead><tbody>'+rows+'</tbody></table>';
 }
 function renderBroadsheet(issue, dateKey){
   var html = '<div class="bs-columns">';
@@ -6375,7 +6437,7 @@ function openPersonInspectorForSlot(slot){
   // grounding.md cast tiers: a roster-backed person is "from the record"
   // (real name, printed role) rather than wholly simulated — quiet badge
   // text only, no meta commentary (voice rule).
-  piTierEl.textContent = bio.role ? "FROM THE RECORD" : "SIMULATED"; piTierEl.classList.remove("documented");
+  piTierEl.textContent = bio.role ? "FROM THE RECORD" : "UNRECORDED"; piTierEl.classList.remove("documented");
   piNameEl.textContent = bio.name;
   var summaryTxt = bio.origin+" · "+bio.arrivedYear+" · "+bio.trade+(bio.wage?(" · "+bio.wage):"");
   piSummaryEl.innerHTML = '<span class="pi-label">ORIGIN &middot; ARRIVED &middot; TRADE'+(bio.wage?" &middot; WAGE":"")+'</span>'+escapeHTML(summaryTxt);
@@ -6429,6 +6491,31 @@ window.addEventListener("keydown", function(e){
    handlers below with a movement threshold already applied there. ---- */
 var peopleRaycaster = new THREE.Raycaster();
 var _peopleNdc = new THREE.Vector2();
+/* U3 hit-target fix: a walking figure's capsule is only ~0.2-0.27m wide in
+   world space, so an exact ray/mesh intersection routinely misses fingers
+   and even careful mouse clicks. If the precise raycast comes up empty,
+   snap to the nearest visible person within a small on-screen radius of the
+   tap instead of silently no-op'ing. */
+var _snapV3 = new THREE.Vector3();
+var SNAP_PX = 24;
+function trySnapToNearestPerson(clientX, clientY){
+  var best=null, bestD=SNAP_PX;
+  for(var mi=0; mi<personMeshSlots.length; mi++){
+    var arr = personMeshSlots[mi];
+    for(var ii=0; ii<arr.length; ii++){
+      var slot = arr[ii];
+      if(!slot) continue;
+      _snapV3.set(slot._x, terrainHeight(slot._x, slot._z)+1.0, slot._z);
+      _snapV3.project(camera);
+      if(_snapV3.z<-1 || _snapV3.z>1) continue; // behind camera / outside clip range
+      var sx=(_snapV3.x*0.5+0.5)*window.innerWidth, sy=(-_snapV3.y*0.5+0.5)*window.innerHeight;
+      var d=Math.hypot(sx-clientX, sy-clientY);
+      if(d<bestD){ bestD=d; best=slot; }
+    }
+  }
+  if(best){ openPersonInspectorForSlot(best); return true; }
+  return false;
+}
 function trySelectAtScreenXY(clientX, clientY){
   _peopleNdc.x = (clientX/window.innerWidth)*2-1;
   _peopleNdc.y = -(clientY/window.innerHeight)*2+1;
@@ -6436,6 +6523,7 @@ function trySelectAtScreenXY(clientX, clientY){
   var targets = personMeshes.concat(documentedMeshes);
   var hits = peopleRaycaster.intersectObjects(targets, false);
   if(hits.length===0){
+    if(trySnapToNearestPerson(clientX, clientY)) return true;
     if(followedSlot || followedDocumented) closePersonInspector(); // "click ground to release"
     return false;
   }
