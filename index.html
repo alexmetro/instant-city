@@ -272,6 +272,55 @@
   #beat-card .bc-quote{ display:block; font-size:0.95rem; font-weight:600; line-height:1.35; margin:3px 0 2px; }
   #beat-card .bc-date{ display:inline-block; font-size:0.6rem; letter-spacing:2px; opacity:0.75; margin-right:1.1em; }
   #beat-card a{ font-size:0.6rem; color:var(--ink); letter-spacing:0.8px; }
+
+  /* ---- THE SCRUBBER — bottom timeline ribbon, above the ticker.
+     jul 1846 -> dec 1849, drag/click to jump, diamond notches at the
+     top-priority spine beats, [ / ] step a month, collapsible tab. ---- */
+  #hud-scrubber{
+    position:fixed; left:50%; bottom:56px; transform:translateX(-50%);
+    width:min(78vw,860px); z-index:9; pointer-events:auto;
+    padding:7px 18px 10px; user-select:none;
+    transition:opacity .3s ease, transform .3s ease;
+  }
+  #hud-scrubber.collapsed .scr-body{ display:none; }
+  #hud-scrubber .scr-tab{
+    position:absolute; left:50%; top:-13px; transform:translateX(-50%);
+    background:rgba(241,230,201,0.92); border:1px solid rgba(43,29,14,0.4); border-bottom:none;
+    font-size:0.6rem; letter-spacing:2px; padding:2px 10px 1px; cursor:pointer; opacity:0.85;
+  }
+  #hud-scrubber .scr-tab:hover{ opacity:1; }
+  #hud-scrubber .scr-years{ position:relative; height:12px; font-size:0.56rem; letter-spacing:1px; opacity:0.75; }
+  #hud-scrubber .scr-year{ position:absolute; transform:translateX(-50%); white-space:nowrap; }
+  #hud-scrubber .scr-track{
+    position:relative; height:20px; margin-top:2px;
+    border-top:1px solid rgba(43,29,14,0.5); cursor:pointer;
+  }
+  #hud-scrubber .scr-tick{ position:absolute; top:0; width:1px; height:5px; background:rgba(43,29,14,0.35); }
+  #hud-scrubber .scr-tick.year{ height:9px; background:rgba(43,29,14,0.65); }
+  #hud-scrubber .scr-notch{
+    position:absolute; top:2px; width:7px; height:7px; transform:translateX(-50%) rotate(45deg);
+    background:var(--ink); opacity:0.75; cursor:pointer;
+  }
+  #hud-scrubber .scr-notch:hover{ opacity:1; box-shadow:0 0 0 3px rgba(43,29,14,0.18); }
+  #hud-scrubber .scr-handle{
+    position:absolute; top:-4px; width:3px; height:24px; background:var(--ink);
+    transform:translateX(-50%); cursor:ew-resize; box-shadow:0 0 0 5px rgba(241,230,201,0.01);
+  }
+  #hud-scrubber .scr-handle::before{
+    content:""; position:absolute; left:50%; top:-4px; transform:translateX(-50%);
+    width:9px; height:9px; border-radius:50%; background:var(--ink);
+  }
+  #hud-scrubber .scr-chip{
+    position:absolute; bottom:100%; margin-bottom:6px; left:50%; transform:translateX(-50%);
+    background:rgba(20,16,10,0.92); color:#e9dcb4; font-size:0.62rem; letter-spacing:0.8px;
+    padding:4px 10px; white-space:nowrap; pointer-events:none; opacity:0; transition:opacity .12s ease;
+    border:1px solid rgba(233,220,180,0.35);
+  }
+  #hud-scrubber .scr-chip.on{ opacity:0.97; }
+  #hud-scrubber .scr-chip .sc-head{ display:block; font-weight:600; font-size:0.66rem; margin-top:1px; }
+  #seed-reshuffle{ pointer-events:auto; cursor:pointer; margin-left:0.5em; opacity:0.75; }
+  #seed-reshuffle:hover{ opacity:1; }
+
   /* Watch mode (V): everything hides but the date, the beat card, the ticker */
   body.watch-mode #hud-title, body.watch-mode #hud-seed, body.watch-mode #hud-altitude,
   body.watch-mode #hud-hint, body.watch-mode #hud-hint-toggle, body.watch-mode #paper-toggle,
@@ -315,7 +364,7 @@
     <h1>SAN FRANCISCO &middot; 1846</h1>
     <span class="sub">the instant city &mdash; phase five, the fates</span>
   </div>
-  <div class="panel" id="hud-seed">SEED <span id="seed-val">1846</span></div>
+  <div class="panel" id="hud-seed">SEED <span id="seed-val">1846</span><span id="seed-reshuffle" title="new telling — re-deals simulated lives">&#10227;</span></div>
   <div class="panel" id="hud-ghost">THEN / NOW &mdash; 2026 SHORELINE GHOST</div>
   <div class="panel" id="hud-clock">
     <span class="date" id="clock-date">&mdash;</span>
@@ -368,6 +417,17 @@
 
   <div class="panel" id="hud-provenance">SHOWING: THE RECORD ONLY &nbsp;&middot;&nbsp; P to restore</div>
   <div class="panel" id="hud-hint-toggle" title="controls">?</div>
+</div>
+
+<div class="panel" id="hud-scrubber">
+  <div class="scr-tab" id="scr-tab" title="collapse/expand timeline">&#9600; TIMELINE</div>
+  <div class="scr-body">
+    <div class="scr-years" id="scr-years"></div>
+    <div class="scr-track" id="scr-track">
+      <div class="scr-chip" id="scr-chip"></div>
+      <div class="scr-handle" id="scr-handle"></div>
+    </div>
+  </div>
 </div>
 
 <div id="beat-card">
@@ -460,15 +520,23 @@ function sfc32(a,b,c,d){
     return (t>>>0)/4294967296;
   };
 }
-var seedStr = "1846";
+var seedStr = "1846";      // WORLD seed — terrain/streets/buildings/ships/curves never read lifeVariant
+var lifeVariant = 0;       // life-stream variant — constant across ordinary jumps; bumped only by the
+                            // seed chip's reshuffle glyph (a deliberate "new telling", not an automatic re-seed)
 (function(){
-  var m = location.hash.match(/s=([A-Za-z0-9]+)/);
-  if(m) seedStr = m[1];
+  var m = location.hash.match(/s=([A-Za-z0-9]+)(?:\.(\d+))?/);
+  if(m){ seedStr = m[1]; if(m[2]) lifeVariant = parseInt(m[2],10)||0; }
   else { try{ history.replaceState(null,"","#s="+seedStr); }catch(e){} }
 })();
 document.getElementById("seed-val").textContent = seedStr;
 var seeds = cyrb128("p1850-"+seedStr);
 var rngBuild = sfc32(seeds[0],seeds[1],seeds[2],seeds[3]);
+function seedHashValue(){ return seedStr + (lifeVariant ? ("."+lifeVariant) : ""); }
+function updateHashSeed(){
+  var h = location.hash.replace(/s=[A-Za-z0-9]+(?:\.\d+)?/, "s="+seedHashValue());
+  if(h.indexOf("#")!==0) h = "#"+h;
+  try{ history.replaceState(null,"", h); }catch(e){}
+}
 
 /* =====================================================================
    SMALL MATH HELPERS
@@ -4063,11 +4131,21 @@ var lanternGlowMesh = new THREE.InstancedMesh(
   new THREE.MeshBasicMaterial({vertexColors:true, transparent:true, opacity:0}), LANTERN_CAP);
 lanternGlowMesh.count = 0; scene.add(lanternGlowMesh);
 
-/* ---- 5. lazy deterministic biography — crystallizes on first click,
-   seeded from (URL seed, slot id) so it's identical on every revisit ---- */
+/* ---- 5. lazy deterministic biography — crystallizes on first observation,
+   seeded from (URL seed, LIFE VARIANT, slot id) so it's identical on every
+   revisit AND on every ordinary date jump within a telling (jumps never
+   change lifeVariant — see TIME-JUMP SEMANTICS in grounding.md). Only the
+   seed chip's reshuffle glyph bumps lifeVariant and clears the cached bios
+   below, which is the one deliberate "new telling" affordance. ---- */
 function personRng(slotId){
-  var h = cyrb128("p1850-person-"+seedStr+"-"+slotId);
+  var h = cyrb128("p1850-person-"+seedStr+"."+lifeVariant+"-"+slotId);
   return sfc32(h[0],h[1],h[2],h[3]);
+}
+function reshuffleLifeStream(){
+  lifeVariant++;
+  ALL_PEOPLE_SLOTS.forEach(function(s){ s.bio = null; });
+  updateHashSeed();
+  if(followedSlot) generateBio(followedSlot); // refresh an open inspector in place
 }
 function generateBio(slot){
   if(slot.bio) return slot.bio;
@@ -5101,6 +5179,156 @@ var DIRECTOR_BEATS = (function(){
   beats.sort(function(a,b){ return a.simDay-b.simDay; });
   return beats;
 })();
+
+/* =========================================================================
+   THE SCRUBBER — bottom timeline ribbon, full span 1846-07 -> 1849-12.
+   jumpToDate() is the single entry point for every explicit jump (drag
+   release, track click, notch click, [ / ]): it sets simDay and rewrites
+   the URL's &d=. Every downstream system (population/ships/districts/fire)
+   already reads simDay live each frame (confirmed via updateShips'
+   "jumping straight to a URL date" handling and FIRE's day-compare state),
+   so this already IS the "fresh telling of fixed history" reconstruction
+   — no fast-forward, no re-seed. lifeVariant (see personRng) is untouched
+   by ordinary jumps in either direction, per TIME-JUMP SEMANTICS. ---- */
+function jumpToDate(day){
+  simDay = clamp(day, 0, SIM_END_DAY);
+  updateHashDate();
+}
+/* top ~10 spine beats by narrative/director priority, hand-picked from the
+   same extraction (events-1846-49.js / feed-1846-49.js) that drives
+   DIRECTOR_BEATS above: founding flag, the Brooklyn's Brannan/Mormon
+   arrival, the first newspaper issue, the renaming, Brannan's gold
+   announcement, the papers' suspension, the SS California, the delegate
+   election, and the Great Fire bracketed by the volunteer companies formed
+   the next day. (No corpus record yet tags a "Hounds" headline verbatim —
+   the delegate election fills that slot instead.) */
+var SCRUB_NOTCHES = (function(){
+  var picks = [
+    { date:"1846-07-09", headline:"Montgomery raises the U.S. flag at Yerba Buena plaza" },
+    { date:"1846-07-31", headline:"Ship Brooklyn lands Brannan and the Mormon settlers" },
+    { date:"1846-08-15", headline:null },
+    { date:"1847-01-23", headline:"Renaming ordinance published: Yerba Buena becomes San Francisco" },
+    { date:"1848-05-11", headline:'Brannan — "Gold! Gold from the American River!"' },
+    { date:"1848-05-29", headline:"The Californian suspends publication" },
+    { date:"1849-01-08", headline:"San Francisco to elect delegates for provisional convention" },
+    { date:"1849-02-28", headline:"SS California, the first Pacific Mail steamer, enters the bay" },
+    { date:"1849-12-24", headline:"The First Great Fire" },
+    { date:"1849-12-25", headline:"Volunteer fire companies organize" }
+  ];
+  var firstIssue = FEED_BY_DATE["1846-08-15"];
+  picks[2].headline = firstIssue ? ("First issue: "+(MASTHEAD_NAME[firstIssue.masthead]||firstIssue.masthead)) : "First issue: The Californian";
+  return picks.map(function(p){ return { day:eventDateToSimDay(p.date), dateISO:p.date, headline:p.headline }; });
+})();
+(function buildScrubber(){
+  var root = document.getElementById("hud-scrubber");
+  var tab = document.getElementById("scr-tab");
+  var yearsEl = document.getElementById("scr-years");
+  var trackEl = document.getElementById("scr-track");
+  var handleEl = document.getElementById("scr-handle");
+  var chipEl = document.getElementById("scr-chip");
+  var reshuffleEl = document.getElementById("seed-reshuffle");
+  var collapsed = false, autoCollapsedByWatch = false, dragging = false;
+
+  function pct(day){ return (clamp(day/SIM_END_DAY,0,1)*100).toFixed(3)+"%"; }
+  function setCollapsed(v){ collapsed = v; root.classList.toggle("collapsed", v); }
+  tab.addEventListener("click", function(){ setCollapsed(!collapsed); });
+
+  // year labels
+  for(var y=1846; y<=1849; y++){
+    var yl = document.createElement("span");
+    yl.className = "scr-year";
+    yl.style.left = pct(eventDateToSimDay(y+"-01-01"));
+    yl.textContent = y;
+    yearsEl.appendChild(yl);
+  }
+
+  // month tick marks, 1846-07 through 1849-12
+  var cursor = new Date(Date.UTC(1846,6,1)), endMs = Date.UTC(1850,0,1);
+  while(cursor.getTime() < endMs){
+    var tick = document.createElement("div");
+    tick.className = "scr-tick" + (cursor.getUTCMonth()===0 ? " year" : "");
+    tick.style.left = pct(eventDateToSimDay(cursor.toISOString().slice(0,10)));
+    trackEl.appendChild(tick);
+    cursor = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth()+1, 1));
+  }
+
+  // spine-event diamond notches — hover/tap tooltip is headline + date only,
+  // no editorializing (VOICE RULE)
+  SCRUB_NOTCHES.forEach(function(n){
+    var el = document.createElement("div");
+    el.className = "scr-notch";
+    el.style.left = pct(n.day);
+    el.addEventListener("mouseenter", function(){ showChip(n.dateISO, n.headline); });
+    el.addEventListener("mouseleave", function(){ if(!dragging) hideChip(); });
+    el.addEventListener("click", function(e){ e.stopPropagation(); jumpToDate(n.day); });
+    trackEl.appendChild(el);
+  });
+
+  function showChip(dateISO, headline){
+    var d = new Date(dateISO+"T00:00:00Z");
+    var dateStr = d.toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric",timeZone:"UTC"});
+    chipEl.innerHTML = escapeHTML(dateStr) + (headline ? ('<span class="sc-head">'+escapeHTML(headline)+'</span>') : "");
+    chipEl.classList.add("on");
+  }
+  function hideChip(){ chipEl.classList.remove("on"); }
+
+  function dayFromClientX(clientX){
+    var r = trackEl.getBoundingClientRect();
+    return clamp((clientX-r.left)/Math.max(1,r.width), 0, 1) * SIM_END_DAY;
+  }
+  function updateHandle(){ handleEl.style.left = pct(simDay); }
+
+  trackEl.addEventListener("pointerdown", function(e){
+    dragging = true;
+    try{ trackEl.setPointerCapture(e.pointerId); }catch(err){}
+    simDay = clamp(dayFromClientX(e.clientX), 0, SIM_END_DAY);
+    updateHandle();
+    showChip(simDateISO(dateFromSimDay(simDay)), null);
+  });
+  trackEl.addEventListener("pointermove", function(e){
+    if(!dragging) return;
+    simDay = clamp(dayFromClientX(e.clientX), 0, SIM_END_DAY);
+    updateHandle();
+    showChip(simDateISO(dateFromSimDay(simDay)), null);
+  });
+  function endDrag(e){
+    if(!dragging) return;
+    dragging = false;
+    try{ trackEl.releasePointerCapture(e.pointerId); }catch(err){}
+    updateHashDate(); // release commits the jump
+    hideChip();
+  }
+  trackEl.addEventListener("pointerup", endDrag);
+  trackEl.addEventListener("pointercancel", endDrag);
+
+  function stepMonth(day, dir){
+    var d = dateFromSimDay(day);
+    var nd = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth()+dir, d.getUTCDate()));
+    return eventDateToSimDay(nd.toISOString().slice(0,10));
+  }
+  window.addEventListener("keydown", function(e){
+    if(e.target && (e.target.tagName==="INPUT" || e.target.tagName==="TEXTAREA")) return;
+    if(e.key==="[") jumpToDate(stepMonth(simDay,-1));
+    if(e.key==="]") jumpToDate(stepMonth(simDay,1));
+  });
+
+  reshuffleEl.addEventListener("click", function(e){ e.stopPropagation(); reshuffleLifeStream(); });
+
+  // Watch mode (V) hides the ribbon by default via the SAME collapse the
+  // tab uses — never touches setWatchMode itself, so the controls-rebuild
+  // stays untouched; this just polls WATCH.on each frame for the transition.
+  var lastWatchOn = false;
+  (function tick(){
+    if(!dragging) updateHandle();
+    if(WATCH.on !== lastWatchOn){
+      lastWatchOn = WATCH.on;
+      if(lastWatchOn){ autoCollapsedByWatch = !collapsed; if(autoCollapsedByWatch) setCollapsed(true); }
+      else if(autoCollapsedByWatch){ setCollapsed(false); autoCollapsedByWatch = false; }
+    }
+    requestAnimationFrame(tick);
+  })();
+})();
+
 var bcClassEl = document.getElementById("bc-class"), bcQuoteEl = document.getElementById("bc-quote"),
     bcDateEl = document.getElementById("bc-date"), bcReceiptEl = document.getElementById("bc-receipt"),
     beatCardEl = document.getElementById("beat-card");
