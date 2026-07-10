@@ -4058,7 +4058,13 @@ var POP_CURVE = [
   { d:"1848-06-15", p:650 },   // gold-rush exodus: "like a place where the plague reigns"
   { d:"1848-08-15", p:600 },
   { d:"1848-12-31", p:2000 },
-  { d:"1849-06-30", p:11000 },
+  { d:"1849-06-30", p:5000 },  // GAPS-2026-07-10 P0 fix: was 11000 (120% overshoot). timeline-spine.md
+                                // clm:timeline:42, hard confidence: "Population ~5,000 (from ~2,000 in
+                                // January); ~15,000 added to the district in the first half-year" —
+                                // this is the ONLY node changed. The 11000 figure conflated visible-
+                                // structure/crowd density with actual population count (see DENSITY_CURVE
+                                // below, which now carries the old density-fix-tuned numbers so Sept 1849
+                                // building/tent/crowd density does not regress from this correction).
   { d:"1849-12-31", p:25000 }  // the Annals' own estimate, "nearer twenty-five thousand souls"
 ].map(function(k){ return { day: eventDateToSimDay(k.d), pop:k.p }; });
 function populationAt(day){
@@ -4070,6 +4076,43 @@ function populationAt(day){
     }
   }
   return POP_CURVE[POP_CURVE.length-1].pop;
+}
+// DENSITY_CURVE (GAPS-2026-07-10 P0 fix, decoupling pass): drives visible
+// structure/crowd DENSITY (growth buildings, tents, waterfront boats/cargo,
+// ambient walker count) — NOT the documented population figure, which now
+// lives in POP_CURVE/populationAt() above for display/narrative use only.
+// Round-2 reconciliation found the Sept-1849-density P0 fix (commit 0e3ed3f)
+// had conflated the two: it pushed the 1849-06-30 POP_CURVE node to 11000 to
+// force enough visible structures, when the documented population for that
+// date is ~5,000 (timeline-spine.md clm:timeline:42). Rather than re-derive
+// and re-tune the whole growthTargets()/peopleTargetCount()/waterfrontTargets()
+// formula set against a fresh building-count curve (50/79/157/200 documented,
+// ~500-600/~700-750 interpolated for Sept/Dec 1849 per the growthTargets()
+// comment below), this curve simply keeps the OLD, already screening-verified
+// pop numbers (identical to pre-fix POP_CURVE) so every density system's
+// output is bit-for-bit unchanged. Only populationAt() moved; densityAt() did
+// not, so nothing that reads density regresses.
+var DENSITY_CURVE = [
+  { d:"1846-07-01", p:200 },
+  { d:"1846-08-05", p:420 },
+  { d:"1847-01-26", p:500 },
+  { d:"1847-08-28", p:459 },
+  { d:"1848-04-30", p:850 },
+  { d:"1848-06-15", p:650 },
+  { d:"1848-08-15", p:600 },
+  { d:"1848-12-31", p:2000 },
+  { d:"1849-06-30", p:11000 }, // kept at the pre-fix, screening-verified density value on purpose
+  { d:"1849-12-31", p:25000 }
+].map(function(k){ return { day: eventDateToSimDay(k.d), pop:k.p }; });
+function densityAt(day){
+  if(day<=DENSITY_CURVE[0].day) return DENSITY_CURVE[0].pop;
+  for(var i=1;i<DENSITY_CURVE.length;i++){
+    if(day<=DENSITY_CURVE[i].day){
+      var a=DENSITY_CURVE[i-1], b=DENSITY_CURVE[i];
+      return lerp(a.pop, b.pop, (day-a.day)/(b.day-a.day));
+    }
+  }
+  return DENSITY_CURVE[DENSITY_CURVE.length-1].pop;
 }
 // P0-4 DENSITY fix (2026-07-10, Director's screening): the pre-fix curve
 // froze buildings entirely at pop>2200 (~late 1848) — everany 1849 growth
@@ -4089,7 +4132,7 @@ function populationAt(day){
 // structures and Dec 1849 ~700-750 total (both founding+fire-block+growth)
 // is a reasoned mid-point, not a hard count (flagged in the build report).
 function growthTargets(pop){
-  var basePop = POP_CURVE[0].pop;
+  var basePop = DENSITY_CURVE[0].pop;
   var housedPop = Math.min(Math.max(0, pop-basePop), 2200);          // pre-1849 growth reads as houses
   var surgePop = Math.max(0, pop-2200);         // 1849 surge: mostly tents, but NOT exclusively —
                                                  // real construction (signage, hotels, chapel) continued
@@ -4120,17 +4163,18 @@ var RAISE_DAYS = 7; // "a small raising animation (scale-in over a sim-week)"
    invisible) until the user unpauses and lets real simDay catch the
    animation up. FIX: these systems are counter-based/seeded precisely so
    "the day this candidate #i should first exist" is directly computable
-   (invert growthTargets() against the same POP_CURVE) — backdate spawnDay
-   to that computed reveal day instead of "now", so a paused jump shows
-   already-standing stock at full scale on the very next frame, with no
-   frame-stepping/replay. */
+   (invert growthTargets() against the same curve it's driven by — now
+   DENSITY_CURVE, see the P0 population/density decoupling fix above) —
+   backdate spawnDay to that computed reveal day instead of "now", so a
+   paused jump shows already-standing stock at full scale on the very next
+   frame, with no frame-stepping/replay. */
 function dayForTentIndex(i){
-  return dayForPopulationAtLeast(2200 + (i+1)*7);
+  return dayForDensityAtLeast(2200 + (i+1)*7);
 }
 function dayForBuildingIndex(i){
   var n = i+1, housedCapCount = Math.floor(2200/13); // buildings obtainable from the housed-pop term alone
-  if(n<=housedCapCount) return dayForPopulationAtLeast(POP_CURVE[0].pop + n*13);
-  return dayForPopulationAtLeast(2200 + (n-housedCapCount)*BUILDING_SURGE_DIV);
+  if(n<=housedCapCount) return dayForDensityAtLeast(DENSITY_CURVE[0].pop + n*13);
+  return dayForDensityAtLeast(2200 + (n-housedCapCount)*BUILDING_SURGE_DIV);
 }
 
 /* =====================================================================
@@ -4263,7 +4307,7 @@ var growthBuildingCandidates = (function(){
   // same swing-window dates as the street-grid rotation above); buildings
   // revealed before that trend match the founding village's scattered
   // off-grid character, buildings after trend toward the surveyed grid.
-  var preSurveyCount = growthTargets(populationAt(OFARRELL_SWING_END)).buildings;
+  var preSurveyCount = growthTargets(densityAt(OFARRELL_SWING_END)).buildings;
   out.forEach(function(c, idx){
     var jitterDeg = idx < preSurveyCount ? 12 : 3;
     c.rot = c.rotBase + (rngBuild()-0.5)*2*(jitterDeg*Math.PI/180) + VIOGET_SKEW;
@@ -4530,7 +4574,7 @@ function updateCampfires(){
   campfireMesh.material.opacity = nightFactor*0.9;
 }
 function updateGrowth(){
-  var pop = populationAt(simDay);
+  var pop = densityAt(simDay);
   var t = growthTargets(pop);
   growRevealStaged(growthBuildingCandidates, spawnedBuildings, t.buildings, dayForBuildingIndex);
   growReveal(tentCandidates, spawnedTents, t.tents, tentMesh, dayForTentIndex);
@@ -6604,7 +6648,7 @@ function waterfrontTargets(pop){
   };
 }
 function updateWaterfrontLife(){
-  var pop = populationAt(simDay);
+  var pop = densityAt(simDay); // density, not population — see P0 decoupling fix above
   var t = waterfrontTargets(pop);
   growReveal(boatCandidates,   spawnedBoats,  t.boats,  rowboatMesh);
   growReveal(cargoCandidates,  spawnedCargo,  t.cargo,  cargoPileMesh);
@@ -7796,15 +7840,15 @@ var HOME_BUILDING_SPOTS = VILLAGE_BUILDING_SPOTS.map(function(spot){
     capacity: boarding ? (6+Math.floor(rngBuild()*5)) : (1+Math.floor(rngBuild()*3)),
     used:0, boarding:boarding, type:"building" };
 });
-function dayForPopulationAtLeast(popTarget){
-  for(var i=0;i<POP_CURVE.length;i++){
-    if(POP_CURVE[i].pop>=popTarget){
-      if(i===0) return POP_CURVE[0].day;
-      var a=POP_CURVE[i-1], b=POP_CURVE[i];
+function dayForDensityAtLeast(popTarget){
+  for(var i=0;i<DENSITY_CURVE.length;i++){
+    if(DENSITY_CURVE[i].pop>=popTarget){
+      if(i===0) return DENSITY_CURVE[0].day;
+      var a=DENSITY_CURVE[i-1], b=DENSITY_CURVE[i];
       return lerp(a.day, b.day, clamp((popTarget-a.pop)/(b.pop-a.pop),0,1));
     }
   }
-  return POP_CURVE[POP_CURVE.length-1].day;
+  return DENSITY_CURVE[DENSITY_CURVE.length-1].day;
 }
 var homeBuildingPtr = 0, homeTentPtr = 0;
 function nextHome(){
@@ -7816,7 +7860,7 @@ function nextHome(){
   if(homeTentPtr<tentCandidates.length){
     var t = tentCandidates[homeTentPtr];
     homeTentPtr++;
-    return { spot:t, revealDay: dayForPopulationAtLeast(2200+7*homeTentPtr), type:"tent" };
+    return { spot:t, revealDay: dayForDensityAtLeast(2200+7*homeTentPtr), type:"tent" };
   }
   return { spot:{x:PLAZA_CENTER.x,z:PLAZA_CENTER.z,w:3,d:3}, revealDay:0, type:"building" }; // pool exhausted (shouldn't happen at these counts)
 }
@@ -8557,7 +8601,7 @@ function computeExtraPosition(slot, day){
 function peopleTargetCount(day, alt){
   var fireCrowd = day>=FIRE.day0 && day<=FIRE.day1+3/24;
   if(alt>(fireCrowd?750:CFG.peopleMaxAltitude)) return 0;
-  var pop = populationAt(day);
+  var pop = densityAt(day); // street-liveliness density, not documented population — P0 decoupling fix above
   var base = clamp(Math.round(pop/45), 6, PEOPLE_CAP);
   var h = (day-Math.floor(day))*24;
   var deepNight = (h<5.5 || h>=22.5) ? 0.06 : 1.0; // sim-schedule night: near-empty streets
@@ -9897,6 +9941,8 @@ window.__P1850 = {
   jump: function(iso){ jumpToDate(eventDateToSimDay(iso)); }, // P0-3: routes through jumpToDate's noon-default fix
   get date(){ return simDateISO(dateFromSimDay(simDay)); },
   get simDay(){ return simDay; },
+  get population(){ return Math.round(populationAt(simDay)); }, // documented population (POP_CURVE) — QA-GATE stat spot-check
+  get density(){ return Math.round(densityAt(simDay)); }, // visible structure/crowd density driver (DENSITY_CURVE), decoupled from population
   get calls(){ return renderer.info.render.calls; },
   render: function(){ renderer.render(scene, camera); },
   tick: function(dt){ return applyCameraRig(dt||0.1); }, // manual frame-advance — CDP-automated tabs can report
@@ -9933,7 +9979,7 @@ window.__P1850 = {
   get masts(){ return { cap:MAST_CAP, rendered:mastClusterMesh.count, shipCap:SHIP_CAP, anchorSlots:ANCHOR_SLOTS.length }; },
   get buildings(){
     return { villageSpots:VILLAGE_BUILDING_SPOTS.length, candidates:growthBuildingCandidates.length,
-      spawned:spawnedBuildings.length, target:growthTargets(populationAt(simDay)).buildings,
+      spawned:spawnedBuildings.length, target:growthTargets(densityAt(simDay)).buildings,
       stages:{ materials:growthMaterialsMesh.count, frame:growthFrameMesh.count, walls:growthWallsMesh.count, done:growthBuildingMesh.count+growthBuildingMesh2.count } };
   },
   get people(){
