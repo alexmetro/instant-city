@@ -1,0 +1,15 @@
+{
+  "name": "San Francisco · 1846 — The Instant City",
+  "short_name": "1846",
+  "description": "A living simulation of San Francisco, 1846-1849, built from the newspapers of the day.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "fullscreen",
+  "orientation": "any",
+  "background_color": "#f4f1e7",
+  "theme_color": "#f4f1e7",
+  "icons": [
+    { "src": "icons/icon-180.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

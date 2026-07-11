@@ -44,6 +44,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>San Francisco · 1846 — The Instant City</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="1846">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<meta name="theme-color" content="#f4f1e7">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,400;0,600;1,400&family=Playfair+Display:wght@700;900&display=swap" rel="stylesheet">
@@ -84,6 +91,13 @@
     bottom:16px; left:16px; font-size:0.85rem; letter-spacing:0.5px; min-width:150px;
   }
   #hud-altitude .label{ font-size:0.6rem; letter-spacing:2px; opacity:0.65; display:block; }
+  #btn-fullscreen{
+    float:right; cursor:pointer; font-size:1.05rem; line-height:1; padding:2px 4px;
+    opacity:0.6; user-select:none; -webkit-user-select:none;
+  }
+  #btn-fullscreen:hover{ opacity:1; }
+  /* hide the button when already chromeless: standalone PWA launch, or no fullscreen API (iPhone Safari) */
+  @media (display-mode: standalone), (display-mode: fullscreen){ #btn-fullscreen{ display:none; } }
   #hud-hint{
     bottom:16px; right:16px; font-size:0.68rem; line-height:1.55; text-align:right;
     max-width:250px;
@@ -537,6 +551,7 @@
   <div class="panel" id="hud-altitude">
     <span class="label">ALTITUDE</span>
     <span id="alt-val">&mdash;</span>
+    <span id="btn-fullscreen" title="full screen">&#x26F6;</span>
   </div>
   <div class="panel" id="hud-ticker">
     <span class="tdate" id="ticker-date"></span><span id="ticker-text"></span>
@@ -11833,6 +11848,24 @@ var altValEl = document.getElementById("alt-val");
 function updateHud(alt){
   altValEl.textContent = Math.round(alt) + " m";
 }
+
+/* Fullscreen button (iPad request, 2026-07-11): browser fullscreen where the
+   API exists; the chromeless path on iOS is Add to Home Screen (manifest +
+   apple-mobile-web-app meta in <head>), where this button auto-hides via the
+   display-mode media query. */
+(function(){
+  var btn = document.getElementById("btn-fullscreen");
+  if(!btn) return;
+  var el = document.documentElement;
+  var req = el.requestFullscreen || el.webkitRequestFullscreen;
+  var exit = document.exitFullscreen || document.webkitExitFullscreen;
+  if(!req){ btn.style.display = "none"; return; } // no API (iPhone Safari): PWA is the path
+  btn.addEventListener("click", function(){
+    var fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+    if(fsEl) exit.call(document);
+    else req.call(el);
+  });
+})();
 
 /* =====================================================================
    RENDER LOOP
