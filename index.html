@@ -137,7 +137,8 @@
     color:#efe2c4; font-family:'Fraunces', Georgia, serif;
     font-size:0.62rem; font-weight:600; letter-spacing:2.5px; white-space:nowrap;
     text-shadow:0 1px 2px rgba(0,0,0,0.85), 0 0 6px rgba(0,0,0,0.55);
-    opacity:0; transition:opacity .25s ease;
+    opacity:0; transition:opacity .2s ease; /* fade matches the label engine's ~200ms show/hide band (see updateStreetLabels) */
+    will-change:transform,opacity;
     pointer-events:none;
   }
   #hud-loading{
@@ -925,12 +926,12 @@ var STREETS_RUNTIME = (function(){
     return classWidthMap[entry.widthClass] || classWidthMap[entry.class] || 12; // last-resort only; calibration covers every class actually used
   }
   var out = [];
-  function addEntry(id,name,widthM,polyline,checkpoints,appears){
+  function addEntry(id,name,widthM,polyline,checkpoints,appears,cls){
     var swings = checkpoints.some(function(c){ return c.map==="vioget-1839"; }); // only the original Vioget-surveyed streets ease through the O'Farrell skew
     var ckpts = checkpoints.filter(function(c){ return Array.isArray(c.extent); }).map(function(c){
       return { day: ERA_MAP_SIMDAY[c.map]!=null ? ERA_MAP_SIMDAY[c.map] : -999999, extent:c.extent };
     }).sort(function(a,b){ return a.day-b.day; });
-    out.push({ id:id, name:name, widthM:widthM, polyline:polyline, checkpoints:ckpts,
+    out.push({ id:id, name:name, widthM:widthM, cls:cls||"lane", polyline:polyline, checkpoints:ckpts,
       surveyedDay: appears?appears.surveyedDay:null, firstMentionDay: appears?appears.firstMentionDay:null, swings:swings });
   }
   SG.streets.forEach(function(s){
@@ -939,12 +940,12 @@ var STREETS_RUNTIME = (function(){
       var wM = widthFor(s);
       s.members.forEach(function(m){
         var poly = m.polyline.map(function(p){ return {u:p[0],v:p[1]}; });
-        addEntry(s.id+":"+m.name, m.name+" Street", wM, poly, [{map:"ofarrell-1847",extent:[0,poly.length-1]}], s.appears);
+        addEntry(s.id+":"+m.name, m.name+" Street", wM, poly, [{map:"ofarrell-1847",extent:[0,poly.length-1]}], s.appears, s.class);
       });
       return;
     }
     var poly = s.polyline.map(function(p){ return {u:p[0],v:p[1]}; });
-    addEntry(s.id, s.name, widthFor(s), poly, s.checkpoints, s.appears);
+    addEntry(s.id, s.name, widthFor(s), poly, s.checkpoints, s.appears, s.class);
   });
   return out;
 })();
@@ -2280,56 +2281,83 @@ function canPlace(x,z,footprintR,opts){
    ===================================================================== */
 
 /* =====================================================================
-   STREET NAME LABELS (STREET-CHECKPOINT RESET, 2026-07-10): every
-   documented street in STREETS_RUNTIME now gets a label pool — not just
-   the original 10 Vioget-grid streets. Era-gated to each street's own
-   surveyedDay (a name doesn't exist on the map before its street does);
-   small-caps text lying along the street's own (possibly multi-point,
-   possibly growing) line, repeating on long streets (Google Maps
-   convention), altitude-gated to the ~120-1200m band where they're
-   legible without cluttering close-in architecture or far-out overview
-   shots. "mission-street" stays unlabeled here (see STREETS_RUNTIME's own
-   comment on why it's excluded from the generic street list).
+   STREET NAME LABEL ENGINE (rebuilt 2026-07-10, iPad oblique-view fix)
 
-   Still a DOM/CSS billboard pool (2026-07-10, iPad field-test defect #5's
-   fix) reprojected every frame via camera.project() — see that fix's own
-   history below for why this beats a world-space ground decal (fixed CSS
-   size at any altitude; recomputed every frame from CURRENT_STREET_SKEW /
-   the street's own active checkpoint extent, so a label never drifts from
-   what's actually painted underneath it, at any date). */
+   TECHNIQUE: screen-space label placement along the feature's PROJECTED
+   path + greedy priority declutter — the industry-standard slippy-map
+   renderer approach (Google Maps, Mapbox GL, OSM renderers all do
+   exactly this). The previous constant-size DOM billboards had no depth
+   scaling, no collision, and no angle awareness, so an oblique high view
+   piled ~40 same-size names on the receding side of the grid while
+   nearby streets went unlabeled (the user-reported iPad defect).
+
+   How it works, per decision tick (~5Hz, STREET_LABEL_TICK_MS):
+     1. PLACEMENT — each era-gated street's active-checkpoint polyline is
+        resampled at ~30m, projected to screen space, and its longest
+        contiguous ON-SCREEN run measured in pixels. A street is a label
+        candidate only if that run is long enough for its own text
+        (>= ~90px and >= 1.15x the label's measured width — which also
+        rejects edge-on streets, since they project short), with an
+        explicit local-foreshortening floor on top. Long runs repeat the
+        name at most once per ~450 screen px. The label sits at the run's
+        (fractional) midpoint and is ROTATED to lie along the street's
+        local screen direction, flipped so text never reads upside-down.
+     2. DECLUTTER — candidates are greedily accepted by priority
+        (street class x on-screen length x proximity to screen center),
+        hard-capped at STREET_LABEL_CAP, testing each candidate's rotated
+        screen box against fixed UI panel rects, the chip rects the
+        shared label-declutter engine accepted on ITS last tick
+        (_declutterAcceptedRects — one declutter system, per the
+        one-system law; street labels always yield to chips), and every
+        street label already accepted this tick. Rejected labels simply
+        don't render this tick.
+     3. HYSTERESIS — a slot must stay accepted ~300ms before it appears
+        and stay rejected ~300ms before it disappears, then fades over
+        ~200ms (CSS transition), so pinch-zooming through the band never
+        thrashes/pops labels.
+   Between ticks, only the ACCEPTED (<=14) labels are reprojected per
+   frame from their stored world anchors — 2 projections each — so
+   labels stay glued to their streets during camera motion at trivial
+   per-frame cost (this runs on iPad Safari).
+
+   Kept from the previous engine: the 120-1200m altitude band, per-street
+   era gating (surveyedDay/firstMentionDay), the water-lot suppression
+   (a platted street whose ground is still open water gets no name), and
+   CURRENT_STREET_SKEW so labels track the exact angle renderGroundSplat()
+   painted this frame. "mission-street" stays unlabeled here (see
+   STREETS_RUNTIME's own comment on why it's excluded). */
 var STREET_LABEL_DEFS = STREETS_RUNTIME.filter(function(s){ return s.surveyedDay!=null || s.firstMentionDay!=null; })
-  .map(function(s){ return { s:s, name:s.name.toUpperCase(), gateDay: s.surveyedDay!=null?s.surveyedDay:s.firstMentionDay }; });
-var streetLabelSlots = []; // {el, s, t} — t is the fractional 0..1 position along the street's active-extent polyline (by arc length)
+  .map(function(s){ return { s:s, name:s.name.toUpperCase(), gateDay: s.surveyedDay!=null?s.surveyedDay:s.firstMentionDay, slots:[], _hw:0 }; });
+var streetLabelSlots = []; // {el, s, gateDay, rep, state:off|pending|on|leaving, since, anchor}
 (function buildStreetLabelPool(){
   var hudEl = document.getElementById("hud");
-  var REPEAT_SPACING = 200; // meters between repeated name instances along a long street
-  var MAX_REPS = 3; // bounded DOM pool per street
+  var MAX_REPS = 3; // bounded DOM pool per street; actual reps shown per tick is screen-length-driven
   STREET_LABEL_DEFS.forEach(function(def){
     var s = def.s;
     // gridToWorldAt() is a pure rotation — distance is skew-invariant, so
     // any fixed angle gives the same real-world length, used only to size
-    // the repeat count; use the street's FULL polyline (its eventual
-    // longest run) so the repeat count doesn't itself change across eras.
+    // the DOM pool; use the street's FULL polyline (its eventual longest
+    // run) so the pool never needs to grow across eras.
     var total = 0;
     for(var i=1;i<s.polyline.length;i++) total += Math.hypot(
       gridToWorldAt(s.polyline[i].u,s.polyline[i].v,0).x - gridToWorldAt(s.polyline[i-1].u,s.polyline[i-1].v,0).x,
       gridToWorldAt(s.polyline[i].u,s.polyline[i].v,0).z - gridToWorldAt(s.polyline[i-1].u,s.polyline[i-1].v,0).z);
-    var reps = Math.min(MAX_REPS, Math.max(1, Math.round(total/REPEAT_SPACING)));
+    var reps = Math.min(MAX_REPS, Math.max(1, Math.round(total/200)));
     for(var r=0;r<reps;r++){
       var el = document.createElement("div");
       el.className = "street-label";
       el.textContent = def.name;
       hudEl.appendChild(el);
-      streetLabelSlots.push({ el:el, s:s, gateDay:def.gateDay, t:(r+0.5)/reps });
+      var slot = { el:el, s:s, gateDay:def.gateDay, rep:r, state:"off", since:0, anchor:null };
+      def.slots.push(slot);
+      streetLabelSlots.push(slot);
     }
   });
 })();
 /* Active checkpoint extent's world-space polyline for a street at the
    given skew angle (cardinal streets swing, everything else is fixed at
-   0 — same rule renderGroundSplat() itself follows), plus a point at
-   fractional arc-length position t along it. Shared by the label
-   repaint below; renderGroundSplat() inlines its own simpler version
-   since it just needs the whole polyline, not a single interpolated point. */
+   0 — same rule renderGroundSplat() itself follows). Shared by the label
+   engine below; renderGroundSplat() inlines its own simpler version. */
 function streetActiveWorldPts(s, day, skewAngleForSwinging){
   var active = s.checkpoints[0];
   for(var ci=0; ci<s.checkpoints.length; ci++){ if(s.checkpoints[ci].day<=day) active=s.checkpoints[ci]; }
@@ -2339,64 +2367,201 @@ function streetActiveWorldPts(s, day, skewAngleForSwinging){
   for(var pi=active.extent[0]; pi<=active.extent[1]; pi++) pts.push(gridToWorldAt(s.polyline[pi].u, s.polyline[pi].v, angle));
   return pts;
 }
-function pointAlongWorldPts(pts, t){
-  if(!pts || pts.length<1) return null;
-  if(pts.length===1) return { x:pts[0].x, z:pts[0].z };
-  var lens=[0]; for(var i=1;i<pts.length;i++) lens.push(lens[i-1]+Math.hypot(pts[i].x-pts[i-1].x, pts[i].z-pts[i-1].z));
-  var target = t*lens[lens.length-1];
-  for(var j=1;j<pts.length;j++){
-    if(target<=lens[j] || j===pts.length-1){
-      var segLen=lens[j]-lens[j-1], lt=segLen>0?(target-lens[j-1])/segLen:0;
-      return { x:lerp(pts[j-1].x,pts[j].x,lt), z:lerp(pts[j-1].z,pts[j].z,lt) };
+var STREET_LABEL_ALT_MIN=120, STREET_LABEL_ALT_MAX=1200; // unchanged altitude band
+var STREET_LABEL_CAP = 14;          // hard cap on visible street labels
+var STREET_LABEL_MIN_RUN_PX = 90;   // minimum on-screen run to earn a label at all
+var STREET_LABEL_REPEAT_PX = 450;   // at most one name instance per this many screen px
+var STREET_LABEL_TICK_MS = 200;     // ~5Hz full placement/declutter recompute
+var STREET_LABEL_HYST_MS = 280;     // must be valid/invalid this long before showing/hiding
+var STREET_LABEL_SAMPLE_M = 30;     // world-space resample step along each polyline
+var STREET_LABEL_EDGEON_PPM = 0.22; // min local screen px per world meter along the street (edge-on/too-far floor)
+var STREET_LABEL_GAP_PX = 12;       // min screen gap between two accepted street labels
+var STREET_CLASS_WEIGHT = { market:4, main:3, "main-override":3, cross:2, "cross-override":2, "cross-ofarrell":2 };
+// Fixed-UI blocker panels street labels must never underlap (chips are
+// covered separately via _declutterAcceptedRects). Rects re-read at tick
+// rate only, so getBoundingClientRect cost stays off the frame path.
+var STREET_LABEL_UI_BLOCKER_IDS = ["hud-title","hud-seed","hud-clock","hud-ghost","hud-altitude","hud-ticker",
+  "hud-scrubber","hud-hint","hud-hint-toggle","hud-tilt-toggle","hud-menu-toggle","hud-menu-sheet",
+  "paper-toggle","hud-provenance","ship-inspector","building-inspector","person-inspector","paper-pane"];
+function collectUIBlockerRects(){
+  var rects = [];
+  for(var i=0;i<STREET_LABEL_UI_BLOCKER_IDS.length;i++){
+    var el = document.getElementById(STREET_LABEL_UI_BLOCKER_IDS[i]);
+    if(!el) continue;
+    var cs = window.getComputedStyle(el);
+    if(cs.display==="none" || cs.visibility==="hidden" || parseFloat(cs.opacity)<0.05) continue;
+    var r = el.getBoundingClientRect();
+    if(r.width<2 || r.height<2) continue;
+    rects.push({ left:r.left, right:r.right, top:r.top, bottom:r.bottom });
+  }
+  return rects;
+}
+var _slV = new THREE.Vector3();
+// front: in front of the camera's near plane; on: within the padded viewport.
+function _projectStreetPoint(wx,wy,wz,out){
+  _slV.set(wx,wy,wz).applyMatrix4(camera.matrixWorldInverse);
+  if(_slV.z>-1){ out.front=false; out.on=false; return out; }
+  _slV.set(wx,wy,wz).project(camera);
+  out.front = true;
+  out.sx = (_slV.x*0.5+0.5)*window.innerWidth;
+  out.sy = (-_slV.y*0.5+0.5)*window.innerHeight;
+  out.on = _slV.x>=-1.04 && _slV.x<=1.04 && _slV.y>=-1.04 && _slV.y<=1.04;
+  return out;
+}
+function _streetLabelHalfSize(def){
+  if(!def._hw){
+    var el = def.slots.length ? def.slots[0].el : null;
+    def._hw = (el && el.offsetWidth) ? el.offsetWidth/2+2 : def.name.length*4.2+8; // real box once laid out; estimate before
+  }
+  return { hw:def._hw, hh:9 };
+}
+var _lastStreetLabelTick = -1e9;
+function recomputeStreetLabelPlacements(now, alt){
+  var candidates = [];
+  var inBand = alt>=STREET_LABEL_ALT_MIN && alt<=STREET_LABEL_ALT_MAX;
+  if(inBand){
+    var skew = CURRENT_STREET_SKEW;
+    var W = window.innerWidth, H = window.innerHeight;
+    var scx=W/2, scy=H/2, diag=Math.hypot(W,H);
+    var p = {front:false,on:false,sx:0,sy:0};
+    for(var d=0; d<STREET_LABEL_DEFS.length; d++){
+      var def = STREET_LABEL_DEFS[d];
+      if(simDay < def.gateDay) continue; // era gate: this name isn't on any map or in any corpus mention yet
+      var pts = streetActiveWorldPts(def.s, simDay, skew);
+      if(!pts || pts.length<2) continue;
+      // resample the active-extent polyline at ~30m and project every sample
+      var samples = [];
+      for(var i=0;i<pts.length-1;i++){
+        var ax=pts[i].x, az=pts[i].z, bx=pts[i+1].x, bz=pts[i+1].z;
+        var n = Math.max(1, Math.ceil(Math.hypot(bx-ax,bz-az)/STREET_LABEL_SAMPLE_M));
+        for(var k=(i===0?0:1); k<=n; k++){
+          var tt=k/n, wx=lerp(ax,bx,tt), wz=lerp(az,bz,tt);
+          var wy=terrainHeight(wx,wz)+0.3;
+          _projectStreetPoint(wx,wy,wz,p);
+          samples.push({wx:wx,wy:wy,wz:wz, ok:(p.front&&p.on), sx:p.sx, sy:p.sy});
+        }
+      }
+      // longest contiguous on-screen run, measured in screen px
+      var best=null, runStart=-1;
+      for(var si=0; si<=samples.length; si++){
+        var okNow = si<samples.length && samples[si].ok;
+        if(okNow && runStart<0) runStart=si;
+        if(!okNow && runStart>=0){
+          if(si-runStart>=2){
+            var L=0, cum=[0];
+            for(var q=runStart+1;q<si;q++){ L+=Math.hypot(samples[q].sx-samples[q-1].sx, samples[q].sy-samples[q-1].sy); cum.push(L); }
+            if(!best || L>best.L) best={i0:runStart, L:L, cum:cum};
+          }
+          runStart=-1;
+        }
+      }
+      if(!best) continue;
+      var half = _streetLabelHalfSize(def);
+      // the run must fit the label's own text with margin — this is also the
+      // edge-on filter: a street seen nearly end-on projects a short run
+      if(best.L < Math.max(STREET_LABEL_MIN_RUN_PX, half.hw*2*1.15)) continue;
+      var reps = Math.min(def.slots.length, Math.max(1, Math.floor(best.L/STREET_LABEL_REPEAT_PX)));
+      var clsW = STREET_CLASS_WEIGHT[def.s.cls] || 1;
+      for(var r=0;r<reps;r++){
+        var target = (r+0.5)/reps * best.L;
+        var j=1; while(j<best.cum.length-1 && best.cum[j]<target) j++;
+        var sa=samples[best.i0+j-1], sb=samples[best.i0+j];
+        var segPx = best.cum[j]-best.cum[j-1];
+        var ft = segPx>0 ? (target-best.cum[j-1])/segPx : 0;
+        // local foreshortening floor: labels never sit where the street is
+        // compressed to almost nothing on screen (too edge-on / too far)
+        var worldStep = Math.hypot(sb.wx-sa.wx, sb.wz-sa.wz);
+        if(worldStep>0 && segPx/worldStep < STREET_LABEL_EDGEON_PPM) continue;
+        var wx2=lerp(sa.wx,sb.wx,ft), wz2=lerp(sa.wz,sb.wz,ft);
+        var wy2=terrainHeight(wx2,wz2)+0.3;
+        // WATER-LOT LABEL rule (kept from previous engine, screening #5
+        // item a): a platted water-lot street whose ground is still open
+        // water paints only a dashed pier-hint — its NAME must not float
+        // over open water either.
+        if(wy2-0.3 <= 0) continue;
+        var angle = Math.atan2(sb.sy-sa.sy, sb.sx-sa.sx)*180/Math.PI;
+        if(angle>90) angle-=180; else if(angle<-90) angle+=180; // never upside-down
+        var sx2=lerp(sa.sx,sb.sx,ft), sy2=lerp(sa.sy,sb.sy,ft);
+        var centerFactor = 1 - Math.min(1, Math.hypot(sx2-scx,sy2-scy)/(0.6*diag));
+        candidates.push({
+          slot:def.slots[r], sx:sx2, sy:sy2, angle:angle, hw:half.hw, hh:half.hh,
+          anchor:{ wx:wx2, wy:wy2, wz:wz2, ax:sb.wx, ay:sb.wy, az:sb.wz, lastAngle:angle },
+          prio: clsW * best.L * (0.35+0.65*centerFactor)
+        });
+      }
     }
   }
-  return { x:pts[pts.length-1].x, z:pts[pts.length-1].z };
+  // GREEDY DECLUTTER: highest priority first, against UI rects, the shared
+  // declutter engine's accepted chip rects (street labels yield to chips),
+  // and street labels already accepted this tick. Hard cap at 14.
+  candidates.sort(function(a,b){ return b.prio-a.prio; });
+  var blockers = collectUIBlockerRects();
+  for(var bi=0;bi<_declutterAcceptedRects.length;bi++) blockers.push(_declutterAcceptedRects[bi]);
+  var placedBoxes = [], acceptedBySlot = new Map();
+  for(var ci=0; ci<candidates.length && acceptedBySlot.size<STREET_LABEL_CAP; ci++){
+    var c = candidates[ci];
+    if(acceptedBySlot.has(c.slot)) continue;
+    // conservative screen AABB of the ROTATED text box
+    var rad=c.angle*Math.PI/180, cA=Math.abs(Math.cos(rad)), sA=Math.abs(Math.sin(rad));
+    var hw=cA*c.hw+sA*c.hh, hh=sA*c.hw+cA*c.hh;
+    var box = { left:c.sx-hw, right:c.sx+hw, top:c.sy-hh, bottom:c.sy+hh };
+    var hit = false, x;
+    for(x=0;x<blockers.length && !hit;x++) hit = rectsOverlap(box, blockers[x], LABEL_PAD);
+    for(x=0;x<placedBoxes.length && !hit;x++) hit = rectsOverlap(box, placedBoxes[x], STREET_LABEL_GAP_PX);
+    if(hit) continue;
+    placedBoxes.push(box);
+    acceptedBySlot.set(c.slot, c);
+  }
+  // HYSTERESIS state machine (anti-thrash during pinch/orbit): accepted
+  // slots must persist ~STREET_LABEL_HYST_MS before appearing; rejected
+  // ones keep rendering that long before the ~200ms CSS fade-out.
+  for(var si2=0; si2<streetLabelSlots.length; si2++){
+    var slot = streetLabelSlots[si2];
+    var acc = acceptedBySlot.get(slot);
+    if(acc){
+      slot.anchor = acc.anchor;
+      if(slot.state==="off"){ slot.state="pending"; slot.since=now; }
+      else if(slot.state==="pending" && now-slot.since>=STREET_LABEL_HYST_MS){ slot.state="on"; }
+      else if(slot.state==="leaving"){ slot.state="on"; }
+    } else {
+      if(slot.state==="pending"){ slot.state="off"; }
+      else if(slot.state==="on"){ slot.state="leaving"; slot.since=now; }
+      else if(slot.state==="leaving" && now-slot.since>=STREET_LABEL_HYST_MS){ slot.state="off"; }
+    }
+  }
 }
-var STREET_LABEL_ALT_MIN=120, STREET_LABEL_ALT_MAX=1200;
-var _slPos = new THREE.Vector3(), _slFwd = new THREE.Vector3();
+var _slFrameP = {front:false,on:false,sx:0,sy:0};
 function updateStreetLabels(alt){
-  var on = alt>=STREET_LABEL_ALT_MIN && alt<=STREET_LABEL_ALT_MAX;
-  if(!on){
-    for(var i=0;i<streetLabelSlots.length;i++) streetLabelSlots[i].el.style.opacity = 0;
+  var now = performance.now();
+  var i, slot, el;
+  // hard clamp well outside the band — no hysteresis grace when the user
+  // has clearly left the labeled altitude range
+  if(alt < STREET_LABEL_ALT_MIN*0.8 || alt > STREET_LABEL_ALT_MAX*1.18){
+    for(i=0;i<streetLabelSlots.length;i++){ slot=streetLabelSlots[i]; slot.state="off"; slot.el.style.opacity=0; }
     return;
   }
-  var skew = CURRENT_STREET_SKEW;
-  for(var j=0;j<streetLabelSlots.length;j++){
-    var slot = streetLabelSlots[j], el = slot.el, s = slot.s;
-    if(simDay<slot.gateDay){ el.style.opacity=0; continue; } // this street's name isn't on any map or in any corpus mention yet
-    var pts = streetActiveWorldPts(s, simDay, skew);
-    var here = pointAlongWorldPts(pts, slot.t);
-    var ahead = pointAlongWorldPts(pts, Math.min(0.98, slot.t+0.05));
-    if(!here || !ahead){ el.style.opacity=0; continue; }
-    var wx=here.x, wz=here.z, wy=terrainHeight(wx,wz)+0.3;
-    // WATER-LOT LABEL fix (screening #5 item a, 2026-07-10): a platted
-    // water-lot street whose ground is still open water/tideflat paints
-    // only a dashed pier-hint (see paintPierHint) — its NAME must not
-    // float over open water either. Suppressed while the label's own
-    // anchor point is wet; since the natural-shoreline terrain is the
-    // per-date truth for this sim's whole 1846-49 window (the real fill
-    // is 1851+, past SIM_END_DAY), wet here means wet at every reachable
-    // date — the label simply waits for dry land that never comes in-sim.
-    if(wy-0.3 <= 0){ el.style.opacity=0; continue; }
-    _slPos.set(wx,wy,wz).applyMatrix4(camera.matrixWorldInverse);
-    if(_slPos.z>-1){ el.style.opacity=0; continue; } // behind the camera
-    _slPos.set(wx,wy,wz).project(camera);
-    if(_slPos.x<-1.05||_slPos.x>1.05||_slPos.y<-1.05||_slPos.y>1.05){ el.style.opacity=0; continue; }
-    var sx=(_slPos.x*0.5+0.5)*window.innerWidth, sy=(-_slPos.y*0.5+0.5)*window.innerHeight;
-    // a second point a short way further along the SAME current-skew run
-    // gives the true on-screen (perspective-correct) angle to rotate the
-    // DOM label by, so it visually lies along the street as drawn, not
-    // just its flat world-space yaw.
-    var fx=ahead.x, fz=ahead.z, fy=terrainHeight(fx,fz)+0.3;
-    _slFwd.set(fx,fy,fz).project(camera);
-    var fsx=(_slFwd.x*0.5+0.5)*window.innerWidth, fsy=(-_slFwd.y*0.5+0.5)*window.innerHeight;
-    var screenAngle = Math.atan2(fsy-sy, fsx-sx)*180/Math.PI;
-    // keep text upright (never upside-down) regardless of view direction
-    if(screenAngle>90) screenAngle-=180; else if(screenAngle<-90) screenAngle+=180;
+  if(now-_lastStreetLabelTick >= STREET_LABEL_TICK_MS){
+    _lastStreetLabelTick = now;
+    recomputeStreetLabelPlacements(now, alt); // ~5Hz full recompute; frames between ticks only reproject accepted anchors below
+  }
+  for(i=0;i<streetLabelSlots.length;i++){
+    slot=streetLabelSlots[i]; el=slot.el;
+    if(!((slot.state==="on"||slot.state==="leaving") && slot.anchor)){ el.style.opacity=0; continue; }
+    var a = slot.anchor;
+    _projectStreetPoint(a.wx,a.wy,a.wz,_slFrameP);
+    if(!_slFrameP.front || !_slFrameP.on){ el.style.opacity=0; slot.state="off"; continue; } // moved offscreen between ticks — hide now
+    var sx=_slFrameP.sx, sy=_slFrameP.sy;
+    _projectStreetPoint(a.ax,a.ay,a.az,_slFrameP);
+    var angle = a.lastAngle;
+    if(_slFrameP.front){
+      angle = Math.atan2(_slFrameP.sy-sy, _slFrameP.sx-sx)*180/Math.PI;
+      if(angle>90) angle-=180; else if(angle<-90) angle+=180;
+      a.lastAngle = angle;
+    }
     el.style.opacity = 0.92;
     el.style.left = sx+"px";
     el.style.top = sy+"px";
-    el.style.transform = "translate(-50%,-50%) rotate("+screenAngle.toFixed(2)+"deg)";
+    el.style.transform = "translate(-50%,-50%) rotate("+angle.toFixed(2)+"deg)";
   }
 }
 
@@ -5456,7 +5621,12 @@ var LABEL_DECLUTTER_CAP = 8;
 var LABEL_DECLUTTER_INTERVAL = 200; // ms (~5Hz)
 var LABEL_PAD = 3; // px slack before two chips count as "overlapping"
 var _declutterSuppressed = new WeakSet();
+var _declutterAcceptedRects = []; // this tick's accepted chip boxes — consumed by the street-label
+                                  // engine (recomputeStreetLabelPlacements) as blockers, so street
+                                  // names always yield to chips without a second collision system
 var _lastDeclutterRun = 0;
+// shared screen-rect overlap test — used by this engine AND the street-label engine above
+function rectsOverlap(a,b,pad){ return a.left<b.right+pad && a.right+pad>b.left && a.top<b.bottom+pad && a.bottom+pad>b.top; }
 function _labelHalfSize(el, kind){
   if(kind==="glyph") return { hw:13, hh:13 };
   // prefer the element's real rendered box (screening #5 item c: the
@@ -5498,16 +5668,14 @@ function recomputeLabelDeclutter(){
     if(!it.exempt){
       if(it.buildingRelated && buildingCount>=LABEL_DECLUTTER_CAP){ suppressed.add(it.el); return; }
       for(var i=0;i<accepted.length;i++){
-        var a = accepted[i];
-        if(it.left<a.right+LABEL_PAD && it.right+LABEL_PAD>a.left && it.top<a.bottom+LABEL_PAD && it.bottom+LABEL_PAD>a.top){
-          suppressed.add(it.el); return;
-        }
+        if(rectsOverlap(it, accepted[i], LABEL_PAD)){ suppressed.add(it.el); return; }
       }
     }
     accepted.push(it);
     if(it.buildingRelated) buildingCount++;
   });
   _declutterSuppressed = suppressed;
+  _declutterAcceptedRects = accepted.map(function(a){ return { left:a.left, right:a.right, top:a.top, bottom:a.bottom }; });
 }
 function applyLabelDeclutter(now){
   if(now-_lastDeclutterRun >= LABEL_DECLUTTER_INTERVAL){
@@ -10589,6 +10757,24 @@ window.__P1850 = {
                                                           // document.hidden=true and never fire rAF at all, so QA
                                                           // scripts can call this directly to advance the camera
                                                           // chase without depending on requestAnimationFrame.
+  camSet: function(o){ // QA/CDP camera control (s16 street-label verification): write rig targets directly
+    if(o.tT!=null) CAM.tT = clamp(o.tT,0,1);
+    if(o.alt!=null) setZoomMeters(o.alt);
+    if(o.yaw!=null) CAM.yawT = o.yaw;
+    if(o.pitchOff!=null) CAM.pitchOffT = clamp(o.pitchOff, PITCH_OFF_MIN, PITCH_OFF_MAX);
+    if(o.x!=null && o.z!=null){ CAM.focusT.set(o.x, groundHeight(o.x,o.z)+2, o.z); }
+    if(o.snap){ CAM.t=CAM.tT; CAM.yaw=CAM.yawT; CAM.pitchOff=CAM.pitchOffT; CAM.focus.copy(CAM.focusT); }
+  },
+  get streetLabels(){ // s16 QA: every street label currently rendering, with screen box + rotation
+    var out=[];
+    streetLabelSlots.forEach(function(sl){
+      if(!(parseFloat(sl.el.style.opacity)>0.05)) return;
+      out.push({ name:sl.el.textContent, state:sl.state,
+        x:Math.round(parseFloat(sl.el.style.left)||0), y:Math.round(parseFloat(sl.el.style.top)||0),
+        rot:(sl.anchor&&sl.anchor.lastAngle!=null)?Math.round(sl.anchor.lastAngle):null, w:sl.el.offsetWidth, h:sl.el.offsetHeight });
+    });
+    return out;
+  },
   get cam(){ return { x:camera.position.x, y:camera.position.y, z:camera.position.z,
     t:CAM.t, tT:CAM.tT, yaw:CAM.yaw, yawT:CAM.yawT, pitchOff:CAM.pitchOff, pitchOffT:CAM.pitchOffT, radius:CAM.radius,
     focus:{x:CAM.focus.x,y:CAM.focus.y,z:CAM.focus.z}, focusT:{x:CAM.focusT.x,y:CAM.focusT.y,z:CAM.focusT.z},
