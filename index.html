@@ -1123,13 +1123,17 @@ var GEO = {
   // shoreline: 1846 cove — inland edge at Montgomery St's EAST side between
   // Clay & Washington (the flag-raising beach), Clark's Point (Broadway &
   // Battery) north, the south beach arcing east past Happy Valley to Rincon
-  // Point. SHORELINE TRUTH (2026-07-11): the old parabola (mouthX 30 /
-  // depth 380) is DELETED — shorelineX(z) now reads the SAME documented
-  // anchor polyline the bake carved the terrain with (TERRAIN_1846
-  // .shoreAnchors, emitted by tools/bake-terrain.js), so the analytic
-  // curve and the baked heightmap can never disagree again.
+  // Point. COVE ARC CORRECTION (2026-07-12): shoreAnchors is now a dense
+  // (10m) first-water-edge table derived from the MEASURED natural line —
+  // the 222-vertex trace of the 1853 Coast Survey chart's "original H.W.
+  // line per Eddy's 1852 resurvey" (data/shoreline-natural-1849.json),
+  // which the bake consumed verbatim as a land/water polygon (old
+  // hand-derived curve deviated up to 230m from it on the south beach).
+  // shorelineX(z) reads that same emitted table (TERRAIN_1846.shoreAnchors,
+  // tools/bake-terrain.js), so the analytic curve and the baked heightmap
+  // can never disagree; east of the curve the heightmap alone is truth.
   zNorthHeadland: -900,
-  zSouthHeadland: 1020,   // Rincon Point (was 950 under the old parabola)
+  zSouthHeadland: 765,    // Rincon Point — traced promontory tip z (was 1020 hand-derived)
 
   // fixed offset for the then/now 2026 ghost shoreline (fill was greatest
   // mid-cove, least near the natural headlands)
@@ -1138,9 +1142,14 @@ var GEO = {
 };
 
 /* One shoreline curve, one owner: [z, shoreX] anchors baked into
-   terrain-1846.js by tools/bake-terrain.js (documented high-tide line,
-   research/geography-shoreline.md §1/§3), linear interp + the same 3-tap
-   smoothing the bake's carve used. */
+   terrain-1846.js by tools/bake-terrain.js (the traced 1849 natural
+   high-water line, data/shoreline-natural-1849.json), linear interp +
+   a light 3-tap smoothing. COVE ARC CORRECTION (2026-07-12): the anchors
+   are now DENSE (10m spacing, discontinuity-refined) samples of the
+   traced line, so the smoothing window shrank ±40 -> ±4 — at the trace's
+   real corners the old ±40 window bowed the curve up to ~21m off the
+   measured line, and any wide window smears the first-water-edge's two
+   real jumps (the spit at the foot of Clay; the Rincon flank handoff). */
 function shoreAnchorsX(z){
   var A = TERRAIN.shoreAnchors;
   if(z<=A[0][0]) return A[0][1];
@@ -1151,7 +1160,7 @@ function shoreAnchorsX(z){
   return A[A.length-1][1];
 }
 function shorelineX(z){
-  return (shoreAnchorsX(z-40)+shoreAnchorsX(z)+shoreAnchorsX(z+40))/3;
+  return (shoreAnchorsX(z-4)+shoreAnchorsX(z)+shoreAnchorsX(z+4))/3;
 }
 function modernShorelineX(z){
   var half = z<0 ? Math.abs(GEO.zNorthHeadland) : GEO.zSouthHeadland;
@@ -4505,7 +4514,7 @@ var STORESHIP_INFO = (function(){
   // chips — the four hulks sit within a block of each other, so their
   // labels stacked/overlapped at most view angles (screening #5 item c).
   return {
-    "Niantic":          { pos: pos(70,  clay-4),        list: 0.16, chipRank:0, groundedNote:"grounded at Clay & Sansome" },
+    "Niantic":          { pos: pos(90,  clay-4),        list: 0.16, chipRank:0, groundedNote:"grounded at Clay & Sansome" }, // u 70->90 (cove-arc correction 2026-07-12): the traced natural line has a small spit at the foot of Clay whose raw-fill bleed dried her old spot; u=90 sits her in wet mud (h=-0.06) and CLOSER to the documented Sansome corner (u=145.7)
     "General Harrison": { pos: pos(112, clay-2),        list: 0.11, chipRank:1, groundedNote:"grounded near Battery St, by the Niantic" },
     "Euphemia":         { pos: pos(103, sacramento+4),  list: 0.09, chipRank:2, groundedNote:"berthed near Central Wharf, converted to the town jail" }, // u 85->97 (s22) ->103 (s25 re-projection): keeps her in the wet mud at the tideline — the 31m heightmap's bilinear shore ridge shifted under her when the grid was re-registered (+110/+44) and re-spaced; verified h≈+0.1 (wet mud, not dry) against the re-baked terrain
     "Apollo":           { pos: pos(128, sacramento+6),  list: 0.14, chipRank:3, groundedNote:"beached between Central Wharf and Howison's Pier" }
