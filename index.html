@@ -10073,33 +10073,28 @@ var ALL_PEOPLE_SLOTS = (function(){
   return slots;
 })();
 
-/* ---- 4. figure prefab — coat-cone body (no limbs, per brief) + head +
-   brimmed hat / bonnet, dark period tones, merged into ONE geometry per
-   variant so each variant is a single InstancedMesh draw call ---- */
+/* ---- 4. figure prefab — s33 PEOPLE OVERHAUL (TECHNIQUES CANON rider 5,
+   the "RuneScape minimum" bar): the coat-cone era is over. Every figure
+   is an articulated low-poly body — head / torso / two arms / two legs
+   (~190-230 tris per variant) — built from the shared masked-part
+   builders below. This legacy entry point now returns the SAME
+   articulated standing body with colors BAKED into the vertex color
+   attribute (only the two DOCUMENTED-MOMENT figures use it; they render
+   as plain static Meshes on an unpatched material, so the aPart/aLimb
+   attributes it carries are simply ignored). ---- */
 var SKIN_TONE = new THREE.Color(0xc79a72);
 function makePersonGeo(coatColor, hatColor, isFemale){
-  var coat = new THREE.CylinderGeometry(0.20,0.27,1.15,6).toNonIndexed();
-  coat.translate(0,0.575,0);
-  colorizeUniform(coat, coatColor);
-  var head = new THREE.SphereGeometry(0.15,7,5).toNonIndexed();
-  head.translate(0,1.28,0);
-  colorizeUniform(head, SKIN_TONE);
-  var parts = [coat, head];
-  if(isFemale){
-    var bonnet = new THREE.SphereGeometry(0.19,7,5,0,Math.PI*2,0,Math.PI*0.62).toNonIndexed();
-    bonnet.translate(0,1.34,0);
-    colorizeUniform(bonnet, hatColor);
-    parts.push(bonnet);
-  } else {
-    var crown = new THREE.CylinderGeometry(0.13,0.13,0.14,7).toNonIndexed();
-    crown.translate(0,1.44,0);
-    colorizeUniform(crown, hatColor);
-    var brim = new THREE.CylinderGeometry(0.24,0.24,0.03,9).toNonIndexed();
-    brim.translate(0,1.38,0);
-    colorizeUniform(brim, hatColor);
-    parts.push(crown, brim);
+  var geo = makeStandingMaskedGeo(isFemale);
+  var ap = geo.attributes.aPart.array, col = geo.attributes.color.array;
+  var trouser = coatColor.clone().multiplyScalar(0.55);
+  for(var i=0;i<ap.length;i++){
+    var c = ap[i]===PART_SKIN ? SKIN_TONE
+          : ap[i]===PART_HAT ? hatColor
+          : ap[i]===PART_TROUSER ? trouser
+          : ap[i]===PART_FIXED ? null : coatColor;
+    if(c){ col[i*3]=c.r; col[i*3+1]=c.g; col[i*3+2]=c.b; }
   }
-  return mergeGeoms(parts);
+  return geo;
 }
 
 /* =========================================================================
@@ -10108,7 +10103,8 @@ function makePersonGeo(coatColor, hatColor, isFemale){
    PER-INSTANCE (three instanced vec3 attributes: coat, skin, hat) against
    silhouette geometries whose tintable parts are baked WHITE and tagged
    with an aPart vertex attribute (0=coat, 1=skin/head, 2=hat, 3=fixed
-   baked color, e.g. the carried crate). So ~20 wardrobe palettes x 6
+   baked color e.g. the carried crate, 4=trousers — coat tint darkened
+   0.55 in-shader, s33). So ~20 wardrobe palettes x 6
    discrete skin tones ride on just SIX InstancedMesh pools:
      0 standing/walking male · 1 standing/walking female · 2 child
      3 seated · 4 stooped-working · 5 carrying
@@ -10117,84 +10113,125 @@ function makePersonGeo(coatColor, hatColor, isFemale){
    BIGGER head. Pose geos route through the same pool-swap updatePeople()
    already does for sleepers. NOTHING here is skeletal/VAT (ratified
    rejection, TECHNIQUES rider 4). ---- */
-var PART_COAT=0, PART_SKIN=1, PART_HAT=2, PART_FIXED=3;
+var PART_COAT=0, PART_SKIN=1, PART_HAT=2, PART_FIXED=3, PART_TROUSER=4; // TROUSER (s33): coat tint darkened 0.55 in-shader — palette-driven leg variety, zero new attributes
+/* s33 LIMB IDS — the second per-vertex channel (aLimb = vec2(limbId,
+   pivotY)): the vertex shader counter-swings ids 2-5 about the baked
+   pivot height, id 6 (skirt) sways side-to-side instead, ids 0/1 never
+   move. Pose geos bake their part rotations statically and tag limbs 0,
+   so poses need no shader work (rider 5: "poses are static part
+   rotations"). PivotY rides the attribute so the child variant's shorter
+   limbs pivot at ITS shoulder/hip heights, not the adult's. */
+var LIMB_STATIC=0, LIMB_HEAD=1, LIMB_ARM_L=2, LIMB_ARM_R=3, LIMB_LEG_L=4, LIMB_LEG_R=5, LIMB_SKIRT=6;
 var _PART_WHITE = new THREE.Color(0xffffff);
-function mergeGeomsParts(parts){ // parts: [{g:geometry, p:partId}] — colors pre-baked (white for tintable parts)
+function mergeGeomsParts(parts){ // parts: [{g:geometry, p:partId, l:limbId, v:pivotY}] — colors pre-baked (white for tintable parts)
   var merged = mergeGeoms(parts.map(function(p){ return p.g; }));
-  var arr = new Float32Array(merged.attributes.position.count);
+  var n = merged.attributes.position.count;
+  var arr = new Float32Array(n), limb = new Float32Array(n*2);
   var off=0;
   parts.forEach(function(p){
-    var n = p.g.attributes.position.count;
-    for(var i=0;i<n;i++) arr[off+i]=p.p;
-    off+=n;
+    var c = p.g.attributes.position.count;
+    for(var i=0;i<c;i++){ arr[off+i]=p.p; limb[(off+i)*2]=p.l||0; limb[(off+i)*2+1]=p.v||0; }
+    off+=c;
   });
   merged.setAttribute("aPart", new THREE.BufferAttribute(arr,1));
+  merged.setAttribute("aLimb", new THREE.BufferAttribute(limb,2));
   return merged;
 }
 function wp(geo){ return colorizeUniform(geo, _PART_WHITE); } // white tintable part
+function _limbCyl(rTop,rBot,len,seg){ return new THREE.CylinderGeometry(rTop,rBot,len,seg).toNonIndexed(); }
+/* ADULT STANDING/WALKING BODY. Male: trouser legs (0-0.78) + knee-length
+   coat torso (0.58-1.20, flared hem hides the hip joint) + sleeve arms
+   hanging from the shoulders + head + crown/brim hat. Female: full
+   tapered skirt cone (0-0.82, NO leg geometry — the skirt itself is the
+   swinging "limb", tagged LIMB_SKIRT so it sways instead) + bodice +
+   arms + head + bonnet. ~220 / ~190 tris. */
 function makeStandingMaskedGeo(isFemale){
-  var coat = wp(new THREE.CylinderGeometry(0.20, isFemale?0.30:0.27, 1.15, 6).toNonIndexed());
-  coat.translate(0,0.575,0);
-  var head = wp(new THREE.SphereGeometry(0.15,7,5).toNonIndexed());
-  head.translate(0,1.28,0);
-  var parts = [{g:coat,p:PART_COAT},{g:head,p:PART_SKIN}];
+  var parts = [], side;
   if(isFemale){
-    var bonnet = wp(new THREE.SphereGeometry(0.19,7,5,0,Math.PI*2,0,Math.PI*0.62).toNonIndexed());
-    bonnet.translate(0,1.34,0);
-    parts.push({g:bonnet,p:PART_HAT});
+    var skirt = wp(_limbCyl(0.14,0.32,0.82,7)); skirt.translate(0,0.41,0);
+    var bodice = wp(_limbCyl(0.16,0.20,0.46,6)); bodice.translate(0,1.00,0);
+    parts.push({g:skirt,p:PART_COAT,l:LIMB_SKIRT,v:0.82},{g:bodice,p:PART_COAT});
   } else {
-    var crown = wp(new THREE.CylinderGeometry(0.13,0.13,0.14,7).toNonIndexed());
-    crown.translate(0,1.44,0);
-    var brim = wp(new THREE.CylinderGeometry(0.24,0.24,0.03,9).toNonIndexed());
-    brim.translate(0,1.38,0);
-    parts.push({g:crown,p:PART_HAT},{g:brim,p:PART_HAT});
+    for(side=-1;side<=1;side+=2){
+      var leg = wp(_limbCyl(0.055,0.065,0.78,5)); leg.translate(side*0.085,0.39,0);
+      parts.push({g:leg,p:PART_TROUSER,l:side<0?LIMB_LEG_L:LIMB_LEG_R,v:0.78});
+    }
+    var coat = wp(_limbCyl(0.17,0.235,0.62,6)); coat.translate(0,0.89,0);
+    parts.push({g:coat,p:PART_COAT});
+  }
+  for(side=-1;side<=1;side+=2){
+    var arm = wp(_limbCyl(0.045,0.05,0.55,5)); arm.translate(side*0.215,0.825,0);
+    parts.push({g:arm,p:PART_COAT,l:side<0?LIMB_ARM_L:LIMB_ARM_R,v:1.10});
+  }
+  var head = wp(new THREE.SphereGeometry(0.14,7,5).toNonIndexed()); head.translate(0,1.31,0);
+  parts.push({g:head,p:PART_SKIN,l:LIMB_HEAD});
+  if(isFemale){
+    var bonnet = wp(new THREE.SphereGeometry(0.175,7,5,0,Math.PI*2,0,Math.PI*0.62).toNonIndexed());
+    bonnet.translate(0,1.36,0);
+    parts.push({g:bonnet,p:PART_HAT,l:LIMB_HEAD});
+  } else {
+    var crown = wp(_limbCyl(0.12,0.12,0.14,7)); crown.translate(0,1.46,0);
+    var brim = wp(_limbCyl(0.23,0.23,0.03,8)); brim.translate(0,1.40,0);
+    parts.push({g:crown,p:PART_HAT,l:LIMB_HEAD},{g:brim,p:PART_HAT,l:LIMB_HEAD});
   }
   return mergeGeomsParts(parts);
 }
-function makeChildMaskedGeo(){ // ~0.6 adult height, proportionally bigger head (the classic child silhouette)
-  var coat = wp(new THREE.CylinderGeometry(0.12,0.17,0.62,6).toNonIndexed());
-  coat.translate(0,0.31,0);
-  var head = wp(new THREE.SphereGeometry(0.135,7,5).toNonIndexed());
-  head.translate(0,0.79,0);
-  var cap = wp(new THREE.CylinderGeometry(0.15,0.15,0.03,8).toNonIndexed());
-  cap.translate(0,0.90,0);
-  return mergeGeomsParts([{g:coat,p:PART_COAT},{g:head,p:PART_SKIN},{g:cap,p:PART_HAT}]);
+function makeChildMaskedGeo(){ // ~0.6 adult height, proportionally bigger head (the classic child silhouette); full limb set, own pivot heights
+  var parts=[];
+  for(var side=-1;side<=1;side+=2){
+    var leg = wp(_limbCyl(0.038,0.045,0.42,5)); leg.translate(side*0.055,0.21,0);
+    var arm = wp(_limbCyl(0.03,0.034,0.34,5)); arm.translate(side*0.145,0.53,0);
+    parts.push({g:leg,p:PART_TROUSER,l:side<0?LIMB_LEG_L:LIMB_LEG_R,v:0.42},
+               {g:arm,p:PART_COAT,l:side<0?LIMB_ARM_L:LIMB_ARM_R,v:0.70});
+  }
+  var coat = wp(_limbCyl(0.115,0.15,0.38,6)); coat.translate(0,0.55,0);
+  var head = wp(new THREE.SphereGeometry(0.115,7,5).toNonIndexed()); head.translate(0,0.85,0);
+  var cap = wp(_limbCyl(0.13,0.13,0.03,8)); cap.translate(0,0.955,0);
+  parts.push({g:coat,p:PART_COAT},{g:head,p:PART_SKIN,l:LIMB_HEAD},{g:cap,p:PART_HAT,l:LIMB_HEAD});
+  return mergeGeomsParts(parts);
 }
-function makeSeatedMaskedGeo(){ // shortened torso + knee box (saloons / shore sitting)
-  var knees = wp(new THREE.BoxGeometry(0.34,0.16,0.44).toNonIndexed());
-  knees.translate(0,0.30,0.22);
-  var torso = wp(new THREE.CylinderGeometry(0.20,0.27,0.66,6).toNonIndexed());
-  torso.translate(0,0.68,0);
-  var head = wp(new THREE.SphereGeometry(0.15,7,5).toNonIndexed());
-  head.translate(0,1.12,0);
-  var crown = wp(new THREE.CylinderGeometry(0.13,0.13,0.13,7).toNonIndexed());
-  crown.translate(0,1.27,0);
-  var brim = wp(new THREE.CylinderGeometry(0.23,0.23,0.03,9).toNonIndexed());
-  brim.translate(0,1.22,0);
-  return mergeGeomsParts([{g:knees,p:PART_COAT},{g:torso,p:PART_COAT},{g:head,p:PART_SKIN},{g:crown,p:PART_HAT},{g:brim,p:PART_HAT}]);
+function makeSeatedMaskedGeo(){ // wharf edges / benches / saloons: thighs horizontal, calves hanging, hands on lap — all rotations baked (limbs static)
+  var parts=[];
+  for(var side=-1;side<=1;side+=2){
+    var thigh = wp(_limbCyl(0.06,0.06,0.40,5)); thigh.rotateX(Math.PI/2); thigh.translate(side*0.08,0.42,0.20);
+    var calf = wp(_limbCyl(0.05,0.058,0.44,5)); calf.translate(side*0.08,0.22,0.40);
+    var arm = wp(_limbCyl(0.042,0.048,0.42,5)); arm.translate(0,-0.21,0); arm.rotateX(-0.55); arm.translate(side*0.20,1.02,0.02);
+    parts.push({g:thigh,p:PART_TROUSER},{g:calf,p:PART_TROUSER},{g:arm,p:PART_COAT});
+  }
+  var torso = wp(_limbCyl(0.17,0.22,0.60,6)); torso.translate(0,0.30,0); torso.rotateX(0.10); torso.translate(0,0.42,0);
+  var head = wp(new THREE.SphereGeometry(0.14,7,5).toNonIndexed()); head.translate(0,1.13,0.06);
+  var crown = wp(_limbCyl(0.12,0.12,0.13,7)); crown.translate(0,1.27,0.06);
+  var brim = wp(_limbCyl(0.22,0.22,0.03,8)); brim.translate(0,1.215,0.06);
+  parts.push({g:torso,p:PART_COAT},{g:head,p:PART_SKIN},{g:crown,p:PART_HAT},{g:brim,p:PART_HAT});
+  return mergeGeomsParts(parts);
 }
-function makeStoopedMaskedGeo(){ // coat tilted ~35° + forward arm hint — digging/washing/loading
-  var coat = wp(new THREE.CylinderGeometry(0.19,0.27,1.05,6).toNonIndexed());
-  coat.translate(0,0.525,0);
-  coat.rotateX(0.62);
-  var arms = wp(new THREE.BoxGeometry(0.34,0.46,0.12).toNonIndexed());
-  arms.translate(0,0.42,0.52);
-  var head = wp(new THREE.SphereGeometry(0.15,7,5).toNonIndexed());
-  head.translate(0,0.96,0.60);
-  var brim = wp(new THREE.CylinderGeometry(0.23,0.23,0.03,9).toNonIndexed());
-  brim.translate(0,1.08,0.62);
-  return mergeGeomsParts([{g:coat,p:PART_COAT},{g:arms,p:PART_COAT},{g:head,p:PART_SKIN},{g:brim,p:PART_HAT}]);
+function makeStoopedMaskedGeo(){ // digging/washing/loading: torso bent ~60° at the hip, arms reaching down toward the work, legs planted
+  var parts=[];
+  for(var side=-1;side<=1;side+=2){
+    var leg = wp(_limbCyl(0.055,0.065,0.74,5)); leg.translate(side*0.085,0.37,0);
+    var arm = wp(_limbCyl(0.042,0.048,0.50,5)); arm.translate(0,-0.25,0); arm.rotateX(-0.25); arm.translate(side*0.16,1.00,0.42);
+    parts.push({g:leg,p:PART_TROUSER},{g:arm,p:PART_COAT});
+  }
+  var torso = wp(_limbCyl(0.16,0.22,0.62,6)); torso.translate(0,0.31,0); torso.rotateX(1.05); torso.translate(0,0.74,0);
+  var head = wp(new THREE.SphereGeometry(0.14,7,5).toNonIndexed()); head.translate(0,1.10,0.62);
+  var brim = wp(_limbCyl(0.22,0.22,0.03,8)); brim.translate(0,1.20,0.64);
+  parts.push({g:torso,p:PART_COAT},{g:head,p:PART_SKIN},{g:brim,p:PART_HAT});
+  return mergeGeomsParts(parts);
 }
-function makeCarryMaskedGeo(){ // upright + shoulder crate — occupational storytelling for free
-  var coat = wp(new THREE.CylinderGeometry(0.20,0.27,1.15,6).toNonIndexed());
-  coat.translate(0,0.575,0);
-  var head = wp(new THREE.SphereGeometry(0.15,7,5).toNonIndexed());
-  head.translate(0,1.28,0);
-  var crown = wp(new THREE.CylinderGeometry(0.13,0.13,0.14,7).toNonIndexed());
-  crown.translate(0,1.44,0);
-  var crate = colorizeUniform(new THREE.BoxGeometry(0.34,0.30,0.36).toNonIndexed(), new THREE.Color(0x8a6f47));
-  crate.translate(0.26,1.22,0);
-  return mergeGeomsParts([{g:coat,p:PART_COAT},{g:head,p:PART_SKIN},{g:crown,p:PART_HAT},{g:crate,p:PART_FIXED}]);
+function makeCarryMaskedGeo(){ // both arms raised forward holding a crate at the chest; legs keep LIVE limb ids so a walking carrier still strides
+  var parts=[];
+  for(var side=-1;side<=1;side+=2){
+    var leg = wp(_limbCyl(0.055,0.065,0.78,5)); leg.translate(side*0.085,0.39,0);
+    var arm = wp(_limbCyl(0.045,0.05,0.52,5)); arm.translate(0,-0.26,0); arm.rotateX(-1.30); arm.translate(side*0.19,1.10,0);
+    parts.push({g:leg,p:PART_TROUSER,l:side<0?LIMB_LEG_L:LIMB_LEG_R,v:0.78},{g:arm,p:PART_COAT});
+  }
+  var coat = wp(_limbCyl(0.17,0.235,0.62,6)); coat.translate(0,0.89,0);
+  var head = wp(new THREE.SphereGeometry(0.14,7,5).toNonIndexed()); head.translate(0,1.31,0);
+  var crown = wp(_limbCyl(0.12,0.12,0.14,7)); crown.translate(0,1.46,0);
+  var crate = colorizeUniform(new THREE.BoxGeometry(0.36,0.30,0.34).toNonIndexed(), new THREE.Color(0x8a6f47));
+  crate.translate(0,1.06,0.42);
+  parts.push({g:coat,p:PART_COAT},{g:head,p:PART_SKIN},{g:crown,p:PART_HAT},{g:crate,p:PART_FIXED});
+  return mergeGeomsParts(parts);
 }
 var PERSON_POOL_GEOS = [
   makeStandingMaskedGeo(false), makeStandingMaskedGeo(true), makeChildMaskedGeo(),
@@ -10222,11 +10259,21 @@ function patchPersonMaterial(mesh){
   mesh.material.onBeforeCompile = function(shader){
     shader.uniforms.uMud = personMudUniform;
     shader.vertexShader = shader.vertexShader
-      .replace("#include <common>", "#include <common>\nattribute vec3 instanceTint;\nattribute vec3 instanceSkin;\nattribute vec3 instanceHat;\nattribute float aPart;\nvarying vec3 vInstanceTint;\nvarying vec3 vInstanceSkin;\nvarying vec3 vInstanceHat;\nvarying float vPart;\nvarying float vLocalY;")
-      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvInstanceTint = instanceTint;\nvInstanceSkin = instanceSkin;\nvInstanceHat = instanceHat;\nvPart = aPart;\nvLocalY = position.y;");
+      .replace("#include <common>", "#include <common>\nattribute vec3 instanceTint;\nattribute vec3 instanceSkin;\nattribute vec3 instanceHat;\nattribute float aPart;\nattribute vec2 aLimb;\nattribute vec2 instanceGait;\nvarying vec3 vInstanceTint;\nvarying vec3 vInstanceSkin;\nvarying vec3 vInstanceHat;\nvarying float vPart;\nvarying float vLocalY;")
+      /* s33 WALK CYCLE (TECHNIQUES rider 5, the labeled-parts crowd
+         trick): counter-swing limbs by part id about their baked pivot
+         height. instanceGait = (phase, amplitude) per instance — phase
+         accumulates with DISTANCE WALKED (the apparent-velocity
+         _gaitPhase, so stride always matches ground covered, no
+         lockstep), amplitude scales with apparent speed and is exactly
+         0 when standing (no idle flailing). armL+legR share phase,
+         armR+legL the opposite half-cycle. The skirt (id 6) sways about
+         Z at half stride frequency instead of leg-swinging. */
+      .replace("#include <beginnormal_vertex>", "#include <beginnormal_vertex>\nfloat limbAng = 0.0, limbSway = 0.0;\nif(aLimb.x > 1.5 && instanceGait.y > 0.001){\n  float lp = instanceGait.x;\n  if(aLimb.x < 2.5) limbAng = sin(lp + 3.14159265) * instanceGait.y * 0.72;\n  else if(aLimb.x < 3.5) limbAng = sin(lp) * instanceGait.y * 0.72;\n  else if(aLimb.x < 4.5) limbAng = sin(lp) * instanceGait.y;\n  else if(aLimb.x < 5.5) limbAng = sin(lp + 3.14159265) * instanceGait.y;\n  else limbSway = sin(lp * 0.5) * instanceGait.y * 0.30;\n}\nfloat limbC = cos(limbAng), limbS = sin(limbAng);\nfloat swayC = cos(limbSway), swayS = sin(limbSway);\nif(limbAng != 0.0) objectNormal = vec3(objectNormal.x, objectNormal.y*limbC - objectNormal.z*limbS, objectNormal.y*limbS + objectNormal.z*limbC);\nif(limbSway != 0.0) objectNormal = vec3(objectNormal.x*swayC - objectNormal.y*swayS, objectNormal.x*swayS + objectNormal.y*swayC, objectNormal.z);")
+      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvInstanceTint = instanceTint;\nvInstanceSkin = instanceSkin;\nvInstanceHat = instanceHat;\nvPart = aPart;\nvLocalY = position.y;\nif(limbAng != 0.0){\n  float ly = transformed.y - aLimb.y;\n  transformed.y = aLimb.y + ly*limbC - transformed.z*limbS;\n  transformed.z = ly*limbS + transformed.z*limbC;\n}\nif(limbSway != 0.0){\n  float lx = transformed.x, ly2 = transformed.y - aLimb.y;\n  transformed.x = lx*swayC - ly2*swayS;\n  transformed.y = aLimb.y + lx*swayS + ly2*swayC;\n}");
     shader.fragmentShader = shader.fragmentShader
       .replace("#include <common>", "#include <common>\nuniform float uMud;\nvarying vec3 vInstanceTint;\nvarying vec3 vInstanceSkin;\nvarying vec3 vInstanceHat;\nvarying float vPart;\nvarying float vLocalY;")
-      .replace("#include <color_fragment>", "#include <color_fragment>\n{ vec3 partTint = vPart<0.5 ? vInstanceTint : (vPart<1.5 ? vInstanceSkin : (vPart<2.5 ? vInstanceHat : vec3(1.0)));\ndiffuseColor.rgb *= partTint;\nfloat band = 1.0 - smoothstep(0.0, 0.55, vLocalY); float m = band*uMud; diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.30,0.24,0.16), m*0.55); }");
+      .replace("#include <color_fragment>", "#include <color_fragment>\n{ vec3 partTint = vPart<0.5 ? vInstanceTint : (vPart<1.5 ? vInstanceSkin : (vPart<2.5 ? vInstanceHat : (vPart<3.5 ? vec3(1.0) : vInstanceTint*0.55)));\ndiffuseColor.rgb *= partTint;\nfloat band = 1.0 - smoothstep(0.0, 0.55, vLocalY); float m = band*uMud; diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.30,0.24,0.16), m*0.55); }");
   };
   mesh.material.needsUpdate = true;
 }
@@ -10238,11 +10285,18 @@ function makeInstColorAttr(geo, name){
   geo.setAttribute(name, attr);
   return attr;
 }
+function makeInstGaitAttr(geo){ // s33: (phase, swing amplitude) per instance — zero-filled, so pose pools whose limbs are all static cost nothing
+  var attr = new THREE.InstancedBufferAttribute(new Float32Array(PEOPLE_CAP*2), 2);
+  if(attr.setUsage) attr.setUsage(THREE.DynamicDrawUsage); else attr.dynamic = true;
+  geo.setAttribute("instanceGait", attr);
+  return attr;
+}
 var personMeshes = PERSON_POOL_GEOS.map(function(geo){
   var mesh = new THREE.InstancedMesh(geo, new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), PEOPLE_CAP);
   mesh._coatAttr = makeInstColorAttr(geo, "instanceTint");
   mesh._skinAttr = makeInstColorAttr(geo, "instanceSkin");
   mesh._hatAttr  = makeInstColorAttr(geo, "instanceHat");
+  mesh._gaitAttr = makeInstGaitAttr(geo);
   patchPersonMaterial(mesh);
   mesh.count = 0; scene.add(mesh); return mesh;
 });
@@ -10280,15 +10334,23 @@ var personShadowMesh = (function(){
 })();
 var _personShadowM4 = new THREE.Matrix4(), _personShadowQ = new THREE.Quaternion();
 
-// PL-B item 4 (grit): street-sleepers — a blanket-wrapped huddle + a head,
-// lying flat, rendered as its own tiny instanced mesh rather than trying to
-// lay the upright coat-cone person figure on its side.
+// PL-B item 4 (grit) reworked s33: street-sleepers on the limbed-body
+// grammar — a side-lying figure (blanket-toned torso + hip roll + knees
+// drawn up at an angle) + bare head, same ~1.5 x 0.55 footprint as the old
+// huddle box so every existing sleeper spot still fits. Static pose, baked
+// colors, own tiny instanced mesh as before.
 function makeStreetSleeperGeo(){
-  var body = makeBoxLocal(1.5,0.32,0.55, new THREE.Color(0x4a4034)); // base already sits at y=0 (makeBoxLocal's own pivot)
-  var head = new THREE.SphereGeometry(0.16,6,5).toNonIndexed();
-  head.translate(0.6,0.28,0);
+  var blanket = new THREE.Color(0x4a4034), blanket2 = new THREE.Color(0x413830);
+  var torso = colorizeUniform(_limbCyl(0.22,0.25,0.68,6), blanket);
+  torso.rotateZ(Math.PI/2); torso.translate(0.26,0.23,0);
+  var hips = colorizeUniform(_limbCyl(0.18,0.22,0.32,6), blanket2);
+  hips.rotateZ(Math.PI/2); hips.translate(-0.24,0.20,0);
+  var legs = colorizeUniform(_limbCyl(0.12,0.16,0.55,6), blanket2); // knees drawn up — bent off the body axis
+  legs.rotateZ(Math.PI/2); legs.rotateY(-0.7); legs.translate(-0.58,0.14,0.14);
+  var head = new THREE.SphereGeometry(0.15,7,5).toNonIndexed();
+  head.translate(0.72,0.20,0);
   colorizeUniform(head, SKIN_TONE);
-  return mergeGeoms([body, head]);
+  return mergeGeoms([torso, hips, legs, head]);
 }
 var STREET_SLEEPER_CAP = 20;
 var streetSleeperMesh = new THREE.InstancedMesh(makeStreetSleeperGeo(),
@@ -10731,13 +10793,22 @@ function updatePeople(dt, camX, camZ, alt){
     ca[idx*3]=cc.r; ca[idx*3+1]=cc.g; ca[idx*3+2]=cc.b;
     sa[idx*3]=sc.r; sa[idx*3+1]=sc.g; sa[idx*3+2]=sc.b;
     ha[idx*3]=hc.r; ha[idx*3+1]=hc.g; ha[idx*3+2]=hc.b;
+    // s33 WALK CYCLE: per-instance (phase, amplitude) for the shader limb
+    // swing — phase is the distance-accumulated _gaitPhase (plus the same
+    // per-slot dephase the bob uses, so no lockstep), amplitude keys to
+    // APPARENT velocity exactly like bob/lean: 0 standing, full swing
+    // (±0.55 rad legs, ±0.72× that arms) at ≥1.2 m/s. Applies to any
+    // pool whose geo carries live limb ids (walkers + carrying legs).
+    var ga = pm._gaitAttr.array;
+    ga[idx*2] = (s._gaitPhase||0) + s.id*0.7;
+    ga[idx*2+1] = clamp((s._appSpd||0)/1.2, 0, 1)*0.55;
     if(showLanterns && s.isLanternCandidate && lanternCount<LANTERN_CAP){
       setShipInstance(lanternGlowMesh, lanternCount, s._x+Math.sin(yaw+1.4)*0.26, h+0.78, s._z+Math.cos(yaw+1.4)*0.26, 0, 1);
       lanternCount++;
     }
   });
   personMeshes.forEach(function(m,vi){ m.count=counts[vi]; m.instanceMatrix.needsUpdate=true;
-    m._coatAttr.needsUpdate=true; m._skinAttr.needsUpdate=true; m._hatAttr.needsUpdate=true; });
+    m._coatAttr.needsUpdate=true; m._skinAttr.needsUpdate=true; m._hatAttr.needsUpdate=true; m._gaitAttr.needsUpdate=true; });
   personMeshSlots = slotArrays;
   lanternGlowMesh.count = lanternCount;
   lanternGlowMesh.instanceMatrix.needsUpdate = true;
