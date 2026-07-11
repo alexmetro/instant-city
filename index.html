@@ -2784,7 +2784,14 @@ function canPlace(x,z,footprintR,opts){
    painted this frame. "mission-street" stays unlabeled here (see
    STREETS_RUNTIME's own comment on why it's excluded). */
 var STREET_LABEL_DEFS = STREETS_RUNTIME.filter(function(s){ return s.surveyedDay!=null || s.firstMentionDay!=null; })
-  .map(function(s){ return { s:s, name:s.name.toUpperCase(), gateDay: s.surveyedDay!=null?s.surveyedDay:s.firstMentionDay, slots:[], _hw:0 }; });
+  .map(function(s){
+    // Display trim (user, 2026-07-11): "CALIFORNIA", not "CALIFORNIA STREET" —
+    // period-map style, and shorter text clears the declutter cap for more names.
+    // Only the generic STREET suffix drops; ROAD/WHARF/etc. stay (there the type
+    // IS the information), and the dataset keeps full names for provenance.
+    var display = s.name.toUpperCase().replace(/\s+STREET$/, "");
+    return { s:s, name:display, gateDay: s.surveyedDay!=null?s.surveyedDay:s.firstMentionDay, slots:[], _hw:0 };
+  });
 var streetLabelSlots = []; // {el, s, gateDay, rep, state:off|pending|on|leaving, since, anchor}
 (function buildStreetLabelPool(){
   var hudEl = document.getElementById("hud");
