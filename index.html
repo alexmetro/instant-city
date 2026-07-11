@@ -798,30 +798,89 @@ function fbm(x,y,octaves){
    off true right angles ("Vioget's error"), not corrected until O'Farrell's
    1847 "swing" — modeled here as a rigid skew of the whole grid (see
    gridToWorld()) rather than hand-skewing individual streets.
+
+   GEOMETRY TRUTH re-projection (2026-07-11, research/map-scans/
+   VALIDATION-2026-07-11.md §4 — measured against the georeferenced 1853
+   Coast Survey chart + Overpass-measured modern intersections, which are
+   valid ground truth because the grid is unchanged since O'Farrell 1847):
+   1. The BASE grid rotation is ~9°, not 2.5°: measured corridor bearings
+      Montgomery 351.2° (=-8.8°), Washington 80.6°/Clay 80.6-81.0°
+      (=-9.0..-9.4°); fitted mean -9.1°, adopted -9.0° (best Market
+      cross-check: modeled Market compass bearing 45.00° vs measured
+      45.06°, well inside the ±0.5° acceptance). SIGN: in this file's
+      convention (+x east, +z south, x = u·cos a − v·sin a) a NEGATIVE
+      angle leans grid-north west of true north, as measured.
+   2. SEMANTICS SPLIT (geography-shoreline.md §2 + its uncertainty #3):
+      the historical "O'Farrell swing" corrected Vioget's ~2.5° error
+      WITHIN the ~9°-rotated grid — the 2.5° is the SWING DELTA, not the
+      grid's rotation. GRID_ROT_BASE (-9.0°, permanent, = the measured
+      modern/post-1847 grid) and VIOGET_ERROR_DEG (2.5°, the pre-1847
+      as-built offset the Feb-Aug 1847 swing removes) are now separate
+      numbers; the as-built pre-swing frame is base + error = -6.5°.
+      (The error's SIGN/direction is undocumented — the record says only
+      "2.5° off true right angles", mechanism contested per
+      geography-shoreline.md consolidated-uncertainty #3 — so the swing
+      keeps this file's long-standing direction convention: pre-1847 sits
+      2.5° counterclockwise-of-base in app angle terms.)
+   3. TERRAIN REGISTRATION: the heightmap bake's world frame is centered
+      on (37.7955N, 122.4045W) while the street grid's (u,v)=(0,0) —
+      Montgomery St's centerline at the Washington–Clay midrow — is really
+      at (37.7951056N, 122.4032421W). gridToWorldAt() now places the grid
+      at that measured spot in the terrain frame (GRID_ORIGIN_X/Z below)
+      instead of silently equating the two origins (~119m apart).
+   Centerline spacing (fix #2 of the validation) lives in the DATASET:
+   data/streets-geometry.json was re-projected to measured centerline
+   spacing (block + per-pair street widths; Market re-anchored to its two
+   measured crossings; Battery/Front at the measured 103.9m water-lot
+   spacing) — see tools/reproject-streets-2026-07-11.js and the dataset's
+   meta.reprojection_2026_07_11.
    ===================================================================== */
 var VARA_M = 0.838;                    // 1 vara (geography-shoreline.md §2)
 var LOT_M = 50*VARA_M;                  // ~41.9 m, one 50-vara lot
-var BLOCK_W = 3*LOT_M;                   // ~125.7 m — along Montgomery/Kearny/Dupont/Stockton
-var BLOCK_D = 2*LOT_M;                   // ~83.8 m — along the E-W cross streets
-var VIOGET_SKEW_DEG = 2.5;               // "Vioget's error" (geography-shoreline.md §2)
+var BLOCK_W = 3*LOT_M + 20.49;           // ~146.2 m — CENTERLINE spacing between adjacent N-S main
+                                          // streets (curb-to-curb 150-vara block + mean documented
+                                          // street width; measured Montgomery↔Kearny 145.8-146.4m).
+                                          // Only coarse consumers (plaza fallback math) read this —
+                                          // exact per-street positions come from STREETS_RUNTIME.
+var BLOCK_D = 2*LOT_M + 14.97;           // ~98.8 m — CENTERLINE spacing between adjacent E-W cross
+                                          // streets (100-vara block + documented 14.97m cross width;
+                                          // measured Washington↔Clay 96.7-97.7m).
+var GRID_ROT_BASE_DEG = -9.0;            // fitted base grid rotation (measured, permanent — the
+                                          // O'Farrell/modern grid; VALIDATION-2026-07-11 §4.1)
+var VIOGET_ERROR_DEG = 2.5;              // "Vioget's error" — the 1847 swing DELTA within the
+                                          // rotated grid (geography-shoreline.md §2; direction
+                                          // modeled, mechanism contested per uncertainty #3)
+var VIOGET_SKEW_DEG = GRID_ROT_BASE_DEG + VIOGET_ERROR_DEG; // -6.5° — the as-built pre-1847 frame
 var VIOGET_SKEW = VIOGET_SKEW_DEG*Math.PI/180;
+var GRID_ROT_BASE = GRID_ROT_BASE_DEG*Math.PI/180;
+/* Terrain↔grid registration (VALIDATION-2026-07-11 §4.3): world offset of
+   the grid origin inside the terrain bake's frame. Derived: grid (0,0) is
+   really (37.7951056N, 122.4032421W) (midpoint of the Overpass-measured
+   Montgomery×Clay / Montgomery×Washington nodes); the bake box is centered
+   (37.7955N, 122.4045W); equirectangular at the bake's own meters/degree
+   (111320·cos 37.7955° = 87965.4 m/°lon) → (+110.66 E, +43.90 S). MUST
+   match tools/bake-terrain.js's GRID_ORIGIN_X/Z (the shore anchors are
+   derived through the same transform at bake time). */
+var GRID_ORIGIN_X = 110.66, GRID_ORIGIN_Z = 43.90;
 var STREET_STUB_LEN = 100;               // sandy-track fade-out length beyond the grid edge
                                           // (shortened 2026-07-10, night-glow fix: the old 180m
                                           // reach + a color that paled toward bright tan read as
                                           // radiating bright scratches spiking off the grid edge)
 
 /* Rotates an "ideal" square-grid coordinate (u = ideal east/west, v = ideal
-   north/south) into world (x,z) at a GIVEN skew angle. Every street, block
-   and the plaza itself is defined in (u,v) and only converted at the end,
-   so the whole grid tilts together instead of being hand-skewed per
+   north/south) into world (x,z) at a GIVEN skew angle, then registers it
+   into the terrain frame via GRID_ORIGIN_X/Z (fix #3 above). Every street,
+   block and the plaza itself is defined in (u,v) and only converted at the
+   end, so the whole grid tilts together instead of being hand-skewed per
    street. gridToWorld() is the permanent (never-swinging) Vioget-skew
    mapping used by buildings/lots/placement; gridToWorldAt() is the same
    math parameterized so the GROUND-SPLAT street painter (below) can ease
-   the angle down to 0 for the O'Farrell 1847 grid-swing without touching
-   anything else's coordinates. */
+   the angle from the as-built VIOGET_SKEW (-6.5°) to GRID_ROT_BASE (-9.0°)
+   for the O'Farrell 1847 grid-swing without touching anything else's
+   coordinates. */
 function gridToWorldAt(u,v,skewAngle){
   var c = Math.cos(skewAngle), s = Math.sin(skewAngle);
-  return { x: u*c - v*s, z: u*s + v*c };
+  return { x: u*c - v*s + GRID_ORIGIN_X, z: u*s + v*c + GRID_ORIGIN_Z };
 }
 function gridToWorld(u,v){ return gridToWorldAt(u,v,VIOGET_SKEW); }
 
@@ -849,12 +908,15 @@ var LAST_SPLAT_SWING_T = -1;
 var CURRENT_STREET_SKEW = VIOGET_SKEW;
 function updateGridSwing(){
   var t = clamp((simDay-OFARRELL_SWING_START)/(OFARRELL_SWING_END-OFARRELL_SWING_START), 0, 1);
-  // t=0 (pre-Feb 1847): full as-built Vioget skew, same as the buildings.
-  // t=1 (post-Aug 1847): skew eased to 0 — the street grid reads
-  // true/square while buildings (never re-baked) stay tilted, same as
-  // the historical record describes for existing structures versus new
+  // t=0 (pre-Feb 1847): full as-built Vioget frame (-6.5°), same as the
+  // buildings. t=1 (post-Aug 1847): eased to GRID_ROT_BASE (-9.0°) — the
+  // O'Farrell swing removes only the 2.5° VIOGET_ERROR_DEG delta, it does
+  // NOT square the grid to cardinal (the measured modern grid the swing
+  // produced is itself rotated -9°; see the GEOMETRY TRUTH block above).
+  // Buildings (never re-baked) stay in the Vioget frame, same as the
+  // historical record describes for existing structures versus new
   // post-survey construction.
-  CURRENT_STREET_SKEW = VIOGET_SKEW*(1-t);
+  CURRENT_STREET_SKEW = VIOGET_SKEW + (GRID_ROT_BASE - VIOGET_SKEW)*t;
   // Re-paints the splat canvases when EITHER the swing angle has moved
   // (cheap 2D redraw, no need to redo it 60x/sec) OR simDay has crossed
   // some street's own survey/worn-track/checkpoint threshold (see
@@ -1049,12 +1111,14 @@ var GEO = {
   streetsV: { pacific:streetVConst("pacific"), jackson:streetVConst("jackson"), clay:streetVConst("clay"),
               washington:streetVConst("washington"), sacramento:streetVConst("sacramento"), california:streetVConst("california-street") },
   // Plaza: one block inland of Montgomery (Dupont/Kearny x Washington/Clay,
-  // north-to-south) — "faced the water one block up from the beach." Built
-  // from the same VARA_M/BLOCK_W/BLOCK_D constants the dataset itself
-  // defines identically (meta.constants), not independently re-derived;
-  // these bounds were never affected by the clay/washington NAME swap bug
-  // above (they're plain block-grid math), and already match the record.
-  plaza: { uMin:-2*BLOCK_W, uMax:-BLOCK_W, vMin:-0.5*BLOCK_D, vMax:0.5*BLOCK_D },
+  // north-to-south) — "faced the water one block up from the beach."
+  // GEOMETRY TRUTH (2026-07-11): read straight from the reprojected street
+  // centerlines instead of BLOCK_W/BLOCK_D multiples, so the plaza block
+  // stays exactly between its four bounding streets under the measured
+  // per-pair centerline spacing (Dupont -292.37 is no longer exactly
+  // 2x Kearny's -145.71).
+  plaza: { uMin:streetUConst("dupont"), uMax:streetUConst("kearny"),
+           vMin:streetVConst("washington"), vMax:streetVConst("clay") },
 
   // shoreline: 1846 cove — inland edge at Montgomery St's EAST side between
   // Clay & Washington (the flag-raising beach), Clark's Point (Broadway &
@@ -1899,10 +1963,11 @@ function paintStub(targets, uEdge, vEdge, du, dv, width, skewAngle){
 }
 
 /* THE master (re)draw. `skewAngle` is the grid's CURRENT skew — the full
-   Vioget skew before Feb 1847, eased to 0 (true/square) by Aug 1847, per
-   updateGridSwing() above. Everything else painted here (plaza, Mission
-   road, door-paths) doesn't swing, matching the pre-existing scope
-   (buildings/lots are never re-baked either). */
+   as-built Vioget frame (-6.5°) before Feb 1847, eased to the permanent
+   GRID_ROT_BASE (-9.0°) by Aug 1847, per updateGridSwing() above.
+   Everything else painted here (plaza, Mission road, door-paths) doesn't
+   swing, matching the pre-existing scope (buildings/lots are never
+   re-baked either). */
 var SPLAT_LAST_STATS = null; // s20 QA: what the last repaint actually painted (era-diff ground truth, exposed via __P1850.splatStats)
 function renderGroundSplat(skewAngle){
   var _statT0 = performance.now();
@@ -2148,7 +2213,10 @@ function renderGroundSplat(skewAngle){
     var active = s.checkpoints[0];
     for(var ci=0; ci<s.checkpoints.length; ci++){ if(s.checkpoints[ci].day<=simDay) active=s.checkpoints[ci]; }
     if(!active) return;
-    var i0=active.extent[0], i1=active.extent[1], angle=s.swings?skewAngle:0;
+    // Non-swinging (O'Farrell-era-and-later) streets paint at the PERMANENT
+    // base grid rotation — they were surveyed into the corrected grid, which
+    // is itself rotated -9°, not cardinal (GEOMETRY TRUTH, 2026-07-11).
+    var i0=active.extent[0], i1=active.extent[1], angle=s.swings?skewAngle:GRID_ROT_BASE;
     var pathPts=[];
     for(var pi=i0; pi<=i1; pi++) pathPts.push(gridToWorldAt(s.polyline[pi].u, s.polyline[pi].v, angle));
     if(pathPts.length<2) return;
@@ -2725,10 +2793,11 @@ function canPlace(x,z,footprintR,opts){
 }
 
 /* =====================================================================
-   STREETS  (Vioget grid: skewed ~2.5° per "Vioget's error" — see
+   STREETS  (Vioget grid: as-built at the -6.5° pre-1847 frame — the
+   measured -9.0° base rotation plus Vioget's 2.5° error, see
    gridToWorld() — fading to narrower, paler sandy-track stubs at the
    surveyed grid's edge rather than ending abruptly. geography-
-   shoreline.md §2.)
+   shoreline.md §2 + GEOMETRY TRUTH block above.)
    Rendering moved to the GROUND SPLAT-MAP (see renderGroundSplat(),
    paintStub() up near the terrain build) — the old per-segment
    draped-box mesh this IIFE used to build is gone; the street-GRAPH
@@ -2820,13 +2889,14 @@ var streetLabelSlots = []; // {el, s, gateDay, rep, state:off|pending|on|leaving
 })();
 /* Active checkpoint extent's world-space polyline for a street at the
    given skew angle (cardinal streets swing, everything else is fixed at
-   0 — same rule renderGroundSplat() itself follows). Shared by the label
-   engine below; renderGroundSplat() inlines its own simpler version. */
+   the permanent GRID_ROT_BASE — same rule renderGroundSplat() itself
+   follows). Shared by the label engine below; renderGroundSplat() inlines
+   its own simpler version. */
 function streetActiveWorldPts(s, day, skewAngleForSwinging){
   var active = s.checkpoints[0];
   for(var ci=0; ci<s.checkpoints.length; ci++){ if(s.checkpoints[ci].day<=day) active=s.checkpoints[ci]; }
   if(!active) return null;
-  var angle = s.swings ? skewAngleForSwinging : 0;
+  var angle = s.swings ? skewAngleForSwinging : GRID_ROT_BASE;
   var pts = [];
   for(var pi=active.extent[0]; pi<=active.extent[1]; pi++) pts.push(gridToWorldAt(s.polyline[pi].u, s.polyline[pi].v, angle));
   return pts;
@@ -3163,7 +3233,11 @@ function landmarkFoundedDay(name){
     // specific post-survey frontage row and stays disciplined/aligned, same
     // as the O'Farrell grid-swing logic elsewhere treats post-survey work.
     var jitterDeg = opts.denseRow ? 3 : 12;
-    var rot = rotBase + (rngBuild()-0.5)*2*(jitterDeg*Math.PI/180) + VIOGET_SKEW; // aligned to the tilted grid, not true north
+    // aligned to the tilted grid, not true north: founding-village work sits
+    // in the as-built Vioget frame; documented post-survey frontage rows
+    // (denseRow — the Dec 1849 fire block) align to the corrected O'Farrell
+    // base grid, same split the growth candidates below use.
+    var rot = rotBase + (rngBuild()-0.5)*2*(jitterDeg*Math.PI/180) + (opts.denseRow ? GRID_ROT_BASE : VIOGET_SKEW);
     var isAdobe = opts.forceFrame ? false : rngBuild()<0.55;
     var bodyColor = new THREE.Color(isAdobe? adobeColors[Math.floor(rngBuild()*adobeColors.length)] : frameColors[Math.floor(rngBuild()*frameColors.length)]);
     var roofColor = new THREE.Color(isAdobe? roofColorsAdobe[Math.floor(rngBuild()*roofColorsAdobe.length)] : roofColorsFrame[Math.floor(rngBuild()*roofColorsFrame.length)]);
@@ -3876,7 +3950,7 @@ var CHURCH_SPOT = null;
   }
   var y = terrainHeight(x,z);
   registerPlacement(x,z,footprintR);
-  var rot = VIOGET_SKEW;
+  var rot = GRID_ROT_BASE; // Nov 1848 construction — post-survey, aligned to the corrected grid
   var wall = new THREE.Color(0xe4dcc0), roof = new THREE.Color(0x5a4432), trim = new THREE.Color(0x3a3226);
   var w=8.5, d=5.6, h=3.4;
   var geoms = [];
@@ -4113,7 +4187,7 @@ var STORESHIP_INFO = (function(){
   return {
     "Niantic":          { pos: pos(70,  clay-4),        list: 0.16, chipRank:0, groundedNote:"grounded at Clay & Sansome" },
     "General Harrison": { pos: pos(112, clay-2),        list: 0.11, chipRank:1, groundedNote:"grounded near Battery St, by the Niantic" },
-    "Euphemia":         { pos: pos(97,  sacramento+4),  list: 0.09, chipRank:2, groundedNote:"berthed near Central Wharf, converted to the town jail" }, // u 85->97 (s22): keeps her in the wet mud at the tideline after the true-distance shore banding narrowed the flats here
+    "Euphemia":         { pos: pos(103, sacramento+4),  list: 0.09, chipRank:2, groundedNote:"berthed near Central Wharf, converted to the town jail" }, // u 85->97 (s22) ->103 (s25 re-projection): keeps her in the wet mud at the tideline — the 31m heightmap's bilinear shore ridge shifted under her when the grid was re-registered (+110/+44) and re-spaced; verified h≈+0.1 (wet mud, not dry) against the re-baked terrain
     "Apollo":           { pos: pos(128, sacramento+6),  list: 0.14, chipRank:3, groundedNote:"beached between Central Wharf and Howison's Pier" }
   };
 })();
@@ -4949,7 +5023,10 @@ var growthBuildingCandidates = (function(){
   var preSurveyCount = growthTargets(densityAt(OFARRELL_SWING_END)).buildings;
   out.forEach(function(c, idx){
     var jitterDeg = idx < preSurveyCount ? 12 : 3;
-    c.rot = c.rotBase + (rngBuild()-0.5)*2*(jitterDeg*Math.PI/180) + VIOGET_SKEW;
+    // pre-survey stock keeps the as-built Vioget frame; post-survey new
+    // construction aligns to the corrected O'Farrell base grid (GEOMETRY
+    // TRUTH split, matching the street painter's post-swing angle).
+    c.rot = c.rotBase + (rngBuild()-0.5)*2*(jitterDeg*Math.PI/180) + (idx < preSurveyCount ? VIOGET_SKEW : GRID_ROT_BASE);
   });
   return out;
 })();
@@ -7699,8 +7776,11 @@ function buildWanderPoly(rng){
   return buildPolyline(pts, false);
 }
 function worldToGridApprox(x,z){
+  // exact inverse of gridToWorld(): un-register the terrain-frame origin
+  // offset, then rotate back by the permanent placement skew.
+  var lx = x - GRID_ORIGIN_X, lz = z - GRID_ORIGIN_Z;
   var c=Math.cos(-VIOGET_SKEW), s=Math.sin(-VIOGET_SKEW);
-  return { u: x*c - z*s, v: x*s + z*c };
+  return { u: lx*c - lz*s, v: lx*s + lz*c };
 }
 function nearestStreetPair(x,z){
   var g = worldToGridApprox(x,z);
@@ -10590,7 +10670,12 @@ function fireClockStep(step, dt){
 var charPatch = (function(){
   var kU=GEO.streetsU.kearny, mU=GEO.streetsU.montgomery, cV=GEO.streetsV.clay, wV=GEO.streetsV.washington;
   var g = new THREE.PlaneGeometry(Math.abs(mU-kU)-10, Math.abs(wV-cV)-8, 1, 1);
-  g.rotateX(-Math.PI/2); g.rotateY(VIOGET_SKEW);
+  // three.js rotateY(θ) maps x'=x·cosθ+z·sinθ — the INVERSE sense of
+  // gridToWorld's (x = u·cos a − v·sin a) — so aligning this patch with the
+  // fire block (post-survey, painted/built at GRID_ROT_BASE) needs -angle.
+  // (The old rotateY(+VIOGET_SKEW) was silently 2·2.5° off; invisible at
+  // 2.5° but visible at the corrected 9° base rotation.)
+  g.rotateX(-Math.PI/2); g.rotateY(-GRID_ROT_BASE);
   var m = new THREE.MeshBasicMaterial({ color:0x191108, transparent:true, opacity:0, depthWrite:false });
   var mesh = new THREE.Mesh(g,m);
   mesh.position.set(FIRE.cx, terrainHeight(FIRE.cx,FIRE.cz)+0.28, FIRE.cz);
