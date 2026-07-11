@@ -1250,8 +1250,11 @@ function terrainColor(x,z,h){
     // from the dry ground above the high-tide line.
     col.lerp(mudFlat, (1-smoothstep(0.1,0.55,h))*0.85);
   }
-  // crisp darker waterline edge band for coast legibility at altitude
-  var edgeT = 1-smoothstep(0,3.5,Math.abs(h));
+  // crisp darker waterline edge band for coast legibility at altitude.
+  // Narrowed 3.5m -> 1.3m (s22): the band is height-based, and the new
+  // gentle beach banks put |h|<3.5 ground across a 100m+ swath — the wide
+  // near-black stain amplified the flat-shaded slope checkerboard.
+  var edgeT = 1-smoothstep(0,1.3,Math.abs(h));
   col.lerp(new THREE.Color(0x2c2418), edgeT*0.55);
 
   col.r = clamp01(col.r+dither); col.g = clamp01(col.g+dither); col.b = clamp01(col.b+dither);
@@ -1468,7 +1471,10 @@ terrainGeo.rotateX(-Math.PI/2);
     pos.setY(i,h);
     var col = terrainColor(x,z,h);
 
-    if(villageBlend>0.15 && h>0.2){
+    // hillshade gate raised 0.2 -> 3.0 (s22): the beach bank / tide flats
+    // are near-flat authored ground — baked slope-shading there only
+    // painted the checkerboard harder. Real relief starts above the bank.
+    if(villageBlend>0.15 && h>3.0){
       var hE = gridH(gi+1,gj), hW = gridH(gi-1,gj);
       var hS = gridH(gi,gj+1), hN = gridH(gi,gj-1);
       var dhdx = (hE-hW)/(2*cellSize), dhdz = (hS-hN)/(2*cellSize);
