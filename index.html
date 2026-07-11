@@ -494,6 +494,16 @@
   body.watch-mode #hud-hint, body.watch-mode #hud-hint-toggle, body.watch-mode #paper-toggle,
   body.watch-mode #hud-ghost, body.watch-mode #hud-provenance,
   body.watch-mode #inspect-panel, body.watch-mode #horizon-ring{ display:none !important; }
+  /* s44 DIRECTOR V2: during a director person-follow beat the inspect panel
+     (who they are — name/trade/what they're doing, facts only) stays visible
+     in watch mode; everything else stays hidden. */
+  body.watch-mode.watch-follow #inspect-panel.on{ display:block !important; }
+  /* s44: quick-cut fade between director beats */
+  #director-fade{
+    position:fixed; inset:0; background:#04050a; opacity:0;
+    pointer-events:none; z-index:30; transition:opacity .26s ease;
+  }
+  #director-fade.on{ opacity:1; }
 
   /* ---- touch/mobile ---- */
   #hud-hint-toggle{
@@ -686,6 +696,7 @@
   <span class="bc-quote" id="bc-quote"></span>
   <span class="bc-date" id="bc-date"></span><a id="bc-receipt" href="#" target="_blank" rel="noopener">view the original page &rarr;</a>
 </div>
+<div id="director-fade"></div>
 
 <div id="paper-pane">
   <div class="pp-head">
@@ -10667,11 +10678,20 @@ function poolIndexFor(slot){
    selects the per-part tint by aPart and (b) muddies hems by uMud — the
    SAME weatherState.wet signal terrain/streets already tint on. */
 var personMudUniform = { value: 0 };
+/* s44 NIGHT READABILITY — people get a subtle warm rim/edge tint at night so
+   figures separate from the ground (shader, riding the existing per-part
+   attribute plumbing). uPersonRim = nightFactor (0 by day). uFollow =
+   (worldX, worldZ, strength): the followed person carries a slightly
+   stronger rim day AND night so they're always clearly readable. */
+var personRimUniform = { value: 0 };
+var personFollowUniform = { value: new THREE.Vector3(0, 0, 0) };
 function patchPersonMaterial(mesh){
   mesh.material.onBeforeCompile = function(shader){
     shader.uniforms.uMud = personMudUniform;
+    shader.uniforms.uPersonRim = personRimUniform;
+    shader.uniforms.uFollow = personFollowUniform;
     shader.vertexShader = shader.vertexShader
-      .replace("#include <common>", "#include <common>\nattribute vec3 instanceTint;\nattribute vec3 instanceSkin;\nattribute vec3 instanceHat;\nattribute float aPart;\nattribute vec2 aLimb;\nattribute vec2 instanceGait;\nvarying vec3 vInstanceTint;\nvarying vec3 vInstanceSkin;\nvarying vec3 vInstanceHat;\nvarying float vPart;\nvarying float vLocalY;")
+      .replace("#include <common>", "#include <common>\nattribute vec3 instanceTint;\nattribute vec3 instanceSkin;\nattribute vec3 instanceHat;\nattribute float aPart;\nattribute vec2 aLimb;\nattribute vec2 instanceGait;\nvarying vec3 vInstanceTint;\nvarying vec3 vInstanceSkin;\nvarying vec3 vInstanceHat;\nvarying float vPart;\nvarying float vLocalY;\nvarying vec3 vWPos;")
       /* s33 WALK CYCLE (TECHNIQUES rider 5, the labeled-parts crowd
          trick): counter-swing limbs by part id about their baked pivot
          height. instanceGait = (phase, amplitude) per instance — phase
@@ -10682,10 +10702,11 @@ function patchPersonMaterial(mesh){
          armR+legL the opposite half-cycle. The skirt (id 6) sways about
          Z at half stride frequency instead of leg-swinging. */
       .replace("#include <beginnormal_vertex>", "#include <beginnormal_vertex>\nfloat limbAng = 0.0, limbSway = 0.0;\nif(aLimb.x > 1.5 && instanceGait.y > 0.001){\n  float lp = instanceGait.x;\n  if(aLimb.x < 2.5) limbAng = sin(lp + 3.14159265) * instanceGait.y * 0.72;\n  else if(aLimb.x < 3.5) limbAng = sin(lp) * instanceGait.y * 0.72;\n  else if(aLimb.x < 4.5) limbAng = sin(lp) * instanceGait.y;\n  else if(aLimb.x < 5.5) limbAng = sin(lp + 3.14159265) * instanceGait.y;\n  else limbSway = sin(lp * 0.5) * instanceGait.y * 0.30;\n}\nfloat limbC = cos(limbAng), limbS = sin(limbAng);\nfloat swayC = cos(limbSway), swayS = sin(limbSway);\nif(limbAng != 0.0) objectNormal = vec3(objectNormal.x, objectNormal.y*limbC - objectNormal.z*limbS, objectNormal.y*limbS + objectNormal.z*limbC);\nif(limbSway != 0.0) objectNormal = vec3(objectNormal.x*swayC - objectNormal.y*swayS, objectNormal.x*swayS + objectNormal.y*swayC, objectNormal.z);")
-      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvInstanceTint = instanceTint;\nvInstanceSkin = instanceSkin;\nvInstanceHat = instanceHat;\nvPart = aPart;\nvLocalY = position.y;\nif(limbAng != 0.0){\n  float ly = transformed.y - aLimb.y;\n  transformed.y = aLimb.y + ly*limbC - transformed.z*limbS;\n  transformed.z = ly*limbS + transformed.z*limbC;\n}\nif(limbSway != 0.0){\n  float lx = transformed.x, ly2 = transformed.y - aLimb.y;\n  transformed.x = lx*swayC - ly2*swayS;\n  transformed.y = aLimb.y + lx*swayS + ly2*swayC;\n}");
+      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvInstanceTint = instanceTint;\nvInstanceSkin = instanceSkin;\nvInstanceHat = instanceHat;\nvPart = aPart;\nvLocalY = position.y;\nif(limbAng != 0.0){\n  float ly = transformed.y - aLimb.y;\n  transformed.y = aLimb.y + ly*limbC - transformed.z*limbS;\n  transformed.z = ly*limbS + transformed.z*limbC;\n}\nif(limbSway != 0.0){\n  float lx = transformed.x, ly2 = transformed.y - aLimb.y;\n  transformed.x = lx*swayC - ly2*swayS;\n  transformed.y = aLimb.y + lx*swayS + ly2*swayC;\n}\nvWPos = (modelMatrix * instanceMatrix * vec4(transformed,1.0)).xyz;");
     shader.fragmentShader = shader.fragmentShader
-      .replace("#include <common>", "#include <common>\nuniform float uMud;\nvarying vec3 vInstanceTint;\nvarying vec3 vInstanceSkin;\nvarying vec3 vInstanceHat;\nvarying float vPart;\nvarying float vLocalY;")
-      .replace("#include <color_fragment>", "#include <color_fragment>\n{ vec3 partTint = vPart<0.5 ? vInstanceTint : (vPart<1.5 ? vInstanceSkin : (vPart<2.5 ? vInstanceHat : (vPart<3.5 ? vec3(1.0) : vInstanceTint*0.55)));\ndiffuseColor.rgb *= partTint;\nfloat band = 1.0 - smoothstep(0.0, 0.55, vLocalY); float m = band*uMud; diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.30,0.24,0.16), m*0.55); }");
+      .replace("#include <common>", "#include <common>\nuniform float uMud;\nuniform float uPersonRim;\nuniform vec3 uFollow;\nvarying vec3 vInstanceTint;\nvarying vec3 vInstanceSkin;\nvarying vec3 vInstanceHat;\nvarying float vPart;\nvarying float vLocalY;\nvarying vec3 vWPos;")
+      .replace("#include <color_fragment>", "#include <color_fragment>\n{ vec3 partTint = vPart<0.5 ? vInstanceTint : (vPart<1.5 ? vInstanceSkin : (vPart<2.5 ? vInstanceHat : (vPart<3.5 ? vec3(1.0) : vInstanceTint*0.55)));\ndiffuseColor.rgb *= partTint;\nfloat band = 1.0 - smoothstep(0.0, 0.55, vLocalY); float m = band*uMud; diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.30,0.24,0.16), m*0.55); }")
+      .replace("#include <emissivemap_fragment>", "#include <emissivemap_fragment>\n{\n  float rimF = pow(1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0), 2.0);\n  float followK = uFollow.z * (1.0 - smoothstep(1.5, 2.6, distance(vWPos.xz, uFollow.xy)));\n  // rim (grazing edges) + a small flat warm lift: the camera's maps-like\n  // pitch sees mostly tops of hats/shoulders where a pure fresnel rim\n  // vanishes, so the flat term is what keeps figures countable at night.\n  totalEmissiveRadiance += vec3(1.0, 0.56, 0.28) * (uPersonRim*(rimF*0.35 + 0.15) + followK*(rimF*0.45 + 0.20));\n}");
   };
   mesh.material.needsUpdate = true;
 }
@@ -10718,6 +10739,27 @@ var lanternGlowMesh = new THREE.InstancedMesh(
   colorizeUniform(new THREE.BoxGeometry(0.09,0.13,0.09).toNonIndexed(), new THREE.Color(0xffd27a)),
   new THREE.MeshBasicMaterial({vertexColors:true, transparent:true, opacity:0}), LANTERN_CAP);
 lanternGlowMesh.count = 0; scene.add(lanternGlowMesh);
+/* s44 NIGHT READABILITY: each carried lantern also throws a small warm pool
+   on the ground (soft radial sprite, additive) — widens the read of lantern
+   light without touching the period-dim building glow. One draw call. */
+var LANTERN_POOL_TEX = (function(){
+  var c = document.createElement("canvas"); c.width = c.height = 64;
+  var g = c.getContext("2d");
+  var grad = g.createRadialGradient(32,32,2,32,32,31);
+  grad.addColorStop(0,"rgba(255,196,120,0.85)");
+  grad.addColorStop(0.45,"rgba(255,172,92,0.30)");
+  grad.addColorStop(1,"rgba(255,160,80,0)");
+  g.fillStyle = grad; g.fillRect(0,0,64,64);
+  return new THREE.CanvasTexture(c);
+})();
+var lanternPoolMesh = (function(){
+  var geo = new THREE.PlaneGeometry(3.4,3.4); geo.rotateX(-Math.PI/2);
+  var mat = new THREE.MeshBasicMaterial({ map:LANTERN_POOL_TEX, transparent:true, opacity:0,
+    depthWrite:false, blending:THREE.AdditiveBlending, fog:false });
+  var mesh = new THREE.InstancedMesh(geo, mat, LANTERN_CAP);
+  mesh.count = 0; mesh.renderOrder = 1; scene.add(mesh);
+  return mesh;
+})();
 
 // grounding contact shadow for every active walking/standing figure (see the
 // "GROUNDING CONTACT SHADOWS" block above, which builds the static building
@@ -10927,6 +10969,9 @@ function walkProg(h, h0, poly){
   // hour h0 — pure function of the sim clock, exact under rewind/jump.
   return clamp(((h - h0)*3600*PERSON_WALK_MPS)/Math.max(20, poly.total), 0, 1);
 }
+/* s44 grammar helper: work labels like "the Mission grazing grounds" already
+   carry their article — avoid "the the" in NOW lines. */
+function theLabel(lbl){ return /^the /i.test(lbl||"") ? lbl : "the "+lbl; }
 function computeRoutinePosition(slot, day){
   resolveDailySchedule(slot, day); // PL-B item 1: today's dice-picked midday/evening activity, cached per calendar day
   var h = (day-Math.floor(day))*24;
@@ -10963,10 +11008,10 @@ function computeRoutinePosition(slot, day){
     else if(h<6.5){ label="waking for the day"; }
     else if(h<7.5){
       wt = walkProg(h, 6.5, slot.commutePoly);
-      if(wt>=1){ x=slot.workPos.x; z=slot.workPos.z; pose=slot.workActivity; label="at work — the "+slot.workLabel; }
-      else { pp=sampleWithJitter(slot.commutePoly,wt,slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking to the "+slot.workLabel; }
+      if(wt>=1){ x=slot.workPos.x; z=slot.workPos.z; pose=slot.workActivity; label="at work — "+theLabel(slot.workLabel); }
+      else { pp=sampleWithJitter(slot.commutePoly,wt,slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking to "+theLabel(slot.workLabel); }
     }
-    else if(h<12){ x=slot.workPos.x; z=slot.workPos.z; pose=slot.workActivity; label="at work — the "+slot.workLabel; }
+    else if(h<12){ x=slot.workPos.x; z=slot.workPos.z; pose=slot.workActivity; label="at work — "+theLabel(slot.workLabel); }
     else if(slot._midday && h<13.4){
       // PL-B item 1/2 (dice engine + needs visible): today's midday choice
       // was sampled from data/catalog-activities.json against this
@@ -10984,12 +11029,12 @@ function computeRoutinePosition(slot, day){
         else if(h<13.0){ x=m.site.x; z=m.site.z; pose=mPose; label=m.act.label+(m.site.label?(" — "+m.site.label):""); }
         else {
           wt = walkProg(h, 13.0, m.poly);
-          if(wt>=1){ x=slot.workPos.x; z=slot.workPos.z; pose=slot.workActivity; label="at work — the "+slot.workLabel; }
-          else { pp=sampleWithJitter(m.poly,1-wt,slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking back to the "+slot.workLabel; }
+          if(wt>=1){ x=slot.workPos.x; z=slot.workPos.z; pose=slot.workActivity; label="at work — "+theLabel(slot.workLabel); }
+          else { pp=sampleWithJitter(m.poly,1-wt,slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking back to "+theLabel(slot.workLabel); }
         }
       } else { x=m.site.x; z=m.site.z; pose=mPose; label=m.act.label+" at the campfire"; }
     }
-    else if(h<18){ x=slot.workPos.x; z=slot.workPos.z; pose=slot.workActivity; label="at work — the "+slot.workLabel; }
+    else if(h<18){ x=slot.workPos.x; z=slot.workPos.z; pose=slot.workActivity; label="at work — "+theLabel(slot.workLabel); }
     else if(h<19){
       wt = walkProg(h, 18, slot.commutePoly);
       if(wt>=1){ label="at home"; }
@@ -11130,7 +11175,9 @@ function updatePeople(dt, camX, camZ, alt){
   var absFade = 1 - groundAbstraction*0.72; // figures dim to ~28%, never fully vanish (flow stays legible)
   personMeshes.forEach(function(m){ m.material.transparent = absOn; m.material.opacity = absFade; });
   streetSleeperMesh.material.transparent = absOn; streetSleeperMesh.material.opacity = absFade;
-  personShadowMesh.material.opacity = 0.88*absFade;
+  // s44: slightly stronger contact shadows by day — figure/ground separation
+  // for tracking people (night keeps the softer mark; the rim does that job).
+  personShadowMesh.material.opacity = (0.82 + 0.16*(1-nightFactor))*absFade;
   // PHASE 5: while the Great Fire burns, the crowd IS the documented story
   // ("a stampede of six thousand human beings") — lift the ambient-people
   // altitude gate so the exodus/spectators read from the director's fire
@@ -11140,6 +11187,7 @@ function updatePeople(dt, camX, camZ, alt){
   if(!ambientOn){
     personMeshes.forEach(function(m){ m.count=0; });
     lanternGlowMesh.count = 0;
+    lanternPoolMesh.count = 0;
     streetSleeperMesh.count = 0;
     personShadowMesh.count = 0;
     updateDocumentedMoments(alt);
@@ -11235,7 +11283,9 @@ function updatePeople(dt, camX, camZ, alt){
     ga[idx*2] = (s._gaitPhase||0) + s.id*0.7;
     ga[idx*2+1] = clamp((s._appSpd||0)/1.2, 0, 1)*0.55;
     if(showLanterns && s.isLanternCandidate && lanternCount<LANTERN_CAP){
-      setShipInstance(lanternGlowMesh, lanternCount, s._x+Math.sin(yaw+1.4)*0.26, h+0.78, s._z+Math.cos(yaw+1.4)*0.26, 0, 1);
+      // s44: slightly larger lantern + a warm ground pool under the carrier
+      setShipInstance(lanternGlowMesh, lanternCount, s._x+Math.sin(yaw+1.4)*0.26, h+0.78, s._z+Math.cos(yaw+1.4)*0.26, 0, 1.35);
+      setShipInstance(lanternPoolMesh, lanternCount, s._x, h+0.06, s._z, 0, 1);
       lanternCount++;
     }
   });
@@ -11245,6 +11295,14 @@ function updatePeople(dt, camX, camZ, alt){
   lanternGlowMesh.count = lanternCount;
   lanternGlowMesh.instanceMatrix.needsUpdate = true;
   lanternGlowMesh.material.opacity = nightFactor;
+  lanternPoolMesh.count = lanternCount;
+  lanternPoolMesh.instanceMatrix.needsUpdate = true;
+  lanternPoolMesh.material.opacity = nightFactor*0.7;
+  // s44 rim uniforms: warm night edge tint on figures (0 by day, stands down
+  // with ground abstraction); the followed person reads stronger, always.
+  personRimUniform.value = nightFactor*(1-groundAbstraction);
+  if(followedSlot) personFollowUniform.value.set(followedSlot._x, followedSlot._z, 1.0);
+  else personFollowUniform.value.z = 0;
   streetSleeperMesh.count = sleeperCount;
   streetSleeperMesh.instanceMatrix.needsUpdate = true;
   personShadowMesh.count = shadowCount;
@@ -11386,7 +11444,10 @@ function openPersonInspectorForSlot(slot){
   var homeLink = '<a href="#" class="ip-fly" onclick="__piFlyTo('+slot.homePos.x.toFixed(1)+','+slot.homePos.z.toFixed(1)+',110);return false;">'+escapeHTML(slot.homeLabel)+'</a>';
   var detailHtml = 'Boards at '+homeLink;
   if(slot.workPos){
-    detailHtml += '; works the <a href="#" class="ip-fly" onclick="__piFlyTo('+slot.workPos.x.toFixed(1)+','+slot.workPos.z.toFixed(1)+',110);return false;">'+escapeHTML(slot.workLabel)+'</a>';
+    // s44 grammar fix: labels like "the Mission grazing grounds" already
+    // carry their article — don't prepend a second "the".
+    var worksArticle = /^the /i.test(slot.workLabel||"") ? 'works ' : 'works the ';
+    detailHtml += '; '+worksArticle+'<a href="#" class="ip-fly" onclick="__piFlyTo('+slot.workPos.x.toFixed(1)+','+slot.workPos.z.toFixed(1)+',110);return false;">'+escapeHTML(slot.workLabel)+'</a>';
   }
   detailHtml += bio.role ? (". Printed in the record as \""+escapeHTML(bio.role)+"\".") : (". "+escapeHTML(bio.agenda)+".");
   if(bio.family) detailHtml += escapeHTML(bio.family);
@@ -11447,7 +11508,7 @@ var _peopleNdc = new THREE.Vector2();
    tap instead of silently no-op'ing. */
 var _snapV3 = new THREE.Vector3();
 var SNAP_PX = 24;
-function trySnapToNearestPerson(clientX, clientY){
+function nearestPersonAtScreenXY(clientX, clientY){
   var best=null, bestD=SNAP_PX;
   for(var mi=0; mi<personMeshSlots.length; mi++){
     var arr = personMeshSlots[mi];
@@ -11462,8 +11523,46 @@ function trySnapToNearestPerson(clientX, clientY){
       if(d<bestD){ bestD=d; best=slot; }
     }
   }
+  return best;
+}
+function trySnapToNearestPerson(clientX, clientY){
+  var best = nearestPersonAtScreenXY(clientX, clientY);
   if(best){ openPersonInspectorForSlot(best); return true; }
   return false;
+}
+/* s44: pointer-hover ring on people — hover marks who is inspectable (ties
+   into the inspect panel; click opens it). Desktop pointers only; the scan
+   is the same cheap projected-distance sweep the tap-snap uses, throttled. */
+var hoverRingMesh = (function(){
+  var g = new THREE.RingGeometry(0.82, 1.0, 48);
+  var m = new THREE.MeshBasicMaterial({ color:0xf1e6c9, transparent:true, opacity:0.30,
+    depthWrite:false, depthTest:false, side:THREE.DoubleSide, fog:false });
+  var mesh = new THREE.Mesh(g, m);
+  mesh.rotation.x = -Math.PI/2; mesh.visible = false; mesh.renderOrder = 9;
+  scene.add(mesh);
+  return mesh;
+})();
+var _hoverPX = -1, _hoverPY = -1, _hoverSlot = null, _hoverNextScan = 0;
+if(!IS_TOUCH){
+  window.addEventListener("pointermove", function(e){ _hoverPX = e.clientX; _hoverPY = e.clientY; }, {passive:true});
+}
+function updateHoverRing(now){
+  if(IS_TOUCH || _hoverPX<0) return;
+  var anyPeople = false;
+  for(var i=0;i<personMeshes.length;i++){ if(personMeshes[i].count>0){ anyPeople=true; break; } }
+  if(!anyPeople){ hoverRingMesh.visible=false; _hoverSlot=null; renderer.domElement.style.cursor=""; return; }
+  if(now>=_hoverNextScan){
+    _hoverNextScan = now+120;
+    _hoverSlot = nearestPersonAtScreenXY(_hoverPX, _hoverPY);
+  }
+  var s = _hoverSlot;
+  var selIsSame = SELECTED && SELECTED.kind==="person" && SELECTED.slot===s;
+  if(s && !selIsSame){
+    hoverRingMesh.position.set(s._x, Math.max(terrainHeight(s._x,s._z),0)+0.5, s._z);
+    hoverRingMesh.scale.set(1.25,1.25,1);
+    hoverRingMesh.visible = true;
+  } else hoverRingMesh.visible = false;
+  renderer.domElement.style.cursor = s ? "pointer" : "";
 }
 function metersPerPixelAtFocus(){
   return 2*Math.tan(camera.fov*Math.PI/360)/window.innerHeight * (CAM ? CAM.radius : 500);
@@ -12258,14 +12357,23 @@ function applyFireCrowd(slot, day){
    the director for 30s. Watch mode hides all HUD but date/beat-card/ticker.
    ========================================================================= */
 var WATCH = { on:false };
-var DIRECTOR = { suspendUntil:0, beat:null, beatStart:0, cursor:0, pending:[], cooldownUntil:{}, lastMonthKey:"" };
+var DIRECTOR = { suspendUntil:0, beat:null, beatStart:0, cursor:0, pending:[], cooldownUntil:{}, lastMonthKey:"",
+  // s44 DIRECTOR V2 state: autoSlot = the person the DIRECTOR is following
+  // (manual follows outrank; they're distinguished by not being autoSlot),
+  // savedSpeed = timelapse tier to restore after a follow forced 2x,
+  // nextPickAt/idleSince pace the cuts between beats.
+  autoSlot:null, savedSpeed:null, nextPickAt:0, idleSince:0 };
 var CLS_META = {
   fire:  { kicker:"THE FIRST GREAT FIRE",  hold:26, cooldown:5,  stale:1.2 },
   minorfire:{ kicker:"FIRE",               hold:10, cooldown:30, stale:3 },
   moment:{ kicker:"A DOCUMENTED MOMENT",   hold:16, cooldown:20, stale:4 },
   paper: { kicker:"THE PRESS",             hold:12, cooldown:30, stale:10 },
   ship:  { kicker:"SHIP ARRIVAL",          hold:9,  cooldown:20, stale:5 },
-  month: { kicker:"THE TOWN",              hold:8,  cooldown:40, stale:8 }
+  month: { kicker:"THE TOWN",              hold:8,  cooldown:40, stale:8 },
+  // s44 interest-pool classes (holds are per-beat; these are fallbacks)
+  follow:{ kicker:"FOLLOWING",             hold:30, cooldown:6,  stale:0 },
+  ashore:{ kicker:"JUST ASHORE",           hold:18, cooldown:90, stale:0 },
+  site:  { kicker:"THE TOWN",              hold:16, cooldown:35, stale:0 }
 };
 var DIRECTOR_BEATS = (function(){
   var beats = [];
@@ -12520,19 +12628,36 @@ var bcClassEl = document.getElementById("bc-class"), bcQuoteEl = document.getEle
     bcDateEl = document.getElementById("bc-date"), bcReceiptEl = document.getElementById("bc-receipt"),
     beatCardEl = document.getElementById("beat-card");
 function showBeatCard(b){
-  bcClassEl.textContent = (CLS_META[b.cls]||{}).kicker || b.cls.toUpperCase();
-  bcQuoteEl.textContent = "“"+b.headline+"”";
+  bcClassEl.textContent = b.kicker || (CLS_META[b.cls]||{}).kicker || b.cls.toUpperCase();
+  // s44: person-follow/site cards state facts (name — trade; place) rather
+  // than quoting a headline, so no quote marks for those kinds (voice rule).
+  bcQuoteEl.textContent = (b.kind==="person"||b.kind==="site"||b.kind==="group") ? b.headline : "“"+b.headline+"”";
   bcDateEl.textContent = new Date(b.dateISO+"T00:00:00Z").toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric",timeZone:"UTC"}).toUpperCase();
   if(b.receipt){ bcReceiptEl.style.display=""; bcReceiptEl.href = b.receipt; }
   else bcReceiptEl.style.display="none";
   beatCardEl.classList.add("on");
 }
 function hideBeatCard(){ beatCardEl.classList.remove("on"); }
+/* s44: end whatever beat is playing, releasing an auto-follow cleanly. */
+function abortDirectorBeat(){
+  if(DIRECTOR.autoSlot){
+    if(followedSlot===DIRECTOR.autoSlot) closeInspect();
+    DIRECTOR.autoSlot = null;
+    document.body.classList.remove("watch-follow");
+    CAM.pitchOffT = cinematicTilt ? CINEMATIC_TILT_OFFSET : 0;
+    if(DIRECTOR.savedSpeed!=null && simSpeedKey==="x2") setSimSpeed(DIRECTOR.savedSpeed);
+    DIRECTOR.savedSpeed = null;
+  }
+  DIRECTOR.beat = null; hideBeatCard();
+}
 function setWatchMode(on){
   WATCH.on = on;
   document.body.classList.toggle("watch-mode", on);
-  if(on && simSpeedKey===0) setSimSpeed(lastActiveSpeed||"day");
-  if(!on){ DIRECTOR.beat=null; hideBeatCard(); }
+  // s44: watch mode's default tier is 2x FOLLOW — person-follows are the
+  // headline, and they need schedule-true motion (you cannot follow a
+  // person at day/s; the director drops compression itself when needed).
+  if(on && simSpeedKey===0) setSimSpeed("x2");
+  if(!on) abortDirectorBeat();
 }
 window.addEventListener("keydown", function(e){
   if(e.key==="v"||e.key==="V") setWatchMode(!WATCH.on);
@@ -12540,7 +12665,7 @@ window.addEventListener("keydown", function(e){
 function suspendDirector(){
   if(!WATCH.on) return;
   DIRECTOR.suspendUntil = performance.now()+30000;
-  if(DIRECTOR.beat && !DIRECTOR.beat.holdUntilDay){ DIRECTOR.beat=null; hideBeatCard(); }
+  if(DIRECTOR.beat && !DIRECTOR.beat.holdUntilDay) abortDirectorBeat();
 }
 /* s41: window, not canvas — map drags can legitimately start on label chips
    now, and those must also give the watch-mode director its 30s pause. */
@@ -12570,13 +12695,277 @@ function lowerBoundBeats(day){
   while(lo<hi){ var mid=(lo+hi)>>1; if(DIRECTOR_BEATS[mid].simDay<day) lo=mid+1; else hi=mid; }
   return lo;
 }
+
+/* =========================================================================
+   s44 — THE INTEREST SYSTEM (Director V2). A scored pool of candidate
+   beats, refreshed as the sim runs:
+     (a) PERSON-FOLLOW beats (the headline): roster people near their
+         documented mention dates, participants of high-icon events
+         (behavior-spec §6 salience), evening saloon-goers, the vaquero with
+         the herd, mud-winter walkers — followed at LIVE/2x, shoulder
+         distance, inspect panel showing who they are (facts only).
+     (b) EVENT beats: the existing DIRECTOR_BEATS spine (fires, documented
+         moments, press, arrivals), icon-scored, unchanged.
+     (c) SITE beats: a curated gallery of proven framings, era-weighted.
+   Scoring mixes salience, recency (near a documented date), novelty
+   (per-person/per-site cooldowns + per-hour spend pressure), and
+   era-appropriateness (availability gates). Beats CUT together (quick
+   fade); when nothing scores, the director jump-cuts the sim clock forward
+   to the next interesting hour instead of orbiting an empty frame.
+   ========================================================================= */
+var INTEREST = { slotCool:{}, siteCool:{}, typeCool:{}, nameCool:{}, hourSpent:{}, log:[] };
+var directorFadeEl = document.getElementById("director-fade");
+var _cutBusy = false;
+function directorCut(apply){
+  if(_cutBusy){ apply(); return; }
+  _cutBusy = true;
+  directorFadeEl.classList.add("on");
+  setTimeout(function(){
+    apply();
+    // compose the new shot behind the fade: snap the rig to its targets
+    CAM.t = CAM.tT; CAM.yaw = CAM.yawT; CAM.pitchOff = CAM.pitchOffT; CAM.focus.copy(CAM.focusT);
+    setTimeout(function(){ directorFadeEl.classList.remove("on"); _cutBusy = false; }, 80);
+  }, 280);
+}
+/* curated site gallery — proven framings, all factual place descriptions
+   (voice rule: state what/where, never editorialize) */
+var SITE_GALLERY = [
+  { key:"wharf_work", kicker:"THE WHARF", label:"Central Wharf at work",
+    hours:[7.5,17.5], from:eventDateToSimDay("1849-05-20"), alt:170, drift:0.022,
+    pos:function(){ return { x:WORKSITE_WHARF.x, z:WORKSITE_WHARF.z }; } },
+  { key:"plaza_noon", kicker:"THE PLAZA", label:"Portsmouth Square at midday",
+    hours:[11,13.8], from:0, alt:150, drift:0.02,
+    pos:function(){ return PLAZA_CENTER; } },
+  { key:"mast_forest", kicker:"THE ANCHORAGE", label:"The anchored fleet off the cove at first light",
+    hours:[5.2,8.6], from:0, alt:380, drift:0.016,
+    avail:function(){ var a=anchoredShipCentroid(); return !!(a && a.count>=12); },
+    pos:function(){ var a=anchoredShipCentroid(); return a ? { x:a.x, z:a.z } : null; } },
+  { key:"mud_crossing", kicker:"WINTER MUD", label:"Crossing the mud at Portsmouth Square",
+    hours:[7,17.9], from:0, alt:95, drift:0.028,
+    avail:function(){ return weatherState.mud>0.45; },
+    pos:function(){ return { x:PLAZA_CENTER.x+26, z:PLAZA_CENTER.z+18 }; } },
+  { key:"mission_pasture", kicker:"THE MISSION", label:"Cattle on the Mission grazing grounds",
+    hours:[8,17.5], from:0, alt:240, drift:0.018,
+    pos:function(){ return { x:PASTURE_MISSION.x, z:PASTURE_MISSION.z }; } },
+  { key:"tents_dusk", kicker:"HAPPY VALLEY", label:"The tent camp toward dusk",
+    hours:[16.5,20.3], from:HAPPY_VALLEY_REVEAL_DAY+20, alt:230, drift:0.02,
+    pos:function(){ return { x:900, z:950 }; } }
+];
+function personCandidates(now, day, h, out){
+  if(provenanceOnly) return; // documented-only mode hides the simulated cast — no person-follows
+  if(h<6.2 || h>=21.5) return; // deep-night streets are legitimately near-empty
+  // surnames of actors named in high-icon events within a day (behavior-spec
+  // §6 salience) — participants of those events score up
+  var actorHits = {};
+  for(var ei=0; ei<EVENTS_RAW.length; ei++){
+    var ev = EVENTS_RAW[ei];
+    if((ev.priority||0)<6 || !ev.actors || Math.abs(day-ev.simDay)>0.8) continue;
+    for(var ai=0; ai<ev.actors.length; ai++){
+      var parts = String(ev.actors[ai]).toUpperCase().replace(/[.]/g,"").split(/\s+/);
+      var last = parts[parts.length-1];
+      if(last && last.length>3) actorHits[last] = true;
+    }
+  }
+  var mudSeason = weatherState.mud>0.45;
+  // outdoor veto for stationary candidates: a figure standing inside a
+  // building footprint (indoor work is rendered at the building's spot)
+  // cannot be followed readably — the camera would hold on a roof.
+  function standsInBuilding(x,z){
+    for(var bi=0;bi<VILLAGE_BUILDING_SPOTS.length;bi++){
+      var sp = VILLAGE_BUILDING_SPOTS[bi];
+      if(sp.foundedDay!=null && day<sp.foundedDay) continue;
+      if(Math.abs(x-sp.x)<sp.w*0.62+0.6 && Math.abs(z-sp.z)<sp.d*0.62+0.6) return true;
+    }
+    return false;
+  }
+  for(var i=0;i<ALL_PEOPLE_SLOTS.length;i++){
+    var s = ALL_PEOPLE_SLOTS[i];
+    if(day<s.notBeforeDay || (s.notAfterDay!=null && day>s.notAfterDay)) continue;
+    if((INTEREST.slotCool[s.id]||0) > now) continue; // novelty: don't re-follow
+    // schedule-true status right now (same pure function of simDay the
+    // renderer runs; updatePeople recomputes every frame afterwards)
+    if(s.kind==="routine") computeRoutinePosition(s, day); else computeExtraPosition(s, day);
+    var nowStr = s._now||"";
+    if(/^asleep/.test(nowStr) || s._pose==="sleep") continue;
+    if(s._pose!=="walk"){
+      if(/Mission Dolores|Presidio/.test(nowStr)) continue;     // landmark-interior worksites
+      if(standsInBuilding(s._x, s._z)) continue;                // under a roof — unwatchable
+    }
+    var sc = 0;
+    if(s.roster){
+      sc += 1.0 + Math.min(1.6, Math.log(1+(s.roster.mentions||1))*0.30); // salience: attestation
+      if(s._rFirstDay===undefined) s._rFirstDay = s.roster.first ? eventDateToSimDay(s.roster.first) : null;
+      if(s._rLastDay===undefined)  s._rLastDay  = s.roster.last  ? eventDateToSimDay(s.roster.last)  : null;
+      if(s._rFirstDay!=null && Math.abs(day-s._rFirstDay)<8) sc += 2.2;      // recency: near their documented moment
+      else if(s._rLastDay!=null && Math.abs(day-s._rLastDay)<8) sc += 1.6;
+      var surname = s.roster.name.toUpperCase().replace(/[.]/g,"").split(/\s+/).pop();
+      if(surname && surname.length>3 && actorHits[surname]) sc += 2.6;       // named in a high-icon event today
+    }
+    if(s.occ && s.occ.id==="vaquero_herder" && h>=7.5 && h<18 && /at work/.test(nowStr)) sc += 2.4; // with the herd
+    if(h>=18.7 && /of an evening|stumbling/.test(nowStr)) sc += 2.0;          // evening saloon-goers
+    if(s._pose==="walk") sc += 0.9;                                           // en route = something to follow
+    if(mudSeason && s._pose==="walk") sc += 0.9;                              // mud-winter crossings
+    if(/^at home/.test(nowStr)) sc -= 2.2;
+    if(s.occ && (INTEREST.typeCool[s.occ.id]||0) > now) sc -= 2.4;            // novelty: vary the trades followed
+    if(s.roster && (INTEREST.nameCool[s.roster.name]||0) > now) sc -= 6;      // novelty: never re-follow a name (dup roster entries)
+    sc += ((s.id*37)%97)/97*0.5; // deterministic variety jitter
+    if(sc < 1.5) continue;
+    out.push({ kind:"person", score:sc, slot:s });
+  }
+}
+function ashoreCandidates(now, day, out){
+  if((INTEREST.siteCool["ashore"]||0) > now) return;
+  for(var i=0;i<shipVisits.length;i++){
+    var v = shipVisits[i];
+    if(v.arrive==null || v.arriveInferred || !v._anchorPos) continue; // documented arrivals only
+    var age = day - v.arrive;
+    if(age<0.05 || age>ARRIVAL_WINDOW_DAYS*0.95) continue;
+    out.push({ kind:"group", score:3.0, visit:v });
+    return; // one is plenty
+  }
+}
+function siteCandidates(now, day, h, out){
+  for(var i=0;i<SITE_GALLERY.length;i++){
+    var g = SITE_GALLERY[i];
+    if(day < g.from) continue;
+    if(h < g.hours[0] || h >= g.hours[1]) continue;
+    if((INTEREST.siteCool[g.key]||0) > now) continue; // novelty: no repeats
+    if(g.avail && !g.avail()) continue;               // era/condition gate
+    var p = g.pos(); if(!p) continue;
+    out.push({ kind:"site", score:1.7 + ((i*29)%13)/13*0.4, gallery:g, x:p.x, z:p.z });
+  }
+}
+function makePersonBeat(c){
+  var s = c.slot;
+  var bio = generateBio(s);
+  // walkers earn the long holds (their errand is the show); a stationary
+  // figure holds shorter so pacing stays varied
+  var hold = clamp(22 + c.score*6, 20, 60);
+  if(s._pose!=="walk") hold = Math.min(hold, 32);
+  return { kind:"person", cls:"follow", pri:5, slot:s,
+    hold: hold,
+    kicker: bio.role ? "FOLLOWING — FROM THE RECORD" : "FOLLOWING",
+    headline: bio.name + " — " + bio.trade,
+    dateISO: simDateISO(dateFromSimDay(simDay)),
+    alt: 40 + (s.id%5)*5 };
+}
+function makeGroupBeat(c){
+  var v = c.visit;
+  return { kind:"group", cls:"ashore", pri:6, visit:v,
+    hold: 18,
+    kicker: "JUST ASHORE",
+    headline: "Ashore from the "+v.ship,
+    dateISO: simDateISO(dateFromSimDay(simDay)),
+    alt: 120,
+    pos: function(){
+      var age = simDay - v.arrive;
+      if(age<0 || age>ARRIVAL_WINDOW_DAYS || !v._anchorPos) return null;
+      var rowT = clamp(age/(ARRIVAL_WINDOW_DAYS*ARRIVAL_ROW_FRAC), 0, 1);
+      if(rowT<1) return { x:lerp(v._anchorPos.x,WORKSITE_WHARF.x,rowT), z:lerp(v._anchorPos.z,WORKSITE_WHARF.z,rowT) };
+      var cache = _arrivalCache[v.ship+"_"+v.arrive];
+      if(!cache) return { x:WORKSITE_WHARF.x, z:WORKSITE_WHARF.z };
+      var walkT = clamp((age-(ARRIVAL_WINDOW_DAYS*ARRIVAL_ROW_FRAC))/(ARRIVAL_WINDOW_DAYS*(1-ARRIVAL_ROW_FRAC)), 0, 1);
+      var pt = pointOnPolyline(cache.poly, walkT*cache.poly.total);
+      return { x:pt.x, z:pt.z };
+    } };
+}
+function makeSiteBeat(c){
+  var g = c.gallery;
+  return { kind:"site", cls:"site", pri:3, siteKey:g.key,
+    hold: 13 + ((g.key.length*7)%7),
+    kicker: g.kicker, headline: g.label,
+    dateISO: simDateISO(dateFromSimDay(simDay)),
+    x: c.x, z: c.z, alt: g.alt, drift: g.drift };
+}
+function pickInterestBeat(now){
+  var day = simDay, h = (day-Math.floor(day))*24;
+  var hourKey = Math.floor(day*24);
+  var spent = INTEREST.hourSpent[hourKey]||0;
+  var cands = [];
+  personCandidates(now, day, h, cands);
+  ashoreCandidates(now, day, cands);
+  siteCandidates(now, day, h, cands);
+  // pacing: after two person-follows in a row, lean toward a site/arrival
+  // beat so the session alternates registers (a strong documented-moment
+  // person can still outbid the lean).
+  var run = INTEREST.runPerson||0;
+  var best = null;
+  for(var i=0;i<cands.length;i++){
+    var c = cands[i];
+    var eff = c.score + (c.kind==="person" ? (run>=2 ? -2.2 : 0) : Math.min(1.2, run*0.5));
+    c._eff = eff;
+    if(!best || eff>best._eff) best = c;
+  }
+  if(!best || best._eff < 1.5 + 1.1*spent) return null; // hour spent — move on (time cut) rather than repeat
+  INTEREST.hourSpent[hourKey] = spent+1;
+  INTEREST.runPerson = best.kind==="person" ? run+1 : 0;
+  if(best.kind==="person") return makePersonBeat(best);
+  if(best.kind==="group") return makeGroupBeat(best);
+  return makeSiteBeat(best);
+}
+function logBeat(b){
+  var f = simDay-Math.floor(simDay), hh = Math.floor(f*24), mm = Math.floor((f*24-hh)*60);
+  var entry = { at: simDateISO(dateFromSimDay(simDay))+" "+(hh<10?"0":"")+hh+":"+(mm<10?"0":"")+mm,
+    cls: b.cls, kind: b.kind||"event",
+    kicker: b.kicker||(CLS_META[b.cls]||{}).kicker||b.cls, headline: b.headline };
+  INTEREST.log.push(entry);
+  if(INTEREST.log.length>250) INTEREST.log.shift();
+  console.log("[director] "+entry.at+" · "+entry.kicker+" · "+entry.headline);
+}
+function startInterestBeat(b, now){
+  b._pendingCut = true;
+  DIRECTOR.beat = b; DIRECTOR.beatStart = now;
+  DIRECTOR.idleSince = 0;
+  showBeatCard(b);
+  logBeat(b);
+  directorCut(function(){
+    if(DIRECTOR.beat!==b) return; // aborted/preempted during the fade (e.g. the fire)
+    b._pendingCut = false;
+    DIRECTOR.beatStart = performance.now();
+    if(b.kind==="person"){
+      var s = b.slot;
+      INTEREST.slotCool[s.id] = performance.now() + 12*60*1000;
+      if(s.occ) INTEREST.typeCool[s.occ.id] = performance.now() + 9*60*1000;
+      if(s.roster) INTEREST.nameCool[s.roster.name] = performance.now() + 30*60*1000;
+      // person-follows run schedule-true: at high compression drop to 2x
+      // automatically (you cannot follow a person at day/s); restore after.
+      if(timelapseActive()){ DIRECTOR.savedSpeed = simSpeedKey; setSimSpeed("x2"); }
+      else if(simSpeedKey===0) setSimSpeed("x2");
+      if(s.kind==="routine") computeRoutinePosition(s, simDay); else computeExtraPosition(s, simDay);
+      DIRECTOR.autoSlot = s;
+      openPersonInspectorForSlot(s);          // the panel says who they are — facts only
+      document.body.classList.add("watch-follow");
+      setZoomMeters(b.alt);                   // period-drama shoulder/three-quarter distance
+      CAM.yawT = CAM.yaw + (((s.id%7)/7)-0.5)*1.6; // vary the angle per person
+      CAM.pitchOffT = -0.30;
+      CAM.focusT = new THREE.Vector3(s._x, groundHeight(s._x,s._z)+1.4, s._z);
+    } else if(b.kind==="group"){
+      INTEREST.siteCool["ashore"] = performance.now() + 8*60*1000;
+      var gp = b.pos();
+      if(gp) CAM.focusT = new THREE.Vector3(gp.x, groundHeight(gp.x,gp.z)+1.2, gp.z);
+      setZoomMeters(b.alt);
+      CAM.pitchOffT = cinematicTilt ? CINEMATIC_TILT_OFFSET : 0;
+    } else {
+      INTEREST.siteCool[b.siteKey] = performance.now() + 6*60*1000;
+      CAM.focusT = new THREE.Vector3(b.x, groundHeight(b.x,b.z), b.z);
+      setZoomMeters(clamp(b.alt*1.15, CFG.minAltitude, CFG.maxAltitude));
+      CAM.pitchOffT = cinematicTilt ? CINEMATIC_TILT_OFFSET : 0;
+    }
+  });
+}
+var INTEREST_HOURS = [6.2, 8.0, 11.8, 15.2, 17.3, 19.3];
+function nextInterestHourDay(day){
+  var f = Math.floor(day), h = (day-f)*24;
+  for(var i=0;i<INTEREST_HOURS.length;i++){ if(INTEREST_HOURS[i] > h+0.2) return f + INTEREST_HOURS[i]/24; }
+  return f + 1 + INTEREST_HOURS[0]/24;
+}
 function updateDirector(dt){
   var now = performance.now();
   // backward time-jump: resynchronize the cursor and drop stale pendings
   if(DIRECTOR.cursor>0 && DIRECTOR_BEATS[DIRECTOR.cursor-1] && DIRECTOR_BEATS[DIRECTOR.cursor-1].simDay > simDay + 0.5){
     DIRECTOR.cursor = lowerBoundBeats(simDay);
     DIRECTOR.pending.length = 0;
-    DIRECTOR.beat = null; hideBeatCard();
+    abortDirectorBeat();
   }
   while(DIRECTOR.cursor<DIRECTOR_BEATS.length && DIRECTOR_BEATS[DIRECTOR.cursor].simDay<=simDay){
     DIRECTOR.pending.push(DIRECTOR_BEATS[DIRECTOR.cursor]); DIRECTOR.cursor++;
@@ -12585,7 +12974,17 @@ function updateDirector(dt){
     return (simDay - b.simDay) <= ((CLS_META[b.cls]||{}).stale||5);
   });
   if(!WATCH.on) return;
-  if(followedSlot || followedDocumented) return;          // a manual follow outranks the director
+  // a manual follow outranks the director — but if the director's own person
+  // beat lost its follow (user clicked someone else / Esc), the beat must
+  // FINISH first or it would hang forever behind this early return.
+  if(DIRECTOR.beat && DIRECTOR.beat.kind==="person" && !DIRECTOR.beat._pendingCut
+     && followedSlot!==DIRECTOR.beat.slot){
+    DIRECTOR.cooldownUntil[DIRECTOR.beat.cls] = now + ((CLS_META[DIRECTOR.beat.cls]||{}).cooldown||25)*1000;
+    abortDirectorBeat();
+    DIRECTOR.nextPickAt = now + 2000;
+  }
+  if(followedDocumented) return;
+  if(followedSlot && followedSlot!==DIRECTOR.autoSlot) return; // (the director's own follow doesn't)
   if(now < DIRECTOR.suspendUntil) return;                 // manual input holds for 30s
 
   // month-change idle beat (priority 2): a wide re-establishing look
@@ -12600,44 +12999,107 @@ function updateDirector(dt){
   }
 
   // a top-priority beat (the fire) preempts whatever lower beat is playing
-  if(DIRECTOR.beat && DIRECTOR.beat.pri<9){
+  if(DIRECTOR.beat && (DIRECTOR.beat.pri||5)<9){
     for(var pi=0; pi<DIRECTOR.pending.length; pi++){
-      if(DIRECTOR.pending[pi].pri>=9){ DIRECTOR.beat=null; hideBeatCard(); break; }
+      if(DIRECTOR.pending[pi].pri>=9){ abortDirectorBeat(); break; }
     }
   }
   if(DIRECTOR.beat){
     var b = DIRECTOR.beat;
+    if(b._pendingCut) return; // composing behind the cut fade
     var elapsed = (now-DIRECTOR.beatStart)/1000;
-    var done = b.holdUntilDay ? (simDay>b.holdUntilDay) : (elapsed > ((CLS_META[b.cls]||{}).hold||10));
-    if(done){
-      DIRECTOR.cooldownUntil[b.cls] = now + ((CLS_META[b.cls]||{}).cooldown||25)*1000;
-      DIRECTOR.beat = null; hideBeatCard();
+    var done = false;
+    if(b.kind==="person"){
+      var fs = b.slot;
+      done = elapsed > b.hold
+          || followedSlot!==fs                             // user closed/replaced the panel
+          || simDay<fs.notBeforeDay || (fs.notAfterDay!=null && simDay>fs.notAfterDay)
+          || (elapsed>8 && (/^asleep/.test(fs._now||"") || fs._pose==="sleep")); // their day concluded
+      if(!done){
+        // the follow lock in animate() carries the focus; the director holds
+        // the shoulder distance + a slow drift around them.
+        setZoomMeters(b.alt);
+        CAM.yawT += 0.030*dt;
+        return;
+      }
+    } else if(b.kind==="group"){
+      var gp = b.pos();
+      done = elapsed > b.hold || !gp;
+      if(!done){
+        CAM.focusT = new THREE.Vector3(gp.x, groundHeight(gp.x,gp.z)+1.2, gp.z);
+        setZoomMeters(b.alt);
+        CAM.yawT += 0.024*dt;
+        return;
+      }
+    } else if(b.kind==="site"){
+      done = elapsed > b.hold;
+      if(!done){
+        // hold with slow drift + a gentle settle toward the framing altitude
+        var st = smoothstep(0, Math.max(6, b.hold*0.6), elapsed);
+        CAM.focusT = new THREE.Vector3(b.x, groundHeight(b.x,b.z), b.z);
+        setZoomMeters(clamp(lerp(b.alt*1.15, b.alt, st), CFG.minAltitude, CFG.maxAltitude));
+        CAM.yawT += (b.drift||0.02)*dt;
+        return;
+      }
     } else {
-      // shot grammar: wide establishing -> push-in, slow drift throughout
-      var pushT = smoothstep(0, 5.5, elapsed);
-      CAM.focusT = new THREE.Vector3(b.x, groundHeight(b.x,b.z), b.z);
-      setZoomMeters(clamp(lerp(b.alt*2.7, b.alt, pushT), CFG.minAltitude, CFG.maxAltitude));
-      CAM.yawT += (b.cls==="fire" ? 0.055 : 0.035)*dt;
+      done = b.holdUntilDay ? (simDay>b.holdUntilDay) : (elapsed > ((CLS_META[b.cls]||{}).hold||10));
+      if(!done){
+        // event grammar: wide establishing -> push-in, slow drift throughout
+        var pushT = smoothstep(0, 5.5, elapsed);
+        CAM.focusT = new THREE.Vector3(b.x, groundHeight(b.x,b.z), b.z);
+        setZoomMeters(clamp(lerp(b.alt*2.7, b.alt, pushT), CFG.minAltitude, CFG.maxAltitude));
+        CAM.yawT += (b.cls==="fire" ? 0.055 : 0.035)*dt;
+        return;
+      }
+    }
+    DIRECTOR.cooldownUntil[b.cls] = now + ((CLS_META[b.cls]||{}).cooldown||25)*1000;
+    abortDirectorBeat(); // clears the card + releases any auto-follow
+    DIRECTOR.nextPickAt = now + 1600 + Math.random()*2800; // varied pacing between cuts
+  }
+  if(now >= DIRECTOR.nextPickAt){
+    // 1. the highest-priority pending EVENT beat off cooldown (icon-scored spine)
+    var best = null;
+    for(var i=0;i<DIRECTOR.pending.length;i++){
+      var cand = DIRECTOR.pending[i];
+      if((DIRECTOR.cooldownUntil[cand.cls]||0) > now) continue;
+      if(!best || cand.pri>best.pri || (cand.pri===best.pri && cand.simDay<best.simDay)) best = cand;
+    }
+    if(best){
+      DIRECTOR.pending.splice(DIRECTOR.pending.indexOf(best),1);
+      if(best.visit){ // ship beats resolve their anchor position at trigger time
+        var ap = best.visit._anchorPos;
+        best.x = ap ? ap.x : 450; best.z = ap ? ap.z : 0;
+      }
+      DIRECTOR.beat = best;
+      DIRECTOR.beatStart = now;
+      DIRECTOR.idleSince = 0;
+      showBeatCard(best);
+      logBeat(best);
       return;
     }
+    // 2. the interest pool: person-follows / just-ashore / site gallery
+    var ib = pickInterestBeat(now);
+    if(ib){ startInterestBeat(ib, now); return; }
+    DIRECTOR.nextPickAt = now + 700; // nothing scored — retry shortly
+    if(!DIRECTOR.idleSince) DIRECTOR.idleSince = now;
   }
-  // pick the highest-priority pending beat off cooldown
-  var best = null;
-  for(var i=0;i<DIRECTOR.pending.length;i++){
-    var cand = DIRECTOR.pending[i];
-    if((DIRECTOR.cooldownUntil[cand.cls]||0) > now) continue;
-    if(!best || cand.pri>best.pri || (cand.pri===best.pri && cand.simDay<best.simDay)) best = cand;
-  }
-  if(best){
-    DIRECTOR.pending.splice(DIRECTOR.pending.indexOf(best),1);
-    if(best.visit){ // ship beats resolve their anchor position at trigger time
-      var ap = best.visit._anchorPos;
-      best.x = ap ? ap.x : 450; best.z = ap ? ap.z : 0;
+  // s44 TIME CUT: nothing worth watching right now (or this hour is spent) —
+  // jump-cut the sim clock forward to the next interesting hour instead of
+  // orbiting an empty frame. Follow tiers only (timelapse compresses on its
+  // own); never past the next documented beat (land on it instead); never
+  // inside the fire window (its own beat holds the clock).
+  if(DIRECTOR.idleSince && now-DIRECTOR.idleSince>4500 && followSpeedActive() && !SCRUBBING
+     && !(simDay>=FIRE.day0 && simDay<=FIRE.day1)){
+    var target = nextInterestHourDay(simDay);
+    var nb = DIRECTOR_BEATS[DIRECTOR.cursor];
+    if(nb && nb.simDay < target) target = nb.simDay + 0.002;
+    target = Math.min(target, SIM_END_DAY);
+    if(target > simDay + 0.02){
+      DIRECTOR.idleSince = 0;
+      DIRECTOR.nextPickAt = now + 1000;
+      directorCut(function(){ simDay = target; updateHashDate(); });
+      return;
     }
-    DIRECTOR.beat = best;
-    DIRECTOR.beatStart = now;
-    showBeatCard(best);
-    return;
   }
   // idle: slow golden-hour orbit of the current center of activity
   var ic = idleActivityCenter();
@@ -12658,6 +13120,25 @@ function updateDirector(dt){
 /* debug/verification handle (used by the Phase-5 QA pass; harmless in prod) */
 window.__P1850 = {
   jump: function(iso){ jumpToDate(eventDateToSimDay(iso)); }, // P0-3: routes through jumpToDate's noon-default fix
+  // s44 QA — Director V2 hooks: the logged beat sequence, watch-mode toggle,
+  // and speed control (all route through the real user-facing functions).
+  get beatLog(){ return INTEREST.log.slice(); },
+  watch: function(on){ setWatchMode(!!on); },
+  setSpeed: function(k){ setSimSpeed(k); },
+  get director(){ // s44 QA introspection
+    var b = DIRECTOR.beat;
+    return {
+      beat: b ? { kind:b.kind||"event", cls:b.cls, headline:b.headline, hold:b.hold,
+                  pendingCut:!!b._pendingCut, slotId: b.slot?b.slot.id:null,
+                  elapsed: +( (performance.now()-DIRECTOR.beatStart)/1000 ).toFixed(1) } : null,
+      autoSlotId: DIRECTOR.autoSlot ? DIRECTOR.autoSlot.id : null,
+      followedSlotId: followedSlot ? followedSlot.id : null,
+      followedName: followedSlot && followedSlot.bio ? followedSlot.bio.name : null,
+      suspendedForMs: Math.max(0, Math.round(DIRECTOR.suspendUntil-performance.now())),
+      nextPickInMs: Math.max(0, Math.round(DIRECTOR.nextPickAt-performance.now())),
+      pending: DIRECTOR.pending.length
+    };
+  },
   get date(){ return simDateISO(dateFromSimDay(simDay)); },
   get simDay(){ return simDay; },
   get population(){ return Math.round(populationAt(simDay)); }, // documented population (POP_CURVE) — QA-GATE stat spot-check
@@ -13121,18 +13602,26 @@ function updateDayNight(){
   var sunColor = cSunNight.clone().lerp(cSunDay, dayT);
   sunColor.lerp(cSunDusk, duskGlow*0.6);
   sun.color.copy(sunColor);
-  sun.intensity = lerp(0.12, 1.15, dayT) + duskGlow*0.15;
+  /* s44 NIGHT READABILITY: raise the moonlit floor (blue-grey ambient via the
+     hemi sky color, already 0x9fb4d8) so ground/buildings read at night —
+     subtle, never daylight. FIRE GUARD: the Great Fire's pre-dawn darkness is
+     intentional (the glow must dominate), so the raised floor stands down
+     while fireGlow burns. */
+  var moonFloor = 1 - clamp01(fireGlow)*0.8;
+  sun.intensity = lerp(0.12+0.05*moonFloor, 1.15, dayT) + duskGlow*0.15;
 
-  hemi.intensity = lerp(0.12, 0.6, dayT);
-  ambient.intensity = lerp(0.05,0.14,dayT);
+  hemi.intensity = lerp(0.12+0.10*moonFloor, 0.6, dayT);
+  ambient.intensity = lerp(0.05+0.055*moonFloor, 0.14, dayT);
 
   var fogCol = cFogNight.clone().lerp(cFogDay, dayT);
   scene.fog.color.copy(fogCol);
   skyMat.needsUpdate = false;
 
   nightFactor = 1-dayT;
-  windowsMesh.material.opacity = clamp01(nightFactor*1.3-0.15);
-  if(window.buildingGlowAccentMesh) window.buildingGlowAccentMesh.material.opacity = clamp01(nightFactor*1.3-0.15);
+  // s44: window/lantern glow comes up slightly earlier and slightly stronger
+  // (wider-reading pools) — still period-dim, still off by day.
+  windowsMesh.material.opacity = clamp01(nightFactor*1.45-0.12);
+  if(window.buildingGlowAccentMesh) window.buildingGlowAccentMesh.material.opacity = clamp01(nightFactor*1.45-0.12);
 
   // dim the water toward indigo at night
   var wDim = lerp(0.18, 1, dayT);
@@ -13804,6 +14293,7 @@ function animate(){
   updateLabels(alt);      // s42: regions/waterways moved BEFORE the declutter pass (they used to run after render, invisible to it)
   applyLabelDeclutter(performance.now()); // must run after every per-type label/glyph/ship update above
   updateSelectionRing();  // s42 §11: selection highlight tracks the selected entity per frame
+  updateHoverRing(performance.now()); // s44: pointer-hover ring on people
   updateRain(dt, camera.position.x, camera.position.z, alt);
   updateFogBanks(dt);
   updatePaper();
