@@ -5416,7 +5416,13 @@ function buildZoneGeometry(z){
       var h = terrainHeight(wx,wz);
       var dist = Math.hypot(lx,lz);
       var radial = 1-smoothstep(z.r*0.62, z.r, dist);
-      var land = smoothstep(-0.4, 1.6, h); // 0 underwater, 1 on real land — clips at the true coastline
+      // land mask raised to the HIGH-TIDE line (s22 shoreline truth): the
+      // old -0.4..1.6 ramp straddled the new rippled intertidal mud band,
+      // so the mask fluctuated per vertex across the flats and the
+      // fwidth() rim shader drew dark diamond edges over the whole zone
+      // (the Feb-1849 Happy Valley tint read as terrain corruption).
+      // Districts are dry-land concepts: mask starts above the mud.
+      var land = smoothstep(0.5, 2.2, h);
       positions.push(wx, h+1.0, wz);
       masks.push(radial*land);
     }
