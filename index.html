@@ -546,7 +546,7 @@
     <b>WASD</b> / arrows &mdash; fly (hold <b>Shift</b> to sprint) &nbsp;&middot;&nbsp; <b>Q</b> / <b>E</b> &mdash; rotate &nbsp;&middot;&nbsp; <b>R</b> / <b>F</b> &mdash; altitude<br>
     scroll / pinch &mdash; zoom &nbsp;&middot;&nbsp; tap/click &mdash; inspect &nbsp;&middot;&nbsp; double-tap/dblclick &mdash; fly to &nbsp;&middot;&nbsp; <b>Esc</b> &mdash; release follow<br>
     <b>G</b> &mdash; then/now ghost &nbsp;&middot;&nbsp; <b>T</b> &mdash; sunrise/sunset &nbsp;&middot;&nbsp; <b>P</b> &mdash; documented-only<br>
-    <b>Space</b> &mdash; pause &nbsp;&middot;&nbsp; <b>1 2 3</b> &mdash; day / week / month per second &nbsp;&middot;&nbsp; <b>N</b> &mdash; the paper<br>
+    <b>Space</b> &mdash; pause / live (1:1) &nbsp;&middot;&nbsp; <b>1 2 3</b> &mdash; day / week / month per second &nbsp;&middot;&nbsp; <b>N</b> &mdash; the paper<br>
     <b>V</b> &mdash; watch mode (the auto-director takes the camera)
   </div>
 
@@ -3439,10 +3439,18 @@ var CHURCH_SPOT = null;
    means downstream systems compare simDay against dated records). URL hash
    gains &d=YYYY-MM-DD, restored on load and rewritten on pause per spec §8.
    ========================================================================= */
-var SIM_SPEEDS = { 0:0, 1:0.5, 2:7, 3:30 }; // days/sec: paused, 1day/2s, 1wk/s, 1mo/s
+/* SPEED REDESIGN (fix sprint 2026-07-11, user-specified): the DEFAULT
+   unpaused speed is now LIVE — sim time 1:1 with real time — so street
+   life is watchable at true walking pace. 1/2/3 remain the timelapse
+   tiers (day/week/month per second); at those rates individual
+   schedule-true motion is NOT rendered (see AMBIENT-FLOW in the people
+   system) because one sim-hour passes in ~83ms at tier 1 alone. */
+var SIM_SPEEDS = { 0:0, live:1/86400, 1:0.5, 2:7, 3:30 }; // days/sec: paused, LIVE 1:1, then 1day/2s, 1wk/s, 1mo/s
 var simDay = 0;
 var simSpeedKey = 0;
-var lastActiveSpeed = 1;
+var lastActiveSpeed = 1; // last TIMELAPSE tier (1/2/3) — watch mode's unpause default
+var SCRUBBING = false;   // timeline drag in progress (set by the scrubber) — renders as ambient flow, like timelapse
+function timelapseActive(){ return simSpeedKey===1 || simSpeedKey===2 || simSpeedKey===3; }
 (function initSimClockFromHash(){
   var m = location.hash.match(/d=(\d{4}-\d{2}-\d{2})/);
   // P0-3 fix (2026-07-10): +0.5 lands a bare calendar-date URL at noon, not
@@ -3458,18 +3466,18 @@ function updateHashDate(){
 }
 var clockDateEl = document.getElementById("clock-date");
 var clockSpeedEl = document.getElementById("clock-speed");
-var SPEED_LABELS = { 0:"PAUSED", 1:"1 DAY / 2s", 2:"1 WEEK / s", 3:"1 MONTH / s" };
+var SPEED_LABELS = { 0:"PAUSED", live:"LIVE — 1:1", 1:"1 DAY / 2s", 2:"1 WEEK / s", 3:"1 MONTH / s" };
 function setSimSpeed(key){
   var wasPaused = simSpeedKey===0;
   simSpeedKey = key;
   clockSpeedEl.textContent = SPEED_LABELS[key];
   if(key===0 && !wasPaused) updateHashDate(); // "update on pause"
 }
-setSimSpeed(0); // starts paused; Space / 1 / 2 / 3 to run
+setSimSpeed(0); // starts paused; Space toggles pause/LIVE, 1 / 2 / 3 for timelapse
 window.addEventListener("keydown", function(e){
   if(e.code==="Space"){
     e.preventDefault();
-    if(simSpeedKey===0) setSimSpeed(lastActiveSpeed); else setSimSpeed(0);
+    if(simSpeedKey===0) setSimSpeed("live"); else setSimSpeed(0);
   }
   if(e.key==="1"){ lastActiveSpeed=1; setSimSpeed(1); }
   if(e.key==="2"){ lastActiveSpeed=2; setSimSpeed(2); }
@@ -9256,44 +9264,46 @@ function sampleWithJitter(poly, t01, lateralJitter){
   var len = Math.hypot(p.dx,p.dz)||1;
   return { x:p.x+(-p.dz/len)*lateralJitter, z:p.z+(p.dx/len)*lateralJitter, dx:p.dx, dz:p.dz };
 }
-/* USER-BUG FIX (2026-07-09, "two NPC populations at different time bases"):
-   this used to derive a walking person's t01 straight from the sim-clock's
-   fractional hour-of-day (e.g. (h-6.5)/1 spans exactly one SIMULATED hour).
-   At the app's normal "1x" rate (SIM_SPEEDS[1] = 0.5 sim-days/sec — the
-   whole point being to watch months pass quickly) one simulated hour is
-   ~83ms of real time, so a routine person's entire commute animated in a
-   blink, every single sim-day (i.e. every 2 real seconds) — reading as
-   thousands of figures sprinting, while EXTRA/ambient walkers (which were
-   always paced by peopleClock, real wall-clock seconds, at a fixed
-   slot.speed) looked normal. Both populations are real — this was one
-   system's motion incorrectly coupled to the sim-clock rate, not a
-   duplicate/legacy spawner (there is exactly one PEOPLE_CAP InstancedMesh
-   set and one updatePeople()).
-   Fix: routine WALKING segments now advance via wall-clock dt at a fixed
-   human walking pace (PERSON_WALK_MPS), independent of sim speed — same
-   time base as the extras. The sim-clock's hour-of-day still decides WHICH
-   schedule state applies (asleep/home/work/walking-window) each frame, so
-   people are still in the right place at the right simulated hour; only
-   the VISUAL foot-travel across a segment is wall-clock-paced. At extreme
-   fast-forward the sim may advance past a walk's scheduled window before
-   the real-time walk finishes — the person simply resumes at the new
-   state next frame (fades between states) rather than blurring across
-   the screen, which is the explicitly-accepted tradeoff at high speeds. */
-var PERSON_WALK_MPS = 1.6;
-function walkT01(slot, segBase, day, poly, dt){
-  // segKey includes the calendar day so a new day's "commute_out" (etc.)
-  // starts fresh at 0 instead of inheriting yesterday's finished (t=1)
-  // progress under the same segment name.
-  var segKey = segBase+"_"+Math.floor(day);
-  if(slot._walkSeg !== segKey){ slot._walkSeg = segKey; slot._walkT = 0; }
-  else { slot._walkT = clamp(slot._walkT + (PERSON_WALK_MPS*dt)/Math.max(20,poly.total), 0, 1); }
-  return slot._walkT;
+/* ONE INTEGRATOR (fix sprint 2026-07-11, supersedes the 2026-07-09
+   "two-speed" wall-clock band-aid — that stateful walkT01 accumulator is
+   DELETED per grounding.md's competing-systems-die law). History of the
+   defect: routine-cast walk segments were originally keyed to the sim
+   clock (a whole commute in ~83ms at the old default 1day/2s), then
+   patched to advance a per-slot accumulator by wall-clock dt — but the
+   schedule STATE (home/commute/work anchors) still swept with the sim
+   hour, so at timelapse routine figures teleported between anchors many
+   times per second while wall-clock-paced ambient extras strolled
+   normally in the same frame: two unsynced movers, the user-reported
+   "speed of light next to casual walkers".
+   Now there is ONE movement policy with two clock modes:
+   - LIVE / PAUSED / any explicit date jump: positions are a PURE FUNCTION
+     of simDay (behavior-spec.md §3 counter-based schedules — resampling
+     is exact, rewind-safe, no per-slot motion state). Walk progress along
+     a route = sim-seconds since the walk window opened × PERSON_WALK_MPS;
+     at LIVE (1:1) that IS true walking pace on screen. Whoever finishes a
+     route before the window closes is simply "arrived" at the destination
+     state. Extras' wander distance is sim-seconds × their amble speed.
+   - TIMELAPSE (1/2/3) and scrub-drag: schedule-true motion is not
+     renderable (state flips faster than a frame), so everyone renders as
+     AMBIENT FLOW — representative street traffic along their real route
+     polylines at a capped legible pace (≤ ~1.7 m/s), count/density still
+     read off the sim date. Dropping back to LIVE or pausing resamples
+     exact schedule positions from simDay.
+   Gait/bob is keyed to APPARENT velocity (measured per-frame screen
+   displacement), never to a clock, so gait always matches motion in both
+   modes. */
+var PERSON_WALK_MPS = 1.6; // purposeful errand pace; extras amble at their own 0.8-1.5
+function walkProg(h, h0, poly){
+  // deterministic walk progress: fraction of the route covered at
+  // PERSON_WALK_MPS in the sim-seconds elapsed since the window opened at
+  // hour h0 — pure function of the sim clock, exact under rewind/jump.
+  return clamp(((h - h0)*3600*PERSON_WALK_MPS)/Math.max(20, poly.total), 0, 1);
 }
-function computeRoutinePosition(slot, day, dt){
+function computeRoutinePosition(slot, day){
   resolveDailySchedule(slot, day); // PL-B item 1: today's dice-picked midday/evening activity, cached per calendar day
   var h = (day-Math.floor(day))*24;
   var sunday = isSundayForDay(day);
-  var pose="idle", label="at home", x=slot.homePos.x, z=slot.homePos.z, dx=0, dz=1, pp;
+  var pose="idle", label="at home", x=slot.homePos.x, z=slot.homePos.z, dx=0, dz=1, pp, wt;
 
   // behavior-spec.md item 3: once the chapel exists, a pious minority
   // attends its Sunday service there instead of the Plaza's secular
@@ -9308,14 +9318,26 @@ function computeRoutinePosition(slot, day, dt){
   if(sunday){
     if(h<7 || h>=21){ label="asleep at home"; }
     else if(h<8){ label="waking, a Sunday"; }
-    else if(h<8.5){ pp=sampleWithJitter(sundayDestPoly,walkT01(slot,"sun_out",day,sundayDestPoly,dt),slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking to "+sundayDestLabel; }
+    else if(h<8.5){
+      wt = walkProg(h, 8, sundayDestPoly);
+      if(wt>=1){ x=sundayDestX; z=sundayDestZ; pose="market"; label=sundayAtLabel; }
+      else { pp=sampleWithJitter(sundayDestPoly,wt,slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking to "+sundayDestLabel; }
+    }
     else if(h<12.5){ x=sundayDestX; z=sundayDestZ; pose="market"; label=sundayAtLabel; }
-    else if(h<13){ pp=sampleWithJitter(sundayDestPoly,1-walkT01(slot,"sun_back",day,sundayDestPoly,dt),slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking home"; }
+    else if(h<13){
+      wt = walkProg(h, 12.5, sundayDestPoly);
+      if(wt>=1){ label="at home, the Sabbath"; }
+      else { pp=sampleWithJitter(sundayDestPoly,1-wt,slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking home"; }
+    }
     else { label="at home, the Sabbath"; }
   } else {
     if(h<5.5 || h>=21){ label="asleep at home"; }
     else if(h<6.5){ label="waking for the day"; }
-    else if(h<7.5){ pp=sampleWithJitter(slot.commutePoly,walkT01(slot,"commute_out",day,slot.commutePoly,dt),slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking to the "+slot.workLabel; }
+    else if(h<7.5){
+      wt = walkProg(h, 6.5, slot.commutePoly);
+      if(wt>=1){ x=slot.workPos.x; z=slot.workPos.z; pose=slot.workActivity; label="at work — the "+slot.workLabel; }
+      else { pp=sampleWithJitter(slot.commutePoly,wt,slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking to the "+slot.workLabel; }
+    }
     else if(h<12){ x=slot.workPos.x; z=slot.workPos.z; pose=slot.workActivity; label="at work — the "+slot.workLabel; }
     else if(slot._midday && h<13.4){
       // PL-B item 1/2 (dice engine + needs visible): today's midday choice
@@ -9326,17 +9348,33 @@ function computeRoutinePosition(slot, day, dt){
       // steamer days), fishing, and gossip all compete for the slot.
       var m = slot._midday, mPose = ACT_POSE[m.act.id] || "stationary";
       if(m.poly){
-        if(h<12.4){ pp=sampleWithJitter(m.poly,walkT01(slot,"errand_out",day,m.poly,dt),slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking to "+(m.site.label||m.act.label.toLowerCase()); }
+        if(h<12.4){
+          wt = walkProg(h, 12, m.poly);
+          if(wt>=1){ x=m.site.x; z=m.site.z; pose=mPose; label=m.act.label+(m.site.label?(" — "+m.site.label):""); }
+          else { pp=sampleWithJitter(m.poly,wt,slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking to "+(m.site.label||m.act.label.toLowerCase()); }
+        }
         else if(h<13.0){ x=m.site.x; z=m.site.z; pose=mPose; label=m.act.label+(m.site.label?(" — "+m.site.label):""); }
-        else { pp=sampleWithJitter(m.poly,1-walkT01(slot,"errand_back",day,m.poly,dt),slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking back to the "+slot.workLabel; }
+        else {
+          wt = walkProg(h, 13.0, m.poly);
+          if(wt>=1){ x=slot.workPos.x; z=slot.workPos.z; pose=slot.workActivity; label="at work — the "+slot.workLabel; }
+          else { pp=sampleWithJitter(m.poly,1-wt,slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking back to the "+slot.workLabel; }
+        }
       } else { x=m.site.x; z=m.site.z; pose=mPose; label=m.act.label+" at the campfire"; }
     }
     else if(h<18){ x=slot.workPos.x; z=slot.workPos.z; pose=slot.workActivity; label="at work — the "+slot.workLabel; }
-    else if(h<19){ pp=sampleWithJitter(slot.commutePoly,1-walkT01(slot,"commute_back",day,slot.commutePoly,dt),slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking home"; }
+    else if(h<19){
+      wt = walkProg(h, 18, slot.commutePoly);
+      if(wt>=1){ label="at home"; }
+      else { pp=sampleWithJitter(slot.commutePoly,1-wt,slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking home"; }
+    }
     else if(slot._doEvening && slot._evening){
       var e = slot._evening, ePose = ACT_POSE[e.act.id] || "evening";
       if(e.poly){
-        if(h<19.3){ pp=sampleWithJitter(e.poly,walkT01(slot,"evening_out",day,e.poly,dt),slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking to "+(e.site.label||e.act.label.toLowerCase()); }
+        if(h<19.3){
+          wt = walkProg(h, 19, e.poly);
+          if(wt>=1){ x=e.site.x; z=e.site.z; pose=ePose; label=e.act.label+(e.site.label?(" — "+e.site.label):"")+", of an evening"; }
+          else { pp=sampleWithJitter(e.poly,wt,slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking to "+(e.site.label||e.act.label.toLowerCase()); }
+        }
         else if(h<20.7){ x=e.site.x; z=e.site.z; pose=ePose; label=e.act.label+(e.site.label?(" — "+e.site.label):"")+", of an evening"; }
         else {
           // "occasional drunk stumbling home" (trait-weighted, re-rolled
@@ -9344,8 +9382,12 @@ function computeRoutinePosition(slot, day, dt){
           // perpendicular weave on top of the normal lateral jitter, only
           // when today's dice picked drink_at_saloon for a heavy-drinker.
           var weaveJit = e.isDrunkWalk ? slot.lateralJitter + Math.sin(peopleClock*3.1+slot.id*1.7)*1.6 : slot.lateralJitter;
-          pp=sampleWithJitter(e.poly,1-walkT01(slot,"evening_back",day,e.poly,dt),weaveJit); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk";
-          label = e.isDrunkWalk ? "stumbling home" : "walking home";
+          wt = walkProg(h, 20.7, e.poly);
+          if(wt>=1){ label="at home"; }
+          else {
+            pp=sampleWithJitter(e.poly,1-wt,weaveJit); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk";
+            label = e.isDrunkWalk ? "stumbling home" : "walking home";
+          }
         }
       } else { x=e.site.x; z=e.site.z; pose=ePose; label=e.act.label+" at the campfire"; }
     }
@@ -9393,8 +9435,16 @@ function computeExtraPosition(slot, day){
     slot._now = "talking at "+cl.anchor.label;
     return;
   }
-  var poly = slot.wanderPoly;
-  var dist = peopleClock*slot.speed + slot.phaseOffset;
+  // ONE INTEGRATOR: wander distance is sim-seconds × amble speed — a pure
+  // function of the sim clock (counter-based, resample-exact), which at
+  // LIVE 1:1 IS wall-clock pacing. (The old peopleClock keying — the
+  // second, unsynced time base — is gone.)
+  movePolyWalker(slot, slot.wanderPoly, day*86400*slot.speed + slot.phaseOffset);
+  slot._now = (h<5.5||h>=22.5) ? "asleep, somewhere in town" : "about the streets";
+}
+/* Shared ping-pong polyline walker — the single piece of route-following
+   math every mover (LIVE extras, ambient flow) runs through. */
+function movePolyWalker(slot, poly, dist){
   var period=poly.total*2, m=((dist%period)+period)%period;
   var d, forward;
   if(m<=poly.total){ d=m; forward=true; } else { d=period-m; forward=false; }
@@ -9404,7 +9454,22 @@ function computeExtraPosition(slot, day){
   slot._x = p.x + (-dz/len)*slot.lateralJitter;
   slot._z = p.z + (dx/len)*slot.lateralJitter;
   slot._dx=dx; slot._dz=dz; slot._pose="walk";
-  slot._now = (h<5.5||h>=22.5) ? "asleep, somewhere in town" : "about the streets";
+}
+/* AMBIENT FLOW — the timelapse mover (speeds 1/2/3 + scrub drag). At those
+   rates schedule-true motion is unrenderable (a sim-hour < one frame), so
+   every figure — routine cast and extras alike — reads as representative
+   street traffic: ping-ponging its own real route polyline (commute route
+   for the cast, wander route for extras) at a capped legible pace, keyed
+   to wall-clock peopleClock so nothing zips or teleports while the sim
+   date races. Count/density still come from the sim date via
+   peopleTargetCount(). Dropping to LIVE/pause resamples exact schedule
+   positions. */
+function computeFlowPosition(slot){
+  var poly = slot.kind==="extra" ? slot.wanderPoly : slot.commutePoly;
+  var spd = slot.kind==="extra" ? slot.speed : (1.1 + (slot.id%7)*0.09); // 0.8-1.5 / 1.1-1.64 m/s, all ≤ ~1.7
+  var phase = slot.phaseOffset!=null ? slot.phaseOffset : (slot.id*137.9)%(poly.total*2);
+  movePolyWalker(slot, poly, peopleClock*spd + phase);
+  slot._now = "about the streets";
 }
 function peopleTargetCount(day, alt){
   var fireCrowd = day>=FIRE.day0 && day<=FIRE.day1+3/24;
@@ -9413,6 +9478,10 @@ function peopleTargetCount(day, alt){
   var base = clamp(Math.round(pop/45), 6, PEOPLE_CAP);
   var h = (day-Math.floor(day))*24;
   var deepNight = (h<5.5 || h>=22.5) ? 0.06 : 1.0; // sim-schedule night: near-empty streets
+  // AMBIENT FLOW: at timelapse the sim hour sweeps whole days per second —
+  // instantaneous night-gating would strobe the crowd, so use the
+  // day-averaged factor ((17h×1.0 + 7h×0.06)/24) instead.
+  if(timelapseActive() || SCRUBBING) deepNight = 0.73;
   return Math.max(2, Math.round(base*deepNight));
 }
 function updatePeople(dt, camX, camZ, alt){
@@ -9435,12 +9504,24 @@ function updatePeople(dt, camX, camZ, alt){
   personMudUniform.value = weatherState.wet; // PL-B item 4: same wet-season signal the ground/streets already tint on
   var eligible = [];
   resetFleeBudget(); // PHASE 5: cap new flee-route computations per frame
+  var flow = timelapseActive() || SCRUBBING; // ONE INTEGRATOR clock policy: exact schedules at LIVE/pause, ambient flow at timelapse
   for(var i=0;i<ALL_PEOPLE_SLOTS.length;i++){
     var s = ALL_PEOPLE_SLOTS[i];
     if(day<s.notBeforeDay) continue;
     if(s.notAfterDay!=null && day>s.notAfterDay) continue; // roster presence window closes (last documented mention)
-    if(s.kind==="routine") computeRoutinePosition(s, day, dt); else computeExtraPosition(s, day);
+    if(flow) computeFlowPosition(s);
+    else if(s.kind==="routine") computeRoutinePosition(s, day);
+    else computeExtraPosition(s, day);
     applyFireCrowd(s, day); // PHASE 5: flee the fire zone via the street graph, then spectate
+    // APPARENT VELOCITY — measured screen displacement per real second;
+    // the single signal gait/bob keys to, so animation always matches
+    // motion. A large jump (mode switch, date jump, resample) reads as
+    // >8 m/s and freezes gait for that frame instead of blurring.
+    var pvx = s._px!=null ? s._x-s._px : 0, pvz = s._pz!=null ? s._z-s._pz : 0;
+    var appRaw = Math.hypot(pvx,pvz)/Math.max(dt,1e-3);
+    s._appSpd = appRaw>8 ? 0 : appRaw;
+    s._px = s._x; s._pz = s._z;
+    s._gaitPhase = (s._gaitPhase||0) + s._appSpd*dt*3.25; // ~1 stride cycle per 1.9m walked
     s._distSq = (s._x-camX)*(s._x-camX)+(s._z-camZ)*(s._z-camZ);
     eligible.push(s);
   }
@@ -9477,14 +9558,19 @@ function updatePeople(dt, camX, camZ, alt){
     if(idx>=PEOPLE_CAP) return;
     counts[vi]++;
     var pb = POSE_BOB[s._pose] || POSE_BOB.walk;
-    var bob = Math.sin(peopleClock*pb.freq + s.id*0.7)*pb.amp + pb.yOff;
-    // TECHNIQUES §6.2 walk-cycle flavor: per-instance phase (s.id) + ±3°
-    // roll sway + a forward lean proportional to speed — matrix compose
-    // only, no shader work. Non-walkers keep a faint idle sway.
+    // TECHNIQUES §6.2 walk-cycle flavor, rekeyed (fix sprint 2026-07-11):
+    // gait keys to APPARENT velocity via the distance-accumulated
+    // _gaitPhase — a stationary "walker" (arrived early, paused sim)
+    // doesn't bob, and stride rate always matches ground actually covered.
+    // Non-walkers keep the faint time-based idle sway.
     var walking = s._pose==="walk";
-    var spd = walking ? (s.kind==="extra" ? 1.2*(s.speed||1) : PERSON_WALK_MPS) : 0;
-    var lean = walking ? clamp(0.03+spd*0.022, 0, 0.09) : 0;
-    var roll = walking ? Math.sin(peopleClock*pb.freq*0.55 + s.id*1.31)*0.052
+    var spd = s._appSpd||0;
+    var gaitK = clamp(spd/1.2, 0, 1);
+    var bob = walking
+      ? Math.sin((s._gaitPhase||0) + s.id*0.7)*pb.amp*gaitK + pb.yOff
+      : Math.sin(peopleClock*pb.freq + s.id*0.7)*pb.amp + pb.yOff;
+    var lean = walking ? clamp(spd*0.04, 0, 0.09) : 0;
+    var roll = walking ? Math.sin((s._gaitPhase||0)*0.55 + s.id*1.31)*0.052*gaitK
                        : Math.sin(peopleClock*0.7 + s.id)*0.012;
     setPersonInstance(personMeshes[vi], idx, s._x, h+bob, s._z, yaw, lean, roll, s._scale||1);
     slotArrays[vi][idx] = s;
@@ -10563,6 +10649,7 @@ var SCRUB_NOTCHES = (function(){
 
   trackEl.addEventListener("pointerdown", function(e){
     dragging = true;
+    SCRUBBING = true; // people render as ambient flow while the handle sweeps time
     try{ trackEl.setPointerCapture(e.pointerId); }catch(err){}
     simDay = clamp(dayFromClientX(e.clientX), 0, SIM_END_DAY);
     updateHandle();
@@ -10577,6 +10664,7 @@ var SCRUB_NOTCHES = (function(){
   function endDrag(e){
     if(!dragging) return;
     dragging = false;
+    SCRUBBING = false; // release: positions resample exactly from the counter-based schedules
     try{ trackEl.releasePointerCapture(e.pointerId); }catch(err){}
     updateHashDate(); // release commits the jump
     hideChip();
@@ -10789,6 +10877,15 @@ window.__P1850 = {
     return { fleeing:fleeing, watching:watching };
   },
   watch: setWatchMode, speed: setSimSpeed, flyTo: flyTo,
+  get speedKey(){ return simSpeedKey; },
+  get walkers(){ // fix-sprint QA: every rendered figure's position + measured apparent speed (m/s)
+    var out=[];
+    personMeshSlots.forEach(function(arr){ arr.forEach(function(s){
+      if(!s) return;
+      out.push({ id:s.id, kind:s.kind, x:+s._x.toFixed(2), z:+s._z.toFixed(2), pose:s._pose, appSpd:+(s._appSpd||0).toFixed(3) });
+    }); });
+    return out;
+  },
   get beat(){ return DIRECTOR.beat ? DIRECTOR.beat.cls+": "+DIRECTOR.beat.headline : null; },
   get tents(){ return { candidates:tentCandidates.length, spawned:spawnedTents.length, meshCount:tentMesh.count }; },
   get ships(){
