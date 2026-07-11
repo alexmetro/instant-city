@@ -1610,15 +1610,26 @@ function wornStroke(t, pts, widthM, color, alpha, seed, meanderM){
     dAcc+=len;
   }
   if(nodes.length<2) return null;
-  // 2. piecewise draw: noisy feathered-edge pass + jittered core pass
+  // 2. piecewise draw: noisy feathered-edge pass + jittered core pass.
+  // Along-length variance rides in COLOR darkness at near-constant alpha,
+  // not in alpha itself — round-cap joints between pieces at partial alpha
+  // compound into dark lens "beads" every ~7m (s20 1500m sweep finding);
+  // same-color near-opaque overlaps saturate invisibly.
+  var baseCol = _parseSplatCol(color);
   for(var j=0;j<nodes.length-1;j++){
     var piece=[nodes[j],nodes[j+1]];
     var wJ=widthM*(0.9+0.2*_strokeN(seed,j*2+1));
-    var aJ=Math.min(1, alpha*(0.78+0.4*_strokeN(seed,j*2)));
-    splatStroke(t.ctx,t.pxFn,t.pxLenFn,piece,wJ*(1.3+0.25*_strokeN(seed,j*3+2)),color,aJ*0.20);
-    splatStroke(t.ctx,t.pxFn,t.pxLenFn,piece,wJ*0.9,color,aJ*0.85);
+    var dk = 1 + (_strokeN(seed,j*2)-0.5)*0.30; // ±15% lightness wobble
+    var colJ = "rgb("+Math.min(255,Math.round(baseCol.r*dk))+","+Math.min(255,Math.round(baseCol.g*dk))+","+Math.min(255,Math.round(baseCol.b*dk))+")";
+    splatStroke(t.ctx,t.pxFn,t.pxLenFn,piece,wJ*(1.3+0.25*_strokeN(seed,j*3+2)),colJ,alpha*0.20);
+    splatStroke(t.ctx,t.pxFn,t.pxLenFn,piece,wJ*0.9,colJ,Math.min(1,alpha*0.95));
   }
   return nodes; // the meandered centerline — rut twins must track it
+}
+function _parseSplatCol(c){
+  if(c.charAt(0)==="#") return { r:parseInt(c.substr(1,2),16), g:parseInt(c.substr(3,2),16), b:parseInt(c.substr(5,2),16) };
+  var m = c.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+  return m ? {r:+m[1], g:+m[2], b:+m[3]} : {r:110, g:90, b:60};
 }
 function wornRuts(t, nodes, widthM, alpha, seed){
   // Broken hand-worn wheel grooves. Gaps are correlated along the length
