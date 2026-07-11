@@ -1056,15 +1056,16 @@ var GEO = {
   // above (they're plain block-grid math), and already match the record.
   plaza: { uMin:-2*BLOCK_W, uMax:-BLOCK_W, vMin:-0.5*BLOCK_D, vMax:0.5*BLOCK_D },
 
-  // shoreline: 1846 cove, inland edge ~Montgomery St, bulging in near
-  // Clay/Washington, flanked by Clark's Point (north) & Rincon Point (south).
-  // Used ONLY for the then/now ghost overlay and cove-related placement now —
-  // the real shoreline in the detail zone comes from the baked heightmap
-  // (tools/bake-terrain.js applies this exact same geometry as a correction).
+  // shoreline: 1846 cove — inland edge at Montgomery St's EAST side between
+  // Clay & Washington (the flag-raising beach), Clark's Point (Broadway &
+  // Battery) north, the south beach arcing east past Happy Valley to Rincon
+  // Point. SHORELINE TRUTH (2026-07-11): the old parabola (mouthX 30 /
+  // depth 380) is DELETED — shorelineX(z) now reads the SAME documented
+  // anchor polyline the bake carved the terrain with (TERRAIN_1846
+  // .shoreAnchors, emitted by tools/bake-terrain.js), so the analytic
+  // curve and the baked heightmap can never disagree again.
   zNorthHeadland: -900,
-  zSouthHeadland: 950,
-  coveMouthX: 30,
-  coveDepth: 380,
+  zSouthHeadland: 1020,   // Rincon Point (was 950 under the old parabola)
 
   // fixed offset for the then/now 2026 ghost shoreline (fill was greatest
   // mid-cove, least near the natural headlands)
@@ -1072,10 +1073,21 @@ var GEO = {
   ghostFillHeadland: 120
 };
 
+/* One shoreline curve, one owner: [z, shoreX] anchors baked into
+   terrain-1846.js by tools/bake-terrain.js (documented high-tide line,
+   research/geography-shoreline.md §1/§3), linear interp + the same 3-tap
+   smoothing the bake's carve used. */
+function shoreAnchorsX(z){
+  var A = TERRAIN.shoreAnchors;
+  if(z<=A[0][0]) return A[0][1];
+  if(z>=A[A.length-1][0]) return A[A.length-1][1];
+  for(var i=0;i<A.length-1;i++){
+    if(z>=A[i][0] && z<=A[i+1][0]) return lerp(A[i][1], A[i+1][1], (z-A[i][0])/(A[i+1][0]-A[i][0]));
+  }
+  return A[A.length-1][1];
+}
 function shorelineX(z){
-  var half = z<0 ? Math.abs(GEO.zNorthHeadland) : GEO.zSouthHeadland;
-  var t = clamp(z/half, -1.7, 1.7);
-  return GEO.coveMouthX + GEO.coveDepth*t*t;
+  return (shoreAnchorsX(z-40)+shoreAnchorsX(z)+shoreAnchorsX(z+40))/3;
 }
 function modernShorelineX(z){
   var half = z<0 ? Math.abs(GEO.zNorthHeadland) : GEO.zSouthHeadland;
@@ -1174,6 +1186,7 @@ function terrainColor(x,z,h){
 
   // palette anchors
   var wetMud   = new THREE.Color(0x5c4e3a);
+  var mudFlat  = new THREE.Color(0x4d4334);  // intertidal wet-sheen mud — darker than any dry sand, browner than seabed
   var sand     = new THREE.Color(0xd8c48c);
   var duneGold = new THREE.Color(0xc9ad6c);
   var scrub    = new THREE.Color(0x64773e);
@@ -1189,6 +1202,11 @@ function terrainColor(x,z,h){
     var depthT = clamp01(-h/45);
     col = seabedShallow.clone().lerp(seabedDeep, depthT);
     col.lerp(wetMud, clamp01(1-depthT)*0.35);
+    // INTERTIDAL FLATS (shoreline truth, 2026-07-11): the top ~1m of the
+    // shelf is the cove's exposed-at-low-tide mud — read as dark wet mud
+    // through the shallow water and wherever the tide uncovers it, clearly
+    // distinct from dry sand above and open water beyond.
+    col.lerp(mudFlat, clamp01((h+1.0)/1.0)*0.8);
   } else {
     col = sand.clone();
     // low sandy dunes -> mid scrub -> dry rocky tops (dark flanks vs pale flats)
@@ -1216,6 +1234,11 @@ function terrainColor(x,z,h){
     // wet mud / beach right at the waterline
     var beachT = 1-smoothstep(0,7,h);
     col.lerp(wetMud, beachT*0.55);
+    // INTERTIDAL FLATS (shoreline truth, 2026-07-11): the above-datum part
+    // of the mud band (h up to ~+0.45 out of the bake's tidal profile) is
+    // WET mud, not beach sand — dark, water-sheened, unmistakably distinct
+    // from the dry ground above the high-tide line.
+    col.lerp(mudFlat, (1-smoothstep(0.1,0.55,h))*0.85);
   }
   // crisp darker waterline edge band for coast legibility at altitude
   var edgeT = 1-smoothstep(0,3.5,Math.abs(h));
@@ -1746,6 +1769,35 @@ function paintSmoothRoute(targets, pts, widthM, color, alpha, mottle){
     }
   });
 }
+/* Densify a waypoint chain through the same quadratic-through-midpoints
+   curve paintSmoothRoute() draws, returning plain {x,z} samples every
+   ~step meters — so a smoothed route can be handed to paintRoad()'s
+   HAND-WORN stroke engine instead of a crisp vector pass. (Mission road
+   retone, screening #11 finding: the old paintSmoothRoute treatment —
+   pale underlay + bright 9m tan + twin rut lines — read as a modern
+   highway triple-stripe. A single irregular darker-than-ground dirt
+   track is the period truth; plank roads are 1850+, outside window.) */
+function smoothRoutePts(pts, step){
+  if(!pts || pts.length<2) return pts||[];
+  var out = [pts[0]];
+  function quad(p0,c,p1){
+    var len = Math.hypot(p1.x-p0.x,p1.z-p0.z)+Math.hypot(c.x-p0.x,c.z-p0.z);
+    var n = Math.max(2, Math.round(len/step));
+    for(var k=1;k<=n;k++){
+      var t=k/n, it=1-t;
+      out.push({ x: it*it*p0.x + 2*it*t*c.x + t*t*p1.x, z: it*it*p0.z + 2*it*t*c.z + t*t*p1.z });
+    }
+  }
+  var prev = pts[0];
+  for(var i=1;i<pts.length-1;i++){
+    var cur=pts[i], next=pts[i+1];
+    var mid={ x:(cur.x+next.x)/2, z:(cur.z+next.z)/2 };
+    quad(prev, cur, mid);
+    prev = mid;
+  }
+  quad(prev, pts[pts.length-1], pts[pts.length-1]);
+  return out;
+}
 // detail:true = the crisp town tier — gets the hand-worn stroke treatment
 // (see HAND-WORN STROKE ENGINE above); the coarse world tier stays plain.
 var SPLAT_TARGETS_BOTH = [
@@ -1871,11 +1923,19 @@ function renderGroundSplat(skewAngle){
     paintRoad(SPLAT_TARGETS_TOWN_ONLY, [plazaCorners[1], plazaCorners[3]], 3.2, "#6e5b3c", 0.35);
   })();
 
-  // Mission Road + El Camino Real — smooth curve through the real
-  // findLowRoute() waypoints (unchanged data, see buildMissionRoad()
-  // below) via quadraticCurveTo, rather than raw straight box segments.
-  paintSmoothRoute(SPLAT_TARGETS_BOTH, SPLAT_MISSION_PTS, 9, "#d2b877", 1, true);
-  paintSmoothRoute(SPLAT_TARGETS_BOTH, SPLAT_ELCAMINO_PTS, 6, "#dccb98", 0.6, false);
+  // Mission Road + El Camino Real — RETONED (screening #11 / sprint s22):
+  // the old paintSmoothRoute pass (pale edge underlay + bright #d2b877 at
+  // 9m + twin rut stripes + hoofprint mottle) read as a crisp modern
+  // highway triple-stripe at altitude. Period truth is a single irregular
+  // rutted dirt track through scrub (plank road is Nov-1850+, outside the
+  // sim window): same smoothed low-route waypoints, densified via
+  // smoothRoutePts() and handed to paintRoad()'s hand-worn stroke engine —
+  // one darker-than-ground tone (tan-brown: darker than the sand it
+  // crosses, naturally tan against the green scrub), ragged jittered
+  // edges, visible meander, broken subtle ruts only on the cart-worn
+  // Mission road, nothing on the fainter El Camino trace.
+  paintRoad(SPLAT_TARGETS_BOTH, smoothRoutePts(SPLAT_MISSION_PTS, 14), 5.5, "#8a744f", 0.6, true, {wear:0.55, meanderM:0.8, seed:0.37});
+  paintRoad(SPLAT_TARGETS_BOTH, smoothRoutePts(SPLAT_ELCAMINO_PTS, 14), 3.8, "#93805a", 0.4, true, {wear:0.3, meanderM:0.9, seed:0.61});
 
   // Worn door-paths — thin, town canvas only (invisible at world scale).
   SPLAT_DOOR_PATHS.forEach(function(p){
@@ -2099,7 +2159,12 @@ function renderGroundSplat(skewAngle){
       for(var sub=0; sub<nSub; sub++){
         var t0=sub/nSub, t1=(sub+1)/nSub;
         var segPts = [ {x:A.x+(B.x-A.x)*t0, z:A.z+(B.z-A.z)*t0}, {x:A.x+(B.x-A.x)*t1, z:A.z+(B.z-A.z)*t1} ];
-        var segWet = terrainHeight(segPts[0].x,segPts[0].z)<=0 && terrainHeight(segPts[1].x,segPts[1].z)<=0;
+        // WET = below the HIGH-TIDE line (0.5m — the baked intertidal mud
+        // band tops out at +0.45), not just below datum: a platted line
+        // across the tide flats is a water lot, never a walkable street
+        // (shoreline truth, 2026-07-11; the flats east of Montgomery used
+        // to read as +2m "land" and took full street paint).
+        var segWet = terrainHeight(segPts[0].x,segPts[0].z)<=0.5 && terrainHeight(segPts[1].x,segPts[1].z)<=0.5;
         if(segWet){ paintPierHint(SPLAT_TARGETS_BOTH, segPts, s.widthM); _rec.pierSegs++; continue; }
         var mid = { x:(segPts[0].x+segPts[1].x)/2, z:(segPts[0].z+segPts[1].z)/2 };
         var densityFactor = clamp01(nearbyBuiltDensity(mid.x,mid.z)/WEAR_FULL_DENSITY);
@@ -2457,6 +2522,11 @@ var bayGeo = new THREE.PlaneGeometry(70000, 70000, CFG.waterSeg, CFG.waterSeg);
 bayGeo.rotateX(-Math.PI/2);
 var bayWater = new THREE.Mesh(bayGeo, waterMat);
 scene.add(bayWater);
+/* TIDE (shoreline truth, 2026-07-11): cheap semidiurnal cycle — the water
+   plane's y sweeps the waterline across the baked intertidal mud band.
+   amp/period are fill:true (plausible SF half-tide-range scale, NOT a
+   harmonic model); the mud band itself is the documented fact. */
+var TIDE = { amp:0.35, periodDays:0.5175, fill:true };
 
 /* =====================================================================
    SHORELINE FOAM (A5) — a thin, gently animated pale ribbon that hugs the
@@ -2841,8 +2911,10 @@ function recomputeStreetLabelPlacements(now, alt){
         // WATER-LOT LABEL rule (kept from previous engine, screening #5
         // item a): a platted water-lot street whose ground is still open
         // water paints only a dashed pier-hint — its NAME must not float
-        // over open water either.
-        if(wy2-0.3 <= 0) continue;
+        // over open water either. Threshold 0.5 = the high-tide line
+        // (shoreline truth 2026-07-11): the intertidal mud band is a
+        // water lot too, same rule as the splat painter's segWet.
+        if(wy2-0.3 <= 0.5) continue;
         var angle = Math.atan2(sb.sy-sa.sy, sb.sx-sa.sx)*180/Math.PI;
         if(angle>90) angle-=180; else if(angle<-90) angle+=180; // never upside-down
         var sx2=lerp(sa.sx,sb.sx,ft), sy2=lerp(sa.sy,sb.sy,ft);
@@ -11366,6 +11438,22 @@ window.__P1850 = {
       dOut:distOutsideBox(x,z,VILLAGE_BOX), villageBox:VILLAGE_BOX };
   },
   get storeships(){ return STORESHIP_INFO; },
+  shipAudit: function(){ // s22 QA (shoreline truth): every active hull's ground truth — NO hull may sit on dry land (h > the +0.5 high-tide line) at ANY date
+    updateShips(0.016); // stalled-rAF CDP tabs never run the frame loop — place hulls synchronously, same code path as rendering
+    var res = { date:simDateISO(dateFromSimDay(simDay)), anchored:0, unplaced:0, dry:[], mud:0, water:0 };
+    var allVisits = provenanceOnly ? shipVisits : shipVisits.concat(fillShipVisits);
+    allVisits.forEach(function(v){
+      if(shipDesiredState(v, simDay)!=="anchored") return; // sailing hulls ride bezier paths over open bay
+      res.anchored++;
+      var p = v.storeship ? v.storeship.pos : v._anchorPos;
+      if(!p){ res.unplaced++; return; }
+      var h = terrainHeight(p.x, p.z);
+      if(h > 0.5) res.dry.push({ ship:v.ship, x:Math.round(p.x), z:Math.round(p.z), h:+h.toFixed(2) });
+      else if(h > -0.5) res.mud++;
+      else res.water++;
+    });
+    return res;
+  },
   get geoDebug(){
     return { streetsV:GEO.streetsV, streetsU:GEO.streetsU,
       pacificW:gridToWorld(0,GEO.streetsV.pacific), californiaW:gridToWorld(0,GEO.streetsV.california),
@@ -11899,6 +11987,14 @@ function animate(){
 
   waterUniforms.uTime.value += dt;
   if(foamMesh) foamMesh.material.opacity = 0.42+0.14*Math.sin(waterUniforms.uTime.value*0.5);
+  // TIDE (shoreline truth, 2026-07-11; amplitude fill:true — SF bay
+  // semidiurnal, half-range approximated): the water plane rides a cheap
+  // sin of simDay, sweeping the waterline back and forth across the baked
+  // intertidal mud band (the bake's tidal profile spans +0.45..-0.5 over
+  // the first ~70m offshore), so the flats read as flats: mud at low
+  // water, the beached storeships afloat at high water.
+  bayWater.position.y = TIDE.amp * Math.sin(simDay/TIDE.periodDays * Math.PI*2);
+  if(foamMesh) foamMesh.position.y = bayWater.position.y*0.5; // foam tracks the moving edge halfway (cheap)
 
   // PHASE 4 — Follow mode: lock the rig's target onto the followed person
   // each frame (positions were refreshed by last frame's updatePeople());
