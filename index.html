@@ -1174,8 +1174,18 @@ function terrainHeight(x,z){
      natural-shoreline curve IS the shoreline-by-date truth for every
      date this app can actually reach; the 1851+ fill progression
      research describes is out of the sim's own window.) */
-  if(x > shorelineX(z)) return h;
-  return lerp(VILLAGE_Y, h, villageBlend);
+  var dShore = x - shorelineX(z);
+  if(dShore > 0) return h;
+  /* PAD BANK FEATHER (s22 shoreline truth, 2026-07-11): the #27 gate
+     above used to be a hard step — pad height (VILLAGE_Y ~21m) one
+     sample west of the shoreline, tide-flat mud one sample east — which
+     the terrain mesh rendered as a one-cell cliff wall the moment it
+     started reading terrainHeight() honestly. The last ~80m of the pad
+     now eases down to the real (bake-banked) beach height, so the town
+     meets the cove on a beach bank, not a fault scarp. */
+  var padH = lerp(VILLAGE_Y, h, villageBlend);
+  var wBank = smoothstep(-80, -6, dShore);
+  return lerp(padH, h, wBank);
 }
 /* alias: pre-rewrite code called the unified sampler groundHeight() */
 function groundHeight(x,z){ return terrainHeight(x,z); }
