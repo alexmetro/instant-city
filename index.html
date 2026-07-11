@@ -117,36 +117,79 @@
     top:16px; left:16px; font-size:0.62rem; letter-spacing:1.5px; opacity:0.8;
     padding:0.35em 0.7em;
   }
-  .geo-label{
+  /* §11 LABEL GRAMMAR (label & inspect overhaul, s42): world labels are
+     floating HALOED TEXT — no chips, no plates, no boxes (Google Maps is
+     the explicit gold standard). One base class + a category grammar so a
+     reader never confuses label types at a glance:
+       .wlbl-water  — blue-toned italic serif (Yerba Buena Cove, the bay)
+       .wlbl-region — large, very faint caps that own the high altitudes
+       .wlbl-zone   — letter-spaced caps, softer sepia (HAPPY VALLEY)
+       .wlbl-loc    — ink text + small period glyph, parchment halo, close zoom
+       .wlbl-ship   — light compact NAME · date
+       .wlbl-moment — documented-moment beats (Brannan's gold shout)
+     Streets keep .street-label below (already plate-free haloed text).
+     Halos are 4-way text-shadow strokes + a soft glow, picked per category
+     (dark halo under light text, parchment halo under ink text) so every
+     category survives ANY background, day or night (QA-GATE #4). */
+  .wlbl{
     position:absolute; transform:translate(-50%,-50%);
-    /* s41 MOBILE-PAN FIX: label chips sit over the map, so a drag that
-       happens to START on one must still pan (the nav handlers now live on
-       window and treat chips as map surface — see the input section).
-       touch-action:none keeps iOS from pointercancel'ing such drags;
-       callout/select off so a slow drag-start can't pop the loupe. */
+    /* s41 MOBILE-PAN FIX carried forward: labels are map surface — a drag
+       that STARTS on one must still pan (window-level nav handlers);
+       touch-action:none keeps iOS from pointercancel'ing such drags. */
     touch-action:none; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none;
-    background:rgba(241,230,201,0.80);
-    border:1px solid rgba(43,29,14,0.40);
-    color:var(--ink);
-    font-family:'Fraunces', Georgia, serif;
-    font-size:0.58rem; letter-spacing:1.8px;
-    padding:1px 8px; white-space:nowrap;
-    opacity:0; transition:opacity .35s ease;
-    box-shadow:0 1px 5px rgba(0,0,0,0.25);
+    font-family:'Fraunces', Georgia, serif; white-space:nowrap;
+    opacity:0; transition:opacity .35s ease; pointer-events:none;
+    will-change:opacity;
   }
-  .ship-label{ pointer-events:auto; cursor:pointer; }
-  .ship-label:hover{ background:rgba(241,230,201,0.98); }
-  .building-label{ pointer-events:auto; cursor:pointer; }
-  .building-label:hover{ background:rgba(241,230,201,0.98); }
-  /* PL-A leftover, completed: mid-zoom (250-900m) business glyph tier — a
-     small engraved-style parchment roundel per business building, findable
-     before true-scale signage reads at closer range (QA-GATE §3). */
+  .wlbl-water{
+    color:#9fc6dd; font-style:italic; font-size:0.76rem; letter-spacing:1px;
+    text-shadow:-1px -1px 0 rgba(14,17,20,0.8), 1px -1px 0 rgba(14,17,20,0.8),
+      -1px 1px 0 rgba(14,17,20,0.8), 1px 1px 0 rgba(14,17,20,0.8), 0 0 7px rgba(10,14,18,0.75);
+  }
+  .wlbl-region{
+    color:rgba(240,229,203,0.55); font-size:1.05rem; letter-spacing:8px; font-weight:400;
+    text-shadow:0 1px 3px rgba(16,13,8,0.75), 0 -1px 3px rgba(16,13,8,0.75), 0 0 9px rgba(16,13,8,0.6);
+  }
+  .wlbl-zone{
+    color:#d9c191; font-size:0.64rem; letter-spacing:4.5px; font-weight:600;
+    text-shadow:-1px -1px 0 rgba(24,18,10,0.85), 1px -1px 0 rgba(24,18,10,0.85),
+      -1px 1px 0 rgba(24,18,10,0.85), 1px 1px 0 rgba(24,18,10,0.85), 0 0 6px rgba(24,18,10,0.65);
+  }
+  .wlbl-route{ /* far-view track names (Mission road, El Camino Real): street voice, not region caps */
+    color:#efe2c4; font-size:0.62rem; font-weight:600; letter-spacing:2.5px;
+    text-shadow:0 1px 2px rgba(0,0,0,0.85), 0 0 6px rgba(0,0,0,0.55);
+  }
+  .wlbl-loc, .wlbl-ship, .wlbl-moment{ pointer-events:auto; cursor:pointer; }
+  .wlbl-loc:hover, .wlbl-ship:hover, .wlbl-moment:hover{ text-decoration:underline dotted; }
+  .wlbl-loc{
+    color:#2b1d0e; font-size:0.6rem; letter-spacing:1.6px; font-weight:600;
+    text-shadow:-1px -1px 0 rgba(241,230,201,0.92), 1px -1px 0 rgba(241,230,201,0.92),
+      -1px 1px 0 rgba(241,230,201,0.92), 1px 1px 0 rgba(241,230,201,0.92), 0 0 5px rgba(241,230,201,0.85);
+  }
+  .wlbl-loc .wg{
+    display:inline-block; width:12px; height:12px; vertical-align:-2px; margin-right:4px;
+    filter:drop-shadow(0 0 1px rgba(241,230,201,0.95)) drop-shadow(0 0 1.5px rgba(241,230,201,0.85));
+  }
+  .wlbl-loc .wg svg{ width:100%; height:100%; display:block; }
+  .wlbl-ship{
+    color:#eee1bd; font-size:0.56rem; font-weight:600; letter-spacing:1.4px;
+    text-shadow:-1px -1px 0 rgba(14,16,19,0.9), 1px -1px 0 rgba(14,16,19,0.9),
+      -1px 1px 0 rgba(14,16,19,0.9), 1px 1px 0 rgba(14,16,19,0.9),
+      0 1px 2px rgba(0,0,0,0.8), 0 0 6px rgba(10,13,17,0.7);
+  }
+  .wlbl-moment{
+    color:#f2e2b1; font-size:0.62rem; letter-spacing:1.2px; font-weight:600;
+    text-shadow:-1px -1px 0 rgba(22,16,9,0.9), 1px -1px 0 rgba(22,16,9,0.9),
+      -1px 1px 0 rgba(22,16,9,0.9), 1px 1px 0 rgba(22,16,9,0.9), 0 0 7px rgba(22,16,9,0.7);
+  }
+  /* mid-zoom (250-900m) business glyph tier — REBUILT s42 per §11: the
+     parchment roundel PLATE is gone; the engraved ink glyph now floats
+     directly on the ground with a parchment drop-shadow halo, same
+     ink+parchment-halo voice as .wlbl-loc (QA-GATE #3 findability kept). */
   .biz-glyph{
     position:absolute; transform:translate(-50%,-50%);
-    width:22px; height:22px; border-radius:50%;
-    background:radial-gradient(circle at 35% 30%, #f1e6c9, #cdb37a 78%);
-    border:1px solid rgba(43,29,14,0.55);
-    box-shadow:0 1px 4px rgba(0,0,0,0.35);
+    width:17px; height:17px;
+    filter:drop-shadow(0 0 1px rgba(241,230,201,0.95)) drop-shadow(0 0 1.5px rgba(241,230,201,0.9));
     opacity:0; transition:opacity .35s ease;
     pointer-events:none;
   }
@@ -161,7 +204,11 @@
     position:absolute; transform:translate(-50%,-50%);
     color:#efe2c4; font-family:'Fraunces', Georgia, serif;
     font-size:0.62rem; font-weight:600; letter-spacing:2.5px; white-space:nowrap;
-    text-shadow:0 1px 2px rgba(0,0,0,0.85), 0 0 6px rgba(0,0,0,0.55);
+    /* s42: full 4-way stroke halo (was a soft drop-shadow only) — the name
+       must survive pale daytime sand as well as near-black night ground */
+    text-shadow:-1px -1px 0 rgba(20,15,8,0.8), 1px -1px 0 rgba(20,15,8,0.8),
+      -1px 1px 0 rgba(20,15,8,0.8), 1px 1px 0 rgba(20,15,8,0.8),
+      0 1px 2px rgba(0,0,0,0.85), 0 0 6px rgba(0,0,0,0.55);
     opacity:0; transition:opacity .2s ease; /* fade matches the label engine's ~200ms show/hide band (see updateStreetLabels) */
     will-change:transform,opacity;
     pointer-events:none;
@@ -326,47 +373,40 @@
   #horizon-ring .hr-stale{ display:block; font-size:0.56rem; opacity:0.65; letter-spacing:1px; margin:1px 0 3px; }
   #horizon-ring .hr-headline{ opacity:0.9; }
 
-  #ship-inspector{
-    top:120px; right:16px; width:250px; pointer-events:auto;
-    font-size:0.72rem; line-height:1.45; display:none;
+  /* ---- INSPECT SIDE PANEL (§11 INSPECT LAW, s42): ONE persistent
+     edge-docked surface replacing the ship-inspector / building-inspector /
+     person-inspector popup trio. Right-docked on desktop; bottom sheet on
+     narrow viewports (see the max-width media block below). UPDATES IN
+     PLACE on every tap/click select. Newsprint-styled — same ink/parchment
+     voice as the paper pane. ---- */
+  #inspect-panel{
+    position:fixed; top:148px; right:0; width:272px; z-index:10; /* above the scrubber ribbon (9) — the bottom sheet must never render under it */
+    max-height:calc(100vh - 246px); overflow-y:auto; box-sizing:border-box;
+    background:linear-gradient(180deg, rgba(241,230,201,0.96), rgba(230,216,180,0.96));
+    border:1px solid rgba(43,29,14,0.5); border-right:none; border-left:3px double rgba(43,29,14,0.65);
+    box-shadow:-6px 2px 18px rgba(0,0,0,0.4);
+    font-family:'Fraunces', Georgia, serif; color:var(--ink);
+    font-size:0.72rem; line-height:1.45; padding:10px 14px 12px;
+    pointer-events:auto; display:none;
   }
-  #ship-inspector.on{ display:block; }
-  #ship-inspector h3{ margin:0 0 4px; font-size:0.95rem; letter-spacing:0.5px; }
-  #ship-inspector .si-close{ position:absolute; top:6px; right:10px; cursor:pointer; opacity:0.6; }
-  #ship-inspector .si-close:hover{ opacity:1; }
-  #ship-inspector .si-field{ display:block; font-size:0.62rem; letter-spacing:1px; opacity:0.7; margin-top:6px; }
-  #ship-inspector a{ color:var(--ink); }
-
-  /* GAPS-2026-07-09 item 3 (named landmarks) — same layout as #ship-inspector,
-     reusing its .si-close/.si-field rules (those are class-based already). */
-  #building-inspector{
-    top:120px; right:16px; width:250px; pointer-events:auto;
-    font-size:0.72rem; line-height:1.45; display:none;
-  }
-  #building-inspector.on{ display:block; }
-  #building-inspector h3{ margin:0 0 4px; font-size:0.95rem; letter-spacing:0.5px; }
-  #building-inspector a{ color:var(--ink); }
-
-  /* ---- PHASE 4: THE PEOPLE ---- */
-  #person-inspector{
-    top:120px; right:16px; width:260px; pointer-events:auto;
-    font-size:0.72rem; line-height:1.45; display:none;
-  }
-  #person-inspector.on{ display:block; }
-  #person-inspector h3{ margin:0 10px 4px 0; font-size:0.95rem; letter-spacing:0.5px; }
-  #person-inspector .pi-close{ position:absolute; top:6px; right:10px; cursor:pointer; opacity:0.6; font-size:1.1rem; }
-  #person-inspector .pi-close:hover{ opacity:1; }
-  #person-inspector .pi-tier{
-    display:inline-block; font-size:0.55rem; letter-spacing:1.6px; padding:2px 7px;
+  #inspect-panel.on{ display:block; }
+  #inspect-panel .ip-close{ position:absolute; top:6px; right:10px; cursor:pointer; opacity:0.6; font-size:1.1rem; line-height:1; }
+  #inspect-panel .ip-close:hover{ opacity:1; }
+  #inspect-panel .ip-kind{
+    display:inline-block; font-size:0.55rem; letter-spacing:2.2px; padding:2px 7px 1px;
     border:1px solid var(--ink); opacity:0.85; margin-bottom:6px;
   }
-  #person-inspector .pi-tier.documented{ background:var(--ink); color:var(--parchment); opacity:1; }
-  #person-inspector .pi-field{ display:block; font-size:0.62rem; letter-spacing:0.6px; opacity:0.8; margin-top:6px; line-height:1.4; }
-  #person-inspector .pi-label{ display:block; font-size:0.55rem; letter-spacing:1.5px; opacity:0.6; margin-top:7px; }
-  #person-inspector a{ color:var(--ink); }
-  #person-inspector .pi-fly{ text-decoration:underline; cursor:pointer; }
-  #person-inspector #pi-now{ font-style:italic; opacity:0.95; }
-  #person-inspector .pi-follow-hint{ display:block; margin-top:8px; font-size:0.58rem; opacity:0.55; font-style:italic; }
+  #inspect-panel .ip-kind.documented{ background:var(--ink); color:var(--parchment); opacity:1; }
+  #inspect-panel h3{
+    margin:0 14px 4px 0; font-size:0.95rem; letter-spacing:0.5px;
+    border-bottom:1px solid rgba(43,29,14,0.45); padding-bottom:5px; font-weight:600;
+  }
+  #inspect-panel .ip-label{ display:block; font-size:0.55rem; letter-spacing:1.5px; opacity:0.6; margin-top:7px; }
+  #inspect-panel .ip-field{ display:block; font-size:0.62rem; letter-spacing:0.6px; opacity:0.85; line-height:1.45; }
+  #inspect-panel a{ color:var(--ink); }
+  #inspect-panel .ip-fly, #inspect-panel .ip-paper{ text-decoration:underline; cursor:pointer; }
+  #inspect-panel .ip-now{ font-style:italic; opacity:0.95; }
+  #inspect-panel .ip-hint{ display:block; margin-top:8px; font-size:0.56rem; opacity:0.55; font-style:italic; }
 
   #hud-provenance{
     top:78px; left:16px; font-size:0.6rem; letter-spacing:2.2px; padding:0.32em 0.9em;
@@ -452,8 +492,8 @@
   /* Watch mode (V): everything hides but the date, the beat card, the ticker */
   body.watch-mode #hud-title, body.watch-mode #hud-seed, body.watch-mode #hud-altitude,
   body.watch-mode #hud-hint, body.watch-mode #hud-hint-toggle, body.watch-mode #paper-toggle,
-  body.watch-mode #hud-ghost, body.watch-mode #hud-provenance, body.watch-mode #ship-inspector,
-  body.watch-mode #person-inspector, body.watch-mode #horizon-ring, body.watch-mode #building-inspector{ display:none !important; }
+  body.watch-mode #hud-ghost, body.watch-mode #hud-provenance,
+  body.watch-mode #inspect-panel, body.watch-mode #horizon-ring{ display:none !important; }
 
   /* ---- touch/mobile ---- */
   #hud-hint-toggle{
@@ -469,12 +509,12 @@
      visual position: equal padding + negative margin grows the hit box
      outward while the glyph itself stays put (absolute-positioned parents
      unaffected since offset is computed from the un-padded edge). */
-  body.touch-device .pi-close, body.touch-device .si-close, body.touch-device .pp-close{
+  body.touch-device .ip-close, body.touch-device .pp-close{
     padding:13px; margin:-13px;
   }
   body.touch-device #seed-reshuffle{ padding:11px; margin:-11px; display:inline-block; }
   body.touch-device .scr-tab{ padding:10px 14px 9px; }
-  body.touch-device .ship-label, body.touch-device .building-label, body.touch-device .geo-label{
+  body.touch-device .wlbl-ship, body.touch-device .wlbl-loc, body.touch-device .wlbl-moment{
     padding:9px 12px;
   }
 
@@ -548,7 +588,13 @@
     #hud-altitude.menu-forced{ display:block; min-width:0; font-size:0.7rem; bottom:64px; left:auto; right:16px; }
     #hud-hint.menu-forced{ display:block; bottom:64px; right:16px; max-width:min(240px,64vw); }
     #paper-pane{ width:100vw; }
-    #ship-inspector, #person-inspector, #building-inspector{ width:min(260px,72vw); }
+    /* §11 inspect law: on narrow viewports the panel docks as a bottom
+       sheet instead of a right rail (thumb reach + map stays visible). */
+    #inspect-panel{
+      top:auto; right:0; left:0; bottom:0; width:auto; max-height:40vh;
+      border:none; border-top:2px solid var(--ink);
+      box-shadow:0 -6px 18px rgba(0,0,0,0.45);
+    }
     #hud-menu-toggle{ display:flex; }
     #hud-ticker{ max-width:min(60vw,420px); min-width:0; bottom:16px; }
     #hud-scrubber{ bottom:56px; }
@@ -597,36 +643,6 @@
     <!-- .hr-item nodes injected by updateHorizonRing() -->
   </div>
 
-  <div class="panel" id="ship-inspector">
-    <span class="si-close" id="si-close">&times;</span>
-    <h3 id="si-name">&mdash;</h3>
-    <span class="si-field" id="si-arrived"></span>
-    <span class="si-field" id="si-detail"></span>
-    <span class="si-field"><a id="si-receipt" href="#" target="_blank" rel="noopener">view the original page &rarr;</a></span>
-  </div>
-
-  <!-- GAPS-2026-07-09 item 3 (named landmarks): reuses the ship-inspector's
-       CSS (#ship-inspector rules are all by-class, not by-id) for the
-       plaza's named buildings — El Dorado, Parker House, etc. -->
-  <div class="panel" id="building-inspector">
-    <span class="si-close" id="bi-close">&times;</span>
-    <h3 id="bi-name">&mdash;</h3>
-    <span class="si-field" id="bi-status"></span>
-    <span class="si-field" id="bi-detail"></span>
-    <span class="si-field" id="bi-receipt-wrap"><a id="bi-receipt" href="#" target="_blank" rel="noopener">view the original page &rarr;</a></span>
-  </div>
-
-  <div class="panel" id="person-inspector">
-    <span class="pi-close" id="pi-close">&times;</span>
-    <span class="pi-tier" id="pi-tier">UNRECORDED</span>
-    <h3 id="pi-name">&mdash;</h3>
-    <span class="pi-field" id="pi-summary"></span>
-    <span class="pi-field" id="pi-detail"></span>
-    <span class="pi-field" id="pi-now"></span>
-    <span class="pi-field" id="pi-receipt-wrap"><a id="pi-receipt" href="#" target="_blank" rel="noopener">view the original page &rarr;</a></span>
-    <span class="pi-follow-hint">Esc &mdash; release</span>
-  </div>
-
   <div class="panel" id="hud-provenance">RECORD ONLY &nbsp;&middot;&nbsp; P</div>
   <div class="panel" id="hud-hint-toggle" title="controls">?</div>
   <div class="panel" id="hud-tilt-toggle" title="cinematic low-angle tilt (toggle)">&#10192;</div>
@@ -641,6 +657,17 @@
     <div class="hm-row" data-target="hud-provenance">Record-only flag</div>
     <div class="hm-row" data-target="hud-hint">Controls</div>
   </div>
+</div>
+
+<!-- §11 INSPECT LAW (s42): the ONE persistent inspect surface — replaces the
+     ship-inspector / building-inspector / person-inspector popups. Lives at
+     body level (NOT inside #hud, whose fixed-position stacking context would
+     pin it under the scrubber ribbon on the narrow-viewport bottom sheet). -->
+<div id="inspect-panel">
+  <span class="ip-close" id="ip-close">&times;</span>
+  <span class="ip-kind" id="ip-kind">&mdash;</span>
+  <h3 id="ip-name">&mdash;</h3>
+  <div id="ip-body"></div>
 </div>
 
 <div class="panel" id="hud-scrubber">
@@ -695,7 +722,7 @@ var CFG = {
   waterSeg: 128,
   minAltitude: 30,
   maxAltitude: 9000,
-  labelFadeStart: 1200,   // geo labels fade in above this altitude
+  labelFadeStart: 1200,   // (superseded s42 — per-category bands live in _geoLabelBandOpacity)
   labelFadeFull: 1900,
   ghostFadeStart: 500,    // ghost overlay fully visible above this altitude
   ghostFadeEnd: 150,       // fully hidden at/below this altitude
@@ -3267,7 +3294,11 @@ var STREET_CLASS_WEIGHT = { market:4, main:3, "main-override":3, cross:2, "cross
 // rate only, so getBoundingClientRect cost stays off the frame path.
 var STREET_LABEL_UI_BLOCKER_IDS = ["hud-title","hud-seed","hud-clock","hud-ghost","hud-altitude","hud-ticker",
   "hud-scrubber","hud-hint","hud-hint-toggle","hud-tilt-toggle","hud-menu-toggle","hud-menu-sheet",
-  "paper-toggle","hud-provenance","ship-inspector","building-inspector","person-inspector","paper-pane"];
+  "paper-toggle","hud-provenance","inspect-panel","paper-pane",
+  // s42 label overhaul: the world-news horizon bar + the beat card are
+  // occupied screen space too (user-reported collision at the zoomed-out
+  // framing) — ALL UI panels are blockers for ALL world labels now.
+  "horizon-ring","beat-card"];
 function collectUIBlockerRects(){
   var rects = [];
   for(var i=0;i<STREET_LABEL_UI_BLOCKER_IDS.length;i++){
@@ -5107,7 +5138,7 @@ var shipLabelPool = [];
   var hudEl = document.getElementById("hud");
   for(var i=0;i<SHIP_LABEL_POOL;i++){
     var el = document.createElement("div");
-    el.className = "geo-label ship-label";
+    el.className = "wlbl wlbl-ship"; // §11 grammar: ships = name · date, light compact haloed text (no chip)
     el.addEventListener("click", function(e){
       e.stopPropagation();
       if(this._visit) openShipInspector(this._visit);
@@ -5116,6 +5147,10 @@ var shipLabelPool = [];
     shipLabelPool.push(el);
   }
 })();
+/* s42 inspect law: per-frame instanceId -> visit maps so the tap/click
+   raycaster can resolve a hull hit to its ship record (updateShips fills
+   these in the same loop that writes the instance matrices). */
+var shipPickVisits = [[],[],[]], mastPickVisits = [];
 
 /* =========================================================================
    COVERAGE-GAP FILL TRAFFIC (WORLD-P0 fix 2026-07-09, grounding.md's
@@ -5291,6 +5326,7 @@ function updateShips(dt){
     }
     // route this vessel's instance into its own type-pool (full ship/brig/schooner)
     var ty = v.shipType, idx = typeCounts[ty]++;
+    shipPickVisits[ty][idx] = v; // s42 inspect law: instanceId -> visit for the tap raycaster
     setShipInstance(shipHullMeshes[ty], idx, pos.x, y, pos.z, v._yaw, 1, v.storeship && v._state==="anchored" ? v.storeship.list : 0);
     // sail uses a non-uniform Y scale (furled flat when anchored) instead of
     // going through setShipInstance's uniform scale
@@ -5302,7 +5338,9 @@ function updateShips(dt){
   shipHullMeshes.forEach(function(m,ty){ m.count = typeCounts[ty]; m.instanceMatrix.needsUpdate = true; });
   shipSailMeshes.forEach(function(m,ty){ m.count = typeCounts[ty]; m.instanceMatrix.needsUpdate = true; });
 
+  shipPickVisits.forEach(function(arr,ty){ arr.length = typeCounts[ty]; });
   mastClusterMesh.count = overflow.length;
+  mastPickVisits = overflow; // s42 inspect law: overflow-tier instanceId -> visit
   overflow.forEach(function(v,i){
     setShipInstance(mastClusterMesh, i, v._anchorPos.x, 0.2, v._anchorPos.z, v._anchorYaw, 1);
   });
@@ -6055,17 +6093,24 @@ function updateWetTint(){
    "period map legend" boundary stroke without a second ring mesh.
    ========================================================================= */
 var DISTRICT_ZONES = [
-  { name:"THE VILLAGE",      cx:PLAZA_CENTER.x,      cz:PLAZA_CENTER.z,      r:360, color:0xcdb37a, revealDay:-1 },
-  { name:"MISSION DOLORES",  cx:OUTPOSTS.mission.x,  cz:OUTPOSTS.mission.z,  r:190, color:0x93a674, revealDay:-1 },
-  { name:"THE PRESIDIO",     cx:OUTPOSTS.presidio.x, cz:OUTPOSTS.presidio.z, r:190, color:0x88a0ad, revealDay:-1 },
-  { name:"HAPPY VALLEY",     cx:900, cz:950,          r:440, color:0xd8a15c, revealDay:eventDateToSimDay("1849-01-10") },
+  // `record` (s42 inspect law): what the record says about the place — shown
+  // verbatim in the inspect panel when a tap lands inside the zone.
+  { name:"THE VILLAGE",      cx:PLAZA_CENTER.x,      cz:PLAZA_CENTER.z,      r:360, color:0xcdb37a, revealDay:-1,
+    record:"Yerba Buena — the trading village around the Plaza; ~200 souls at the July 1846 flag-raising, renamed San Francisco January 1847 (timeline-spine.md)." },
+  { name:"MISSION DOLORES",  cx:OUTPOSTS.mission.x,  cz:OUTPOSTS.mission.z,  r:190, color:0x93a674, revealDay:-1,
+    record:"Mission San Francisco de Asís (founded 1776) — the peninsula's oldest settlement, secularized under Mexico; a cluster of adobes by 1846 (peninsula-1846.md)." },
+  { name:"THE PRESIDIO",     cx:OUTPOSTS.presidio.x, cz:OUTPOSTS.presidio.z, r:190, color:0x88a0ad, revealDay:-1,
+    record:"The Mexican-era military post at the Golden Gate — garrisoned only thinly by 1846 (peninsula-1846.md)." },
+  { name:"HAPPY VALLEY",     cx:900, cz:950,          r:440, color:0xd8a15c, revealDay:eventDateToSimDay("1849-01-10"),
+    record:"The 1849 canvas city south of the cove — hundreds of tents pitched among the dunes and scrub as the rush crowds outran the town's rooms (demographics-society.md)." },
   // GAPS-2026-07-09 item 3 (1849 bible-tier events): the Chilean immigrant
   // encampment at Clark's Point (clm demographics-society.md §3 / research
   // police-courts.md), site of the Hounds' July 15 1849 attack. Placement
   // approximate (toward the waterfront at the base of Telegraph Hill/Clark's
   // Point, per the record — no lot-level position survives); revealed on
   // ORIGINS' own documented Chilean-arrival onset (1848-10-25).
-  { name:"LITTLE CHILE",     cx:150, cz:-830,         r:130, color:0xb98a5a, revealDay:eventDateToSimDay("1848-10-25") }
+  { name:"LITTLE CHILE",     cx:150, cz:-830,         r:130, color:0xb98a5a, revealDay:eventDateToSimDay("1848-10-25"),
+    record:"The Chilean encampment at the base of Telegraph Hill, toward Clark's Point — attacked and plundered by the Hounds, July 15 1849 (police-courts.md)." }
 ];
 var ZONE_GRID_RES = 28; // (res+1)^2 verts per zone, land-masked once at build time
 var zoneVert = [
@@ -6144,11 +6189,14 @@ function buildZoneGeometry(z){
     });
     var mesh = new THREE.Mesh(geo,mat); scene.add(mesh);
     z.tintMesh = mesh;
-    var el = document.createElement("div"); el.className="geo-label"; el.textContent=z.name;
+    // §11 grammar: neighborhoods/zones = letter-spaced caps in a softer
+    // sepia, floating haloed text (the old parchment chip is gone).
+    var el = document.createElement("div"); el.className="wlbl wlbl-zone"; el.textContent=z.name;
     hudEl.appendChild(el); z.el = el;
     z.pos = new THREE.Vector3(z.cx, terrainHeight(z.cx,z.cz)+80, z.cz);
   });
 })();
+var zoneLabelEls = DISTRICT_ZONES.map(function(z){ return z.el; }); // fed to the shared declutter engine
 var _zoneV = new THREE.Vector3();
 function updateDistrictZones(alt){
   var cartoT = smoothstep(CFG.zoomTrueScaleFull, CFG.zoomCartoFull, alt);
@@ -6163,12 +6211,16 @@ function updateDistrictZones(alt){
     z.tintMesh.material.uniforms.uOpacity.value = glowOp;
     z.tintMesh.material.uniforms.uNightFactor.value = nightFactor; // NIGHT-GLOW fix (2026-07-10): these were a raw unlit ShaderMaterial — full brightness at any hour, reading as a glowing halo/disc at night. nightFactor is the same day/night global updateDayNight() already drives terrain/splat dimming from.
     z.tintMesh.visible = glowOp>0.004;
-    if(op<0.01){ z.el.style.opacity=0; return; }
+    // §11 zoom choreography: zone NAMES hand the very high band off to the
+    // region labels (updateLabels) — cross-fade out above ~2000m. The tint
+    // itself keeps its period-map-legend behavior unchanged.
+    var zoneLabelFade = 1 - smoothstep(2000, 3000, alt);
+    if(op*zoneLabelFade<0.01){ z.el.style.opacity=0; return; }
     _zoneV.copy(z.pos).applyMatrix4(camera.matrixWorldInverse);
     if(_zoneV.z>-1){ z.el.style.opacity=0; return; }
     _zoneV.copy(z.pos).project(camera);
     if(_zoneV.x<-1.05||_zoneV.x>1.05||_zoneV.y<-1.05||_zoneV.y>1.05){ z.el.style.opacity=0; return; }
-    z.el.style.opacity = op*0.95;
+    z.el.style.opacity = op*zoneLabelFade*0.95;
     z.el.style.left = ((_zoneV.x*0.5+0.5)*window.innerWidth)+"px";
     z.el.style.top = ((-_zoneV.y*0.5+0.5)*window.innerHeight)+"px";
   });
@@ -6547,19 +6599,78 @@ function updateHorizonRing(alt){
   horizonRingEl.innerHTML = html;
 }
 
-/* -------------------------------------------------------------------------
-   SHIP CHIPS -> INSPECTOR (spec item 6). Click a ship's floating label
-   (wired in the label-pool loop above via el._visit) to open a small card:
-   name, arrival date, the fullest matching arrival record from
-   events-1846-49.js, and its receipt (looked up back in the day's feed
-   issue by matching headline, since build-events.js trims prov off).
-   ------------------------------------------------------------------------- */
-var shipInspectorEl = document.getElementById("ship-inspector");
-var siNameEl = document.getElementById("si-name");
-var siArrivedEl = document.getElementById("si-arrived");
-var siDetailEl = document.getElementById("si-detail");
-var siReceiptEl = document.getElementById("si-receipt");
-document.getElementById("si-close").addEventListener("click", function(){ shipInspectorEl.classList.remove("on"); });
+/* =========================================================================
+   INSPECT CORE (§11 INSPECT LAW, s42) — the ONE persistent, edge-docked
+   inspect surface. Every selectable entity kind (person, building, tent,
+   street, ship, tree/fauna, zone, place) renders into the same panel via
+   showInspect(); tap/click selection UPDATES IN PLACE; ESC or tap-empty
+   deselects. Replaces the ship/building/person popup trio (deleted —
+   one-system law). A subtle terrain-hugging ring marks the selection.
+   ========================================================================= */
+var inspectPanelEl = document.getElementById("inspect-panel");
+var ipKindEl = document.getElementById("ip-kind");
+var ipNameEl = document.getElementById("ip-name");
+var ipBodyEl = document.getElementById("ip-body");
+var SELECTED = null; // {kind, ...refs} — read by the per-frame ring/NOW updaters
+function ipRow(label, html){ return '<span class="ip-label">'+label+'</span><span class="ip-field">'+html+'</span>'; }
+function showInspect(kindText, name, bodyHtml, opts){
+  opts = opts || {};
+  ipKindEl.textContent = kindText;
+  ipKindEl.classList.toggle("documented", !!opts.documented);
+  ipNameEl.textContent = name;
+  var html = bodyHtml;
+  if(opts.receiptUrl){
+    html += '<span class="ip-field" style="margin-top:7px;"><a href="'+opts.receiptUrl+'" target="_blank" rel="noopener">'
+      + escapeHTML(opts.receiptText || "view the original page →")+'</a></span>';
+  }
+  if(opts.hint) html += '<span class="ip-hint">'+opts.hint+'</span>';
+  ipBodyEl.innerHTML = html;
+  inspectPanelEl.classList.add("on");
+}
+function closeInspect(){
+  inspectPanelEl.classList.remove("on");
+  SELECTED = null;
+  followedSlot = null; followedDocumented = null;
+  selRingMesh.visible = false;
+}
+document.getElementById("ip-close").addEventListener("click", function(e){ e.stopPropagation(); closeInspect(); });
+/* selection highlight: a subtle parchment ring hugging the ground at the
+   selected entity — repositioned per frame (updateSelectionRing) so it
+   tracks walking people and sailing ships. depthTest off: the ring is a
+   UI affordance, never occluded by terrain. */
+var selRingMesh = (function(){
+  var g = new THREE.RingGeometry(0.82, 1.0, 48);
+  var m = new THREE.MeshBasicMaterial({ color:0xf1e6c9, transparent:true, opacity:0.6,
+    depthWrite:false, depthTest:false, side:THREE.DoubleSide, fog:false });
+  var mesh = new THREE.Mesh(g, m);
+  mesh.rotation.x = -Math.PI/2; mesh.visible = false; mesh.renderOrder = 9;
+  scene.add(mesh);
+  return mesh;
+})();
+function setSelRing(x, z, r){
+  selRingMesh.position.set(x, Math.max(terrainHeight(x,z),0)+0.5, z);
+  selRingMesh.scale.set(r, r, 1);
+  selRingMesh.visible = true;
+}
+function updateSelectionRing(){
+  if(!SELECTED){ selRingMesh.visible = false; return; }
+  if(SELECTED.kind==="person" && SELECTED.slot) setSelRing(SELECTED.slot._x, SELECTED.slot._z, 1.4);
+  else if(SELECTED.kind==="ship" && SELECTED.visit){
+    var p = SELECTED.visit._lastPos || SELECTED.visit._anchorPos;
+    if(p) setSelRing(p.x, p.z, 16);
+  }
+  // static kinds keep the ring where the pick landed
+  selRingMesh.material.opacity = 0.42 + 0.18*Math.sin(performance.now()*0.004);
+  // live NOW refresh for a followed person (updates in place, §11)
+  if(SELECTED.kind==="person" && SELECTED.slot){
+    var nowEl = document.getElementById("ip-now");
+    if(nowEl) nowEl.textContent = SELECTED.slot._now || "—";
+  }
+}
+
+/* ---- SHIP cards (kept from spec item 6, re-homed into the one panel):
+   name, silhouette type, arrival, status (at anchor / abandoned /
+   storeship), documented fate + CDNC receipt. ---- */
 function findFeedItemProv(dateKey, headline){
   var issue = FEED_BY_DATE[dateKey];
   if(!issue) return null;
@@ -6573,28 +6684,41 @@ function findShipArrivalRecord(name){
   });
   return best;
 }
+var SHIP_TYPE_NAME = ["full-rigged ship","brig","schooner"];
 function openShipInspector(v){
-  siNameEl.textContent = v.ship;
-  // BUG FIX (2026-07-10, ghost-fleet P0): v.arrive is now always a real
-  // number (buildShipVisits() fills coverage-gap visits with an inferred
-  // recent arrival instead of null — see shipDesiredState()), so this can
-  // no longer key off "!==null" to detect the undocumented case; it must
-  // check the explicit arriveInferred flag instead, or this panel would
-  // present a fabricated date/citation as documented fact.
-  var documented = v.arrive!==null && !v.arriveInferred;
-  siArrivedEl.textContent = documented ? ("arrived "+formatIssueDateLabel(todayISOFromSimDay(v.arrive))) : "arrival undocumented in this window";
+  // BUG FIX (2026-07-10, ghost-fleet P0) carried forward: undocumented
+  // arrivals must key off the explicit arriveInferred flag, never
+  // "arrive!==null", or the panel would present a fabricated date as fact.
+  var documented = v.arrive!==null && !v.arriveInferred && !v.isFill;
+  var st = shipDesiredState(v, simDay);
+  var html = "";
+  html += ipRow("TYPE", escapeHTML(v.storeship ? "storeship — "+SHIP_TYPE_NAME[v.shipType] : SHIP_TYPE_NAME[v.shipType]));
+  html += ipRow("ARRIVED", documented ? escapeHTML(formatIssueDateLabel(todayISOFromSimDay(v.arrive))) : "arrival undocumented in this window");
+  var status;
+  if(v.storeship) status = "grounded storeship — "+v.storeship.groundedNote;
+  else if(st==="sailing_in") status = "standing in through the Gate";
+  else if(st==="sailing_out") status = "outbound";
+  else if(st==="anchored" && v.depart===null && v.arrive!==null && v.arrive>=GHOST_FLEET_START)
+    status = "abandoned at anchor — crew gone to the diggings (the ghost fleet)";
+  else if(st==="anchored") status = "at anchor in Yerba Buena Cove";
+  else status = v.depart!==null && simDay>v.depart ? "departed San Francisco" : "in port";
+  html += ipRow("STATUS", escapeHTML(status));
+  if(v.depart!==null && !v.storeship) html += ipRow("FATE", "departed "+escapeHTML(formatIssueDateLabel(todayISOFromSimDay(v.depart))));
+  var opts = {};
   var rec = documented ? findShipArrivalRecord(v.ship) : null;
   if(rec){
-    siDetailEl.textContent = rec.headline;
+    html += ipRow("THE RECORD", escapeHTML(rec.headline));
     var issueKey = latestIssueOnOrBefore(todayISOFromSimDay(rec.simDay));
     var prov = issueKey && findFeedItemProv(issueKey, rec.headline);
-    if(prov && prov.src){ siReceiptEl.href = issueUrl(prov.src); siReceiptEl.parentElement.style.display=""; }
-    else { siReceiptEl.parentElement.style.display = "none"; }
-  } else {
-    siDetailEl.textContent = v.depart!==null ? "departed San Francisco" : "in port";
-    siReceiptEl.parentElement.style.display = "none";
+    if(prov && prov.src) opts.receiptUrl = issueUrl(prov.src);
   }
-  shipInspectorEl.classList.add("on");
+  var kind = v.isFill ? "SHIP — UNRECORDED" : (v.storeship ? "STORESHIP" : "SHIP");
+  opts.documented = documented;
+  showInspect(kind, v.isFill ? "Unnamed vessel" : v.ship, html, opts);
+  var p = v._lastPos || v._anchorPos;
+  SELECTED = { kind:"ship", visit:v };
+  if(p) setSelRing(p.x, p.z, 16);
+  followedSlot = null; followedDocumented = null;
 }
 
 /* =========================================================================
@@ -6619,13 +6743,6 @@ var NAMED_BUILDINGS = {
   "The Chapel": { detail:"Rev. Timothy Dwight Hunt (from Hawaii, arrived Oct 29 1848) held the town's first Protestant services as a nondenominational City Chaplain from Nov 2, 1848; the congregation organized as First Congregational Church in July 1849. No documented name survives for an early meeting-house building itself.", src:"demographics-society.md §ministries" }
 };
 var FIRE_RECEIPT_URL = "https://cdnc.ucr.edu/?a=d&d=DAC18491226.1.2";
-var buildingInspectorEl = document.getElementById("building-inspector");
-var biNameEl = document.getElementById("bi-name");
-var biStatusEl = document.getElementById("bi-status");
-var biDetailEl = document.getElementById("bi-detail");
-var biReceiptWrapEl = document.getElementById("bi-receipt-wrap");
-var biReceiptEl = document.getElementById("bi-receipt");
-document.getElementById("bi-close").addEventListener("click", function(){ buildingInspectorEl.classList.remove("on"); });
 function buildingStatus(spot){
   var burning = FIRE.burn.some(function(b){ return b.spot===spot; });
   var scorched = !burning && FIRE.scorch.some(function(s){ return s.spot===spot; });
@@ -6635,17 +6752,132 @@ function buildingStatus(spot){
   if(burning) return { text: simDay>=FIRE.rebuildDay ? "destroyed Dec 24 1849 — rebuilding" : "destroyed, Dec 24 1849", onFire:true };
   return { text:"standing (scorched in the Great Fire)", onFire:true };
 }
+/* §11 inspect law — BUILDING cards for EVERY structure, not just the named
+   landmarks: type (residence / lodging house / grocer's / gambling house /
+   …), occupant or business, founded date where documented, street corner.
+   HOME_BUILDING_SPOTS maps 1:1 by index onto VILLAGE_BUILDING_SPOTS, so a
+   spot's boarding/occupancy data rides along for free. */
+function signWordAt(x,z){
+  for(var i=0;i<SIGN_BUILDING_SPOTS.length;i++){
+    var s = SIGN_BUILDING_SPOTS[i];
+    if(Math.abs(s.x-x)<0.6 && Math.abs(s.z-z)<0.6) return s.word;
+  }
+  return null;
+}
+function buildingTypeWord(spot){
+  var idx = VILLAGE_BUILDING_SPOTS.indexOf(spot);
+  var home = idx>=0 && typeof HOME_BUILDING_SPOTS!=="undefined" ? HOME_BUILDING_SPOTS[idx] : null;
+  var word = signWordAt(spot.x, spot.z);
+  if(spot.type==="gambling") return "gambling house";
+  if(spot.type==="hotel" || spot.name==="City Hotel") return "hotel";
+  if(spot.name==="The Chapel") return "meeting house";
+  if(spot.type==="business") return word ? (SIGN_WORD_LABEL[word]||word.toLowerCase()) : "storefront";
+  if(spot.type==="rundown") return "rundown cabin — past the surveyed edge";
+  if(home && home.boarding) return "lodging house";
+  return "residence";
+}
 function openBuildingInspector(spot){
-  biNameEl.textContent = spot.name;
-  var st = buildingStatus(spot);
-  biStatusEl.textContent = st.text;
-  var info = NAMED_BUILDINGS[spot.name];
-  biDetailEl.textContent = info ? info.detail : "One of the establishments named in the Alta's own account of Portsmouth Square.";
-  if(st.onFire){ biReceiptEl.href = FIRE_RECEIPT_URL; biReceiptWrapEl.style.display = ""; }
-  else { biReceiptWrapEl.style.display = "none"; }
-  buildingInspectorEl.classList.add("on");
+  var idx = VILLAGE_BUILDING_SPOTS.indexOf(spot);
+  var home = idx>=0 && typeof HOME_BUILDING_SPOTS!=="undefined" ? HOME_BUILDING_SPOTS[idx] : null;
+  var typeWord = buildingTypeWord(spot);
+  var html = ipRow("TYPE", escapeHTML(typeWord));
+  if(spot.name){
+    var st = buildingStatus(spot);
+    html += ipRow("STATUS", escapeHTML(st.text));
+  }
+  if(!spot.name && home){
+    if(home.boarding) html += ipRow("OCCUPANTS", home.used>0 ? (home.used+" boarder"+(home.used===1?"":"s")+" of the town's floating crowd") : "rooms to let");
+    else if(home.used>0) html += ipRow("OCCUPANTS", "a household of "+home.used);
+  }
+  html += ipRow("FOUNDED", (spot.foundedDay!=null && spot.foundedDay>0)
+    ? escapeHTML(formatIssueDateLabel(todayISOFromSimDay(spot.foundedDay)))
+    : (spot.foundedDay!=null
+      ? "standing before the window opens (July 1846)" // e.g. City Hotel, built 1846 — founded day predates the sim clock
+      : "standing at the window's open (no founding date in the record)"));
+  html += ipRow("STREET", escapeHTML(nearestStreetPair(spot.x, spot.z))+" Streets");
+  var info = spot.name ? NAMED_BUILDINGS[spot.name] : null;
+  if(info) html += ipRow("THE RECORD", escapeHTML(info.detail));
+  else if(spot.name) html += ipRow("THE RECORD", "One of the establishments named in the Alta's own account of Portsmouth Square.");
+  var opts = { documented: !!spot.name };
+  if(spot.name){
+    var st2 = buildingStatus(spot);
+    if(st2.onFire){ opts.receiptUrl = FIRE_RECEIPT_URL; }
+  }
+  showInspect(spot.name ? "NAMED BUILDING" : "BUILDING", spot.name || cap(typeWord), html, opts);
+  SELECTED = { kind:"building", spot:spot };
+  setSelRing(spot.x, spot.z, Math.max(spot.w, spot.d)*0.85+1.2);
   followedSlot = null; followedDocumented = null;
-  flyTo(spot.x, spot.z, 90);
+}
+/* growth-rush frame houses + canvas tents (the 1848-49 build-out) get the
+   same treatment — spawnedBuildings/spawnedTents entries carry spawnDay. */
+function openGrowthBuildingInspector(b){
+  var frac = clamp((simDay-b.spawnDay)/CONSTRUCTION_DAYS, 0, 1);
+  var stage = frac<0.18 ? "materials on the lot" : frac<0.45 ? "frame up" : frac<0.8 ? "walls going on" : "finished";
+  var html = ipRow("TYPE", "frame house — the growth rush");
+  html += ipRow("STATE", escapeHTML(stage));
+  html += ipRow("RAISED", escapeHTML(formatIssueDateLabel(todayISOFromSimDay(b.spawnDay))));
+  html += ipRow("STREET", escapeHTML(nearestStreetPair(b.x, b.z))+" Streets");
+  showInspect("BUILDING", "Frame house", html, {});
+  SELECTED = { kind:"building", spot:b };
+  setSelRing(b.x, b.z, 5);
+  followedSlot = null; followedDocumented = null;
+}
+function openTentInspector(t){
+  var html = ipRow("TYPE", "canvas tent");
+  if(t.label) html += ipRow("CAMP", escapeHTML(t.label));
+  if(t.spawnDay!=null) html += ipRow("PITCHED", escapeHTML(formatIssueDateLabel(todayISOFromSimDay(t.spawnDay))));
+  showInspect("TENT", "Canvas tent", html, {});
+  SELECTED = { kind:"tent", spot:t };
+  setSelRing(t.x, t.z, 3);
+  followedSlot = null; followedDocumented = null;
+}
+/* §11 STREET cards: name, the road-emergence lifecycle state as a plain
+   word (grounding.md §9b — surveyed line / foot trail / worn road / graded
+   street, computed live via roadPieceState at the picked point), survey +
+   first-mention dates, and the dataset's own source note. */
+var ROAD_STATE_WORD = { 0:"not yet traced", 1:"a surveyed line — paper only", 2:"a foot trail, worn by use",
+  3:"a worn road, widening toward its plat", 4:"a graded street, full survey width" };
+function streetSourceNote(id){
+  var baseId = id.indexOf(":")>=0 ? id.slice(0, id.indexOf(":")) : id;
+  for(var i=0;i<SG.streets.length;i++){
+    if(SG.streets[i].id===baseId) return SG.streets[i].sourceNotes || null;
+  }
+  return null;
+}
+function openStreetInspector(s, atX, atZ){
+  var wet = terrainHeight(atX, atZ) <= 0.5;
+  var stateWord;
+  if(wet) stateWord = "platted across the water lots — still open water here";
+  else {
+    var viogetExt = (s.surveyedDay!=null && s.surveyedDay<=0 && s.checkpoints.length) ? s.checkpoints[0].extent : null;
+    // conservative: treat the picked point as inside the Vioget extent when
+    // one exists (the floor only lifts S0/S1 to trail, per §9b)
+    var st = roadPieceState(s, atX, atZ, simDay, !!viogetExt);
+    stateWord = ROAD_STATE_WORD[st.st] || "—";
+  }
+  var html = ipRow("STATE", escapeHTML(stateWord));
+  if(s.surveyedDay!=null){
+    html += ipRow("SURVEYED", escapeHTML(s.surveyedDay<=0
+      ? "Vioget's survey, 1839"
+      : formatIssueDateLabel(todayISOFromSimDay(s.surveyedDay))));
+  } else {
+    html += ipRow("SURVEYED", "never platted in this window — corpus-attested use only");
+  }
+  if(s.firstMentionDay!=null) html += ipRow("FIRST IN PRINT", escapeHTML(formatIssueDateLabel(todayISOFromSimDay(s.firstMentionDay))));
+  var note = streetSourceNote(s.id);
+  if(note) html += ipRow("THE RECORD", escapeHTML(note.length>260 ? note.slice(0,257)+"…" : note));
+  showInspect("STREET", s.name, html, {});
+  SELECTED = { kind:"street", street:s, x:atX, z:atZ };
+  setSelRing(atX, atZ, Math.max(6, s.widthM));
+  followedSlot = null; followedDocumented = null;
+}
+function openZoneInspector(z){
+  var html = ipRow("THE RECORD", escapeHTML(z.record || "named in the record"));
+  if(z.revealDay>=0) html += ipRow("APPEARS", escapeHTML(formatIssueDateLabel(todayISOFromSimDay(z.revealDay))));
+  showInspect("DISTRICT", z.name, html, {});
+  SELECTED = { kind:"zone", zone:z };
+  setSelRing(z.cx, z.cz, Math.min(z.r*0.5, 120));
+  followedSlot = null; followedDocumented = null;
 }
 var NAMED_BUILDING_SPOTS = VILLAGE_BUILDING_SPOTS.filter(function(s){ return !!s.name; });
 var BUILDING_LABEL_POOL = Math.min(4, NAMED_BUILDING_SPOTS.length); // decluttered hard cap (was 14)
@@ -6654,7 +6886,9 @@ var buildingLabelPool = [];
   var hudEl = document.getElementById("hud");
   for(var i=0;i<BUILDING_LABEL_POOL;i++){
     var el = document.createElement("div");
-    el.className = "geo-label building-label";
+    // §11 grammar: key buildings = small period glyph + name, ink text with
+    // a parchment halo, close zoom only (innerHTML set in updateBuildingLabels)
+    el.className = "wlbl wlbl-loc";
     el.addEventListener("click", function(e){
       e.stopPropagation();
       if(this._spot) openBuildingInspector(this._spot);
@@ -6663,6 +6897,83 @@ var buildingLabelPool = [];
     buildingLabelPool.push(el);
   }
 })();
+/* engraved-style period glyphs (moved up from the biz-glyph tier so the
+   location labels can share them; four new marks added for the §11
+   "small symbol + name" location grammar: house, church, flag, anchor). */
+var GLYPH_SVG = {
+  fork:  '<svg viewBox="0 0 16 16"><path d="M5 2v5M8 2v5M11 2v5M8 7v7" stroke="#2b1d0e" stroke-width="1.3" fill="none" stroke-linecap="round"/></svg>',
+  glass: '<svg viewBox="0 0 16 16"><path d="M5 3h6l-1.5 8h-3z" fill="none" stroke="#2b1d0e" stroke-width="1.2"/><path d="M6.5 13h3" stroke="#2b1d0e" stroke-width="1.2" stroke-linecap="round"/></svg>',
+  cards: '<svg viewBox="0 0 16 16"><rect x="4" y="4" width="6" height="8" rx="1" transform="rotate(-14 7 8)" fill="none" stroke="#2b1d0e" stroke-width="1.1"/><rect x="6.5" y="4" width="6" height="8" rx="1" fill="none" stroke="#2b1d0e" stroke-width="1.1"/></svg>',
+  bed:   '<svg viewBox="0 0 16 16"><rect x="3" y="7.5" width="10" height="4" fill="none" stroke="#2b1d0e" stroke-width="1.1"/><path d="M3 7.5V4h3v3.5" stroke="#2b1d0e" stroke-width="1.1" fill="none"/></svg>',
+  anvil: '<svg viewBox="0 0 16 16"><path d="M3 6.5h10l-2 2H6z" fill="none" stroke="#2b1d0e" stroke-width="1.1"/><rect x="6.5" y="8.5" width="3" height="3.5" fill="none" stroke="#2b1d0e" stroke-width="1.1"/></svg>',
+  barrel:'<svg viewBox="0 0 16 16"><rect x="5" y="2" width="6" height="12" rx="2.4" fill="none" stroke="#2b1d0e" stroke-width="1.1"/><path d="M5 6h6M5 10h6" stroke="#2b1d0e" stroke-width="1"/></svg>',
+  house: '<svg viewBox="0 0 16 16"><path d="M3 8l5-4.5L13 8" fill="none" stroke="#2b1d0e" stroke-width="1.2"/><path d="M4.5 8v5h7V8" fill="none" stroke="#2b1d0e" stroke-width="1.1"/></svg>',
+  church:'<svg viewBox="0 0 16 16"><path d="M8 2v3M6.6 3.5h2.8" stroke="#2b1d0e" stroke-width="1.1" fill="none"/><path d="M4.5 13V9l3.5-3 3.5 3v4" fill="none" stroke="#2b1d0e" stroke-width="1.1"/></svg>',
+  flag:  '<svg viewBox="0 0 16 16"><path d="M5 2.5v11" stroke="#2b1d0e" stroke-width="1.2"/><path d="M5 3h6l-1.6 2L11 7H5z" fill="none" stroke="#2b1d0e" stroke-width="1.1"/></svg>',
+  anchor:'<svg viewBox="0 0 16 16"><circle cx="8" cy="3.6" r="1.3" fill="none" stroke="#2b1d0e" stroke-width="1.1"/><path d="M8 5v8M4 10c0 2 1.8 3 4 3s4-1 4-3M5.8 7h4.4" fill="none" stroke="#2b1d0e" stroke-width="1.1" stroke-linecap="round"/></svg>'
+};
+function locGlyphFor(spot){
+  if(spot.type==="gambling") return "cards";
+  if(spot.type==="hotel" || (spot.name && /hotel/i.test(spot.name))) return "bed";
+  if(spot.name==="The Chapel") return "church";
+  return "house";
+}
+function locLabelHTML(glyph, name){
+  return '<span class="wg">'+(GLYPH_SVG[glyph]||GLYPH_SVG.house)+'</span>'+escapeHTML(name);
+}
+
+/* §11 KEY LOCATIONS — a small fixed set of place labels beyond the named
+   buildings (the plaza, Central Wharf, Mission Dolores), small glyph +
+   name at close-to-mid zoom. Only documented places; no Post Office label —
+   no documented site survives in this build's evidence base to place one. */
+var LOC_POINTS = (function(){
+  var cw = gridToWorld(GEO.streetsU.montgomery, GEO.streetsV.clay);
+  return [
+    { name:"The Plaza", glyph:"flag", x:PLAZA_CENTER.x, z:PLAZA_CENTER.z,
+      record:"Portsmouth Square — the open square Vioget's 1839 survey kept at the town's heart; parade ground, market, and by 1849 a ring of round-the-clock gambling houses." },
+    { name:"Central Wharf", glyph:"anchor", x:cw.x+120, z:cw.z, foundedDay:eventDateToSimDay("1849-05-01"),
+      record:"Begun May 1849 off the foot of Clay Street and pushed ~800 feet out over the cove flats — the town's deep-water landing." },
+    { name:"Mission Dolores", glyph:"church", x:OUTPOSTS.mission.x, z:OUTPOSTS.mission.z,
+      record:"Mission San Francisco de Asís (founded 1776) — the peninsula's oldest settlement, a cluster of adobes at the end of the sand-hill road." }
+  ];
+})();
+var locLabelPool = [];
+(function buildLocLabelPool(){
+  var hudEl = document.getElementById("hud");
+  LOC_POINTS.forEach(function(p){
+    var el = document.createElement("div");
+    el.className = "wlbl wlbl-loc";
+    el.innerHTML = locLabelHTML(p.glyph, p.name);
+    el.addEventListener("click", function(e){ e.stopPropagation(); openPlaceInspector(p); });
+    hudEl.appendChild(el);
+    p.el = el; locLabelPool.push(el);
+  });
+})();
+function openPlaceInspector(p){
+  var html = ipRow("THE RECORD", escapeHTML(p.record));
+  if(p.foundedDay!=null) html += ipRow("BEGUN", escapeHTML(formatIssueDateLabel(todayISOFromSimDay(p.foundedDay))));
+  showInspect("PLACE", p.name, html, { documented:true });
+  SELECTED = { kind:"place", spot:p };
+  setSelRing(p.x, p.z, 22);
+  followedSlot = null; followedDocumented = null;
+}
+var _locLabelV = new THREE.Vector3();
+function updateLocPoints(alt){
+  // band: fade in below ~530m, gone above (the zone tier owns higher views)
+  var fade = 1 - smoothstep(430, 530, alt);
+  for(var i=0;i<LOC_POINTS.length;i++){
+    var p = LOC_POINTS[i], el = p.el;
+    if(fade<0.02 || (p.foundedDay!=null && simDay<p.foundedDay)){ el.style.opacity=0; continue; }
+    var y = terrainHeight(p.x,p.z)+4;
+    _locLabelV.set(p.x,y,p.z).applyMatrix4(camera.matrixWorldInverse);
+    if(_locLabelV.z>-1){ el.style.opacity=0; continue; }
+    _locLabelV.set(p.x,y,p.z).project(camera);
+    if(_locLabelV.x<-1.05||_locLabelV.x>1.05||_locLabelV.y<-1.05||_locLabelV.y>1.05){ el.style.opacity=0; continue; }
+    el.style.opacity = fade*0.92;
+    el.style.left = ((_locLabelV.x*0.5+0.5)*window.innerWidth)+"px";
+    el.style.top = ((-_locLabelV.y*0.5+0.5)*window.innerHeight)+"px";
+  }
+}
 var _bldgLabelV = new THREE.Vector3();
 // LABEL TIER FIX (usability fix, 2026-07-09): name chips now belong ONLY to
 // the close-in band (<=buildingLabelAlwaysAlt, ~120m) on every input type —
@@ -6690,7 +7001,7 @@ function updateBuildingLabels(alt){
     _bldgLabelV.set(spot.x, spot.y+spot.h+1.4, spot.z).project(camera);
     if(_bldgLabelV.x<-1.05||_bldgLabelV.x>1.05||_bldgLabelV.y<-1.05||_bldgLabelV.y>1.05){ el.style.opacity=0; el._spot=null; continue; }
     var sx = (_bldgLabelV.x*0.5+0.5)*window.innerWidth, sy = (-_bldgLabelV.y*0.5+0.5)*window.innerHeight;
-    el.textContent = spot.name.toUpperCase();
+    if(el._spot!==spot) el.innerHTML = locLabelHTML(locGlyphFor(spot), spot.name);
     el.style.opacity = 0.9;
     el.style.left = sx+"px";
     el.style.top = sy+"px";
@@ -6706,16 +7017,9 @@ function updateBuildingLabels(alt){
    opaque by ~450m, fades back out below buildingLabelAlwaysAlt(250) where
    true-scale signage/architecture itself carries the identity instead —
    same "signs are the wayfinding, chips are the fallback" discipline the
-   named-landmark labels above already follow.
+   named-landmark labels above already follow. (GLYPH_SVG itself moved up
+   beside the location-label tier, s42 — the two tiers share the marks.)
    ===================================================================== */
-var GLYPH_SVG = {
-  fork:  '<svg viewBox="0 0 16 16"><path d="M5 2v5M8 2v5M11 2v5M8 7v7" stroke="#2b1d0e" stroke-width="1.3" fill="none" stroke-linecap="round"/></svg>',
-  glass: '<svg viewBox="0 0 16 16"><path d="M5 3h6l-1.5 8h-3z" fill="none" stroke="#2b1d0e" stroke-width="1.2"/><path d="M6.5 13h3" stroke="#2b1d0e" stroke-width="1.2" stroke-linecap="round"/></svg>',
-  cards: '<svg viewBox="0 0 16 16"><rect x="4" y="4" width="6" height="8" rx="1" transform="rotate(-14 7 8)" fill="none" stroke="#2b1d0e" stroke-width="1.1"/><rect x="6.5" y="4" width="6" height="8" rx="1" fill="none" stroke="#2b1d0e" stroke-width="1.1"/></svg>',
-  bed:   '<svg viewBox="0 0 16 16"><rect x="3" y="7.5" width="10" height="4" fill="none" stroke="#2b1d0e" stroke-width="1.1"/><path d="M3 7.5V4h3v3.5" stroke="#2b1d0e" stroke-width="1.1" fill="none"/></svg>',
-  anvil: '<svg viewBox="0 0 16 16"><path d="M3 6.5h10l-2 2H6z" fill="none" stroke="#2b1d0e" stroke-width="1.1"/><rect x="6.5" y="8.5" width="3" height="3.5" fill="none" stroke="#2b1d0e" stroke-width="1.1"/></svg>',
-  barrel:'<svg viewBox="0 0 16 16"><rect x="5" y="2" width="6" height="12" rx="2.4" fill="none" stroke="#2b1d0e" stroke-width="1.1"/><path d="M5 6h6M5 10h6" stroke="#2b1d0e" stroke-width="1"/></svg>'
-};
 var BIZ_GLYPH_POOL = SCT(10), bizGlyphPool = []; // decluttered hard cap (was 30)
 (function buildBizGlyphPool(){
   var hudEl = document.getElementById("hud");
@@ -6787,16 +7091,20 @@ function updateBizGlyphs(alt){
    ===================================================================== */
 var LABEL_DECLUTTER_CAP = 8;
 var LABEL_DECLUTTER_INTERVAL = 200; // ms (~5Hz)
-var LABEL_PAD = 3; // px slack before two chips count as "overlapping"
-var _declutterSuppressed = new WeakSet();
-var _declutterAcceptedRects = []; // this tick's accepted chip boxes — consumed by the street-label
+var LABEL_PAD = 3; // px slack before two labels count as "overlapping"
+var LABEL_DECLUTTER_HYST_MS = 280;  // s42: street-engine-style hysteresis — a
+                                    // label must stay accepted/rejected this
+                                    // long before appearing/disappearing, so
+                                    // zoom sweeps cross-fade instead of popping
+var _declutterAcceptedRects = []; // this tick's accepted label boxes — consumed by the street-label
                                   // engine (recomputeStreetLabelPlacements) as blockers, so street
-                                  // names always yield to chips without a second collision system
+                                  // names always yield to point labels without a second collision system
 var _lastDeclutterRun = 0;
+var _dcState = new WeakMap(); // el -> {st:"off"|"pending"|"on"|"leaving", since}
 // shared screen-rect overlap test — used by this engine AND the street-label engine above
 function rectsOverlap(a,b,pad){ return a.left<b.right+pad && a.right+pad>b.left && a.top<b.bottom+pad && a.bottom+pad>b.top; }
 function _labelHalfSize(el, kind){
-  if(kind==="glyph") return { hw:13, hh:13 };
+  if(kind==="glyph") return { hw:10, hh:10 };
   // prefer the element's real rendered box (screening #5 item c: the
   // character-count estimate under-measured wide chips, letting "slight"
   // overlaps through the declutter); fall back to the estimate pre-layout.
@@ -6817,12 +7125,23 @@ function _declutterCollect(pool, kind, priority, buildingRelated, out){
     });
   });
 }
-function recomputeLabelDeclutter(){
+/* s42: EVERY point-label category now routes through this one engine —
+   documented moments, building/location names, biz glyphs, ships, zones,
+   and the region/waterway tier (geoLabelEls, filled by buildLabels below).
+   Fixed UI panels (title/clock/scrubber/ticker/horizon bar/beat card/
+   inspect panel — collectUIBlockerRects, shared with the street engine)
+   enter the pass as pre-accepted blockers: no world label may underlap
+   chrome (the user-reported zoomed-out collision). Street labels keep
+   yielding via _declutterAcceptedRects, same as before. */
+function recomputeLabelDeclutter(now){
   var items = [];
-  _declutterCollect(documentedLabels, "text", 4, false, items);
-  _declutterCollect(buildingLabelPool, "text", 3, true, items);
-  _declutterCollect(bizGlyphPool, "glyph", 2, true, items);
-  _declutterCollect(shipLabelPool, "text", 1, false, items);
+  _declutterCollect(documentedLabels, "text", 7, false, items);
+  _declutterCollect(buildingLabelPool, "text", 6, true, items);
+  _declutterCollect(locLabelPool, "text", 5, false, items);
+  _declutterCollect(bizGlyphPool, "glyph", 4, true, items);
+  _declutterCollect(shipLabelPool, "text", 3, false, items);
+  _declutterCollect(zoneLabelEls, "text", 2, false, items);
+  _declutterCollect(geoLabelEls, "text", 1, false, items); // regions/waterways: biggest text, lowest priority — they yield
   var cx = window.innerWidth/2, cy = window.innerHeight/2;
   items.forEach(function(it){ var dx=it.cx-cx, dy=it.cy-cy; it.d2 = dx*dx+dy*dy; });
   items.sort(function(a,b){
@@ -6831,27 +7150,75 @@ function recomputeLabelDeclutter(){
     return a.d2-b.d2;
   });
   var accepted = [], buildingCount = 0;
-  var suppressed = new WeakSet();
+  var uiRects = collectUIBlockerRects();
+  for(var u=0; u<uiRects.length; u++) accepted.push(uiRects[u]); // chrome wins, always
+  var acceptedWorld = [];
   items.forEach(function(it){
+    it._won = true;
     if(!it.exempt){
-      if(it.buildingRelated && buildingCount>=LABEL_DECLUTTER_CAP){ suppressed.add(it.el); return; }
-      for(var i=0;i<accepted.length;i++){
-        if(rectsOverlap(it, accepted[i], LABEL_PAD)){ suppressed.add(it.el); return; }
+      if(it.buildingRelated && buildingCount>=LABEL_DECLUTTER_CAP){ it._won=false; }
+      else {
+        for(var i=0;i<accepted.length;i++){
+          if(rectsOverlap(it, accepted[i], LABEL_PAD)){ it._won=false; break; }
+        }
       }
     }
-    accepted.push(it);
+    if(!it._won) return;
+    accepted.push(it); acceptedWorld.push(it);
     if(it.buildingRelated) buildingCount++;
   });
-  _declutterSuppressed = suppressed;
-  _declutterAcceptedRects = accepted.map(function(a){ return { left:a.left, right:a.right, top:a.top, bottom:a.bottom }; });
+  // HYSTERESIS state machine (reused from the street-label engine): won
+  // items persist ~280ms before appearing; losers keep rendering that long
+  // before the CSS fade-out — no popping while pinch-zooming through bands.
+  items.forEach(function(it){
+    var s = _dcState.get(it.el);
+    if(!s){ s = { st:"off", since:now }; _dcState.set(it.el, s); }
+    if(it._won){
+      if(s.st==="off"){ s.st="pending"; s.since=now; }
+      else if(s.st==="pending" && now-s.since>=LABEL_DECLUTTER_HYST_MS){ s.st="on"; }
+      else if(s.st==="leaving"){ s.st="on"; }
+    } else {
+      if(s.st==="pending"){ s.st="off"; }
+      else if(s.st==="on"){ s.st="leaving"; s.since=now; }
+      else if(s.st==="leaving" && now-s.since>=LABEL_DECLUTTER_HYST_MS){ s.st="off"; }
+    }
+  });
+  _declutterAcceptedRects = acceptedWorld.map(function(a){ return { left:a.left, right:a.right, top:a.top, bottom:a.bottom }; });
 }
+var _DECLUTTER_POOLS_ALL = null;
 function applyLabelDeclutter(now){
   if(now-_lastDeclutterRun >= LABEL_DECLUTTER_INTERVAL){
     _lastDeclutterRun = now;
-    recomputeLabelDeclutter();
+    recomputeLabelDeclutter(now);
   }
-  function hide(pool){ pool.forEach(function(el){ if(_declutterSuppressed.has(el)) el.style.opacity = 0; }); }
-  hide(documentedLabels); hide(buildingLabelPool); hide(bizGlyphPool); hide(shipLabelPool);
+  if(!_DECLUTTER_POOLS_ALL) _DECLUTTER_POOLS_ALL = [documentedLabels, buildingLabelPool, locLabelPool, bizGlyphPool, shipLabelPool, zoneLabelEls, geoLabelEls];
+  _DECLUTTER_POOLS_ALL.forEach(function(pool){
+    pool.forEach(function(el){
+      var s = _dcState.get(el);
+      if(s && (s.st==="off"||s.st==="pending") && parseFloat(el.style.opacity)>0.05) el.style.opacity = 0;
+    });
+  });
+}
+var geoLabelEls = []; // regions + waterways — filled by buildLabels() far below
+
+/* s42 INSPECT LAW — inspectable-mesh registry: any InstancedMesh whose
+   every instance is the same species/kind (trees, fauna) registers here
+   with its catalog identity; the tap raycaster resolves a hit to a
+   species card without per-instance bookkeeping. */
+var INSPECT_MESHES = [];
+function tagInspect(mesh, kind, species, note){
+  if(!mesh) return mesh;
+  mesh.userData._inspect = { kind:kind, species:species, note:note||null };
+  INSPECT_MESHES.push(mesh);
+  return mesh;
+}
+function openSpeciesInspector(info, x, z, r){
+  var html = ipRow("SPECIES", escapeHTML(info.species));
+  if(info.note) html += ipRow("THE RECORD", escapeHTML(info.note));
+  showInspect(info.kind.toUpperCase(), info.species, html, {});
+  SELECTED = { kind:info.kind, x:x, z:z };
+  setSelRing(x, z, r||2.5);
+  followedSlot = null; followedDocumented = null;
 }
 
 /* =====================================================================
@@ -8039,23 +8406,27 @@ function updateWaterfrontLife(){
 }
 
 /* =====================================================================
-   GEOGRAPHIC LABELS — parchment chips, fade in above ~1200m
+   GEOGRAPHIC LABELS — s42 §11 grammar split: WATERWAYS (blue-toned italic
+   serif, title case — Yerba Buena Cove, San Francisco Bay, the Golden
+   Gate, Mission Creek pushed in at buildLabels once the marsh site is
+   known) vs REGIONS (large, very faint caps that own the high altitudes).
+   No more parchment chips — floating haloed text only.
    ===================================================================== */
 /* Hill/landmark label positions verified against the baked heightmap
    (tools/debug-region.js peak search) rather than the old procedural
    ring's hand-picked, unverified coordinates — see research/peninsula-1846.md
    for the source bearings/distances used to seed the search. */
 var LABELS = [
-  { name:"GOLDEN GATE",           x:-4000, z:-3450, y:40 },
-  { name:"BAY OF SAN FRANCISCO",  x:2600,  z:-1700, y:30 },
-  { name:"YERBA BUENA COVE",      x:200,   z:20,    y:20 },
-  { name:"TELEGRAPH HILL",        x:-134,  z:-808,  y:null },
-  { name:"NOB HILL",              x:-945,  z:181,   y:null },
-  { name:"RINCON HILL",           x:1076,  z:1118,  y:null },
-  { name:"YERBA BUENA ISLAND",    x:3360,  z:-1620, y:null },
-  { name:"MISSION DOLORES",       x:-1997, z:3462,  y:null },
-  { name:"THE PRESIDIO",          x:-4776, z:-234,  y:null },
-  { name:"ALCATRAZ",              x:-1600, z:-3460, y:null }
+  { name:"the Golden Gate",       cat:"water",              x:-4000, z:-3450, y:40 },
+  { name:"San Francisco Bay",     cat:"water",              x:2600,  z:-1700, y:30 },
+  { name:"Yerba Buena Cove",      cat:"water", near:true,   x:200,   z:20,    y:20 },
+  { name:"TELEGRAPH HILL",        cat:"region", x:-134,  z:-808,  y:null },
+  { name:"NOB HILL",              cat:"region", x:-945,  z:181,   y:null },
+  { name:"RINCON HILL",           cat:"region", x:1076,  z:1118,  y:null },
+  { name:"YERBA BUENA ISLAND",    cat:"region", x:3360,  z:-1620, y:null },
+  { name:"MISSION DOLORES",       cat:"region", x:-1997, z:3462,  y:null },
+  { name:"THE PRESIDIO",          cat:"region", x:-4776, z:-234,  y:null },
+  { name:"ALCATRAZ",              cat:"region", x:-1600, z:-3460, y:null }
 ];
 
 /* =====================================================================
@@ -8121,9 +8492,9 @@ var MISSION_ROAD_PTS = []; // populated below — reused as an exclusion corrido
   MISSION_ROAD_PTS = toMission.concat(southRoute);
 
   var midPt = toMission[Math.floor(toMission.length/2)];
-  LABELS.push({ name:"ROAD TO THE MISSION", x:midPt.x, z:midPt.z, y:null });
+  LABELS.push({ name:"ROAD TO THE MISSION", cat:"route", x:midPt.x, z:midPt.z, y:null });
   var farPt = southRoute[southRoute.length-1];
-  LABELS.push({ name:"EL CAMINO REAL", x:farPt.x, z:farPt.z, y:null });
+  LABELS.push({ name:"EL CAMINO REAL", cat:"route", x:farPt.x, z:farPt.z, y:null });
 })();
 
 /* =========================================================================
@@ -9000,7 +9371,8 @@ function makeHogGeo(){
   return mergeGeoms([legs,body,head,snout]); // 4-box hog, ~1.2m nose-to-rump
 }
 var HOG_CAP = 8;
-var hogMesh = new THREE.InstancedMesh(makeHogGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), HOG_CAP);
+var hogMesh = tagInspect(new THREE.InstancedMesh(makeHogGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), HOG_CAP),
+  "fauna", "Domestic hog", "Loose hogs scavenged the streets — the era's de facto garbage service (fauna-1846.md).");
 hogMesh.count = 0; scene.add(hogMesh);
 // street muck patches the hogs root between — jittered off real street-graph
 // nodes within a couple blocks of the Plaza (seeded, stable per world seed)
@@ -9047,7 +9419,8 @@ function makeGullGeo(){
   return mergeGeoms([body, wingTri(1), wingTri(-1)]); // triangle-wing bird, ~1m span
 }
 var GULL_CAP = 20;
-var gullMesh = new THREE.InstancedMesh(makeGullGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0, side:THREE.DoubleSide}), GULL_CAP);
+var gullMesh = tagInspect(new THREE.InstancedMesh(makeGullGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0, side:THREE.DoubleSide}), GULL_CAP),
+  "fauna", "Western gull", "Working the harbor and the waterfront refuse line (fauna-1846.md).");
 gullMesh.count = 0; scene.add(gullMesh);
 function makeHorseGeo(){
   var bay = new THREE.Color(0x5a3d28), darkBay = new THREE.Color(0x3c2a1c);
@@ -9112,7 +9485,8 @@ function makeQuailGeo(){
   return mergeGeoms([body,head]); // ~0.25m — true quail scale
 }
 var QUAIL_PER_COVEY = 6, QUAIL_COVEYS = 2;
-var quailMesh = new THREE.InstancedMesh(makeQuailGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), QUAIL_PER_COVEY*QUAIL_COVEYS);
+var quailMesh = tagInspect(new THREE.InstancedMesh(makeQuailGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), QUAIL_PER_COVEY*QUAIL_COVEYS),
+  "fauna", "California quail", "Coveys in the dune scrub and chaparral (fauna-1846.md).");
 quailMesh.count = 0; scene.add(quailMesh);
 var QUAIL_SITES = (function(){
   var sites = scatterSample(QUAIL_COVEYS, PLAZA_CENTER.x-750, PLAZA_CENTER.z+120, 520,
@@ -9274,6 +9648,7 @@ var cattleMesh = (function(){
       .replace("#include <begin_vertex>", "#include <begin_vertex>\nfloat cowHead = step(0.5,aPart)*(1.0-step(1.5,aPart));\nfloat cowTail = step(1.5,aPart);\ntransformed.y += cowHead*((0.5+0.5*sin(uFaunaTime*0.3+instancePhase))*0.42 - 0.12);\ntransformed.x += cowTail*sin(uFaunaTime*2.5+instancePhase*1.9)*0.08;");
   };
   var mesh = new THREE.InstancedMesh(geo, mat, CATTLE_CAP);
+  tagInspect(mesh, "fauna", "Range cattle", "Loose hide-and-tallow stock grazing the peninsula hills (fauna-1846.md).");
   mesh.count = 0; scene.add(mesh);
   return mesh;
 })();
@@ -9387,7 +9762,8 @@ function makePelicanGeo(){
   return mergeGeoms([body,head,bill,wingTri(1),wingTri(-1)]); // ~2.2m span — true brown-pelican scale
 }
 var PELICAN_N = 6;
-var pelicanMesh = new THREE.InstancedMesh(makePelicanGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0, side:THREE.DoubleSide}), PELICAN_N);
+var pelicanMesh = tagInspect(new THREE.InstancedMesh(makePelicanGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0, side:THREE.DoubleSide}), PELICAN_N),
+  "fauna", "Brown pelican", "Formation-gliders along the cove shoreline — Ayala named Alcatraz for their kind, 1775 (fauna-1846.md).");
 pelicanMesh.count = 0; scene.add(pelicanMesh);
 var PELICAN_PATH = (function(){
   var pts = [];
@@ -9428,7 +9804,8 @@ function makeHeronGeo(){
   return mergeGeoms(parts); // ~1.0m standing — true great-blue/egret scale
 }
 var HERON_N = 3;
-var heronMesh = new THREE.InstancedMesh(makeHeronGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), HERON_N);
+var heronMesh = tagInspect(new THREE.InstancedMesh(makeHeronGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), HERON_N),
+  "fauna", "Great blue heron", "Waders at the Mission Bay marsh — 'inconceivably thick' with birds in the era's accounts (fauna-1846.md).");
 heronMesh.count = 0; scene.add(heronMesh);
 var HERON_SPOTS = (function(){
   // The baked terrain keeps the Mission Bay marsh as a low near-waterline
@@ -9470,7 +9847,8 @@ function makeRatGeo(){
   return mergeGeoms([body,tail]); // ~0.36m nose-to-tail-tip — true ship-rat scale
 }
 var RAT_CAP = 10;
-var ratMesh = new THREE.InstancedMesh(makeRatGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), RAT_CAP);
+var ratMesh = tagInspect(new THREE.InstancedMesh(makeRatGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), RAT_CAP),
+  "fauna", "Ship rat", "Off the anchored fleet — the documented rat surge of the storeship waterfront (fauna-1846.md).");
 ratMesh.count = 0; scene.add(ratMesh);
 var RAT_SURGE_DAY = eventDateToSimDay("1849-08-01");
 function ratTargetCount(day){
@@ -9518,7 +9896,8 @@ function makeCatGeo(){
   return mergeGeoms([haunch,chest,head,tail]); // ~0.34m sitting — true cat scale
 }
 var CAT_CAP = 3;
-var catMesh = new THREE.InstancedMesh(makeCatGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), CAT_CAP);
+var catMesh = tagInspect(new THREE.InstancedMesh(makeCatGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), CAT_CAP),
+  "fauna", "Cat", "Shipped in against the rat surge and sold dear on the waterfront (fauna-1846.md).");
 catMesh.count = 0; scene.add(catMesh);
 var CAT_ARRIVAL_DAY = eventDateToSimDay("1849-10-01");
 var CAT_FULL_DAY = eventDateToSimDay("1849-12-01");
@@ -9557,7 +9936,8 @@ function makeDogGeo(){
   return mergeGeoms(parts); // ~0.9m nose-to-tail, ~0.55m shoulder
 }
 var DOG_CAP = 4;
-var dogMesh = new THREE.InstancedMesh(makeDogGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), DOG_CAP);
+var dogMesh = tagInspect(new THREE.InstancedMesh(makeDogGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), DOG_CAP),
+  "fauna", "Dog", "The town's loose dogs — a fixture of every street scene in the record (fauna-1846.md).");
 dogMesh.count = 0; scene.add(dogMesh);
 var DOG_GROW1 = eventDateToSimDay("1848-06-01"), DOG_GROW2 = eventDateToSimDay("1849-06-01");
 function dogTargetCount(day){ return day>=DOG_GROW2 ? 4 : (day>=DOG_GROW1 ? 3 : 2); }
@@ -10870,9 +11250,8 @@ function updatePeople(dt, camX, camZ, alt){
   personShadowMesh.count = shadowCount;
   personShadowMesh.instanceMatrix.needsUpdate = true;
 
-  if(followedSlot && personInspectorEl.classList.contains("on") && piNowEl){
-    piNowEl.innerHTML = '<span class="pi-label">NOW</span>'+escapeHTML(followedSlot._now||"—");
-  }
+  // (s42) the followed person's live NOW line now refreshes in
+  // updateSelectionRing() — the one inspect panel updates in place.
   updateDocumentedMoments(alt);
 }
 
@@ -10919,7 +11298,7 @@ var documentedMeshes = [], documentedLabels = [];
     documentedMeshes.push(mesh);
 
     var el = document.createElement("div");
-    el.className = "geo-label ship-label";
+    el.className = "wlbl wlbl-moment"; // §11: documented moments = distinct haloed beat text, no chip
     el.textContent = doc.chip;
     el.addEventListener("click", function(e){ e.stopPropagation(); openPersonInspectorForDocumented(doc); });
     hudEl.appendChild(el);
@@ -10949,17 +11328,9 @@ function updateDocumentedMoments(alt){
   });
 }
 
-/* ---- 8. Inspector + Follow + provenance toggle ---- */
-var personInspectorEl = document.getElementById("person-inspector");
-var piTierEl = document.getElementById("pi-tier");
-var piNameEl = document.getElementById("pi-name");
-var piSummaryEl = document.getElementById("pi-summary");
-var piDetailEl = document.getElementById("pi-detail");
-var piNowEl = document.getElementById("pi-now");
-var piReceiptWrapEl = document.getElementById("pi-receipt-wrap");
-var piReceiptEl = document.getElementById("pi-receipt");
+/* ---- 8. PERSON cards + Follow + provenance toggle (s42: rendered into
+   the ONE inspect panel; the #person-inspector popup is deleted). ---- */
 var followedSlot = null, followedDocumented = null;
-document.getElementById("pi-close").addEventListener("click", closePersonInspector);
 /* Clicking a HOME/WORK name in the bio card flies the camera there (spec
    ask #2) — releases follow-mode first so the per-frame follow-lock in
    animate() doesn't immediately snap the target back onto the walker. */
@@ -10967,63 +11338,106 @@ window.__piFlyTo = function(x,z,alt){
   followedSlot = null; followedDocumented = null;
   flyTo(x,z,alt);
 };
+/* §11 "documented receipts w/ click-to-paper": scan the baked feed for a
+   printed mention of a roster person's name; clicking opens THE PAPER at
+   that issue, scrolled to the item — same mechanism as the ticker click. */
+function findPaperMention(name){
+  if(!name) return null;
+  var target = name.toUpperCase();
+  var surname = null;
+  var parts = target.replace(/[.]/g,"").split(/\s+/);
+  if(parts.length>1 && parts[parts.length-1].length>3) surname = parts[parts.length-1];
+  for(var k=0;k<FEED_DATES.length;k++){
+    var dateKey = FEED_DATES[k], issue = FEED_BY_DATE[dateKey];
+    for(var i=0;i<issue.items.length;i++){
+      var it = issue.items[i];
+      var hay = ((it.headline||"")+" "+(it.text||"")).toUpperCase();
+      if(hay.indexOf(target)>=0 || (surname && hay.indexOf(surname)>=0)){
+        return { dateKey:dateKey, headline:it.headline };
+      }
+    }
+  }
+  return null;
+}
+window.__ipOpenPaper = function(dateKey, headline){
+  pendingScrollHeadline = headline;
+  paperView = "feed";
+  ppTabFeed.classList.add("active"); ppTabBroadsheet.classList.remove("active");
+  forcedIssueKey = dateKey;
+  _lastRenderKey = null;
+  setPaperOpen(true);
+};
+var _ipMention = null; // last-rendered paper mention, consumed by the delegated click below
+ipBodyEl.addEventListener("click", function(e){
+  var t = e.target;
+  if(t && t.classList && t.classList.contains("ip-paper") && _ipMention){
+    e.preventDefault();
+    window.__ipOpenPaper(_ipMention.dateKey, _ipMention.headline);
+  }
+});
 function openPersonInspectorForSlot(slot){
   var bio = generateBio(slot);
   // grounding.md cast tiers: a roster-backed person is "from the record"
   // (real name, printed role) rather than wholly simulated — quiet badge
   // text only, no meta commentary (voice rule).
-  piTierEl.textContent = bio.role ? "FROM THE RECORD" : "UNRECORDED"; piTierEl.classList.remove("documented");
-  piNameEl.textContent = bio.name;
-  var summaryTxt = bio.origin+" · "+bio.arrivedYear+" · "+bio.trade+(bio.wage?(" · "+bio.wage):"");
-  piSummaryEl.innerHTML = '<span class="pi-label">ORIGIN &middot; ARRIVED &middot; TRADE'+(bio.wage?" &middot; WAGE":"")+'</span>'+escapeHTML(summaryTxt);
-  var homeLink = '<a href="#" class="pi-fly" onclick="__piFlyTo('+slot.homePos.x.toFixed(1)+','+slot.homePos.z.toFixed(1)+',110);return false;">'+escapeHTML(slot.homeLabel)+'</a>';
-  var detailHtml = '<span class="pi-label">HOME'+(slot.workPos?" &middot; WORK":"")+'</span>Boards at '+homeLink;
+  var html = "";
+  html += ipRow("ORIGIN &middot; ARRIVED &middot; TRADE"+(bio.wage?" &middot; WAGE":""),
+    escapeHTML(bio.origin+" · "+bio.arrivedYear+" · "+bio.trade+(bio.wage?(" · "+bio.wage):"")));
+  var homeLink = '<a href="#" class="ip-fly" onclick="__piFlyTo('+slot.homePos.x.toFixed(1)+','+slot.homePos.z.toFixed(1)+',110);return false;">'+escapeHTML(slot.homeLabel)+'</a>';
+  var detailHtml = 'Boards at '+homeLink;
   if(slot.workPos){
-    detailHtml += '; works the <a href="#" class="pi-fly" onclick="__piFlyTo('+slot.workPos.x.toFixed(1)+','+slot.workPos.z.toFixed(1)+',110);return false;">'+escapeHTML(slot.workLabel)+'</a>';
+    detailHtml += '; works the <a href="#" class="ip-fly" onclick="__piFlyTo('+slot.workPos.x.toFixed(1)+','+slot.workPos.z.toFixed(1)+',110);return false;">'+escapeHTML(slot.workLabel)+'</a>';
   }
   detailHtml += bio.role ? (". Printed in the record as \""+escapeHTML(bio.role)+"\".") : (". "+escapeHTML(bio.agenda)+".");
   if(bio.family) detailHtml += escapeHTML(bio.family);
-  piDetailEl.innerHTML = detailHtml;
-  piNowEl.innerHTML = '<span class="pi-label">NOW</span>'+escapeHTML(slot._now||"—");
-  piReceiptWrapEl.style.display = "none";
-  personInspectorEl.classList.add("on");
+  html += ipRow("HOME"+(slot.workPos?" &middot; WORK":""), detailHtml);
+  html += '<span class="ip-label">NOW</span><span class="ip-field ip-now" id="ip-now">'+escapeHTML(slot._now||"—")+'</span>';
+  _ipMention = bio.role ? findPaperMention(bio.name) : null; // only roster names can be in print
+  if(_ipMention){
+    html += '<span class="ip-label">RECEIPT</span><span class="ip-field"><a href="#" class="ip-paper" onclick="return false;">in the paper: '
+      + escapeHTML(_ipMention.headline)+' →</a></span>';
+  }
+  showInspect(bio.role ? "PERSON — FROM THE RECORD" : "PERSON — UNRECORDED", bio.name, html,
+    { hint:"Esc — release" });
+  SELECTED = { kind:"person", slot:slot };
+  setSelRing(slot._x, slot._z, 1.4);
   followedSlot = slot; followedDocumented = null;
   setZoomMeters(70);
 }
 function openPersonInspectorForDocumented(doc){
-  piTierEl.textContent = "DOCUMENTED"; piTierEl.classList.add("documented");
-  piNameEl.textContent = doc.name;
-  piSummaryEl.innerHTML = '<span class="pi-label">SUMMARY</span>'+escapeHTML(doc.summary);
-  piDetailEl.innerHTML = '<span class="pi-label">RECEIPT NOTE</span>'+escapeHTML(doc.detail);
-  if(doc.receiptUrl){
-    piReceiptEl.href = doc.receiptUrl;
-    piReceiptEl.textContent = doc.receiptNote ? (doc.receiptNote+" →") : "view the original page →";
-    piReceiptWrapEl.style.display = "";
-  } else piReceiptWrapEl.style.display = "none";
-  personInspectorEl.classList.add("on");
+  var html = "";
+  html += ipRow("SUMMARY", escapeHTML(doc.summary));
+  html += ipRow("RECEIPT NOTE", escapeHTML(doc.detail));
+  _ipMention = null;
+  showInspect("DOCUMENTED", doc.name, html, {
+    documented:true,
+    receiptUrl: doc.receiptUrl || null,
+    receiptText: doc.receiptNote ? (doc.receiptNote+" →") : "view the original page →",
+    hint:"Esc — release"
+  });
+  SELECTED = { kind:"documented", doc:doc };
+  setSelRing(doc.x, doc.z, 2.2);
   followedDocumented = doc; followedSlot = null;
   setZoomMeters(90);
-}
-function closePersonInspector(){
-  personInspectorEl.classList.remove("on");
-  followedSlot = null; followedDocumented = null;
 }
 var provenanceOnly = false;
 var hudProvenanceEl = document.getElementById("hud-provenance");
 function setProvenanceOnly(on){
   provenanceOnly = on;
   hudProvenanceEl.classList.toggle("on", on);
-  if(on && followedSlot) closePersonInspector(); // simulated fill (and its card) hides under the record-only toggle
+  if(on && followedSlot) closeInspect(); // simulated fill (and its card) hides under the record-only toggle
 }
 window.addEventListener("keydown", function(e){
   if(e.key==="p"||e.key==="P") setProvenanceOnly(!provenanceOnly);
-  if(e.key==="Escape") closePersonInspector();
+  if(e.key==="Escape") closeInspect(); // §11: ESC deselects (one inspect surface)
 });
 
-/* ---- 9. click/tap selection — raycast against the people InstancedMeshes
-   + the two documented-moment meshes; ship selection stays on its existing
-   HTML-label click path (unaffected). Called from the pointer/touch input
-   handlers below with a movement threshold already applied there. ---- */
+/* ---- 9. click/tap selection (s42 §11 INSPECT LAW — the doPick): one
+   resolver for EVERY selectable entity kind, priority ordered
+     person > documented figure > ship > tree/fauna > building/tent >
+     street > zone > empty (deselect).
+   Called from the pointer/touch input handlers below with a movement
+   threshold already applied there. ---- */
 var peopleRaycaster = new THREE.Raycaster();
 var _peopleNdc = new THREE.Vector2();
 /* U3 hit-target fix: a walking figure's capsule is only ~0.2-0.27m wide in
@@ -11051,25 +11465,122 @@ function trySnapToNearestPerson(clientX, clientY){
   if(best){ openPersonInspectorForSlot(best); return true; }
   return false;
 }
+function metersPerPixelAtFocus(){
+  return 2*Math.tan(camera.fov*Math.PI/360)/window.innerHeight * (CAM ? CAM.radius : 500);
+}
+function _distToSegXZ(x,z,x0,z0,x1,z1){
+  var dx=x1-x0, dz=z1-z0, len2=dx*dx+dz*dz;
+  var t = len2>0 ? ((x-x0)*dx+(z-z0)*dz)/len2 : 0;
+  t = clamp(t,0,1);
+  return { d: Math.hypot(x-(x0+dx*t), z-(z0+dz*t)), px:x0+dx*t, pz:z0+dz*t };
+}
+/* STREET pick: nearest era-gated street polyline (active checkpoint extent,
+   current skew) within its own width or ~12 screen px, whichever is wider. */
+function pickStreetAt(px, pz){
+  var mpp = metersPerPixelAtFocus();
+  var best = null, bestD = 1e9;
+  for(var i=0;i<STREETS_RUNTIME.length;i++){
+    var s = STREETS_RUNTIME[i];
+    var gate = s.surveyedDay!=null ? s.surveyedDay : s.firstMentionDay;
+    if(gate==null || simDay<gate) continue;
+    var pts = streetActiveWorldPts(s, simDay, CURRENT_STREET_SKEW);
+    if(!pts || pts.length<2) continue;
+    for(var j=1;j<pts.length;j++){
+      var r = _distToSegXZ(px,pz, pts[j-1].x,pts[j-1].z, pts[j].x,pts[j].z);
+      if(r.d<bestD){ bestD=r.d; best={ s:s, x:r.px, z:r.pz, d:r.d }; }
+    }
+  }
+  if(!best) return null;
+  var thresh = Math.max(best.s.widthM*0.75, mpp*12, 5);
+  return bestD<=thresh ? best : null;
+}
+function tryPickShip(raycaster){
+  var hits = raycaster.intersectObjects(shipHullMeshes.concat([mastClusterMesh]), false);
+  if(!hits.length) return false;
+  var h = hits[0];
+  var v = null;
+  var ti = shipHullMeshes.indexOf(h.object);
+  if(ti>=0) v = shipPickVisits[ti][h.instanceId];
+  else if(h.object===mastClusterMesh) v = mastPickVisits[h.instanceId];
+  if(v){ openShipInspector(v); return true; }
+  return false;
+}
+function tryPickSpecies(raycaster){
+  var hits = raycaster.intersectObjects(INSPECT_MESHES, false);
+  if(!hits.length) return false;
+  var h = hits[0];
+  var info = h.object.userData._inspect;
+  if(!info) return false;
+  openSpeciesInspector(info, h.point.x, h.point.z, info.kind==="tree" ? 3.2 : 2);
+  return true;
+}
+function tryPickGroundEntity(gx, gz, alt){
+  // buildings (village core, era-gated), then growth frame houses, tents
+  var i, best=null, bestD=1e9, d;
+  for(i=0;i<VILLAGE_BUILDING_SPOTS.length;i++){
+    var sp = VILLAGE_BUILDING_SPOTS[i];
+    if(sp.foundedDay!=null && simDay<sp.foundedDay) continue;
+    d = Math.hypot(sp.x-gx, sp.z-gz);
+    if(d < Math.max(sp.w,sp.d)*0.75+1.5 && d<bestD){ bestD=d; best={kind:"village", spot:sp}; }
+  }
+  if(best){ openBuildingInspector(best.spot); return true; }
+  for(i=0;i<spawnedBuildings.length;i++){
+    var gb = spawnedBuildings[i];
+    d = Math.hypot(gb.x-gx, gb.z-gz);
+    if(d<4.5 && d<bestD){ bestD=d; best={kind:"growth", spot:gb}; }
+  }
+  if(best){ openGrowthBuildingInspector(best.spot); return true; }
+  for(i=0;i<spawnedTents.length;i++){
+    var tt = spawnedTents[i];
+    d = Math.hypot(tt.x-gx, tt.z-gz);
+    if(d<3 && d<bestD){
+      bestD=d;
+      var cand = tentCandidates[i]; // growReveal keeps index parity with the candidate pool
+      best={kind:"tent", spot:{ x:tt.x, z:tt.z, spawnDay:tt.spawnDay, label:cand?cand.label:null }};
+    }
+  }
+  if(best){ openTentInspector(best.spot); return true; }
+  // streets
+  var st = pickStreetAt(gx, gz);
+  if(st){ openStreetInspector(st.s, st.x, st.z); return true; }
+  // zones — only meaningful above the close-in band (their tint tier)
+  if(alt>250){
+    for(i=0;i<DISTRICT_ZONES.length;i++){
+      var z = DISTRICT_ZONES[i];
+      if(z.revealDay>=0 && simDay<z.revealDay) continue;
+      if(Math.hypot(z.cx-gx, z.cz-gz) <= z.r*0.85){ openZoneInspector(z); return true; }
+    }
+  }
+  return false;
+}
 function trySelectAtScreenXY(clientX, clientY){
   _peopleNdc.x = (clientX/window.innerWidth)*2-1;
   _peopleNdc.y = -(clientY/window.innerHeight)*2+1;
   peopleRaycaster.setFromCamera(_peopleNdc, camera);
+  // 1. people + the documented-moment figures (precise)
   var targets = personMeshes.concat(documentedMeshes);
   var hits = peopleRaycaster.intersectObjects(targets, false);
-  if(hits.length===0){
-    if(trySnapToNearestPerson(clientX, clientY)) return true;
-    if(followedSlot || followedDocumented) closePersonInspector(); // "click ground to release"
-    return false;
+  if(hits.length){
+    var hit = hits[0];
+    var mi = personMeshes.indexOf(hit.object);
+    if(mi>=0){
+      var slot = (personMeshSlots[mi]||[])[hit.instanceId];
+      if(slot){ openPersonInspectorForSlot(slot); return true; }
+    }
+    var di = documentedMeshes.indexOf(hit.object);
+    if(di>=0){ openPersonInspectorForDocumented(DOCUMENTED_MOMENTS[di]); return true; }
   }
-  var hit = hits[0];
-  var mi = personMeshes.indexOf(hit.object);
-  if(mi>=0){
-    var slot = (personMeshSlots[mi]||[])[hit.instanceId];
-    if(slot){ openPersonInspectorForSlot(slot); return true; }
-  }
-  var di = documentedMeshes.indexOf(hit.object);
-  if(di>=0){ openPersonInspectorForDocumented(DOCUMENTED_MOMENTS[di]); return true; }
+  // 2. near-miss snap to a person (tiny capsules, U3 fix)
+  if(trySnapToNearestPerson(clientX, clientY)) return true;
+  // 3. ships (hulls + the mast-cluster overflow tier)
+  if(tryPickShip(peopleRaycaster)) return true;
+  // 4. trees / fauna (species-tagged instanced meshes)
+  if(tryPickSpecies(peopleRaycaster)) return true;
+  // 5. ground entities: buildings, tents, streets, zones
+  var g = groundHit(clientX, clientY);
+  if(g && tryPickGroundEntity(g.x, g.z, lastKnownAlt)) return true;
+  // 6. empty — §11: tap-empty deselects
+  closeInspect();
   return false;
 }
 
@@ -11179,6 +11690,7 @@ function trySelectAtScreenXY(clientX, clientY){
   }
   oakSamples = oakSamples.concat(scatterSample(SCT(400), OUTPOSTS.mission.x, OUTPOSTS.mission.z, 520, oakMissionTest));
   var oakMesh = buildScatterMesh(makeOakGeo(), propMat(), oakSamples, { minScale:1.4, maxScale:2.7 });
+  tagInspect(oakMesh, "tree", "Coast live oak", "Clustered in sheltered valleys and around Mission Dolores (peninsula-1846.md).");
   scene.add(oakMesh); farScatterMeshes.push(oakMesh);
 
   // ---- willows: low-lying flat ground (springs/creek proxy) + near the Mission's arroyo ----
@@ -11190,12 +11702,14 @@ function trySelectAtScreenXY(clientX, clientY){
   }
   willowSamples = willowSamples.concat(scatterSample(SCT(160), OUTPOSTS.mission.x, OUTPOSTS.mission.z, 450, willowMissionTest));
   var willowMesh = buildScatterMesh(makeWillowGeo(), propMat(), willowSamples, { minScale:1.3, maxScale:2.3 });
+  tagInspect(willowMesh, "tree", "Willow", "At springs and creek lines — the low wet ground's marker tree (peninsula-1846.md).");
   scene.add(willowMesh); farScatterMeshes.push(willowMesh);
 
   // ---- laurel/buckeye: sparse, scattered through the scrub band ----
   function laurelTest(x,z,h){ return h>12 && h<80 && clearOfManMade(x,z) && localRelief(x,z)<14; }
   var laurelSamples = scatterSample(SCT(700), originX, originZ, 2450, laurelTest);
   var laurelMesh = buildScatterMesh(makeLaurelGeo(), propMat(), laurelSamples, { minScale:1.3, maxScale:2.2 });
+  tagInspect(laurelMesh, "tree", "California laurel / buckeye", "Scattered singles through the scrub band (peninsula-1846.md).");
   scene.add(laurelMesh); farScatterMeshes.push(laurelMesh);
 
   // ---- rock outcrops: clustered groups on Telegraph/Rincon/Fort Point flanks + scattered singles on steep slopes ----
@@ -11212,6 +11726,7 @@ function trySelectAtScreenXY(clientX, clientY){
   function steepSlopeTest(x,z,h){ return h>16 && h<140 && clearOfManMade(x,z) && Math.abs(leeBias(x,z))>0.28; }
   boulderSamples = boulderSamples.concat(scatterSample(SCT(220), originX, originZ, 2500, steepSlopeTest));
   var boulderMesh = buildScatterMesh(makeBoulderGeo(), propMat(), boulderSamples, { minScale:1.6, maxScale:5.5 });
+  tagInspect(boulderMesh, "outcrop", "Serpentine outcrop", "Grey-green rock on the Telegraph, Rincon, and Fort Point flanks (peninsula-1846.md).");
   scene.add(boulderMesh); farScatterMeshes.push(boulderMesh);
 
   // ---- chaparral band: denser coyote-brush clumps on mid slopes (joins the near-fade scatter group) ----
@@ -11223,21 +11738,39 @@ function trySelectAtScreenXY(clientX, clientY){
 
 (function buildLabels(){
   var hudEl = document.getElementById("hud");
+  // §11 waterway set: Mission Creek joins here (its marsh-edge site is
+  // found at runtime by the heron placement search — reuse it rather than
+  // invent a second coordinate for the same feature).
+  if(typeof HERON_SPOTS!=="undefined" && HERON_SPOTS.length){
+    LABELS.push({ name:"Mission Creek", cat:"water", near:true, x:HERON_SPOTS[0].x, z:HERON_SPOTS[0].z, y:null });
+  }
   LABELS.forEach(function(L){
     var el = document.createElement("div");
-    el.className = "geo-label";
+    el.className = "wlbl " + (L.cat==="water" ? "wlbl-water" : L.cat==="route" ? "wlbl-route" : "wlbl-region");
     el.textContent = L.name;
     hudEl.appendChild(el);
     L.el = el;
-    var gy = (L.y!==null) ? L.y : groundHeight(L.x,L.z)+45;
+    geoLabelEls.push(el); // shared declutter engine pool
+    var gy = (L.y!==null && L.y!==undefined) ? L.y : groundHeight(L.x,L.z)+45;
     L.pos = new THREE.Vector3(L.x, gy, L.z);
   });
 })();
 var _labelV = new THREE.Vector3();
+/* §11 zoom choreography: regions OWN the high band (fade in ascending
+   ~1050-1600m and stay); big waterways ride a slightly lower shoulder;
+   near waterways (the cove, Mission Creek) live in the street/zone band
+   and bow out again at altitude. All cross-fades — no popping. */
+function _geoLabelBandOpacity(L, alt){
+  if(L.cat==="water"){
+    if(L.near) return smoothstep(260, 430, alt) * (1 - smoothstep(2600, 4200, alt));
+    return smoothstep(750, 1200, alt);
+  }
+  return smoothstep(1050, 1600, alt);
+}
 function updateLabels(alt){
-  var fade = smoothstep(CFG.labelFadeStart, CFG.labelFadeFull, alt);
   for(var i=0;i<LABELS.length;i++){
     var L = LABELS[i];
+    var fade = _geoLabelBandOpacity(L, alt);
     if(fade<0.02){ L.el.style.opacity = 0; continue; }
     // in front of the camera?
     _labelV.copy(L.pos).applyMatrix4(camera.matrixWorldInverse);
@@ -12143,6 +12676,45 @@ window.__P1850 = {
     if(o.x!=null && o.z!=null){ CAM.focusT.set(o.x, groundHeight(o.x,o.z)+2, o.z); }
     if(o.snap){ CAM.t=CAM.tT; CAM.yaw=CAM.yawT; CAM.pitchOff=CAM.pitchOffT; CAM.focus.copy(CAM.focusT); }
   },
+  /* s42 QA — inspect-law verification hooks: screen-coordinate pick (the
+     real doPick path), panel readback, and direct per-kind selectors. */
+  pick: function(x,y){ return trySelectAtScreenXY(x,y); },
+  inspectPanel: function(){
+    return inspectPanelEl.classList.contains("on")
+      ? { kind: ipKindEl.textContent, name: ipNameEl.textContent, body: ipBodyEl.innerText }
+      : null;
+  },
+  toScreen: function(x,z){
+    var v = new THREE.Vector3(x, terrainHeight(x,z), z).project(camera);
+    return { x:(v.x*0.5+0.5)*window.innerWidth, y:(-v.y*0.5+0.5)*window.innerHeight, front: v.z<1 };
+  },
+  closeInspect: closeInspect,
+  _sel: {
+    person: openPersonInspectorForSlot,
+    documented: openPersonInspectorForDocumented,
+    ship: openShipInspector,
+    building: openBuildingInspector,
+    growth: openGrowthBuildingInspector,
+    tent: openTentInspector,
+    street: openStreetInspector,
+    zone: openZoneInspector,
+    species: openSpeciesInspector,
+    place: openPlaceInspector
+  },
+  get _selData(){
+    return { slots:ALL_PEOPLE_SLOTS, villageSpots:VILLAGE_BUILDING_SPOTS, homes:HOME_BUILDING_SPOTS,
+      streets:STREETS_RUNTIME, visits:shipVisits, zones:DISTRICT_ZONES, growth:spawnedBuildings,
+      tentsSpawned:spawnedTents, tentCands:tentCandidates, inspectMeshes:INSPECT_MESHES, locPoints:LOC_POINTS };
+  },
+  get worldLabels(){ // every visible world label with class + screen box (collision QA)
+    var out = [];
+    document.querySelectorAll(".wlbl, .street-label, .biz-glyph").forEach(function(el){
+      if(!(parseFloat(el.style.opacity)>0.05)) return;
+      var r = el.getBoundingClientRect();
+      out.push({ cls:el.className, text:(el.innerText||"").slice(0,40), left:Math.round(r.left), top:Math.round(r.top), right:Math.round(r.right), bottom:Math.round(r.bottom) });
+    });
+    return out;
+  },
   get streetLabels(){ // s16 QA: every street label currently rendering, with screen box + rotation
     var out=[];
     streetLabelSlots.forEach(function(sl){
@@ -12722,7 +13294,7 @@ canvas.addEventListener("contextmenu", function(e){ e.preventDefault(); });
    selector below) opts out of map navigation; label chips count as map
    surface (drag pans, tap still opens them via their own click handlers). */
 var UI_STEAL_SELECTOR = "#paper-pane,#hud-menu-sheet,#hud-menu-toggle,#beat-card,"+
-  "#ship-inspector,#person-inspector,#building-inspector,#paper-toggle,"+
+  "#inspect-panel,#paper-toggle,"+
   "#hud-hint-toggle,#hud-tilt-toggle,#hud-ticker,#hud-hint,#hud-seed,#hud-title,"+
   "#hud-clock,#hud-altitude,#horizon-ring,#touch-debug,.scr-tab,.scr-track,"+
   "a,button,input,textarea,select";
@@ -13225,10 +13797,13 @@ function animate(){
   updateSmoke(dt);
   updateDistrictZones(alt);
   updateBuildingLabels(alt);
+  updateLocPoints(alt);   // s42 §11: key-location glyph+name tier (plaza / Central Wharf / Mission)
   updateBizGlyphs(alt);
   updateGridSwing(); // refreshes CURRENT_STREET_SKEW before updateStreetLabels() reads it, so labels never lag a frame behind the street paint
   updateStreetLabels(alt);
+  updateLabels(alt);      // s42: regions/waterways moved BEFORE the declutter pass (they used to run after render, invisible to it)
   applyLabelDeclutter(performance.now()); // must run after every per-type label/glyph/ship update above
+  updateSelectionRing();  // s42 §11: selection highlight tracks the selected entity per frame
   updateRain(dt, camera.position.x, camera.position.z, alt);
   updateFogBanks(dt);
   updatePaper();
@@ -13240,7 +13815,6 @@ function animate(){
   ghostGroup.visible = ghostT>0.003;
 
   renderer.render(scene, camera);
-  updateLabels(alt);
 }
 animate();
 
