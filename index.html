@@ -857,14 +857,26 @@ function updateGridSwing(){
   // building count has moved — street wear now reads nearby built density,
   // which changes continuously as the town grows, not just at the fixed
   // survey/checkpoint thresholds streetTopologyMayHaveChanged() tracks.
-  var buildingCountChanged = spawnedBuildings.length !== LAST_SPLAT_BUILDING_COUNT;
-  if((Math.abs(t-LAST_SPLAT_SWING_T)>0.015 || topologyChanged || buildingCountChanged) && typeof renderGroundSplat==="function"){
-    LAST_SPLAT_SWING_T = t;
-    LAST_SPLAT_SIMDAY = simDay;
-    LAST_SPLAT_BUILDING_COUNT = spawnedBuildings.length;
-    renderGroundSplat(CURRENT_STREET_SKEW);
+  var buildingCountChanged = (spawnedBuildings.length + spawnedTents.length) !== LAST_SPLAT_BUILDING_COUNT; // tents count too (s20 on-use ruling: tent camps wear streets)
+  var needRepaint = Math.abs(t-LAST_SPLAT_SWING_T)>0.015 || topologyChanged || buildingCountChanged;
+  if(needRepaint && typeof renderGroundSplat==="function"){
+    // REPAINT THROTTLE (s20 sprint, 2026-07-11): the hand-worn stroke
+    // engine made repaints heavier, and timelapse growth changes the
+    // building count nearly every frame — cap repaints at ~3/s of WALL
+    // time. A skipped repaint is never lost: LAST_* stays stale, so the
+    // same trigger re-fires every frame until the throttle window opens
+    // (the final state after a jump/scrub always lands within ~350ms).
+    var nowMs = performance.now();
+    if(LAST_SPLAT_SIMDAY===null || nowMs - _lastSplatRepaintMs > 350){
+      _lastSplatRepaintMs = nowMs;
+      LAST_SPLAT_SWING_T = t;
+      LAST_SPLAT_SIMDAY = simDay;
+      LAST_SPLAT_BUILDING_COUNT = spawnedBuildings.length + spawnedTents.length;
+      renderGroundSplat(CURRENT_STREET_SKEW);
+    }
   }
 }
+var _lastSplatRepaintMs = 0;
 
 /* =====================================================================
    STREET-CHECKPOINT DATA (grounding.md §9, THE STREET-CHECKPOINT LAW):
@@ -961,11 +973,28 @@ function streetVConst(id){ return STREETS_RUNTIME_BY_ID[id].polyline[0].v; } // 
    Eddy's 1849 extensions or a street's firstMentionDay arriving — exactly
    the "time-jump leaves the world stale" failure class the P0 quartet
    fixed for population/ships/people, now closed for streets too). */
+// Wear-ramp constants, hoisted out of renderGroundSplat() (s20 sprint,
+// 2026-07-11) so the repaint-threshold table below can see them: a street's
+// rendered state keeps changing through the whole mention/survey ramp, so
+// the ramp END days are repaint thresholds too — previously a date jump
+// landing mid-ramp (e.g. firstMention+10d -> firstMention+300d) crossed no
+// threshold and left both tiers painted at the stale pre-jump wear.
+// ON-USE RULING (s20 sprint, 2026-07-11, coordinator directive): the old
+// DEFAULT_WORN_DELAY fill ("no corpus citation -> read as worn ~1yr after
+// survey") is DELETED, not tuned. Every street in streets-geometry.js
+// carries wornTrackRule:"on-use", and the record is explicit that
+// O'Farrell's 1847 paper streets were paper: Market's right-of-way stayed
+// ungraded sand dunes through this sim's whole window, and the numbered
+// streets only firmed up where the 1849 Happy Valley tent settlement
+// actually was. A survey date alone now NEVER drives wear — wear comes
+// from a documented corpus first-mention (use evidence, ramped below) or
+// from real adjacent settlement density (buildings AND tent camps).
+var WEAR_MENTION_RAMP = 120;  // days from firstMentionDay to fully-worn, once documented in use
 var STREET_REPAINT_THRESHOLDS = (function(){
   var set = {};
   STREETS_RUNTIME.forEach(function(s){
     if(s.surveyedDay!=null) set[s.surveyedDay]=1;
-    if(s.firstMentionDay!=null) set[s.firstMentionDay]=1;
+    if(s.firstMentionDay!=null){ set[s.firstMentionDay]=1; set[s.firstMentionDay+WEAR_MENTION_RAMP]=1; }
     s.checkpoints.forEach(function(c){ if(c.day>-999999) set[c.day]=1; });
   });
   return Object.keys(set).map(Number).sort(function(a,b){ return a-b; });
@@ -973,6 +1002,11 @@ var STREET_REPAINT_THRESHOLDS = (function(){
 var LAST_SPLAT_SIMDAY = null;
 function streetTopologyMayHaveChanged(prevDay, curDay){
   if(prevDay==null || prevDay===curDay) return prevDay==null;
+  // ERA-CORRECTNESS audit (s20 sprint): any jump/scrub of 15+ days always
+  // repaints — closes the mid-ramp staleness class generically (wear is a
+  // continuous function of simDay between thresholds, and a big jump can
+  // land inside any street's ramp without crossing a discrete threshold).
+  if(Math.abs(curDay-prevDay)>=15) return true;
   var lo=Math.min(prevDay,curDay), hi=Math.max(prevDay,curDay);
   for(var i=0;i<STREET_REPAINT_THRESHOLDS.length;i++){
     var t = STREET_REPAINT_THRESHOLDS[i];
@@ -1436,7 +1470,12 @@ scene.add(terrainMesh);
    1847 grid-swing progress changes — see updateGridSwing() above, which
    now actually runs (its NaN bug is fixed alongside SIM_START_MS below).
    ===================================================================== */
-var SPLAT_WORLD_RES = 3072, SPLAT_TOWN_RES = 4096;
+// SHIMMER fix (s20 sprint, 2026-07-11): world res raised 3072 -> 4096 —
+// power-of-two, so both splat textures can mipmap (see the PREMULTIPLIED
+// MIPMAP block below; WebGL1 requires POT dimensions for generateMipmap,
+// and 3072 silently isn't POT). Bonus: world texel density improves
+// 3.9m -> 2.9m/texel.
+var SPLAT_WORLD_RES = 4096, SPLAT_TOWN_RES = 4096;
 // BLUR fix (2026-07-10, iPad field test defect #4): the old pad
 // (STREET_STUB_LEN+80 ≈ 180m) sized the crisp town-tier canvas just barely
 // past the grid's own outer streets. But the "maps-like" mid-zoom camera
@@ -1470,9 +1509,18 @@ var splatWorldCtx = splatWorldCanvas.getContext("2d"), splatTownCtx = splatTownC
 function splatStroke(ctx, pxFn, pxLenFn, pts, widthM, color, alpha){
   if(!pts || pts.length<2) return;
   ctx.save();
-  ctx.globalAlpha = alpha==null?1:alpha;
+  // SUB-TEXEL COVERAGE fix (s20 sprint, 2026-07-11 — "streets appear too
+  // early at altitude"): a stroke narrower than one canvas pixel used to be
+  // clamped UP to a full 1px line at its full alpha — on the coarse world
+  // canvas (~2.9m/texel) every faint 1.5m survey-ghost scratch rendered
+  // ~2x too wide at full strength, reading at 1000m+ as a real street long
+  // before its worn-track date. Keep the 1px floor (a 0px line vanishes)
+  // but scale alpha by the true sub-pixel coverage so thin faint marks
+  // thin out toward invisibility at world scale instead of fattening.
+  var _pw = pxLenFn(widthM);
+  ctx.globalAlpha = (alpha==null?1:alpha) * Math.min(1, _pw);
   ctx.strokeStyle = color;
-  ctx.lineWidth = Math.max(1, pxLenFn(widthM));
+  ctx.lineWidth = Math.max(1, _pw);
   ctx.lineJoin = "round"; ctx.lineCap = "round";
   ctx.beginPath();
   var p0 = pxFn(pts[0].x, pts[0].z);
@@ -1527,18 +1575,98 @@ var ROAD_EDGE_COL = "#cdb87f", ROAD_RUT_COL = "#241a0f";
    edge than the flat-alpha main stroke without the halo dominating the
    intersection; alpha trimmed slightly too so stacked halos at a 4-way
    crossing don't compound into a bright smudge. */
-function paintRoad(targets, pts, widthM, color, alpha, skipUnderlay){
+/* =====================================================================
+   HAND-WORN STROKE ENGINE (s20 sprint, 2026-07-11 — TECHNIQUES.md §8 /
+   user P0 "roads look too perfect"): every street stroke on the CRISP
+   town tier is noise-modulated instead of vector-drawn — subdivided into
+   ~7m pieces with per-piece width jitter (±10%), along-length alpha/
+   darkness variance, a noisy feathered edge pass, a subtle centerline
+   meander (<0.5m, strongest on pre-survey/low-wear tracks per the brief),
+   and broken (gappy) wheel-rut twins on cart-class streets. The coarse
+   WORLD tier keeps plain strokes: at ~2.9m/texel all of this jitter is
+   sub-texel — pure cost, zero read. Jitter is seeded from the street id +
+   arc length (skew-invariant), so the O'Farrell grid swing repaints don't
+   re-roll the noise every frame — no crawling.
+   ===================================================================== */
+function _streetSeed(str){ var h=0; for(var i=0;i<str.length;i++) h=(h*31+str.charCodeAt(i))|0; return ((h>>>0)%1000)/1000; }
+function _strokeN(seed,k){ return hash2(seed*127.1+k*13.7+3.7, seed*311.7-k*7.3+1.3); }
+function wornStroke(t, pts, widthM, color, alpha, seed, meanderM){
+  if(!pts || pts.length<2) return null;
+  if(seed==null) seed = hash2(pts[0].x*0.037, pts[0].z*0.037);
+  meanderM = meanderM||0;
+  // 1. resample at ~7m steps with a smooth two-sine lateral meander
+  var STEP=7, nodes=[], dAcc=0, ph1=seed*37.0, ph2=seed*91.0;
+  for(var i=0;i<pts.length-1;i++){
+    var ax=pts[i].x, az=pts[i].z, bx=pts[i+1].x, bz=pts[i+1].z;
+    var dx=bx-ax, dz=bz-az, len=Math.hypot(dx,dz);
+    if(len<1e-6) continue;
+    var nxp=-dz/len, nzp=dx/len;
+    var n=Math.max(1, Math.round(len/STEP));
+    for(var k=(nodes.length?1:0);k<=n;k++){
+      var tt=k/n, d=dAcc+len*tt;
+      var off=meanderM*(0.62*Math.sin(d*0.33+ph1)+0.38*Math.sin(d*0.11+ph2));
+      nodes.push({x:ax+dx*tt+nxp*off, z:az+dz*tt+nzp*off});
+    }
+    dAcc+=len;
+  }
+  if(nodes.length<2) return null;
+  // 2. piecewise draw: noisy feathered-edge pass + jittered core pass
+  for(var j=0;j<nodes.length-1;j++){
+    var piece=[nodes[j],nodes[j+1]];
+    var wJ=widthM*(0.9+0.2*_strokeN(seed,j*2+1));
+    var aJ=Math.min(1, alpha*(0.78+0.4*_strokeN(seed,j*2)));
+    splatStroke(t.ctx,t.pxFn,t.pxLenFn,piece,wJ*(1.3+0.25*_strokeN(seed,j*3+2)),color,aJ*0.20);
+    splatStroke(t.ctx,t.pxFn,t.pxLenFn,piece,wJ*0.9,color,aJ*0.85);
+  }
+  return nodes; // the meandered centerline — rut twins must track it
+}
+function wornRuts(t, nodes, widthM, alpha, seed){
+  // Broken hand-worn wheel grooves. Gaps are correlated along the length
+  // (a slow sine + noise gate), so ruts come and go in irregular multi-
+  // meter RUNS the way real wheel tracks fade in and out of packed earth —
+  // a per-piece coin flip reads as mechanical stitching (s20 first-pass
+  // finding, s20-local-250m-after vs before).
+  var rutOff = widthM*0.19;
+  [rutOff,-rutOff].forEach(function(off,side){
+    var line = splatOffsetPolyline(nodes,off);
+    var ph = seed*53.0 + side*2.7, d = 0, run = [];
+    for(var j=0;j<line.length;j++){
+      if(j>0) d += Math.hypot(line[j].x-line[j-1].x, line[j].z-line[j-1].z);
+      var v = 0.5+0.5*Math.sin(d*0.09+ph) + (_strokeN(seed,700+j*2+side)-0.5)*0.55;
+      if(v > 0.32) run.push(line[j]);
+      if((v <= 0.32 || j===line.length-1) && run.length){
+        if(run.length>=2){
+          var g = 0.55+0.45*_strokeN(seed,900+j+side);
+          splatStroke(t.ctx,t.pxFn,t.pxLenFn,run,widthM*(0.10+0.05*g),ROAD_RUT_COL,alpha*0.5*g);
+        }
+        run = [];
+      }
+    }
+  });
+}
+function paintRoad(targets, pts, widthM, color, alpha, skipUnderlay, opts){
   alpha = alpha==null?1:alpha;
+  opts = opts||{};
+  var wear = opts.wear!=null?opts.wear:1;
+  // <0.5m meander, strongest on faint/pre-survey tracks, subtle when worn
+  var meanderM = opts.meanderM!=null?opts.meanderM:Math.min(0.5, 0.5*(1-wear*0.7));
   targets.forEach(function(t){
     // SURVEY-GHOST fix (item 7): callers may suppress the pale edge-wear
     // underlay — a lightening halo is only honest on genuinely worn streets
     // (paint must never read LIGHTER than the ground on faint tracks).
     if(!skipUnderlay) splatStroke(t.ctx, t.pxFn, t.pxLenFn, pts, widthM*1.22, ROAD_EDGE_COL, alpha*0.34);
-    splatStroke(t.ctx, t.pxFn, t.pxLenFn, pts, widthM, color, alpha);
-    if(widthM>=4){ // ruts read as noise on the already-narrow stubs/door-paths; skip those
-      var rutOff = widthM*0.19;
-      splatStroke(t.ctx, t.pxFn, t.pxLenFn, splatOffsetPolyline(pts, rutOff), widthM*0.12, ROAD_RUT_COL, alpha*0.55);
-      splatStroke(t.ctx, t.pxFn, t.pxLenFn, splatOffsetPolyline(pts,-rutOff), widthM*0.12, ROAD_RUT_COL, alpha*0.55);
+    if(t.detail){
+      var nodes = wornStroke(t, pts, widthM, color, alpha, opts.seed, meanderM);
+      // ruts read as noise on the already-narrow stubs/door-paths, and a
+      // rut is evidence of USE — unworn surveyed streets get none
+      if(nodes && widthM>=4 && wear>0.45) wornRuts(t, nodes, widthM, alpha, opts.seed==null?0.5:opts.seed);
+    } else {
+      splatStroke(t.ctx, t.pxFn, t.pxLenFn, pts, widthM, color, alpha);
+      if(widthM>=4 && wear>0.45){
+        var rutOff = widthM*0.19;
+        splatStroke(t.ctx, t.pxFn, t.pxLenFn, splatOffsetPolyline(pts, rutOff), widthM*0.12, ROAD_RUT_COL, alpha*0.55);
+        splatStroke(t.ctx, t.pxFn, t.pxLenFn, splatOffsetPolyline(pts,-rutOff), widthM*0.12, ROAD_RUT_COL, alpha*0.55);
+      }
     }
   });
 }
@@ -1556,9 +1684,10 @@ function paintSmoothRoute(targets, pts, widthM, color, alpha, mottle){
     // WEAR-HALO TIGHTEN (2026-07-10, screening P1-5) — same ratio pulled in as paintRoad() above.
     [ {w:widthM*1.18, col:ROAD_EDGE_COL, a:alpha*0.24}, {w:widthM, col:color, a:alpha} ].forEach(function(pass){
       t.ctx.save();
-      t.ctx.globalAlpha = pass.a;
+      var _pw = t.pxLenFn(pass.w); // SUB-TEXEL COVERAGE fix (s20) — same rule as splatStroke()
+      t.ctx.globalAlpha = pass.a * Math.min(1, _pw);
       t.ctx.strokeStyle = pass.col;
-      t.ctx.lineWidth = Math.max(1, t.pxLenFn(pass.w));
+      t.ctx.lineWidth = Math.max(1, _pw);
       t.ctx.lineJoin = "round"; t.ctx.lineCap = "round";
       t.ctx.beginPath();
       var p0 = t.pxFn(pts[0].x, pts[0].z);
@@ -1591,11 +1720,13 @@ function paintSmoothRoute(targets, pts, widthM, color, alpha, mottle){
     }
   });
 }
+// detail:true = the crisp town tier — gets the hand-worn stroke treatment
+// (see HAND-WORN STROKE ENGINE above); the coarse world tier stays plain.
 var SPLAT_TARGETS_BOTH = [
   { ctx:splatWorldCtx, pxFn:worldPx, pxLenFn:worldPxLen },
-  { ctx:splatTownCtx,  pxFn:townPx,  pxLenFn:townPxLen  }
+  { ctx:splatTownCtx,  pxFn:townPx,  pxLenFn:townPxLen, detail:true }
 ];
-var SPLAT_TARGETS_TOWN_ONLY = [ { ctx:splatTownCtx, pxFn:townPx, pxLenFn:townPxLen } ];
+var SPLAT_TARGETS_TOWN_ONLY = [ { ctx:splatTownCtx, pxFn:townPx, pxLenFn:townPxLen, detail:true } ];
 
 /* Static (non-swinging) ground-marking data — filled in later by the
    sections that compute it (Mission road, worn door-paths) as the file's
@@ -1660,7 +1791,9 @@ function paintStub(targets, uEdge, vEdge, du, dv, width, skewAngle){
     if(terrainHeight(a.x,a.z)<=1.5 || terrainHeight(b.x,b.z)<=1.5) break; // don't run stubs into the bay
     var w = lerp(width*0.8, width*0.3, (k+1)/STUB_STEPS);
     var col = lerpHexColor(STREET_STUB_NEAR, STREET_STUB_FAR, (k+1)/STUB_STEPS);
-    paintRoad(targets, [a,b], w, col, lerp(0.55,0,(k+1)/STUB_STEPS), true); // partial start alpha, no pale underlay (SW-BLUR fix)
+    // partial start alpha, no pale underlay (SW-BLUR fix); low wear opt (s20)
+    // gives stubs the strongest meander — an unsurveyed sandy track, not a line
+    paintRoad(targets, [a,b], w, col, lerp(0.55,0,(k+1)/STUB_STEPS), true, {wear:0.2, seed:hash2(uEdge*0.11+du, vEdge*0.11+dv)+k*0.171});
   }
 }
 
@@ -1669,7 +1802,10 @@ function paintStub(targets, uEdge, vEdge, du, dv, width, skewAngle){
    updateGridSwing() above. Everything else painted here (plaza, Mission
    road, door-paths) doesn't swing, matching the pre-existing scope
    (buildings/lots are never re-baked either). */
+var SPLAT_LAST_STATS = null; // s20 QA: what the last repaint actually painted (era-diff ground truth, exposed via __P1850.splatStats)
 function renderGroundSplat(skewAngle){
+  var _statT0 = performance.now();
+  var _stats = { simDay: simDay, skew: skewAngle, streets: {} };
   splatWorldCtx.clearRect(0,0,SPLAT_WORLD_RES,SPLAT_WORLD_RES);
   splatTownCtx.clearRect(0,0,SPLAT_TOWN_RES,SPLAT_TOWN_RES);
 
@@ -1756,7 +1892,9 @@ function renderGroundSplat(skewAngle){
   // "mission-street" is deliberately excluded here — see STREETS_RUNTIME's
   // own comment — its existing curved MISSION_ROAD_PTS handling above
   // already covers it, more faithfully than this dataset entry would.
-  var DEFAULT_WORN_DELAY = 365; // fill: streets with no corpus firstMentionDay citation read as worn ~1yr after survey (precedent: LANDMARK_DEFAULT_FOUNDED_ISO elsewhere in this file)
+  // DEFAULT_WORN_DELAY / WEAR_MENTION_RAMP hoisted to top level next to
+  // STREET_REPAINT_THRESHOLDS (s20 sprint) — the repaint triggers and this
+  // painter must share one set of ramp constants or they drift.
   /* SURVEY-GHOST fix (item 7, user report 2026-07-10, s10-default-load):
      platted-but-unused streets used to paint as crisp uniform CREAM lines
      BRIGHTER than the sand — reading as a modern GPS/road-map overlay on
@@ -1784,17 +1922,60 @@ function renderGroundSplat(skewAngle){
   // street's own frontage actually filling in, read straight off the
   // growth system's own spawnedBuildings — can push it further/faster, or
   // hold a surveyed-but-still-empty street near the faint survey-line end.
-  var WEAR_RADIUS = 70;        // ~one block — buildings this close count as "this street is in use"
-  var WEAR_FULL_DENSITY = 6;   // buildings within WEAR_RADIUS for a fully-worn reading
-  var WEAR_MENTION_RAMP = 120; // days from firstMentionDay to fully-worn, once documented in use
+  var WEAR_RADIUS = 70;        // ~one block — settlement this close counts as "this street is in use"
+  var WEAR_FULL_DENSITY = 6;   // building-equivalents within WEAR_RADIUS for a fully-worn reading
+  // ON-USE RULING (s20): tent camps ARE use — Happy Valley's 1849 tents are
+  // what wore First/Second street into ways while Seventh/Eighth stayed
+  // survey lines. A tent counts half a building.
+  // FRONTAGE WEIGHTING (s20, same ruling): weight falls off linearly with
+  // distance from the street line. A building right on the line (its real
+  // frontage, ~10-25m from centerline) counts near-full; one 60m away
+  // fronts a DIFFERENT street and must not wear this one — this is what
+  // kept Seventh St reading fully-worn in Sep 1849 off buildings that
+  // actually front the Market/Mission corridor. The 1.4 factor renormalizes
+  // so a genuinely fronted street (6 buildings at typical setback) still
+  // reaches fully-worn.
+  // A tent CAMP radiates use farther than a single house (daily foot
+  // traffic from the whole camp to water/town), so tents get a wider
+  // influence radius at lower per-tent weight — measured against the app's
+  // actual Happy Valley camp geometry (audit 2026-07-11: the camp's tents
+  // sit 30-110m off First/Second's lines).
+  var TENT_WEAR_RADIUS = 110;
   function nearbyBuiltDensity(x,z){
-    var r2 = WEAR_RADIUS*WEAR_RADIUS, n = 0;
-    for(var i=0;i<spawnedBuildings.length;i++){
-      var b = spawnedBuildings[i], dx=b.x-x, dz=b.z-z;
-      if(dx*dx+dz*dz<=r2){ n++; if(n>=WEAR_FULL_DENSITY) break; }
+    var r2 = WEAR_RADIUS*WEAR_RADIUS, tr2 = TENT_WEAR_RADIUS*TENT_WEAR_RADIUS, n = 0, i, dx, dz, d2;
+    for(i=0;i<spawnedBuildings.length;i++){
+      dx=spawnedBuildings[i].x-x; dz=spawnedBuildings[i].z-z; d2=dx*dx+dz*dz;
+      if(d2<=r2){ n += (1-Math.sqrt(d2)/WEAR_RADIUS)*1.4; if(n>=WEAR_FULL_DENSITY) return n; }
+    }
+    for(i=0;i<spawnedTents.length;i++){
+      dx=spawnedTents[i].x-x; dz=spawnedTents[i].z-z; d2=dx*dx+dz*dz;
+      if(d2<=tr2){ n += (1-Math.sqrt(d2)/TENT_WEAR_RADIUS)*0.7; if(n>=WEAR_FULL_DENSITY) return n; }
     }
     return n;
   }
+  // Documented per-street wear caps (checkpoint-law exceptions, cited):
+  // market — O'Farrell's 120-ft showpiece stayed a PAPER street here: an
+  // ungraded sand ridge crossed its right-of-way until grading in the
+  // early 1850s, after this sim's Dec-1849 end. Nearby buildings front
+  // OTHER streets, so adjacency density must not read as Market being a
+  // usable road; capped below the worn threshold = survey ghost for the
+  // whole window. (User/coordinator ruling 2026-07-11; candidate field
+  // for data/streets-by-year.json.)
+  // numbered streets — the record (user/coordinator ruling 2026-07-11):
+  // only the numbered streets nearest the 1849 Happy Valley settlement
+  // (First/Second) became worn ways within this sim's window; the higher
+  // numbers stayed paper lines through the dunes into the 1850s. Caps
+  // graduate down with distance from the settlement; First/Second are
+  // uncapped (the tent camp itself drives their wear honestly).
+  var WEAR_CAP_OVERRIDES = {
+    "market": 0.25,
+    "numbered-streets-first-eighth:Third": 0.50,
+    "numbered-streets-first-eighth:Fourth": 0.45,
+    "numbered-streets-first-eighth:Fifth": 0.40,
+    "numbered-streets-first-eighth:Sixth": 0.35,
+    "numbered-streets-first-eighth:Seventh": 0.28,
+    "numbered-streets-first-eighth:Eighth": 0.28
+  };
   var SURVEY_GHOST_RGB = {r:0x8f,g:0x7c,b:0x55}, STREET_DIRT_RGB = {r:0x6e,g:0x5a,b:0x3c}; // == SURVEY_GHOST_COL / STREET_DIRT_COL
   function paintSurveyGhost(targets, pts, widthM, wear){
     // broken, hand-drawn read: short pieces, hashed alpha, some gaps — no
@@ -1803,13 +1984,17 @@ function renderGroundSplat(skewAngle){
     var dx = pts[1].x-pts[0].x, dz = pts[1].z-pts[0].z;
     var len = Math.hypot(dx,dz);
     var pieces = Math.max(1, Math.round(len/12));
+    var pnx = -dz/len, pnz = dx/len; // unit perpendicular for scratch wobble
     for(var pi=0; pi<pieces; pi++){
       var t0 = pi/pieces, t1 = (pi+1)/pieces;
       var mx = pts[0].x+dx*(t0+t1)/2, mz = pts[0].z+dz*(t0+t1)/2;
       var hh = hash2(mx*0.021, mz*0.021);
       if(hh > 0.82) continue; // gap — the line is scratched, not vector-drawn
       var a = (0.06 + hh*0.15) * (0.6 + wear*1.6);
-      var seg = [ {x:pts[0].x+dx*t0, z:pts[0].z+dz*t0}, {x:pts[0].x+dx*t1, z:pts[0].z+dz*t1} ];
+      // HAND-WORN pass (s20): ±0.45m lateral wobble per piece — a surveyor's
+      // scratch through scrub never holds a ruler-straight line
+      var lat = (hash2(mx*0.045+9.1, mz*0.045)-0.5)*0.9;
+      var seg = [ {x:pts[0].x+dx*t0+pnx*lat, z:pts[0].z+dz*t0+pnz*lat}, {x:pts[0].x+dx*t1+pnx*lat, z:pts[0].z+dz*t1+pnz*lat} ];
       targets.forEach(function(tg){ splatStroke(tg.ctx, tg.pxFn, tg.pxLenFn, seg, w*(0.7+hh*0.6), SURVEY_GHOST_COL, Math.min(a,0.30)); });
     }
   }
@@ -1829,9 +2014,10 @@ function renderGroundSplat(skewAngle){
   function paintPierHint(targets, pts, widthM){
     targets.forEach(function(t){
       t.ctx.save();
-      t.ctx.globalAlpha = 0.24;
+      var _pw = t.pxLenFn(Math.min(widthM,3)); // SUB-TEXEL COVERAGE fix (s20)
+      t.ctx.globalAlpha = 0.24 * Math.min(1, _pw);
       t.ctx.strokeStyle = PIER_HINT_COL;
-      t.ctx.lineWidth = Math.max(1, t.pxLenFn(Math.min(widthM,3)));
+      t.ctx.lineWidth = Math.max(1, _pw);
       t.ctx.lineCap = "round";
       t.ctx.setLineDash([t.pxLenFn(3), t.pxLenFn(5)]);
       t.ctx.beginPath();
@@ -1858,29 +2044,61 @@ function renderGroundSplat(skewAngle){
     for(var pi=i0; pi<=i1; pi++) pathPts.push(gridToWorldAt(s.polyline[pi].u, s.polyline[pi].v, angle));
     if(pathPts.length<2) return;
 
+    // ON-USE RULING (s20): a corpus mention is use EVIDENCE; a survey date
+    // alone is paper and contributes NOTHING to wear (see the deleted
+    // DEFAULT_WORN_DELAY fallback's comment at STREET_REPAINT_THRESHOLDS).
     var mentionFactor = s.firstMentionDay!=null
       ? smoothstep(s.firstMentionDay, s.firstMentionDay+WEAR_MENTION_RAMP, simDay)
-      : smoothstep(s.surveyedDay, s.surveyedDay+DEFAULT_WORN_DELAY, simDay);
+      : 0;
     var anyWorn = false;
+    var _rec = _stats.streets[s.id] = { extent:[i0,i1], maxWear:0, ghostSegs:0, wornSegs:0, pierSegs:0 };
 
+    var wearCap = WEAR_CAP_OVERRIDES[s.id]!=null ? WEAR_CAP_OVERRIDES[s.id] : 1;
+    // PRE-EXISTING VILLAGE FLOOR (s20): the Vioget-era streets (surveyedDay
+    // <= 0, i.e. before the sim opens) are NOT paper lines — Vioget's 1839
+    // survey formalized lanes the village had already worn in. Their
+    // ORIGINAL documented extent (the first checkpoint) reads as a worn
+    // dirt street from day one; extensions added by later surveys are
+    // paper until used, like any other street.
+    var viogetExt = (s.surveyedDay!=null && s.surveyedDay<=0 && s.checkpoints.length) ? s.checkpoints[0].extent : null;
     for(var segI=0; segI<pathPts.length-1; segI++){
-      var segPts = [pathPts[segI], pathPts[segI+1]];
-      var segWet = terrainHeight(segPts[0].x,segPts[0].z)<=0 && terrainHeight(segPts[1].x,segPts[1].z)<=0;
-      if(segWet){ paintPierHint(SPLAT_TARGETS_BOTH, segPts, s.widthM); continue; }
-      var mid = { x:(segPts[0].x+segPts[1].x)/2, z:(segPts[0].z+segPts[1].z)/2 };
-      var densityFactor = clamp01(nearbyBuiltDensity(mid.x,mid.z)/WEAR_FULL_DENSITY);
-      // SURVEY-GHOST fix (item 7): a corpus mention alone can no longer push
-      // a street through EMPTY land to fully-worn — real wear needs real
-      // frontage. A mentioned-but-unbuilt street tops out as a faint track.
-      var wear = Math.max(densityFactor, mentionFactor * lerp(0.30, 1, densityFactor));
-      if(wear>0.5) anyWorn = true;
-      if(wear < 0.30){
-        paintSurveyGhost(SPLAT_TARGETS_BOTH, segPts, s.widthM, wear);
-      } else {
-        var col = lerpHexColor(SURVEY_GHOST_RGB, STREET_DIRT_RGB, wear);
-        var alpha = lerp(0.30, 1, wear);
-        var w = lerp(Math.min(s.widthM*0.5, 3), s.widthM, wear);
-        paintRoad(SPLAT_TARGETS_BOTH, segPts, w, col, alpha, wear<0.6); // pale edge-wear underlay only once genuinely worn
+      var A = pathPts[segI], B = pathPts[segI+1];
+      // LOCAL-WEAR SUBDIVISION (s20, coordinator ruling): sample use density
+      // in <=60m pieces, not once per (possibly very long) polyline segment
+      // — so a numbered street wears into a way NEAR the Happy Valley tents
+      // and stays a survey ghost at its empty far end, instead of one
+      // midpoint sample deciding an entire 800m line either way.
+      var segLen = Math.hypot(B.x-A.x, B.z-A.z);
+      var nSub = Math.max(1, Math.min(14, Math.round(segLen/60)));
+      for(var sub=0; sub<nSub; sub++){
+        var t0=sub/nSub, t1=(sub+1)/nSub;
+        var segPts = [ {x:A.x+(B.x-A.x)*t0, z:A.z+(B.z-A.z)*t0}, {x:A.x+(B.x-A.x)*t1, z:A.z+(B.z-A.z)*t1} ];
+        var segWet = terrainHeight(segPts[0].x,segPts[0].z)<=0 && terrainHeight(segPts[1].x,segPts[1].z)<=0;
+        if(segWet){ paintPierHint(SPLAT_TARGETS_BOTH, segPts, s.widthM); _rec.pierSegs++; continue; }
+        var mid = { x:(segPts[0].x+segPts[1].x)/2, z:(segPts[0].z+segPts[1].z)/2 };
+        var densityFactor = clamp01(nearbyBuiltDensity(mid.x,mid.z)/WEAR_FULL_DENSITY);
+        // SURVEY-GHOST fix (item 7): a corpus mention alone can no longer push
+        // a street through EMPTY land to fully-worn — real wear needs real
+        // frontage. A mentioned-but-unbuilt street tops out as a faint track.
+        // pathPts[0] is polyline[i0], so the polyline-space segment index is i0+segI
+        var floorW = (viogetExt && (i0+segI)>=viogetExt[0] && (i0+segI+1)<=viogetExt[1]) ? 0.6 : 0;
+        var wear = Math.min(wearCap, Math.max(floorW, densityFactor, mentionFactor * lerp(0.30, 1, densityFactor)));
+        if(wear>0.5) anyWorn = true;
+        _rec.maxWear = Math.max(_rec.maxWear, wear);
+        (_rec.pieces||(_rec.pieces=[])).push({x:Math.round(mid.x), z:Math.round(mid.z), w:+wear.toFixed(2)}); // s20 QA: wear-audit trail
+        if(wear < 0.30){
+          paintSurveyGhost(SPLAT_TARGETS_BOTH, segPts, s.widthM, wear);
+          _rec.ghostSegs++;
+        } else {
+          var col = lerpHexColor(SURVEY_GHOST_RGB, STREET_DIRT_RGB, wear);
+          var alpha = lerp(0.30, 1, wear);
+          var w = lerp(Math.min(s.widthM*0.5, 3), s.widthM, wear);
+          // pale edge-wear underlay only once genuinely worn; seed is street-id
+          // + segment based (skew-invariant) so the hand-worn jitter holds
+          // still through the O'Farrell swing repaints
+          paintRoad(SPLAT_TARGETS_BOTH, segPts, w, col, alpha, wear<0.6, {wear:wear, seed:_streetSeed(s.id)+(segI*17+sub)*0.113});
+          _rec.wornSegs++;
+        }
       }
     }
 
@@ -1898,24 +2116,98 @@ function renderGroundSplat(skewAngle){
     }
   });
 
+  applyTierOwnership();
+
+  _stats.ms = +(performance.now()-_statT0).toFixed(1);
+  SPLAT_LAST_STATS = _stats;
   splatWorldTex.needsUpdate = true;
   splatTownTex.needsUpdate = true;
 }
 
+/* =====================================================================
+   TIER OWNERSHIP (s20 sprint, 2026-07-11 — user P0 "flicker between view
+   levels" / "road lines double-write"): EVERY GROUND PIXEL HAS EXACTLY
+   ONE OWNER. Both canvases used to paint the full street network across
+   the whole TOWN_BOX (SPLAT_TARGETS_BOTH), so at every altitude two
+   alpha-blended copies of every street rendered on nearly-coincident
+   meshes — the coarse world copy quantized to ~2.9m texels sat visibly
+   OFFSET from the crisp town copy (the "double lines"), and the pair
+   compounded alpha + fought the depth buffer (the shimmer).
+   Now: after each repaint, the world canvas gets a HARD CUTOUT
+   (destination-out) of the town rectangle — where the town canvas covers,
+   the world tier contributes NOTHING. The cutout core is inset by
+   TIER_FEATHER_M; only in that thin outermost band do the tiers
+   cross-fade complementarily (world fades in exactly as the town tier
+   fades out), so streets crossing the boundary hand off without a seam
+   and the interior is single-owner everywhere.
+   ===================================================================== */
+var TIER_FEATHER_M = 60;
+function eraseFeatheredRect(ctx, x0,y0,x1,y1, f, invert){
+  // invert=false: erase fully inside the inset core, fading to no-erase at
+  // the rect edge (world tier). invert=true: erase nothing inside the core,
+  // fading to full erase at the rect edge (town tier's own edge fade).
+  ctx.save();
+  ctx.globalCompositeOperation = "destination-out";
+  var ix0=x0+f, iy0=y0+f, ix1=x1-f, iy1=y1-f;
+  var IN = invert?"rgba(0,0,0,0)":"rgba(0,0,0,1)", OUT = invert?"rgba(0,0,0,1)":"rgba(0,0,0,0)";
+  if(!invert){ ctx.fillStyle="#000"; ctx.fillRect(ix0, iy0, ix1-ix0, iy1-iy0); }
+  function band(gx0,gy0,gx1,gy1, rx,ry,rw,rh){
+    var g = ctx.createLinearGradient(gx0,gy0,gx1,gy1);
+    g.addColorStop(0, IN); g.addColorStop(1, OUT);
+    ctx.fillStyle = g; ctx.fillRect(rx,ry,rw,rh);
+  }
+  band(0,iy0, 0,y0,  ix0,y0, ix1-ix0, f);   // top    (gradient runs inner->outer)
+  band(0,iy1, 0,y1,  ix0,iy1, ix1-ix0, f);  // bottom
+  band(ix0,0, x0,0,  x0,iy0, f, iy1-iy0);   // left
+  band(ix1,0, x1,0,  ix1,iy0, f, iy1-iy0);  // right
+  function corner(cx,cy, rx,ry){
+    var g = ctx.createRadialGradient(cx,cy,0, cx,cy,f);
+    g.addColorStop(0, IN); g.addColorStop(1, OUT);
+    ctx.fillStyle = g; ctx.fillRect(rx,ry,f,f);
+  }
+  corner(ix0,iy0, x0,y0); corner(ix1,iy0, ix1,y0);
+  corner(ix0,iy1, x0,iy1); corner(ix1,iy1, ix1,iy1);
+  ctx.restore();
+}
+function applyTierOwnership(){
+  // WORLD tier: hard cutout of the town rect (feather band inside its edge)
+  var a = worldPx(TOWN_BOX.xMin, TOWN_BOX.zMin), b = worldPx(TOWN_BOX.xMax, TOWN_BOX.zMax);
+  eraseFeatheredRect(splatWorldCtx, Math.min(a.x,b.x), Math.min(a.y,b.y), Math.max(a.x,b.x), Math.max(a.y,b.y),
+                     worldPxLen(TIER_FEATHER_M), false);
+  // TOWN tier: complementary fade of its own outermost band, so across the
+  // feather band (townWeight + worldWeight) == 1 and inside it town == 1
+  eraseFeatheredRect(splatTownCtx, 0, 0, SPLAT_TOWN_RES, SPLAT_TOWN_RES,
+                     townPxLen(TIER_FEATHER_M), true);
+}
+
 var splatWorldTex = new THREE.CanvasTexture(splatWorldCanvas); splatWorldTex.flipY=false; splatWorldTex.wrapS=splatWorldTex.wrapT=THREE.ClampToEdgeWrapping;
 var splatTownTex  = new THREE.CanvasTexture(splatTownCanvas);  splatTownTex.flipY=false;  splatTownTex.wrapS=splatTownTex.wrapT=THREE.ClampToEdgeWrapping;
-// NIGHT-GLOW fix, part A (2026-07-10): these canvases are almost entirely
-// transparent (clearRect'd to 0,0,0,0) with small opaque-ish painted
-// street/plaza shapes. Mipmapping a non-premultiplied-alpha texture like
-// this box-filters color and alpha independently, so far-zoomed-out views
-// (which sample deep mip levels) show the painted color bleeding out across
-// the WHOLE transparent canvas as a faint wash — reading as a big halo/disc
-// the size of the canvas itself once contrasted against a near-black night
-// terrain. Decals don't need mip levels (they're single flat overlays, never
-// minified enough within one frame to alias); disabling mipmaps entirely
-// removes the bleed and guarantees the untouched canvas stays truly
-// invisible all the way to its own edge, at every zoom level.
-[splatWorldTex, splatTownTex].forEach(function(t){ t.generateMipmaps = false; t.minFilter = THREE.LinearFilter; });
+/* PREMULTIPLIED MIPMAP PIPELINE (s20 sprint, 2026-07-11 — supersedes
+   NIGHT-GLOW fix part A's mipmaps-off tradeoff, which this replaces
+   PROPERLY): part A was right that mipmapping a NON-premultiplied
+   transparent canvas bleeds painted color across the transparent field
+   (color and alpha box-filtered independently) — but turning mipmaps off
+   traded that halo for permanent minification aliasing: at 500-1500m the
+   4096px canvases are sampled far below their native rate with plain
+   LinearFilter, so every street edge sparkles/crawls with the smallest
+   camera motion — the user-reported nauseating shimmer. The industry-
+   standard fix is to filter PREMULTIPLIED data: upload the canvas
+   premultiplied (canvas 2D backing store already IS premultiplied, so
+   this also skips a lossy un-premultiply round trip) and mip-average
+   color*alpha together — transparent texels are (0,0,0,0) black and can
+   never bleed a tan wash. Blending is switched to the matching
+   premultiplied equation (ONE, ONE_MINUS_SRC_ALPHA) in
+   makeSplatMaterial() below, with the fog mix patched to respect alpha.
+   Anisotropy keeps street lines crisp at the oblique, low-pitch angles
+   the map camera actually uses. */
+var SPLAT_ANISO = Math.min(8, (renderer.capabilities.getMaxAnisotropy&&renderer.capabilities.getMaxAnisotropy())||1);
+[splatWorldTex, splatTownTex].forEach(function(t){
+  t.premultiplyAlpha = true;
+  t.generateMipmaps = true;
+  t.minFilter = THREE.LinearMipmapLinearFilter;
+  t.magFilter = THREE.LinearFilter;
+  t.anisotropy = SPLAT_ANISO;
+});
 
 // World overlay: shares terrainGeo's OWN position/normal buffers (so it
 // is exactly coincident with the terrain, no seam possible) with its own
@@ -1934,8 +2226,32 @@ if(terrainGeo.index) splatWorldGeo.setIndex(terrainGeo.index);
   splatWorldGeo.setAttribute("uv", new THREE.BufferAttribute(uv,2));
 })();
 
-// Town overlay: its own smaller draped grid, real terrainHeight() at
-// each vertex (same sampler as everything else), high effective res.
+// Town overlay: its own smaller draped grid, high effective res.
+// TERRAIN-POKE fix (s20 sprint, 2026-07-11 — the other half of the town-
+// square flicker): this used to drape at analytic terrainHeight(), but the
+// RENDERED terrain surface is the 31.25m-grid mesh's piecewise-LINEAR
+// interpolation, which bulges above the analytic surface between vertices
+// — and with logarithmicDepthBuffer on, three.js writes gl_FragDepth in
+// every material, which DISABLES fixed-function polygonOffset entirely
+// (the -4 bias documented on this mesh's material never actually applied).
+// So wherever the draped decal dipped below a terrain triangle, its
+// street pixels FAILED the depth test and vanished — camera-dependent
+// holes that flipped with the smallest motion (the "flicker between view
+// levels"). Fix: sample the terrain MESH's own triangles (exact, reads
+// terrainGeo's live position buffer with PlaneGeometry's a-b-d/b-c-d
+// split) and drape at max(analytic, mesh) + a small constant lift.
+var _terrPosAttr = terrainGeo.attributes.position;
+function terrainMeshSurfaceY(x,z){
+  var n = TERRAIN.n, half = CFG.worldSize/2, cell = CFG.worldSize/(n-1);
+  var fi = clamp((x+half)/cell, 0, n-1-1e-6), fj = clamp((z+half)/cell, 0, n-1-1e-6);
+  var gi = Math.floor(fi), gj = Math.floor(fj);
+  var fx = fi-gi, fz = fj-gj;
+  var ha=_terrPosAttr.getY(gj*n+gi),     hb=_terrPosAttr.getY((gj+1)*n+gi),
+      hc=_terrPosAttr.getY((gj+1)*n+gi+1), hd=_terrPosAttr.getY(gj*n+gi+1);
+  return (fx+fz<=1) ? ha+(hd-ha)*fx+(hb-ha)*fz
+                    : hc+(hd-hc)*(1-fz)+(hb-hc)*(1-fx);
+}
+var TOWN_SPLAT_LIFT = 0.15; // meters above the rendered surface — grass-blade height, invisible at map altitudes, decisive in the depth buffer
 var TOWN_SEG = 176; // scaled up with TOWN_BOX's larger pad (2026-07-10) to hold roughly the same per-cell size as before
 var splatTownGeo = new THREE.PlaneGeometry(TOWN_W, TOWN_H, TOWN_SEG, TOWN_SEG);
 splatTownGeo.rotateX(-Math.PI/2);
@@ -1945,7 +2261,7 @@ splatTownGeo.translate((TOWN_BOX.xMin+TOWN_BOX.xMax)/2, 0, (TOWN_BOX.zMin+TOWN_B
   var uv = new Float32Array(pos.count*2);
   for(var i=0;i<pos.count;i++){
     var x=pos.getX(i), z=pos.getZ(i);
-    pos.setY(i, terrainHeight(x,z));
+    pos.setY(i, Math.max(terrainHeight(x,z), terrainMeshSurfaceY(x,z)) + TOWN_SPLAT_LIFT);
     uv[i*2]   = (x-TOWN_BOX.xMin)/TOWN_W;
     uv[i*2+1] = (z-TOWN_BOX.zMin)/TOWN_H;
   }
@@ -1967,10 +2283,32 @@ splatTownGeo.translate((TOWN_BOX.xMin+TOWN_BOX.xMax)/2, 0, (TOWN_BOX.zMin+TOWN_B
    sharing the exact same sun/hemi/ambient lights terrainMesh uses. Now both
    surfaces dim together automatically, every frame, with zero drift risk. */
 function makeSplatMaterial(tex, offsetAmt){
-  return new THREE.MeshLambertMaterial({ map:tex, transparent:true, depthWrite:false, polygonOffset:true, polygonOffsetFactor:offsetAmt, polygonOffsetUnits:offsetAmt });
+  var m = new THREE.MeshLambertMaterial({ map:tex, transparent:true, depthWrite:false, polygonOffset:true, polygonOffsetFactor:offsetAmt, polygonOffsetUnits:offsetAmt });
+  // PREMULTIPLIED MIPMAP PIPELINE (s20): the splat textures now upload
+  // premultiplied (see their setup above), so blend with the matching
+  // premultiplied-alpha equation. Night darkening / wet tint still work
+  // unchanged: lighting and material.color scale the (premultiplied) rgb,
+  // alpha rides through untouched.
+  m.blending = THREE.CustomBlending;
+  m.blendEquation = THREE.AddEquation;
+  m.blendSrc = THREE.OneFactor;
+  m.blendDst = THREE.OneMinusSrcAlphaFactor;
+  m.onBeforeCompile = function(shader){
+    // Scene fog mixes toward an OPAQUE fogColor after lighting; with
+    // src=ONE blending a fully-transparent fragment (alpha 0) would
+    // otherwise ADD fogColor*fogFactor over the whole mesh at distance —
+    // a glowing haze film. Weight the fog target by alpha so transparent
+    // stays transparent and painted streets still fade into the haze.
+    var fogLine = "gl_FragColor.rgb = mix( gl_FragColor.rgb, fogColor, fogFactor );";
+    if(shader.fragmentShader.indexOf(fogLine) !== -1){
+      shader.fragmentShader = shader.fragmentShader.replace(fogLine,
+        "gl_FragColor.rgb = mix( gl_FragColor.rgb, fogColor * gl_FragColor.a, fogFactor );");
+    } else if(window.console) console.warn("splat fog premultiply patch: fog chunk not found — three version drift?");
+  };
+  return m;
 }
 var splatWorldMat = makeSplatMaterial(splatWorldTex, -2);
-var splatTownMat  = makeSplatMaterial(splatTownTex, -4); // wins over the world layer where they overlap
+var splatTownMat  = makeSplatMaterial(splatTownTex, -4); // offsets kept for consistency, but NOTE: logdepth writes gl_FragDepth, so polygonOffset never actually applies — real tier authority is the TIER OWNERSHIP canvas cutout + renderOrder + the town mesh's geometric lift
 var splatWorldMesh = new THREE.Mesh(splatWorldGeo, splatWorldMat);
 var splatTownMesh  = new THREE.Mesh(splatTownGeo, splatTownMat);
 // TOWN-SQUARE FLICKER fix (2026-07-10): both meshes paint the plaza/street
@@ -10878,6 +11216,26 @@ window.__P1850 = {
   },
   watch: setWatchMode, speed: setSimSpeed, flyTo: flyTo,
   get speedKey(){ return simSpeedKey; },
+  get splatStats(){ return SPLAT_LAST_STATS; }, // s20 QA: era-diff ground truth — what the last splat repaint actually painted, per street
+  _splatDebug: { townMesh:function(v){ splatTownMesh.visible=v; }, worldMesh:function(v){ splatWorldMesh.visible=v; },
+    townAlphaAt:function(x,z){ var p=townPx(x,z); return splatTownCtx.getImageData(Math.round(p.x),Math.round(p.y),1,1).data; },
+    nearAt:function(x,z,r){ r=r||70; var b=0,t=0,i,dx,dz;
+      for(i=0;i<spawnedBuildings.length;i++){ dx=spawnedBuildings[i].x-x; dz=spawnedBuildings[i].z-z; if(dx*dx+dz*dz<=r*r) b++; }
+      for(i=0;i<spawnedTents.length;i++){ dx=spawnedTents[i].x-x; dz=spawnedTents[i].z-z; if(dx*dx+dz*dz<=r*r) t++; }
+      return {buildings:b, tents:t}; } },
+  splatOwnership: function(){ // s20 QA: verify the world tier contributes NOTHING inside the town rect (tier-authority cutout)
+    var f = TIER_FEATHER_M;
+    var probe = [
+      {x:(TOWN_BOX.xMin+TOWN_BOX.xMax)/2, z:(TOWN_BOX.zMin+TOWN_BOX.zMax)/2}, // town center
+      {x:TOWN_BOX.xMin+f+20, z:TOWN_BOX.zMin+f+20},                            // just inside the cutout core
+      {x:TOWN_BOX.xMax-f-20, z:TOWN_BOX.zMax-f-20}
+    ];
+    return probe.map(function(p){
+      var px = worldPx(p.x,p.z);
+      var d = splatWorldCtx.getImageData(Math.round(px.x), Math.round(px.y), 1, 1).data;
+      return { x:Math.round(p.x), z:Math.round(p.z), worldAlpha:d[3] }; // must all be 0
+    });
+  },
   get walkers(){ // fix-sprint QA: every rendered figure's position + measured apparent speed (m/s)
     var out=[];
     personMeshSlots.forEach(function(arr){ arr.forEach(function(s){
