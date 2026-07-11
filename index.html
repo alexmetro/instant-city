@@ -560,8 +560,8 @@
     drag &mdash; pan the ground &nbsp;&middot;&nbsp; right-drag &mdash; orbit<br>
     <b>WASD</b> / arrows &mdash; fly (hold <b>Shift</b> to sprint) &nbsp;&middot;&nbsp; <b>Q</b> / <b>E</b> &mdash; rotate &nbsp;&middot;&nbsp; <b>R</b> / <b>F</b> &mdash; altitude<br>
     scroll / pinch &mdash; zoom &nbsp;&middot;&nbsp; tap/click &mdash; inspect &nbsp;&middot;&nbsp; double-tap/dblclick &mdash; fly to &nbsp;&middot;&nbsp; <b>Esc</b> &mdash; release follow<br>
-    <b>G</b> &mdash; then/now ghost &nbsp;&middot;&nbsp; <b>T</b> &mdash; sunrise/sunset &nbsp;&middot;&nbsp; <b>P</b> &mdash; documented-only<br>
-    <b>Space</b> &mdash; pause / live (1:1) &nbsp;&middot;&nbsp; <b>1 2 3</b> &mdash; day / week / month per second &nbsp;&middot;&nbsp; <b>N</b> &mdash; the paper<br>
+    <b>G</b> &mdash; then/now ghost &nbsp;&middot;&nbsp; <b>T</b> &mdash; skip to next sunrise / sunset &nbsp;&middot;&nbsp; <b>P</b> &mdash; documented-only<br>
+    <b>Space</b> &mdash; pause / live (1:1) &nbsp;&middot;&nbsp; <b>1</b> &mdash; 2&times; follow &nbsp;&middot;&nbsp; <b>2 3 4</b> &mdash; day / week / month per second &nbsp;&middot;&nbsp; <b>N</b> &mdash; the paper<br>
     <b>V</b> &mdash; watch mode (the auto-director takes the camera)
   </div>
 
@@ -4309,17 +4309,21 @@ var CHURCH_SPOT = null;
    gains &d=YYYY-MM-DD, restored on load and rewritten on pause per spec §8.
    ========================================================================= */
 /* SPEED REDESIGN (fix sprint 2026-07-11, user-specified): the DEFAULT
-   unpaused speed is now LIVE — sim time 1:1 with real time — so street
-   life is watchable at true walking pace. 1/2/3 remain the timelapse
-   tiers (day/week/month per second); at those rates individual
-   schedule-true motion is NOT rendered (see AMBIENT-FLOW in the people
-   system) because one sim-hour passes in ~83ms at tier 1 alone. */
-var SIM_SPEEDS = { 0:0, live:1/86400, 1:0.5, 2:7, 3:30 }; // days/sec: paused, LIVE 1:1, then 1day/2s, 1wk/s, 1mo/s
+   unpaused speed is LIVE — sim time 1:1 with real time — so street
+   life is watchable at true walking pace. "x2" (fix sprint 2026-07-11 #3)
+   is the FOLLOW tier: sim time at 2x real, people still schedule-true and
+   human-followable (~3.2 m/s apparent max). day/week/month are the
+   timelapse tiers; at those rates individual schedule-true motion is NOT
+   rendered (see AMBIENT-FLOW in the people system) because one sim-hour
+   passes in ~83ms at day/s alone. Keys: Space pause/LIVE, 1=2x follow,
+   2=day/s, 3=week/s, 4=month/s. */
+var SIM_SPEEDS = { 0:0, live:1/86400, x2:2/86400, day:0.5, week:7, month:30 }; // days/sec: paused, LIVE 1:1, 2x follow, 1day/2s, 1wk/s, 1mo/s
 var simDay = 0;
 var simSpeedKey = 0;
-var lastActiveSpeed = 1; // last TIMELAPSE tier (1/2/3) — watch mode's unpause default
+var lastActiveSpeed = "day"; // last TIMELAPSE tier — watch mode's unpause default
 var SCRUBBING = false;   // timeline drag in progress (set by the scrubber) — renders as ambient flow, like timelapse
-function timelapseActive(){ return simSpeedKey===1 || simSpeedKey===2 || simSpeedKey===3; }
+function timelapseActive(){ return simSpeedKey==="day" || simSpeedKey==="week" || simSpeedKey==="month"; }
+function followSpeedActive(){ return simSpeedKey==="live" || simSpeedKey==="x2"; } // schedule-true, sun-true tiers
 (function initSimClockFromHash(){
   var m = location.hash.match(/d=(\d{4}-\d{2}-\d{2})/);
   // P0-3 fix (2026-07-10): +0.5 lands a bare calendar-date URL at noon, not
@@ -4335,22 +4339,23 @@ function updateHashDate(){
 }
 var clockDateEl = document.getElementById("clock-date");
 var clockSpeedEl = document.getElementById("clock-speed");
-var SPEED_LABELS = { 0:"PAUSED", live:"LIVE — 1:1", 1:"1 DAY / 2s", 2:"1 WEEK / s", 3:"1 MONTH / s" };
+var SPEED_LABELS = { 0:"PAUSED", live:"LIVE — 1:1", x2:"FOLLOW — 2×", day:"1 DAY / 2s", week:"1 WEEK / s", month:"1 MONTH / s" };
 function setSimSpeed(key){
   var wasPaused = simSpeedKey===0;
   simSpeedKey = key;
   clockSpeedEl.textContent = SPEED_LABELS[key];
   if(key===0 && !wasPaused) updateHashDate(); // "update on pause"
 }
-setSimSpeed(0); // starts paused; Space toggles pause/LIVE, 1 / 2 / 3 for timelapse
+setSimSpeed(0); // starts paused; Space toggles pause/LIVE, 1 = 2x follow, 2/3/4 for timelapse
 window.addEventListener("keydown", function(e){
   if(e.code==="Space"){
     e.preventDefault();
     if(simSpeedKey===0) setSimSpeed("live"); else setSimSpeed(0);
   }
-  if(e.key==="1"){ lastActiveSpeed=1; setSimSpeed(1); }
-  if(e.key==="2"){ lastActiveSpeed=2; setSimSpeed(2); }
-  if(e.key==="3"){ lastActiveSpeed=3; setSimSpeed(3); }
+  if(e.key==="1"){ setSimSpeed("x2"); } // 2x follow — schedule-true, not a timelapse tier
+  if(e.key==="2"){ lastActiveSpeed="day";   setSimSpeed("day"); }
+  if(e.key==="3"){ lastActiveSpeed="week";  setSimSpeed("week"); }
+  if(e.key==="4"){ lastActiveSpeed="month"; setSimSpeed("month"); }
 });
 function updateSimClock(dt){
   if(simSpeedKey!==0){
@@ -6128,9 +6133,14 @@ function updateDistrictZones(alt){
   DISTRICT_ZONES.forEach(function(z){
     var revealed = z.revealDay<0 || simDay>=z.revealDay;
     var op = revealed ? cartoT : 0;
-    z.tintMesh.material.uniforms.uOpacity.value = op*0.42;
+    // TIMELAPSE GROUND ABSTRACTION (fix sprint 2026-07-11 #4): a subtle
+    // district activity glow joins the dimmed figure flow at ground-level
+    // timelapse (groundAbstraction, set in updatePeople) — activity reads
+    // as place, not as zipping individuals.
+    var glowOp = op*0.42 + (revealed ? groundAbstraction*0.10 : 0);
+    z.tintMesh.material.uniforms.uOpacity.value = glowOp;
     z.tintMesh.material.uniforms.uNightFactor.value = nightFactor; // NIGHT-GLOW fix (2026-07-10): these were a raw unlit ShaderMaterial — full brightness at any hour, reading as a glowing halo/disc at night. nightFactor is the same day/night global updateDayNight() already drives terrain/splat dimming from.
-    z.tintMesh.visible = op>0.01;
+    z.tintMesh.visible = glowOp>0.004;
     if(op<0.01){ z.el.style.opacity=0; return; }
     _zoneV.copy(z.pos).applyMatrix4(camera.matrixWorldInverse);
     if(_zoneV.z>-1){ z.el.style.opacity=0; return; }
@@ -10439,9 +10449,9 @@ function generateBio(slot){
 
 /* ---- 6. DAILY SCHEDULE + per-frame walk/LOD selection. `h` below is the
    hour-of-day read straight off the fractional part of simDay — the sim's
-   OWN calendar clock — not the separate fast real-time day/night lighting
-   cycle further down (updateDayNight/timeOfDay), which keeps the view
-   visually alive regardless of sim speed; the schedule is deliberately
+   OWN calendar clock, which (fix sprint 2026-07-11) now ALSO drives the
+   day/night lighting (updateTimeOfDay/updateDayNight), so schedules and
+   the sun finally agree; the schedule is deliberately
    tied to the SAME clock that drives ships/growth/weather so "follow a
    person for a sim-day" reads as one coherent day: ~6am wake, walk to
    work, work, a midday errand for some, walk home ~6pm, a few out for the
@@ -10496,7 +10506,10 @@ function sampleWithJitter(poly, t01, lateralJitter){
      at LIVE (1:1) that IS true walking pace on screen. Whoever finishes a
      route before the window closes is simply "arrived" at the destination
      state. Extras' wander distance is sim-seconds × their amble speed.
-   - TIMELAPSE (1/2/3) and scrub-drag: schedule-true motion is not
+   - 2x FOLLOW (fix sprint 2026-07-11 #3): same pure function of simDay —
+     the clock just runs at 2/86400 days/s, so everyone moves schedule-true
+     at exactly 2x apparent (walkers ~3.2 m/s, still human-followable).
+   - TIMELAPSE (day/week/month per s) and scrub-drag: schedule-true motion is not
      renderable (state flips faster than a frame), so everyone renders as
      AMBIENT FLOW — representative street traffic along their real route
      polylines at a capped legible pace (≤ ~1.7 m/s), count/density still
@@ -10668,7 +10681,8 @@ function movePolyWalker(slot, poly, dist){
   slot._z = p.z + (dx/len)*slot.lateralJitter;
   slot._dx=dx; slot._dz=dz; slot._pose="walk";
 }
-/* AMBIENT FLOW — the timelapse mover (speeds 1/2/3 + scrub drag). At those
+/* AMBIENT FLOW — the timelapse mover (day/week/month tiers + scrub drag;
+   2x follow renders schedule-true like LIVE and never enters here). At those
    rates schedule-true motion is unrenderable (a sim-hour < one frame), so
    every figure — routine cast and extras alike — reads as representative
    street traffic: ping-ponging its own real route polyline (commute route
@@ -10697,8 +10711,24 @@ function peopleTargetCount(day, alt){
   if(timelapseActive() || SCRUBBING) deepNight = 0.73;
   return Math.max(2, Math.round(base*deepNight));
 }
+/* TIMELAPSE GROUND ABSTRACTION (fix sprint 2026-07-11 #4): at day/s+ below
+   ~250m, individual ambient-flow figures FADE toward an activity
+   representation (dimmed translucent flow + a subtle district activity
+   glow, applied in updateDistrictZones) so ground-level timelapse reads as
+   intentional abstraction rather than zipping chaos. Above 250m the specks
+   render at full strength — watching them + the growth IS the point of
+   timelapse. Smoothed so tier changes cross-fade rather than pop. */
+var groundAbstraction = 0; // 0 = normal figures, 1 = fully abstracted (ground-level timelapse)
 function updatePeople(dt, camX, camZ, alt){
   peopleClock += dt;
+  var absTarget = (timelapseActive()||SCRUBBING) ? (1 - smoothstep(120, 250, alt)) : 0;
+  groundAbstraction += (absTarget-groundAbstraction)*(1-Math.exp(-4*dt));
+  if(groundAbstraction<0.005) groundAbstraction = 0;
+  var absOn = groundAbstraction>0;
+  var absFade = 1 - groundAbstraction*0.72; // figures dim to ~28%, never fully vanish (flow stays legible)
+  personMeshes.forEach(function(m){ m.material.transparent = absOn; m.material.opacity = absFade; });
+  streetSleeperMesh.material.transparent = absOn; streetSleeperMesh.material.opacity = absFade;
+  personShadowMesh.material.opacity = 0.88*absFade;
   // PHASE 5: while the Great Fire burns, the crowd IS the documented story
   // ("a stampede of six thousand human beings") — lift the ambient-people
   // altitude gate so the exodus/spectators read from the director's fire
@@ -11229,12 +11259,16 @@ window.addEventListener("keydown", function(e){
     document.getElementById("hud-ghost").classList.toggle("on", ghostVisible);
   }
   if(e.key==="t"||e.key==="T"){
-    // Phase 2: T now skips to the next sunrise/sunset rather than an
-    // arbitrary jump, since the day/night cycle keeps running under the
-    // sim clock rather than being advanced by hand.
-    if(timeOfDay<0.25) timeOfDay = 0.25;
-    else if(timeOfDay<0.75) timeOfDay = 0.75;
-    else timeOfDay = 0.25;
+    // T FIX (fix sprint 2026-07-11 #2): advance the SIM clock to the next
+    // sunrise or sunset — the lighting now derives from the sim clock, so
+    // this is a real (small) time jump and round-trips cleanly:
+    // pre-dawn -> sunrise -> sunset -> next sunrise -> ...
+    var f = Math.floor(simDay), h = (simDay-f)*24;
+    var sp = daylightSpanForDay(simDay);
+    if(h < sp.sunrise-1/60)      simDay = clamp(f + sp.sunrise/24, 0, SIM_END_DAY);
+    else if(h < sp.sunset-1/60)  simDay = clamp(f + sp.sunset/24, 0, SIM_END_DAY);
+    else { var sp2 = daylightSpanForDay(f+1); simDay = clamp(f+1 + sp2.sunrise/24, 0, SIM_END_DAY); }
+    updateHashDate();
   }
 });
 
@@ -11433,11 +11467,11 @@ var _fireClock = 0, _fireWasActive = false;
 function updateFire(dt){
   _fireClock += dt;
   var active = simDay>=FIRE.day0 && simDay<=FIRE.day1;
-  // The fire broke out at a quarter before six on a December morning — the
-  // visual day/night cycle is otherwise decoupled from sim hours (Phase 2
-  // decision), so pin it to the pre-dawn dark as the fire opens; dawn then
-  // breaks naturally over the burn ("The morning was still...").
-  if(active && !_fireWasActive && simSpeedKey!==0) timeOfDay = 0.185;
+  // The fire broke out at a quarter before six on a December morning. The
+  // old hand-pin of timeOfDay=0.185 is gone (fix sprint 2026-07-11 #1):
+  // lighting now derives from the sim clock, and 5:45 a.m. against a
+  // December ~7:15 sunrise IS the pre-dawn dark — dawn then breaks
+  // naturally over the burn ("The morning was still...").
   _fireWasActive = active;
   var windowDays = simDay>=FIRE.day0-0.05 && simDay<=FIRE.rebuildDay+FIRE.rebuildDur+1;
   if(!windowDays){
@@ -11942,7 +11976,7 @@ function hideBeatCard(){ beatCardEl.classList.remove("on"); }
 function setWatchMode(on){
   WATCH.on = on;
   document.body.classList.toggle("watch-mode", on);
-  if(on && simSpeedKey===0) setSimSpeed(lastActiveSpeed||1);
+  if(on && simSpeedKey===0) setSimSpeed(lastActiveSpeed||"day");
   if(!on){ DIRECTOR.beat=null; hideBeatCard(); }
 }
 window.addEventListener("keydown", function(e){
@@ -12056,7 +12090,12 @@ function updateDirector(dt){
     lerp(CAM.focusT.z, ic.z, clamp01(dt*0.5)));
   setZoomMeters(lerp(getZoomMeters(), ic.alt, clamp01(dt*0.4)));
   CAM.yawT += 0.03*dt;
-  if(nightFactor>0.9) timeOfDay = (timeOfDay + dt*3/DAY_CYCLE_SECONDS)%1; // drift deep night toward the golden hours
+  // drift deep night toward the golden hours: lighting derives from the sim
+  // clock now (fix sprint 2026-07-11), so the idle director nudges the SIM
+  // clock itself through the small hours (~10 sim-min per real second — the
+  // same visual pace the old timeOfDay drift had). Skipped at timelapse,
+  // where the representative light never reads as deep night anyway.
+  if(nightFactor>0.9 && !timelapseActive()) simDay = clamp(simDay + dt*(3/420), 0, SIM_END_DAY);
 }
 
 /* debug/verification handle (used by the Phase-5 QA pass; harmless in prod) */
@@ -12269,6 +12308,17 @@ window.__P1850 = {
     return { all:h, byKind:byKind, idleNows:nows };
   },
   setHour: function(hFrac){ jumpToDate(Math.floor(simDay)+clamp(hFrac,0,23.9)/24); },
+  // SUN-FROM-SIM-CLOCK verification hooks (fix sprint 2026-07-11)
+  get hour(){ return (simDay-Math.floor(simDay))*24; },
+  get tod(){ return timeOfDay; },
+  get nightFactor(){ return nightFactor; },
+  get lightBlend(){ return lightBlend; },
+  get groundAbstraction(){ return groundAbstraction; },
+  get daylight(){ return daylightSpanForDay(simDay); },
+  get walkSample(){ // s39 2x-speed verification: positions of currently-walking figures
+    var out=[]; for(var i=0;i<ALL_PEOPLE_SLOTS.length&&out.length<12;i++){ var s=ALL_PEOPLE_SLOTS[i]; if(s._pose==="walk"&&s._x!=null&&simDay>=s.notBeforeDay) out.push({id:s.id,x:s._x,z:s._z}); }
+    return out;
+  },
   get poseCounts(){
     return { walkM:personMeshes[POOL_M].count, walkF:personMeshes[POOL_F].count,
       child:personMeshes[POOL_CHILD].count, seated:personMeshes[POOL_SEATED].count,
@@ -12375,11 +12425,68 @@ window.__P1850 = {
 };
 
 /* =====================================================================
-   DAY / NIGHT CYCLE
+   DAY / NIGHT CYCLE — SUN FROM THE SIM CLOCK (fix sprint 2026-07-11, P0)
+   The old system ran its own wall-clock cycle (DAY_CYCLE_SECONDS=420, a
+   full day every 7 real minutes) with no relationship to the timeline —
+   the rogue clock. Now sun/sky/lighting derive from the sim clock's
+   hour-of-day, always, through the COMPRESSION POLICY:
+   - LIVE / 2x follow / paused / any explicit jump: true sun position,
+     continuously, from todFromSimDay() (seasonal daylight warp below).
+   - day/s and faster (+ scrub drags): the true cycle would strobe (a
+     full day every <=2s), so lighting blends (smoothed, never snapping)
+     to a REPRESENTATIVE day — a soft midday-warm baseline, with a gentle
+     dawn/dusk tint pulse as each day boundary passes at day/s only
+     (week/s and month/s sweep 7-30 days per real second, so they hold
+     the steady baseline — any per-day pulse would itself strobe).
+   - the Great Fire window overrides back to the true sun even at
+     timelapse: fireClockStep() already caps the clock at 1 sim-hour/3s
+     there, slow enough to watch dawn break naturally over the burn.
+   Scrub/jump landings default to noon (jumpToDate's +0.5) and the sun
+   now correctly stands at noon there.
    ===================================================================== */
-var timeOfDay = 0.32; // start mid-morning
-var DAY_CYCLE_SECONDS = 420; // slow autonomous cycle
+var timeOfDay = 0.32; // 0=midnight, 0.25=sunrise, 0.5=noon, 0.75=sunset — DERIVED each frame by updateTimeOfDay(); never advanced by its own clock
 var nightFactor = 0; // 0=full day .. 1=full night; shared by windows, campfires, lantern-carriers
+
+/* Seasonal daylight length (fill:true — approximate, SF ~37.8°N, no
+   equation-of-time): winter dusk ~17:00, summer ~20:00 per user spec. */
+function daylightSpanForDay(day){
+  var d = dateFromSimDay(day);
+  var doy = (d.getTime() - Date.UTC(d.getUTCFullYear(),0,1))/86400000;
+  var s = Math.cos((doy-172)/365*Math.PI*2); // +1 at summer solstice, -1 at winter
+  return { sunrise: 6.1 - 1.15*s, sunset: 18.5 + 1.5*s }; // winter ~7:15/17:00, summer ~4:57/20:00
+}
+/* Map the sim clock's hour-of-day onto the sun phase so sunrise always
+   lands at 0.25 and sunset at 0.75 regardless of season. */
+function todFromSimDay(day){
+  var h = (day-Math.floor(day))*24;
+  var sp = daylightSpanForDay(day);
+  if(h>=sp.sunrise && h<=sp.sunset)
+    return 0.25 + 0.5*(h-sp.sunrise)/(sp.sunset-sp.sunrise);
+  var nightLen = 24-(sp.sunset-sp.sunrise);
+  var hn = h>sp.sunset ? h-sp.sunset : h+24-sp.sunset;
+  return (0.75 + 0.5*hn/nightLen) % 1;
+}
+/* shortest-path circular lerp on the 0..1 day phase */
+function mixTod(a,b,t){
+  var d = b-a; if(d>0.5) d-=1; else if(d<-0.5) d+=1;
+  return ((a + d*t)%1+1)%1;
+}
+var REP_TOD = 0.45;       // representative timelapse light: soft near-noon warm
+var REP_DUSK_TOD = 0.72;  // the gentle day-boundary pulse leans toward this golden-hour phase
+var lightBlend = 0;       // 0 = true sun, 1 = representative day; smoothed so tier changes cross-fade
+function updateTimeOfDay(dt){
+  var fireWindow = simDay>=FIRE.day0 && simDay<=FIRE.day1; // fire clock is capped watchable — keep the true (pre-dawn -> morning) sun
+  var wantRep = (timelapseActive()||SCRUBBING) && !fireWindow ? 1 : 0;
+  lightBlend = chase(lightBlend, wantRep, dt, 2.5);
+  var rep = REP_TOD;
+  if(simSpeedKey==="day" && !SCRUBBING){
+    // dawn/dusk tint pulse: one gentle golden swell per passing day (2s each)
+    var f = simDay-Math.floor(simDay);
+    var db = Math.min(f, 1-f); // distance to the nearest day boundary
+    rep = mixTod(REP_TOD, REP_DUSK_TOD, Math.exp(-Math.pow(db/0.09,2))*0.8);
+  }
+  timeOfDay = mixTod(todFromSimDay(simDay), rep, lightBlend);
+}
 
 var WATER_DEEP_BASE = new THREE.Color(0x2a5570);
 var WATER_SHALLOW_BASE = new THREE.Color(0x8fc2c9);
@@ -12865,9 +12972,9 @@ function animate(){
   requestAnimationFrame(animate);
   var dt = Math.min(clock.getDelta(), 0.05);
 
-  // PHASE 2 — the sim clock drives ships/growth/weather; day/night keeps
-  // its own real-time cycle underneath it (spec §13: "day/night continues
-  // under the clock").
+  // The sim clock drives ships/growth/weather AND (fix sprint 2026-07-11,
+  // superseding spec §13's "own real-time cycle") the day/night lighting —
+  // see the SUN FROM THE SIM CLOCK compression policy at updateTimeOfDay().
   updateSimClock(dt);
   updateWeather();
   updateWetTint();
@@ -12881,7 +12988,7 @@ function animate(){
   updateFire(dt);      // PHASE 5 — the Dec 24 1849 Great Fire + aftermath/rebuild
   updateLaundryDay(simDay); // PL-B item 4 — laundry lines only carry wash on the (fill:true) weekly wash day
 
-  timeOfDay = (timeOfDay + dt/DAY_CYCLE_SECONDS) % 1;
+  updateTimeOfDay(dt); // SUN FROM THE SIM CLOCK — timeOfDay derives from simDay (compression policy above)
   updateDayNight();
 
   waterUniforms.uTime.value += dt;
