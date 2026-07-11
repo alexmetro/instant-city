@@ -1443,11 +1443,18 @@ terrainGeo.rotateX(-Math.PI/2);
     var gi = Math.round((x+CFG.worldSize/2)/CFG.worldSize*(TERRAIN.n-1));
     var gj = Math.round((z+CFG.worldSize/2)/CFG.worldSize*(TERRAIN.n-1));
     gi = clamp(gi,0,TERRAIN.n-1); gj = clamp(gj,0,TERRAIN.n-1);
-    var h = TERRAIN.heights[gj*TERRAIN.n+gi];
-    // blend the village pad in (same rule as terrainHeight())
+    // ONE height rule (s22 shoreline truth, 2026-07-11): the mesh reads
+    // terrainHeight() itself — pad blend + task #27's east-of-shoreline
+    // gate, identical to every other consumer. This loop used to keep a
+    // PRIVATE copy of the pad blend ("same rule as terrainHeight()")
+    // that silently missed the #27 gate — so the RENDERED mesh lifted
+    // the tide flats east of Montgomery to village height (a false 2-3
+    // block dry-sand apron, hulls reading as beached on it) while
+    // terrainHeight() said water and every placement system agreed.
+    // The user's Feb-1849 reference screening caught the divergence.
+    var h = terrainHeight(x,z);
     var dOut = distOutsideBox(x,z,VILLAGE_BOX);
-    var villageBlend = smoothstep(0,240,dOut);
-    h = lerp(VILLAGE_Y, h, villageBlend);
+    var villageBlend = smoothstep(0,240,dOut); // still read by the hillshade gates below
     pos.setY(i,h);
     var col = terrainColor(x,z,h);
 
