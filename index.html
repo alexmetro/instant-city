@@ -61,8 +61,13 @@
   }
   html,body{
     margin:0; padding:0; overflow:hidden; height:100%; background:#0a0a0a;
+    overscroll-behavior:none; /* s41: no rubber-band/pull-to-refresh contention on iOS */
   }
-  canvas{ display:block; touch-action:none; }
+  canvas{
+    display:block; touch-action:none;
+    /* s41 iOS hardening: no long-press callout/loupe mid-drag-start */
+    -webkit-user-select:none; user-select:none; -webkit-touch-callout:none;
+  }
   #hud{
     position:fixed; inset:0; pointer-events:none;
     font-family:'Fraunces', Georgia, serif;
@@ -114,6 +119,12 @@
   }
   .geo-label{
     position:absolute; transform:translate(-50%,-50%);
+    /* s41 MOBILE-PAN FIX: label chips sit over the map, so a drag that
+       happens to START on one must still pan (the nav handlers now live on
+       window and treat chips as map surface — see the input section).
+       touch-action:none keeps iOS from pointercancel'ing such drags;
+       callout/select off so a slow drag-start can't pop the loupe. */
+    touch-action:none; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none;
     background:rgba(241,230,201,0.80);
     border:1px solid rgba(43,29,14,0.40);
     color:var(--ink);
@@ -384,9 +395,20 @@
      top-priority spine beats, [ / ] step a month, collapsible tab. ---- */
   #hud-scrubber{
     position:fixed; left:50%; bottom:56px; transform:translateX(-50%);
-    width:min(78vw,860px); z-index:9; pointer-events:auto;
+    width:min(78vw,860px); z-index:9;
+    /* s41 MOBILE-PAN FIX: this ribbon spans ~78vw across the bottom-center —
+       exactly where a thumb starts an upward pan. The container no longer
+       eats pointer events; only the genuinely interactive pieces (tab,
+       track/handle/notches) do. Drags starting on the ribbon's dead space
+       now pan the map. touch-action:none on the track keeps iOS from
+       cancelling handle scrubs (its drag is pointermove-based). */
+    pointer-events:none;
     padding:7px 18px 10px; user-select:none;
     transition:opacity .3s ease, transform .3s ease;
+  }
+  #hud-scrubber .scr-tab, #hud-scrubber .scr-track{
+    pointer-events:auto; touch-action:none;
+    -webkit-user-select:none; user-select:none; -webkit-touch-callout:none;
   }
   #hud-scrubber.collapsed .scr-body{ display:none; }
   #hud-scrubber .scr-tab{
@@ -11987,7 +12009,9 @@ function suspendDirector(){
   DIRECTOR.suspendUntil = performance.now()+30000;
   if(DIRECTOR.beat && !DIRECTOR.beat.holdUntilDay){ DIRECTOR.beat=null; hideBeatCard(); }
 }
-["pointerdown","wheel","touchstart"].forEach(function(ev){ canvas.addEventListener(ev, suspendDirector, {passive:true}); });
+/* s41: window, not canvas — map drags can legitimately start on label chips
+   now, and those must also give the watch-mode director its 30s pause. */
+["pointerdown","wheel","touchstart"].forEach(function(ev){ window.addEventListener(ev, suspendDirector, {passive:true}); });
 window.addEventListener("keydown", function(e){
   var k = e.key.toLowerCase();
   if("wasdqerf".indexOf(k)>=0 && k.length===1 || k.indexOf("arrow")===0) suspendDirector();
@@ -12628,6 +12652,7 @@ function applyCameraRig(dt){
 
   CAM.radius = radiusFromT(CAM.t);
   var elev = clamp(elevationForT(CAM.t) + CAM.pitchOff, 8*Math.PI/180, 85*Math.PI/180);
+  CAM.elev = elev; // cached for panBy's foreshortening term (s41)
 
   var horizR = CAM.radius*Math.cos(elev);
   var camX = CAM.focus.x + horizR*Math.sin(CAM.yaw);
@@ -12680,25 +12705,92 @@ var TAP_MAX_MS = 500;      // ms — single tap must release within this to coun
 var DBLTAP_MAX_MS = 350;   // ms — gap between two taps to count as a double-tap/dblclick
 var DBLTAP_MAX_DIST = 36;  // px — distance between the two taps
 var ptrs = new Map();      // pointerId -> {x,y,type,button}
-var tapState = { downX:0, downY:0, downTime:0, moved:0 };
+var tapState = { downX:0, downY:0, downTime:0, moved:0, onCanvas:true };
 var lastTap = { time:-9999, x:0, y:0 };
 var orbitActive = false, panActive = false;
 var pinch = null; // {ids:[idA,idB], d, cx, cy} once a 2nd pointer joins
 canvas.addEventListener("contextmenu", function(e){ e.preventDefault(); });
 
-/* screen dx/dy (pan gesture delta) -> world xz delta, scaled by current
-   zoom radius and rotated through yaw so it always tracks the ground
-   plane regardless of heading (Annals arch. point C, verbatim). */
+/* s41 MOBILE-PAN FIX — the nav pointer/wheel/gesture handlers now live on
+   WINDOW, not the canvas. Root cause of the iPad "one-finger pan is
+   unreliable" bug: label chips (.ship-label/.building-label, enlarged to
+   finger size on touch), the 78vw-wide scrubber ribbon, and the beat card
+   all sit OVER the canvas with pointer-events:auto — any drag that STARTED
+   on one of them never reached the canvas listeners at all, so whether a
+   pan worked depended on exactly which pixel the finger landed on. Now the
+   window sees every pointer and only genuinely interactive chrome (the
+   selector below) opts out of map navigation; label chips count as map
+   surface (drag pans, tap still opens them via their own click handlers). */
+var UI_STEAL_SELECTOR = "#paper-pane,#hud-menu-sheet,#hud-menu-toggle,#beat-card,"+
+  "#ship-inspector,#person-inspector,#building-inspector,#paper-toggle,"+
+  "#hud-hint-toggle,#hud-tilt-toggle,#hud-ticker,#hud-hint,#hud-seed,#hud-title,"+
+  "#hud-clock,#hud-altitude,#horizon-ring,#touch-debug,.scr-tab,.scr-track,"+
+  "a,button,input,textarea,select";
+function isUIEvent(e){
+  var t = e.target;
+  return !!(t && t.closest && t.closest(UI_STEAL_SELECTOR));
+}
+/* One real drag must not double as a click on whatever chip the finger
+   happened to land on — ptrEnd arms this after any >5px gesture and a
+   capture-phase listener swallows the compatibility click that follows. */
+var suppressClickUntil = 0;
+window.addEventListener("click", function(e){
+  if(performance.now() < suppressClickUntil){ e.stopPropagation(); e.preventDefault(); }
+}, true);
+
+/* screen dx/dy (pan gesture delta) -> world xz delta, rotated through yaw
+   (Annals arch. point C) — REWORKED s41 to the Apple-Maps invariant (the
+   ground point under the finger stays under the finger), measured against
+   the real camera via CDP touch traces:
+   - the flat 0.0016*radius gain overshot 1:1 by ~35% (it bakes in one
+     window height and ignores fov); now derived exactly:
+     meters-per-pixel at the focus = 2*tan(fov/2)/viewportHeight * radius.
+   - screen-VERTICAL drags cross foreshortened ground — 1px maps to
+     1/sin(elevation) ground-meters along the view axis (55-70 deg here,
+     up to ~3x at the cinematic low tilt). The old uniform scale made
+     vertical pans lag horizontal ones.
+   - the forward component's SIGN was inverted in the port: finger down
+     moved the world up-screen (measured -183px per +200px drag) while
+     horizontal correctly followed the finger — the half-mirrored response
+     is a big slice of why touch pan felt broken. Both axes now follow. */
 function panBy(dx, dy){
-  var sc = CAM.radius*0.0016;
+  var sc = 2*Math.tan(camera.fov*Math.PI/360)/window.innerHeight * CAM.radius;
+  var fsc = sc/Math.max(0.25, Math.sin(CAM.elev || 1));
+  var lat = dx*sc, fwd = dy*fsc;
   var sinY = Math.sin(CAM.yaw), cosY = Math.cos(CAM.yaw);
-  var worldDX = -cosY*dx + sinY*dy;
-  var worldDZ =  sinY*dx + cosY*dy;
+  var worldDX = -cosY*lat - sinY*fwd;
+  var worldDZ =  sinY*lat - cosY*fwd;
   var half = CFG.worldSize/2;
-  var nx = clamp(CAM.focusT.x + worldDX*sc, -half, half);
-  var nz = clamp(CAM.focusT.z + worldDZ*sc, -half, half);
+  var nx = clamp(CAM.focusT.x + worldDX, -half, half);
+  var nz = clamp(CAM.focusT.z + worldDZ, -half, half);
   CAM.focusT.x = nx; CAM.focusT.z = nz;
   CAM.focusT.y = groundHeight(nx, nz);
+}
+
+/* Ground-anchored pan (s41, the exact Apple-Maps invariant): at gesture
+   start we remember the terrain point under the finger (dragAnchor); every
+   move then shifts the focus by exactly the world displacement that puts
+   that point back under the finger. Because the correction is recomputed
+   each event against the CURRENT camera pose from the ABSOLUTE anchor, it
+   self-corrects both the chase-smoothing lag and perspective nonlinearity
+   (the scalar panBy above is first-order and drifted up to ~50% on long
+   screen-vertical drags — meters-per-pixel shrinks toward the bottom of
+   the screen). Falls back to the scalar model when a ray misses (sky /
+   past the world edge). Serves BOTH the one-finger pan and the two-finger
+   centroid pan; anchoring the pinch centroid also makes zoom track the
+   fingers' midpoint instead of the screen center. */
+var dragAnchor = null; // {x,z} terrain point pinned under the finger/centroid
+function anchorPan(cx, cy, pdx, pdy){
+  var gCur = dragAnchor ? groundHit(cx, cy) : null;
+  if(dragAnchor && gCur){
+    var half = CFG.worldSize/2;
+    var nx = clamp(CAM.focusT.x + (dragAnchor.x - gCur.x), -half, half);
+    var nz = clamp(CAM.focusT.z + (dragAnchor.z - gCur.z), -half, half);
+    CAM.focusT.x = nx; CAM.focusT.z = nz;
+    CAM.focusT.y = groundHeight(nx, nz);
+  } else {
+    panBy(pdx, pdy); // sky/off-world fallback: first-order screen-space model
+  }
 }
 
 /* Heightfield ray-march with bisection refine (Annals arch. point G) —
@@ -12732,8 +12824,22 @@ function groundHit(sx, sy){
   return null;
 }
 
-canvas.addEventListener("pointerdown", function(e){
-  canvas.setPointerCapture(e.pointerId);
+window.addEventListener("pointerdown", function(e){
+  if(isUIEvent(e)) return; // genuine chrome: panels, scrubber track/tab, links…
+
+  /* stale-pointer purge (s41): a drag that starts on a chip has no pointer
+     capture, so if its pointerup is ever lost (window blur, iOS system
+     gesture) the ptrs entry would linger and the NEXT single finger would
+     read ptrs.size===2 — a phantom pinch that zooms instead of panning.
+     e.isPrimary on a touch means no other touch is actually down. */
+  if(e.pointerType==="touch" && e.isPrimary && ptrs.size){
+    ptrs.clear(); pinch = null; orbitActive = false; panActive = false;
+  }
+  /* capture only when the gesture starts on the canvas itself (keeps mouse
+     drags tracking outside the window). Chip-started drags stay uncaptured
+     so the chip's own click still fires on a clean tap. try/catch: iOS can
+     throw here and an unguarded throw used to abort this whole handler. */
+  if(e.target===canvas){ try{ canvas.setPointerCapture(e.pointerId); }catch(err){} }
   ptrs.set(e.pointerId, { x:e.clientX, y:e.clientY, type:e.pointerType, button:e.button });
 
   if(ptrs.size===2){
@@ -12741,11 +12847,14 @@ canvas.addEventListener("pointerdown", function(e){
     var p0 = ptrs.get(ids[0]), p1 = ptrs.get(ids[1]);
     pinch = { ids:ids, d:Math.hypot(p1.x-p0.x,p1.y-p0.y), cx:(p0.x+p1.x)/2, cy:(p0.y+p1.y)/2 };
     orbitActive = false; panActive = false;
+    dragAnchor = groundHit(pinch.cx, pinch.cy); // pin the terrain under the centroid
     return;
   }
   if(ptrs.size>2) return; // ignore a 3rd+ pointer
 
   tapState.downX=e.clientX; tapState.downY=e.clientY; tapState.downTime=performance.now(); tapState.moved=0;
+  tapState.onCanvas = (e.target===canvas); // chip taps select via their own click handlers
+  dragAnchor = groundHit(e.clientX, e.clientY); // pin the terrain under the finger
   // DRAG-CONVENTION SWAP (2026-07-10, user directive overriding the Annals
   // default): primary drag (left mouse button / one-finger touch) now PANS
   // — Apple Maps muscle memory — secondary (right mouse button) orbits.
@@ -12754,7 +12863,7 @@ canvas.addEventListener("pointerdown", function(e){
   if(e.button===0){ panActive = true; orbitActive = false; }
   else { orbitActive = true; panActive = false; }
 });
-canvas.addEventListener("pointermove", function(e){
+window.addEventListener("pointermove", function(e){
   if(!ptrs.has(e.pointerId)) return;
   var prev = ptrs.get(e.pointerId);
   var dx = e.clientX-prev.x, dy = e.clientY-prev.y;
@@ -12766,7 +12875,7 @@ canvas.addEventListener("pointermove", function(e){
     var d = Math.hypot(p1.x-p0.x, p1.y-p0.y);
     var cx = (p0.x+p1.x)/2, cy = (p0.y+p1.y)/2;
     CAM.tT = clamp(CAM.tT + (pinch.d-d)*0.0016, 0, 1);
-    panBy(cx-pinch.cx, cy-pinch.cy);
+    anchorPan(cx, cy, cx-pinch.cx, cy-pinch.cy);
     pinch.d = d; pinch.cx = cx; pinch.cy = cy; // continuous re-baseline = 1:1 tracking
     return;
   }
@@ -12775,32 +12884,49 @@ canvas.addEventListener("pointermove", function(e){
     CAM.yawT -= dx*0.0052;
     CAM.pitchOffT = clamp(CAM.pitchOffT + dy*0.0034, PITCH_OFF_MIN, PITCH_OFF_MAX);
   } else if(panActive){
-    panBy(dx, dy);
+    anchorPan(e.clientX, e.clientY, dx, dy);
   }
   var moveDist = Math.hypot(e.clientX-tapState.downX, e.clientY-tapState.downY);
   if(moveDist>tapState.moved) tapState.moved = moveDist;
 });
+function endWhy(r){ if(TDBG) TDBG.why = r; } // ?debugtouch: why the last gesture ended the way it did
 function ptrEnd(e){
+  if(!ptrs.has(e.pointerId)){ endWhy("foreign"); return; } // not a gesture the nav owns (started on UI chrome)
   ptrs.delete(e.pointerId);
 
   if(pinch && (e.pointerId===pinch.ids[0] || e.pointerId===pinch.ids[1])){
     pinch = null;
+    endWhy("pinch-end");
     var remaining = Array.from(ptrs.keys());
     if(remaining.length===1){
       var p = ptrs.get(remaining[0]);
       tapState.downX=p.x; tapState.downY=p.y; tapState.downTime=performance.now(); tapState.moved=999;
       panActive = (p.button===0); orbitActive = !panActive; // same swapped convention as pointerdown above
-    } else { orbitActive = false; panActive = false; }
+      dragAnchor = groundHit(p.x, p.y); // re-pin under the surviving finger
+    } else { orbitActive = false; panActive = false; dragAnchor = null; }
     return;
   }
-  if(!orbitActive && !panActive) return;
-  orbitActive = false; panActive = false;
+  if(!orbitActive && !panActive){ endWhy("idle"); return; }
+  orbitActive = false; panActive = false; dragAnchor = null;
 
+  // a real drag must not ALSO fire as a click on whatever chip it ended over
+  if(tapState.moved>5) suppressClickUntil = performance.now()+400;
+
+  /* pointercancel = the browser/OS took the gesture (iOS fires it
+     aggressively when its own gestures contend) — never treat it as a tap. */
+  if(e.type==="pointercancel"){ endWhy("cancelled"); return; }
+
+  if(!tapState.onCanvas){ endWhy("ui-tap"); return; } // clean tap on a chip: its own click handler selects
+
+  if(tapState.moved>5){ endWhy("drag"); }
+  else if((performance.now()-tapState.downTime)>=TAP_MAX_MS){ endWhy("slow-tap"); }
+  else endWhy("tap");
   if(tapState.moved<=5 && (performance.now()-tapState.downTime)<TAP_MAX_MS){
     var now = performance.now();
     var isDbl = (now-lastTap.time)<DBLTAP_MAX_MS && Math.hypot(e.clientX-lastTap.x, e.clientY-lastTap.y)<DBLTAP_MAX_DIST;
     if(isDbl){
       lastTap.time = -9999; // consumed; don't chain into a triple-tap
+      if(TDBG) TDBG.dbl = (TDBG.dbl||0)+1;
       var hit = groundHit(e.clientX, e.clientY);
       if(hit){
         CAM.focusT.set(hit.x, groundHeight(hit.x,hit.z), hit.z);
@@ -12809,19 +12935,24 @@ function ptrEnd(e){
       }
     } else {
       lastTap.time = now; lastTap.x = e.clientX; lastTap.y = e.clientY;
+      if(TDBG) TDBG.sel = (TDBG.sel||0)+1;
       trySelectAtScreenXY(e.clientX, e.clientY);
     }
   }
 }
-canvas.addEventListener("pointerup", ptrEnd);
-canvas.addEventListener("pointercancel", ptrEnd);
+window.addEventListener("pointerup", ptrEnd);
+window.addEventListener("pointercancel", ptrEnd);
 
 /* wheel: magnitude-scaled (not sign-stepped, so trackpads don't slam);
    ctrl+wheel IS trackpad-pinch in Chromium/Firefox (higher gain); zoom-in
    drifts the focus toward the cursor's ground point (Annals arch. point D,
    verbatim). passive:false is required for preventDefault to work — this
-   is what stops a Windows-precision-trackpad pinch from page-zooming. */
-canvas.addEventListener("wheel", function(e){
+   is what stops a Windows-precision-trackpad pinch from page-zooming.
+   s41: moved to window (chips/ribbons over the map used to eat it and a
+   ctrl+wheel trackpad-pinch over a chip page-zoomed); real chrome (paper
+   pane etc.) opts out via isUIEvent so its native scroll still works. */
+window.addEventListener("wheel", function(e){
+  if(isUIEvent(e)) return;
   e.preventDefault();
   var dy = e.deltaY;
   if(e.deltaMode===1) dy *= 33; else if(e.deltaMode===2) dy *= window.innerHeight;
@@ -12837,14 +12968,82 @@ canvas.addEventListener("wheel", function(e){
    iPad-trackpad fix: Safari never fires wheel events for a trackpad pinch,
    only these proprietary gesture events, and zooms the whole PAGE
    unrecoverably unless all three are preventDefault'd. */
+/* s41 changes to the verbatim port, both iPad-touch findings:
+   (a) listeners moved canvas->window + isUIEvent filter — Safari targets
+       gesture events at the FIRST touch's element, so a pinch whose first
+       finger landed on a label chip never reached the canvas listeners and
+       page-zoomed (user-scalable=no is ignored by modern iOS);
+   (b) gesturechange now yields while a pointer-pinch is active — Safari
+       fires gesture events for two-finger TOUCH as well as trackpad pinch,
+       so this handler (absolute tT from gesture start) and the pointer
+       pinch path (incremental tT) were both writing CAM.tT, fighting each
+       other mid-gesture. Trackpad pinches have no pointer pair (pinch stays
+       null), so the trackpad fix is untouched. */
 var gestT = null;
-canvas.addEventListener("gesturestart", function(e){ e.preventDefault(); gestT = CAM.tT; });
-canvas.addEventListener("gesturechange", function(e){
+window.addEventListener("gesturestart", function(e){ if(isUIEvent(e)) return; e.preventDefault(); gestT = CAM.tT; });
+window.addEventListener("gesturechange", function(e){
+  if(isUIEvent(e)) return;
   e.preventDefault();
-  if(gestT===null) return;
+  if(gestT===null || pinch) return;
   CAM.tT = clamp(gestT - Math.log2(e.scale || 1)*0.5, 0, 1);
 });
-canvas.addEventListener("gestureend", function(e){ e.preventDefault(); gestT = null; });
+window.addEventListener("gestureend", function(e){ if(isUIEvent(e)) return; e.preventDefault(); gestT = null; });
+
+/* =====================================================================
+   ?debugtouch — tiny shipping diagnostic overlay (s41 mobile-pan sprint).
+   Hidden unless the URL has ?debugtouch. Shows the last 5 pointer/gesture
+   events (with the DOM element that received them — the #1 way a drag
+   dies is an overlay stealing pointerdown from the canvas), whether the
+   canvas got pointer capture, pointercancel count, and live pan state.
+   Screenshot this on-device when touch input misbehaves. Also exposes a
+   read-only window.__dt handle for automated input verification — only
+   when the flag is present.
+   ===================================================================== */
+var TDBG = /[?&]debugtouch/i.test(location.search) ? (function(){
+  var el = document.createElement("div");
+  el.id = "touch-debug";
+  el.style.cssText = "position:fixed;left:4px;top:64px;z-index:99;background:rgba(0,0,0,0.72);color:#8f8;font:9px/1.4 monospace;padding:4px 6px;pointer-events:none;max-width:60vw;white-space:pre;";
+  document.body.appendChild(el);
+  var lines = [], cancels = 0, lastCap = "-", mv = null;
+  function desc(t){ if(!t||!t.tagName) return "?"; if(t.id) return "#"+t.id; var c=(t.className||"").toString().split(" ")[0]; return t.tagName.toLowerCase()+(c?"."+c:""); }
+  function flushMv(){ if(mv){ lines.push("move#"+mv.id+" x"+mv.n+" ->"+mv.x+","+mv.y+" on "+mv.tgt); if(lines.length>5) lines.shift(); mv=null; } }
+  function push(s){ flushMv(); lines.push(s); if(lines.length>5) lines.shift(); paint(); }
+  function paint(){
+    el.textContent = lines.join("\n")
+      + (mv ? "\nmove#"+mv.id+" x"+mv.n+" ->"+mv.x+","+mv.y+" on "+mv.tgt : "")
+      + "\nptrs:"+ptrs.size+" pan:"+panActive+" orbit:"+orbitActive+" pinch:"+(!!pinch)
+      + "\ncap:"+lastCap+" cancels:"+cancels+" moved:"+tapState.moved.toFixed(0)
+      + "\nfocus:"+CAM.focusT.x.toFixed(0)+","+CAM.focusT.z.toFixed(0)+" r:"+CAM.radius.toFixed(0);
+  }
+  ["pointerdown","pointerup","pointercancel"].forEach(function(t){
+    window.addEventListener(t, function(e){
+      if(t==="pointercancel") cancels++;
+      if(t==="pointerdown") lastCap = "?";
+      push(t.replace("pointer","")+"#"+e.pointerId+" "+e.pointerType+"/b"+e.button+" "+Math.round(e.clientX)+","+Math.round(e.clientY)+" on "+desc(e.target));
+    }, true);
+  });
+  window.addEventListener("pointermove", function(e){
+    if(ptrs.size===0 && e.pointerType==="mouse") return; // ignore idle mouse hover
+    if(lastCap==="?"){ try{ lastCap = canvas.hasPointerCapture(e.pointerId) ? "ok" : "NO"; }catch(err){ lastCap = "err"; } }
+    if(mv && mv.id!==e.pointerId) flushMv();
+    if(!mv) mv = { id:e.pointerId, n:0 };
+    mv.n++; mv.x = Math.round(e.clientX); mv.y = Math.round(e.clientY); mv.tgt = desc(e.target);
+    paint();
+  }, true);
+  ["gesturestart","gesturechange","gestureend"].forEach(function(t){
+    window.addEventListener(t, function(e){ push(t+" scale="+(e.scale!=null ? Number(e.scale).toFixed(2) : "-")); }, true);
+  });
+  window.__dt = {
+    CAM:CAM, groundHit:groundHit, camera:camera, ptrs:ptrs, terrainHeight:terrainHeight, lastTap:lastTap,
+    toScreen:function(x,z){ var v=new THREE.Vector3(x,terrainHeight(x,z),z).project(camera);
+      return { x:(v.x*0.5+0.5)*window.innerWidth, y:(-v.y*0.5+0.5)*window.innerHeight }; },
+    state:function(){ return { tT:CAM.tT, t:CAM.t, radius:CAM.radius, fx:CAM.focusT.x, fz:CAM.focusT.z,
+      pan:panActive, orbit:orbitActive, pinch:!!pinch, cancels:cancels, cap:lastCap, moved:tapState.moved,
+      sel:TDBG&&TDBG.sel||0, dbl:TDBG&&TDBG.dbl||0, why:TDBG&&TDBG.why||"-", onCanvas:tapState.onCanvas,
+      anchor:dragAnchor ? {x:dragAnchor.x, z:dragAnchor.z} : null }; }
+  };
+  return { push:push };
+})() : null;
 
 window.addEventListener("resize", function(){
   camera.aspect = window.innerWidth/window.innerHeight;
