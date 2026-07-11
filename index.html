@@ -4609,105 +4609,284 @@ var shipVisits = (function buildShipVisits(){
 // P0-2 fix (2026-07-10, Director's screening): __P1850.ships reports 497
 // anchored by Sept 1849, climbing to a documented peak of 566 (Dec 1 1849,
 // the sim's own data — buildShipVisits()+fillShipVisits against the real
-// 1849 aggregate arrival rate) — but the old SHIP_CAP+MAST_CAP total
-// (260) silently dropped everything past that cap in updateShips()'s
-// hard-cap truncation, so the cove's single most famous historical sight
-// ("~200 ships stand abandoned in Yerba Buena Cove... by June" 1849, per
-// timeline-spine.md, ballooning through the rest of the year) rendered as
-// ~25 hulls. Raised to a combined 800 (SHIP_CAP+MAST_CAP), comfortably
-// above the documented in-sim peak with headroom to spare; ANCHOR_SLOTS
-// below is widened to match so 800 ships get 800+ distinct moorings
-// (period imagery's dense, varied-yaw crescent) rather than wrapping onto
-// the same handful of slots.
+// 1849 aggregate arrival rate) — SHIP_CAP+MAST_CAP stays at a combined 800,
+// comfortably above the documented in-sim peak with headroom to spare, and
+// the anchorage lattice below supplies 1000+ distinct depth-checked
+// moorings so nothing ever wraps onto a reused slot.
 var SHIP_CAP = 130;         // full-hull rendered ships, per spec
 var MAST_CAP = 670;         // simplified mast-cluster overflow ("the forest of masts")
-var SAIL_IN_DAYS = 2;       // "enters ... ~2 sim-days before its date"
-var SAIL_OUT_DAYS = 1.5;
-var SHIP_GATE = { x:-4000, z:-3450 };       // the Golden Gate label position
-var SHIP_ALCATRAZ_CTRL = { x:-1950, z:-2100 }; // bezier control point, sailing past Alcatraz
-var SHIP_NORTH_EXIT = { x:-2500, z:-5300 };
 
-var anchorFreeSlots = [], anchorNextSlot = 0;
-function allocAnchorSlot(){ return anchorFreeSlots.length ? anchorFreeSlots.pop() : anchorNextSlot++; }
-function freeAnchorSlot(i){ anchorFreeSlots.push(i); }
+/* =====================================================================
+   SHIP NAVIGATION (sprint #29, 2026-07-11) — WATER-ONLY ROUTING.
+   The old single quadratic bezier (gate -> "Alcatraz" control -> anchor)
+   cut straight across the peninsula's NE corner: sampled against the
+   baked heightmap it ran 34/101 samples over dry land, topping Telegraph
+   Hill at h=+42m on final approach (the user report: "ships sail
+   straight through the peninsula"). Ships now sail a WAYPOINT CHANNEL
+   derived from the real geography — mid-strait from the Golden Gate,
+   deep water south of Alcatraz, along the north shore with 300m+
+   clearance (clearing the charted rock/islet at ~(-1200,-1650)),
+   rounding Clark's Point (easternmost shallow in the bake x=410; the
+   channel rounds it abeam at x~850) south into Yerba Buena cove.
+   The channel is DATA — a Catmull-Rom-smoothed waypoint polyline plus a
+   corridor width: each ship steers along it with a per-ship lateral
+   offset (±SHIP_LATERAL_MAX) and a slight period tack wiggle, both
+   tapering to zero on final approach. The full corridor was validated
+   against the baked terrain offline (min depth 2.2m at ±65m laterals)
+   and is re-audited at every load (validateShipChannelOnBuild below;
+   __P1850.channelAudit / __P1850.sailAudit for QA).
+   ===================================================================== */
+var SHIP_GATE = { x:-4000, z:-3450 };        // the Golden Gate
+var SHIP_NORTH_EXIT = { x:-2500, z:-5300 };  // up-bay departures (Sacramento/Benicia way)
+var SHIP_CHANNEL_WPTS = [
+  SHIP_GATE,
+  { x:-3050, z:-2650 },  // mid-strait, angling SE
+  { x:-2150, z:-2150 },  // deep water, well south of Alcatraz (Alcatraz bakes at ~(-1350,-3450))
+  { x:-1150, z:-1950 },  // clears the North Beach flats and the bay islet at (-1200,-1650)
+  { x: -250, z:-1720 },  // off the north shore (land reaches z=-1280..-1360 along here)
+  { x:  620, z:-1620 },  // begin rounding Clark's Point
+  { x:  850, z:-1180 },  // abeam the point, ~440m off its easternmost shallow
+  { x:  790, z: -820 }   // cove gate: the mouth of Yerba Buena cove
+];
+var SHIP_NORTH_WPTS = [
+  { x:  790, z: -820 },  // shares the cove gate, reverses round the point, then up-bay
+  { x:  780, z:-1180 },
+  { x:  540, z:-1600 },
+  { x:  280, z:-2300 },
+  { x: -450, z:-3600 },
+  { x:-1400, z:-4900 },
+  SHIP_NORTH_EXIT
+];
+var SHIP_LATERAL_MAX = 45; // per-ship corridor offset (m); with the ±20m tack wiggle this stays inside the validated ±65m wet corridor
+function smoothShipPath(wpts, step){ // Catmull-Rom through the waypoints -> dense arc-length polyline
+  var raw = [];
+  function cr(p0,p1,p2,p3,t){
+    var t2=t*t, t3=t2*t;
+    return { x: 0.5*((2*p1.x)+(-p0.x+p2.x)*t+(2*p0.x-5*p1.x+4*p2.x-p3.x)*t2+(-p0.x+3*p1.x-3*p2.x+p3.x)*t3),
+             z: 0.5*((2*p1.z)+(-p0.z+p2.z)*t+(2*p0.z-5*p1.z+4*p2.z-p3.z)*t2+(-p0.z+3*p1.z-3*p2.z+p3.z)*t3) };
+  }
+  for(var i=0;i<wpts.length-1;i++){
+    var p0=wpts[Math.max(0,i-1)], p1=wpts[i], p2=wpts[i+1], p3=wpts[Math.min(wpts.length-1,i+2)];
+    var n = Math.max(2, Math.ceil(Math.hypot(p2.x-p1.x, p2.z-p1.z)/step));
+    for(var k=(i===0?0:1); k<=n; k++) raw.push(cr(p0,p1,p2,p3,k/n));
+  }
+  var pts=[{x:raw[0].x, z:raw[0].z, s:0}], s=0;
+  for(var j=1;j<raw.length;j++){
+    s += Math.hypot(raw[j].x-raw[j-1].x, raw[j].z-raw[j-1].z);
+    pts.push({x:raw[j].x, z:raw[j].z, s:s});
+  }
+  return { pts:pts, len:s };
+}
+function shipPolyAt(poly, s){ // position + unit tangent at arc length s (clamped)
+  var pts = poly.pts;
+  s = clamp(s, 0, poly.len);
+  var lo=0, hi=pts.length-1;
+  while(hi-lo>1){ var mid=(lo+hi)>>1; if(pts[mid].s<=s) lo=mid; else hi=mid; }
+  var a=pts[lo], b=pts[Math.min(lo+1, pts.length-1)];
+  var seg = Math.max(1e-6, b.s-a.s), t=(s-a.s)/seg;
+  var tx=(b.x-a.x)/seg, tz=(b.z-a.z)/seg;
+  var tl = Math.hypot(tx,tz)||1;
+  return { x:lerp(a.x,b.x,t), z:lerp(a.z,b.z,t), tx:tx/tl, tz:tz/tl };
+}
+var SHIP_CHANNEL = smoothShipPath(SHIP_CHANNEL_WPTS, 25);
+var SHIP_NORTH = smoothShipPath(SHIP_NORTH_WPTS, 25);
 
 /* ---------------------------------------------------------------------
-   ANCHORAGE — historically ships moored in a broad crescent off the
-   town, Clark's Point down past the frontage toward Rincon Point, at
-   varied distances offshore, not a single tight square. Slots are laid
-   out along the real cove shoreline: for each along-shore sample we walk
-   east from an inland point until the BAKED heightmap (not the analytic
-   shorelineX() approximation, which is only a placement seed here) goes
-   underwater, then push out 80-400m and re-check real depth so nothing
-   ever anchors in the shallows. Slots are grouped into offshore "rings".
-   P0-2 fix (2026-07-10, screening #2 — "dense rafted anchorage
-   concentrated off the cove", not confetti): the along-shore fill order
-   used to be a bit-reversal spread, which fans slots evenly across the
-   ENTIRE ~1.68km cove length as soon as a handful of ships exist — every
-   framing read as scattered dots rather than the documented knot of hulls
-   off the town's own frontage. allocAnchorSlot() hands out increasing
-   indices to earliest-arriving ships, and ANCHOR_SLOTS is visited in
-   array order, so the fix is in the array's own ORDER: along-shore
-   samples are now sorted by distance from the town center (z=0, off
-   Clay/Montgomery — geography-shoreline.md's Yerba Buena Cove section;
-   the town's own Pacific-California frontage spans roughly z=-210..+210)
-   so the first ships to arrive cluster tightly off the town and only
-   spread up/down the cove as the fleet grows into the hundreds, matching
-   the anchorage's documented 1849 growth. Ring (offshore) distances are
-   also pulled in — period engravings show hulls rafted close together,
-   not spread a half-km out — and the outermost ring stays the sparsest.
+   ANCHORAGE GROWTH (sprint #29) — historically the fleet moored in a
+   dense raft off the town's own frontage and spread bay-ward as 1849
+   filled the cove. Slots are a jittered hex LATTICE over the cove's
+   real deep water (baked-heightmap depth > 2m only), SORTED BY DISTANCE
+   FROM THE PRIME ANCHORAGE SEED off Clay/Montgomery. Assignment
+   (assignAnchorSlots below) is a build-time deterministic chronological
+   sweep: each visit takes the nearest FREE slot whose hull clears every
+   already-anchored hull (oriented segment-segment check with true-scale
+   footprints), the four grounded storeships, and the Central Wharf
+   corridor; a mooring frees when its occupant weighs anchor. The fleet
+   therefore fills OUTWARD from the prime anchorage as 1849 progresses
+   (measured on this lattice: 12 ships = raft radius ~50m, Jul-1849
+   ~200 = ~275m, Sept ~352 = ~406m, Dec ~566 = ~577m) and every ship
+   keeps its slot across any scrub/rewind — the sweep runs once off the
+   visit list at build, never off runtime frame order.
    --------------------------------------------------------------------- */
-function findRealShoreX(z){
-  var x = shorelineX(z)-260;
-  for(var step=0; step<170; step++){
-    x += 4;
-    if(terrainHeight(x,z) < 0) return x;
-  }
-  return shorelineX(z); // fallback if the walk never finds water (shouldn't happen in-cove)
-}
+var ANCHOR_SEED = { x: shorelineX(0)+230, z: 0 }; // prime anchorage off the Clay/Montgomery frontage (depth ~4m)
 var ANCHOR_SLOTS = (function(){
-  var zMin = -800, zMax = 880;              // Clark's Point down toward Rincon Point
-  var nAlong = 150;
-  var rings = [90, 150, 210, 275, 345, 420, 500];   // offshore-distance centers — tightened from 130-770 (P0-2 fix)
-  var alongIdx = [];
-  for(var k=0;k<nAlong;k++) alongIdx.push(k);
-  alongIdx.sort(function(a,b){ // center-out fill order, town frontage (z=0) first
-    var za = lerp(zMin, zMax, (a+0.5)/nAlong), zb = lerp(zMin, zMax, (b+0.5)/nAlong);
-    return Math.abs(za)-Math.abs(zb);
-  });
-  var slots = [];
-  for(var ring=0; ring<rings.length; ring++){
-    for(var si=0; si<alongIdx.length; si++){
-      var k = alongIdx[si];
-      var zBase = lerp(zMin, zMax, (k+0.5)/nAlong);
-      var z = zBase + (hash2(k*3.1+ring*11.7, 4.2)-0.5)*((zMax-zMin)/nAlong)*0.9; // jittered spacing
-      var shoreX = findRealShoreX(z);
-      var x = shoreX + rings[ring] + (hash2(k*7.7+ring*2.9, 9.1)-0.5)*70;
-      if(terrainHeight(x,z) < -2){ // real heightmap depth check — anchor only where depth > 2m
-        var yaw = Math.atan2(-1,-1) + (hash2(k*1.3+ring*5.5, 13.7)-0.5)*1.3; // bow roughly NW-ish, jittered
-        slots.push({ x:x, z:z, yaw:yaw });
-      }
+  var PITCH = 29; // mooring spacing (m) — period rafting density; the sweep's collision check thins where hulls would truly touch
+  var slots = [], rowI = 0;
+  var cw = gridToWorld(GEO.streetsU.montgomery, GEO.streetsV.clay); // Central Wharf line (foot of Clay)
+  var cwTipX = cw.x;
+  for(var ws=0; ws<80; ws++){ cwTipX += 3; if(terrainHeight(cwTipX, cw.z) < 0) break; }
+  cwTipX += 310; // documented full deck (244m) + swing clearance
+  var hulks = Object.keys(STORESHIP_INFO).map(function(k){ return STORESHIP_INFO[k].pos; });
+  for(var z=-950; z<=1060; z+=PITCH*0.87){
+    rowI++;
+    var wx = shorelineX(z)-260;
+    for(var st=0; st<200; st++){ wx += 4; if(terrainHeight(wx,z)<0) break; } // real water's edge, not the analytic seed
+    for(var c=0; c<19; c++){
+      var x = wx + 55 + c*PITCH + (rowI%2)*PITCH*0.5 + (hash2(rowI*3.1, c*7.7)-0.5)*8;
+      var zz = z + (hash2(rowI*1.7, c*2.3)-0.5)*8;
+      if(terrainHeight(x,zz) >= -2) continue;              // depth: below sea level + margin, real heightmap
+      if(Math.abs(zz-cw.z) < 26 && x < cwTipX) continue;   // keep the Central Wharf's water clear
+      var nearHulk = false;
+      for(var hk=0; hk<hulks.length; hk++){ var hdx=hulks[hk].x-x, hdz=hulks[hk].z-zz; if(hdx*hdx+hdz*hdz < 55*55){ nearHulk = true; break; } }
+      if(nearHulk) continue;
+      slots.push({ x:x, z:zz, d:Math.hypot(x-ANCHOR_SEED.x, zz-ANCHOR_SEED.z),
+                   yaw: Math.atan2(-1,-1) + (hash2(c*1.3+rowI*5.5, 13.7)-0.5)*0.9 }); // bow NW-ish into wind/ebb, wind/tide scatter
     }
   }
+  slots.sort(function(a,b){ return a.d-b.d; });
   return slots;
 })();
-function anchorSlotPos(i){
-  if(ANCHOR_SLOTS.length===0) return { x:200, z:0, yaw:Math.atan2(-1,-1) }; // defensive; shouldn't happen
-  return ANCHOR_SLOTS[i % ANCHOR_SLOTS.length];
+
+/* true-scale hull footprints per vessel type (matches SHIP_TRUE_SCALE
+   applied to the prefab hulls below) for the sweep's collision check */
+var SHIP_DIMS = [ {hl:17.5, hb:4.8}, {hl:13.0, hb:4.1}, {hl:10.0, hb:3.0} ];
+function _ptSegDistSq(px,pz, ax,az, bx,bz){
+  var vx=bx-ax, vz=bz-az, wx=px-ax, wz=pz-az;
+  var c1 = vx*wx+vz*wz;
+  if(c1<=0) return wx*wx+wz*wz;
+  var c2 = vx*vx+vz*vz;
+  var t = c1>=c2 ? 1 : c1/c2;
+  var qx=ax+vx*t-px, qz=az+vz*t-pz;
+  return qx*qx+qz*qz;
 }
-function shipBezier(p0,p1,p2,t){
-  var it = 1-t;
-  return { x: it*it*p0.x + 2*it*t*p1.x + t*t*p2.x, z: it*it*p0.z + 2*it*t*p1.z + t*t*p2.z };
+function segSegDistSq(ax,az,bx,bz, cx,cz,dx,dz){
+  function orient(ox,oz,px,pz,qx,qz){ return (px-ox)*(qz-oz)-(pz-oz)*(qx-ox); }
+  var o1=orient(ax,az,bx,bz,cx,cz), o2=orient(ax,az,bx,bz,dx,dz),
+      o3=orient(cx,cz,dx,dz,ax,az), o4=orient(cx,cz,dx,dz,bx,bz);
+  if(((o1>0)!==(o2>0)) && ((o3>0)!==(o4>0))) return 0; // crossing hulls
+  return Math.min(_ptSegDistSq(ax,az,cx,cz,dx,dz), _ptSegDistSq(bx,bz,cx,cz,dx,dz),
+                  _ptSegDistSq(cx,cz,ax,az,bx,bz), _ptSegDistSq(dx,dz,ax,az,bx,bz));
 }
-function shipPathPoint(v, t, arriving){
+function hullSeg(x,z,yaw,hl){ var dx=Math.sin(yaw)*hl, dz=Math.cos(yaw)*hl; return [x-dx,z-dz,x+dx,z+dz]; }
+
+/* final approach: leave the channel at the cove gate, stand toward a
+   point radially offshore of the assigned mooring (the raft grows
+   outward from the seed, so a new arrival's slot is on the fringe and
+   the stand-in crosses open water, not the raft), then luff up the last
+   length onto the anchor heading. */
+function shipStandoff(dest){
+  var so = { x: dest.x+220, z: dest.z }; // radially offshore — the cove faces east
+  for(var i=0; i<20 && terrainHeight(so.x, so.z) > -2.5; i++){ so.x = lerp(so.x, dest.x, 0.2); so.z = lerp(so.z, dest.z, 0.2); }
+  return so;
+}
+function ensureApproach(v){
+  if(v._appPolyCache) return v._appPolyCache;
   var dest = v._anchorPos;
-  var ctrl = { x: SHIP_ALCATRAZ_CTRL.x+(v.pathJitter-0.5)*500, z: SHIP_ALCATRAZ_CTRL.z+(v.pathJitter-0.5)*260 };
-  var far = v.exitNorth ? SHIP_NORTH_EXIT : SHIP_GATE;
-  return arriving ? shipBezier(SHIP_GATE, ctrl, dest, t) : shipBezier(dest, ctrl, far, t);
+  var gateEnd = SHIP_CHANNEL.pts[SHIP_CHANNEL.pts.length-1];
+  v._appPolyCache = smoothShipPath([ {x:gateEnd.x, z:gateEnd.z}, shipStandoff(dest), {x:dest.x, z:dest.z} ], 18);
+  return v._appPolyCache;
 }
+function approachLenEstimate(dest){
+  var so = shipStandoff(dest);
+  var gateEnd = SHIP_CHANNEL.pts[SHIP_CHANNEL.pts.length-1];
+  return (Math.hypot(so.x-gateEnd.x, so.z-gateEnd.z) + Math.hypot(dest.x-so.x, dest.z-so.z)) * 1.02;
+}
+
+/* the sailing position: composite path = channel + final approach
+   (arrivals), or approach reversed + channel/north-exit (departures),
+   with the per-ship lateral corridor offset + tack wiggle tapering to
+   zero over the last 220m so every hull converges onto its mooring. */
+function shipSailPos(v, t, arriving){
+  var Lc = SHIP_CHANNEL.len, La = v._appLen || approachLenEstimate(v._anchorPos);
+  var L = arriving ? Lc+La : La + (v.exitNorth ? SHIP_NORTH.len : Lc);
+  var s = clamp(t,0,1)*L, b, remAnchor;
+  if(arriving){
+    if(s <= Lc) b = shipPolyAt(SHIP_CHANNEL, s);
+    else { var ap = ensureApproach(v); b = shipPolyAt(ap, (s-Lc)/La*ap.len); }
+    remAnchor = L-s;
+  } else {
+    if(s <= La){ var ap2 = ensureApproach(v); b = shipPolyAt(ap2, (1-s/La)*ap2.len); b.tx=-b.tx; b.tz=-b.tz; }
+    else if(v.exitNorth) b = shipPolyAt(SHIP_NORTH, s-La);
+    else { b = shipPolyAt(SHIP_CHANNEL, Lc-(s-La)); b.tx=-b.tx; b.tz=-b.tz; }
+    remAnchor = s;
+  }
+  var taper = clamp(remAnchor/220, 0, 1);
+  var tack = (10 + hash2(v.pathJitter*91.7, 4.1)*10) * Math.sin(s*0.019 + v.pathJitter*6.283); // slight period tack wiggle
+  var lat = ((v.pathJitter-0.5)*2*SHIP_LATERAL_MAX + tack) * taper;
+  return { x: b.x - b.tz*lat, z: b.z + b.tx*lat };
+}
+function shipPathPoint(v, t, arriving){ return shipSailPos(v, t, arriving); } // legacy name, 3 call sites
+
+/* ANCHORAGE ASSIGNMENT SWEEP — deterministic, build-time (rewind-exact:
+   runs once over the arrival-sorted visit list; runtime frame order can
+   never change who moors where). Also fixes a latent rewind bug in the
+   old runtime alloc/free: scrubbing BACKWARD across a departure used to
+   leave the freed slot re-issuable while the original ship re-anchored
+   on it — two hulls on one mooring. Called below, after fillShipVisits
+   exists. */
+function assignAnchorSlots(allVisits){
+  var order = allVisits.slice().sort(function(a,b){ return (a.arrive-b.arrive) || (a.ship<b.ship?-1:(a.ship>b.ship?1:0)); });
+  var occ = {};      // slotIdx -> {seg, hb} of the hull riding there
+  var releases = []; // {day, idx} — mooring frees when its occupant weighs anchor
+  var CELL = 64, grid = {};
+  ANCHOR_SLOTS.forEach(function(sl,i){ var key = Math.floor(sl.x/CELL)+","+Math.floor(sl.z/CELL); (grid[key]=grid[key]||[]).push(i); });
+  function neighborsOf(i){
+    var sl = ANCHOR_SLOTS[i], out = [], cx = Math.floor(sl.x/CELL), cz = Math.floor(sl.z/CELL);
+    for(var gx=cx-1; gx<=cx+1; gx++) for(var gz=cz-1; gz<=cz+1; gz++){
+      var arr = grid[gx+","+gz]; if(arr) out = out.concat(arr);
+    }
+    return out;
+  }
+  order.forEach(function(v){
+    for(var r=releases.length-1; r>=0; r--){ if(releases[r].day <= v.arrive){ delete occ[releases[r].idx]; releases.splice(r,1); } }
+    if(v.storeship){
+      // documented grounding spot at the tideline — never on the lattice
+      v._anchorPos = v.storeship.pos; v._anchorYaw = 0.3; v._anchorIdx = -2;
+    } else {
+      var dims = SHIP_DIMS[v.shipType], idx = -1;
+      for(var i=0;i<ANCHOR_SLOTS.length;i++){
+        if(occ[i]) continue;
+        var sl = ANCHOR_SLOTS[i];
+        var seg = hullSeg(sl.x, sl.z, sl.yaw, dims.hl);
+        var ok = true, nb = neighborsOf(i);
+        for(var n2=0;n2<nb.length;n2++){
+          var o = occ[nb[n2]]; if(!o) continue;
+          var need = dims.hb + o.hb + 3; // beam-to-beam clearance
+          if(segSegDistSq(seg[0],seg[1],seg[2],seg[3], o.seg[0],o.seg[1],o.seg[2],o.seg[3]) < need*need){ ok = false; break; }
+        }
+        if(ok){ idx = i; break; } // slots are seed-distance-sorted: first free+clear IS the nearest valid mooring
+      }
+      if(idx < 0) idx = ANCHOR_SLOTS.length-1; // defensive: the lattice (1000+) far exceeds the ~566 peak
+      var slot = ANCHOR_SLOTS[idx];
+      occ[idx] = { seg: hullSeg(slot.x, slot.z, slot.yaw, dims.hl), hb: dims.hb };
+      v._anchorIdx = idx; v._anchorPos = slot; v._anchorYaw = slot.yaw;
+      if(v.depart!==null) releases.push({ day: v.depart+0.05, idx: idx });
+    }
+    // per-visit sail timing: true path distance / a period working speed
+    // (5.0-7.8 knots) -> a full Golden Gate->anchor entrance is ~30-45
+    // real minutes at LIVE 1:1 (grounding.md §10), proportionally faster
+    // in timelapse (ambient-flow, see updateShips).
+    v._speed = 2.6 + hash2((v._anchorIdx+3)*0.77, v.pathJitter*17.3)*1.4; // m/s
+    v._appLen = approachLenEstimate(v._anchorPos);
+    v._sailInDays = (SHIP_CHANNEL.len + v._appLen)/(v._speed*86400);
+    v._sailOutDays = (v._appLen + (v.exitNorth ? SHIP_NORTH.len : SHIP_CHANNEL.len))/(v._speed*86400);
+  });
+}
+
+/* load-time corridor audit: the channel is derived from the current
+   terrain bake's own geography — if a future re-bake moves the shore
+   under it, say so loudly instead of silently sailing over land. */
+(function validateShipChannelOnBuild(){
+  var bad = 0, minD = 99;
+  [SHIP_CHANNEL, SHIP_NORTH].forEach(function(poly){
+    for(var s=0; s<=poly.len; s+=50){
+      var p = shipPolyAt(poly, s);
+      for(var o=-65; o<=65; o+=65){
+        var h = terrainHeight(p.x - p.tz*o, p.z + p.tx*o);
+        if(-h < minD) minD = -h;
+        if(h > -1.5) bad++;
+      }
+    }
+  });
+  if(bad > 0) console.warn("[verify] ship channel corridor has "+bad+" shallow samples (<1.5m depth) — re-derive SHIP_CHANNEL_WPTS against the current terrain bake");
+  else console.log("[verify] ship channel wet end-to-end (min depth "+minD.toFixed(1)+"m at ±65m laterals; "+ANCHOR_SLOTS.length+" anchorage slots, seed d"+Math.round(ANCHOR_SLOTS[0].d)+".."+Math.round(ANCHOR_SLOTS[ANCHOR_SLOTS.length-1].d)+"m)");
+})();
 function shipDesiredState(v, day){
+  // sail windows are per-visit (true path length / period speed, set by
+  // assignAnchorSlots) — a ship is "sailing_in" for the ~30-45 sim-minutes
+  // its entrance actually takes, anchored ON its documented date.
   if(v.depart!==null){
-    if(day >= v.depart+SAIL_OUT_DAYS) return "done";
+    if(day >= v.depart+(v._sailOutDays||0.05)) return "done";
     if(day >= v.depart) return "sailing_out";
   }
   // BUG FIX (2026-07-10, ghost-fleet P0): arrive is never null any more —
@@ -4715,7 +4894,7 @@ function shipDesiredState(v, day){
   // typical stay) for the coverage-gap case that used to leave arrive:null
   // here and get read as "anchored since window open." See buildShipVisits().
   if(day >= v.arrive) return "anchored";
-  if(day >= v.arrive-SAIL_IN_DAYS) return "sailing_in";
+  if(day >= v.arrive-(v._sailInDays||0.05)) return "sailing_in";
   return "future";
 }
 
@@ -4939,6 +5118,11 @@ var fillShipVisits = (function(){
   return out;
 })();
 
+/* sprint #29: every visit (documented + fill) gets its mooring, sail
+   windows, and approach geometry ONCE, deterministically, at build —
+   provenance toggle only filters rendering, never re-assigns. */
+assignAnchorSlots(shipVisits.concat(fillShipVisits));
+
 var _UP = new THREE.Vector3(0,1,0);
 var _shipM4 = new THREE.Matrix4(), _shipQ = new THREE.Quaternion(), _shipV = new THREE.Vector3(), _shipS = new THREE.Vector3();
 var _shipLabelV = new THREE.Vector3();
@@ -4951,42 +5135,70 @@ function setShipInstance(mesh, idx, x, y, z, yaw, scale, list){
   mesh.setMatrixAt(idx, _shipM4);
 }
 
+var SHIP_FLOW_BUDGET = 10;     // §10 ambient-flow analog: max ships visibly working the channel at timelapse
+var shipsLastSimDay = null;
 function updateShips(dt){
   var activeList = [], anchoredCandidates = [];
   // WORLD-P0 fix (coverage-gap fill traffic): merge in the simulated
   // 1849 fill arrivals unless the provenance ("record only") toggle is on.
   var allVisits = provenanceOnly ? shipVisits : shipVisits.concat(fillShipVisits);
+  /* §10 LIVE-PACE analog for ships (sprint #29): at LIVE/pause the rendered
+     position is schedule-true — pure f(simDay), a full entrance sails the
+     channel at 5-8 knots over ~30-45 real minutes, period-honest. At
+     timelapse a schedule-true transit (~0.03 sim-days) would flash across
+     in under 100ms — a teleport — so ships that arrive/depart while the
+     timelapse clock is RUNNING instead sail an AMBIENT-FLOW pass along the
+     same channel: capped apparent speed (full route in ~6 real seconds),
+     budgeted to SHIP_FLOW_BUDGET concurrent sails (beyond the budget they
+     appear directly at anchor — correct counts, legible motion). Flow
+     state is render-only; moorings, dates, and states stay deterministic,
+     and exact schedule positions resample the instant timelapse ends. */
+  var tl = timelapseActive() && !SCRUBBING;
+  var frameA = shipsLastSimDay===null ? simDay : shipsLastSimDay;
+  var organic = tl && simDay>frameA && (simDay-frameA) < 1.5; // a running clock, not a jump/scrub
+  var flows = 0;
   allVisits.forEach(function(v){
     var st = shipDesiredState(v, simDay);
-    if(st==="future"){ v._state = st; return; }
-    if(st==="done"){
-      if(v._anchorPos && !v._released){ freeAnchorSlot(v._anchorIdx); v._released = true; }
-      v._state = st; return;
+    v._state = st; v._renderMode = null;
+    if(!v._anchorPos) return; // defensive; assignAnchorSlots covers every visit
+    var LIn = SHIP_CHANNEL.len + v._appLen;
+    var LOut = v._appLen + (v.exitNorth ? SHIP_NORTH.len : SHIP_CHANNEL.len);
+    if(!tl){ v._flowIn = null; v._flowOut = null; }
+    else {
+      var sailStart = v.arrive - (v._sailInDays||0.05);
+      if(!v._flowIn && organic && sailStart>frameA && sailStart<=simDay && flows<SHIP_FLOW_BUDGET && (st==="sailing_in"||st==="anchored")) v._flowIn = { s:0 };
+      if(!v._flowOut && organic && v.depart!==null && v.depart>frameA && v.depart<=simDay && flows<SHIP_FLOW_BUDGET && (st==="sailing_out"||st==="done")) v._flowOut = { s:0 };
     }
-    if((st==="sailing_in" || st==="anchored" || st==="sailing_out") && !v._anchorPos){
-      if(v.storeship){
-        // WORLD-P0 fix: named storeships ground at their own documented
-        // spot, not a generic anchorage slot — never allocated/freed from
-        // the shared slot pool.
-        v._anchorPos = v.storeship.pos; v._anchorYaw = 0.3; v._anchorIdx = -2;
-      } else {
-      // covers a pre-existing edge case: jumping straight to a URL date (&d=...)
-      // that's already past a visit's departure can hit "sailing_out" on its very
-      // first-ever evaluation, skipping the "anchored" phase that normally
-      // allocates the slot — without this, shipPathPoint's bezier reads a null
-      // anchorPos and throws, killing the whole render loop.
-      v._anchorIdx = allocAnchorSlot();
-      var slot = anchorSlotPos(v._anchorIdx);
-      v._anchorPos = slot; v._anchorYaw = slot.yaw; // dispersed-arc slot supplies its own NW-ish jittered heading
-      }
+    if(v._flowIn){
+      v._flowIn.s += dt*(LIn/6);
+      if(v._flowIn.s>=LIn || st==="future" || st==="sailing_out" || st==="done") v._flowIn = null; else flows++;
     }
-    if(st==="sailing_out" && v._anchorPos && !v._released && v._anchorIdx>=0){
-      freeAnchorSlot(v._anchorIdx); v._released = true; // slot's free for a new arrival; this visit keeps its own anchorPos to sail from
+    if(v._flowOut){
+      v._flowOut.s += dt*(LOut/6);
+      if(v._flowOut.s>=LOut || st==="future" || st==="sailing_in") v._flowOut = null; else flows++;
     }
-    v._state = st;
-    if(st==="sailing_in" || st==="sailing_out") activeList.push(v);
-    else anchoredCandidates.push(v);
+    // render bucket + rendered arc position (meters along the composite path)
+    if(v._flowOut){
+      var sTO = st==="done" ? LOut : clamp((simDay-v.depart)/(v._sailOutDays||0.05),0,1)*LOut;
+      v._renderMode = "out"; v._renderS = Math.min(v._flowOut.s, sTO); // never ahead of the schedule-true position, never faster than the flow cap
+      activeList.push(v); return;
+    }
+    if(st==="sailing_out"){
+      v._renderMode = "out"; v._renderS = clamp((simDay-v.depart)/(v._sailOutDays||0.05),0,1)*LOut;
+      activeList.push(v); return;
+    }
+    if(v._flowIn){
+      var sTI = st==="anchored" ? LIn : clamp((simDay-(v.arrive-(v._sailInDays||0.05)))/(v._sailInDays||0.05),0,1)*LIn;
+      v._renderMode = "in"; v._renderS = Math.min(v._flowIn.s, sTI);
+      activeList.push(v); return;
+    }
+    if(st==="sailing_in"){
+      v._renderMode = "in"; v._renderS = clamp((simDay-(v.arrive-(v._sailInDays||0.05)))/(v._sailInDays||0.05),0,1)*LIn;
+      activeList.push(v); return;
+    }
+    if(st==="anchored"){ v._renderMode = "anchor"; anchoredCandidates.push(v); }
   });
+  shipsLastSimDay = simDay;
   // most recently arrived first, but named storeships always sort to the
   // front so they never fall into the mast-cluster overflow tier — they're
   // the era's best-documented hulls and must always render as full ships.
@@ -5007,19 +5219,27 @@ function updateShips(dt){
   var gullTargets = []; // §10.2 gulls: up to 3 ships in camera range (sailing ships sort first in activeList); deserted storeships draw no working-harbor birds
   activeList.forEach(function(v){
     var pos, sailScale, y;
-    if(v._state==="sailing_in"){
-      var t = clamp((simDay-(v.arrive-SAIL_IN_DAYS))/SAIL_IN_DAYS, 0, 1);
-      pos = shipPathPoint(v,t,true);
-      var ahead = shipPathPoint(v, clamp(t+0.02,0,1), true);
-      v._yaw = Math.atan2(ahead.x-pos.x, ahead.z-pos.z) || v._anchorYaw;
-      sailScale = 1; y = 0.25;
-      if(!v.isFill) labelCandidates.push(v); // fill traffic is anonymous — no name/date label, per the coverage-gap voice rule
-    } else if(v._state==="sailing_out"){
-      var t2 = clamp((simDay-v.depart)/SAIL_OUT_DAYS, 0, 1);
-      pos = shipPathPoint(v,t2,false);
-      var ahead2 = shipPathPoint(v, clamp(t2+0.02,0,1), false);
-      v._yaw = Math.atan2(ahead2.x-pos.x, ahead2.z-pos.z) || v._anchorYaw;
-      sailScale = 1; y = 0.25;
+    if(v._renderMode==="in" || v._renderMode==="out"){
+      var arriving = v._renderMode==="in";
+      var L = arriving ? SHIP_CHANNEL.len+v._appLen : v._appLen+(v.exitNorth ? SHIP_NORTH.len : SHIP_CHANNEL.len);
+      var tt = L>0 ? clamp(v._renderS/L, 0, 1) : 1;
+      pos = shipSailPos(v, tt, arriving);
+      var ahead = shipSailPos(v, clamp(tt + 40/L, 0, 1), arriving);
+      var pathYaw = Math.atan2(ahead.x-pos.x, ahead.z-pos.z) || v._anchorYaw;
+      // luff/turn-up: inside ~90m of the mooring the heading settles onto
+      // the anchor yaw (arrivals) / swings off it (departures), and the
+      // sails come in / fill over the same stretch.
+      var remM = arriving ? (L-v._renderS) : v._renderS; // meters from the mooring
+      if(remM < 90){
+        var w = 1 - remM/90;
+        var dy = v._anchorYaw - pathYaw;
+        while(dy > Math.PI) dy -= 2*Math.PI; while(dy < -Math.PI) dy += 2*Math.PI;
+        pathYaw += dy*w;
+      }
+      v._yaw = pathYaw;
+      sailScale = clamp(remM/130, 0.06, 1);
+      y = 0.25;
+      if(arriving && !v.isFill) labelCandidates.push(v); // fill traffic is anonymous — no name/date label, per the coverage-gap voice rule
     } else { // anchored (active tier)
       pos = v._anchorPos; v._yaw = v._anchorYaw;
       // storeships are grounded/deserted, not gently riding at anchor —
@@ -5028,6 +5248,7 @@ function updateShips(dt){
       y = v.storeship ? 0.05 : (0.2+Math.sin(simDay*2+v._anchorIdx)*0.05);
       if(!v.isFill && (v.storeship || (v.arrive!==null && (simDay-v.arrive)<1))) labelCandidates.push(v);
     }
+    v._lastPos = pos;
     if(!v.storeship && gullTargets.length<3){
       var gdx = pos.x-camera.position.x, gdz = pos.z-camera.position.z;
       if(gdx*gdx+gdz*gdz < 900*900) gullTargets.push({ x:pos.x, z:pos.z, yaw:v._yaw, moving:v._state!=="anchored" });
@@ -5057,7 +5278,7 @@ function updateShips(dt){
     var el = shipLabelPool[li];
     var v2 = labelCandidates[li];
     if(!v2){ el.style.opacity = 0; el._visit = null; continue; }
-    var p2 = (v2._state==="anchored") ? v2._anchorPos : shipPathPoint(v2, v2._state==="sailing_in" ? clamp((simDay-(v2.arrive-SAIL_IN_DAYS))/SAIL_IN_DAYS,0,1) : clamp((simDay-v2.depart)/SAIL_OUT_DAYS,0,1), v2._state==="sailing_in");
+    var p2 = v2._lastPos || v2._anchorPos; // set in the render loop above (sailing ships: rendered channel position)
     var wy = terrainHeight(p2.x,p2.z);
     _shipLabelV.set(p2.x, Math.max(wy,0)+12, p2.z);
     _shipLabelV.applyMatrix4(camera.matrixWorldInverse);
@@ -11998,6 +12219,59 @@ window.__P1850 = {
       else res.water++;
     });
     return res;
+  },
+  channelAudit: function(step, lat){ // sprint #29 QA: every corridor sample of the ship channel must be honest water
+    step = step||25; lat = (lat==null)?65:lat;
+    function audit(poly, name){
+      var shallow = [], minD = 99;
+      for(var s=0; s<=poly.len; s+=step){
+        var p = shipPolyAt(poly, s);
+        [-lat,0,lat].forEach(function(o){
+          var h = terrainHeight(p.x - p.tz*o, p.z + p.tx*o);
+          if(-h < minD) minD = -h;
+          if(h > -1.5) shallow.push({ path:name, s:Math.round(s), x:Math.round(p.x-p.tz*o), z:Math.round(p.z+p.tx*o), h:+h.toFixed(2) });
+        });
+      }
+      return { name:name, len:Math.round(poly.len), minDepth:+minD.toFixed(2), shallow:shallow };
+    }
+    return [ audit(SHIP_CHANNEL,"channel"), audit(SHIP_NORTH,"north-exit") ];
+  },
+  sailAudit: function(){ // sprint #29 QA: sample every currently-sailing hull's FULL composite path — no sample may be dry land
+    updateShips(0.016);
+    var out = [], allVisits = provenanceOnly ? shipVisits : shipVisits.concat(fillShipVisits);
+    allVisits.forEach(function(v){
+      if(v._renderMode!=="in" && v._renderMode!=="out") return;
+      var arriving = v._renderMode==="in";
+      var dry = [], minD = 99;
+      for(var t=0; t<=1.0001; t+=0.01){
+        var p = shipSailPos(v, t, arriving);
+        var h = terrainHeight(p.x, p.z);
+        if(-h < minD) minD = -h;
+        if(h > 0.5) dry.push({ t:+t.toFixed(2), x:Math.round(p.x), z:Math.round(p.z), h:+h.toFixed(1) });
+      }
+      out.push({ ship:v.ship, mode:v._renderMode, storeship:!!v.storeship, minDepth:+minD.toFixed(2), dry:dry,
+                 pos:{ x:Math.round(v._lastPos?v._lastPos.x:0), z:Math.round(v._lastPos?v._lastPos.z:0) } });
+    });
+    return out;
+  },
+  _nav: function(){ // sprint #29 QA: closure internals for screening scripts (read/drive only — not UI)
+    return { visits: shipVisits, fill: fillShipVisits, jumpToDate: jumpToDate, updateShips: updateShips,
+             terrainHeight: terrainHeight, eventDateToSimDay: eventDateToSimDay, channel: SHIP_CHANNEL, north: SHIP_NORTH, seed: ANCHOR_SEED };
+  },
+  anchorage: function(){ // sprint #29 QA: raft growth — anchored-hull distances from the prime-anchorage seed
+    updateShips(0.016);
+    var ds = [], allVisits = provenanceOnly ? shipVisits : shipVisits.concat(fillShipVisits);
+    allVisits.forEach(function(v){
+      if(shipDesiredState(v, simDay)!=="anchored" || !v._anchorPos || v.storeship) return;
+      ds.push(Math.hypot(v._anchorPos.x-ANCHOR_SEED.x, v._anchorPos.z-ANCHOR_SEED.z));
+    });
+    ds.sort(function(a,b){ return a-b; });
+    function within(r){ var n=0; ds.forEach(function(d){ if(d<=r) n++; }); return n; }
+    return { date:simDateISO(dateFromSimDay(simDay)), anchored:ds.length, seed:{x:Math.round(ANCHOR_SEED.x), z:Math.round(ANCHOR_SEED.z)},
+      within200:within(200), within400:within(400), within600:within(600),
+      rMedian:ds.length?Math.round(ds[Math.floor(ds.length*0.5)]):0,
+      r90:ds.length?Math.round(ds[Math.floor(ds.length*0.9)]):0,
+      rMax:ds.length?Math.round(ds[ds.length-1]):0 };
   },
   get geoDebug(){
     return { streetsV:GEO.streetsV, streetsU:GEO.streetsU,
