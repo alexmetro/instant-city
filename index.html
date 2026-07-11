@@ -11409,6 +11409,9 @@ function findPaperMention(name){
     var dateKey = FEED_DATES[k], issue = FEED_BY_DATE[dateKey];
     for(var i=0;i<issue.items.length;i++){
       var it = issue.items[i];
+      // s44: skip extraction-artifact items whose "headline" is a raw token
+      // (e.g. "period_diction") — never show those as a receipt line.
+      if(!it.headline || /_/.test(it.headline)) continue;
       var hay = ((it.headline||"")+" "+(it.text||"")).toUpperCase();
       if(hay.indexOf(target)>=0 || (surname && hay.indexOf(surname)>=0)){
         return { dateKey:dateKey, headline:it.headline };
