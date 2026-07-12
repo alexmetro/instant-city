@@ -745,7 +745,13 @@
     <div class="sp-seg" data-speed="week">wk</div>
     <div class="sp-seg" data-speed="month">mo</div>
   </div>
-  <div id="hud-menu-sheet">
+</div>
+<!-- s54: the ☰ menu sheet lives at BODY level, not inside #hud — #hud is a
+     fixed-position stacking context with z-index:auto, so any z-indexed
+     body-level surface (scrubber 9, inspect panel 10) painted over the open
+     sheet no matter its own z-index. At body level its z-index:13 stacks
+     properly above both (same reasoning as the inspect panel's placement). -->
+<div id="hud-menu-sheet">
     <div class="hm-head">MENU <span class="hm-close" id="hm-close">&times;</span></div>
     <!-- s54 MODES: the touch path for the V / N / G / P / T keys -->
     <div class="hm-row hm-mode" id="hm-watch">Director / watch mode</div>
@@ -762,7 +768,6 @@
     <div class="hm-row" data-target="hud-altitude">Altitude</div>
     <div class="hm-row" data-target="hud-provenance">Record-only flag</div>
     <div class="hm-row" data-target="hud-hint">Controls</div>
-  </div>
 </div>
 
 <!-- §11 INSPECT LAW (s42): the ONE persistent inspect surface — replaces the
