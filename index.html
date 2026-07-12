@@ -729,10 +729,11 @@
    CONFIG
    ===================================================================== */
 var CFG = {
-  worldSize: 12000,       // full extent, meters — matches the baked 1846 heightmap
+  // worldSize is GONE (s46 peninsula bake): the baked domain is now a
+  // RECTANGLE read from terrain-1846.js — see WORLD below TERRAIN's load.
   waterSeg: 128,
   minAltitude: 30,
-  maxAltitude: 9000,
+  maxAltitude: 15000,     // s46: raised so the FULL peninsula (Pacific -> bay) frames in one view
   labelFadeStart: 1200,   // (superseded s42 — per-category bands live in _geoLabelBandOpacity)
   labelFadeFull: 1900,
   ghostFadeStart: 500,    // ghost overlay fully visible above this altitude
@@ -1262,17 +1263,36 @@ function distOutsideBox(x,z,b){
    ===================================================================== */
 var TERRAIN = window.TERRAIN_1846;
 if(!TERRAIN){ throw new Error("terrain-1846.js failed to load — run tools/bake-terrain.js and check the <script src> path"); }
+if(!TERRAIN.nx){ throw new Error("terrain-1846.js is a pre-peninsula square bake — re-run tools/bake-terrain.js (s46 rect domain)"); }
+/* WORLD — the rect baked domain (s46 peninsula bake: Pacific -> bay).
+   Replaces every CFG.worldSize consumer. */
+var WORLD = (function(){
+  var w = { x0:TERRAIN.x0, z0:TERRAIN.z0, cell:TERRAIN.cell, nx:TERRAIN.nx, nz:TERRAIN.nz };
+  w.xMax = w.x0 + (w.nx-1)*w.cell;
+  w.zMax = w.z0 + (w.nz-1)*w.cell;
+  w.sizeX = w.xMax - w.x0;
+  w.sizeZ = w.zMax - w.z0;
+  return w;
+})();
 function sampleTerrainGrid(x,z){
-  var half = TERRAIN.size/2;
-  var fi = clamp((x+half)/TERRAIN.size*(TERRAIN.n-1), 0, TERRAIN.n-1);
-  var fj = clamp((z+half)/TERRAIN.size*(TERRAIN.n-1), 0, TERRAIN.n-1);
+  var fi = clamp((x-WORLD.x0)/WORLD.cell, 0, TERRAIN.nx-1);
+  var fj = clamp((z-WORLD.z0)/WORLD.cell, 0, TERRAIN.nz-1);
   var i0 = Math.floor(fi), j0 = Math.floor(fj);
   var fx = fi-i0, fz = fj-j0;
-  var i1 = Math.min(i0+1, TERRAIN.n-1), j1 = Math.min(j0+1, TERRAIN.n-1);
-  var h00 = TERRAIN.heights[j0*TERRAIN.n+i0], h10 = TERRAIN.heights[j0*TERRAIN.n+i1];
-  var h01 = TERRAIN.heights[j1*TERRAIN.n+i0], h11 = TERRAIN.heights[j1*TERRAIN.n+i1];
+  var i1 = Math.min(i0+1, TERRAIN.nx-1), j1 = Math.min(j0+1, TERRAIN.nz-1);
+  var h00 = TERRAIN.heights[j0*TERRAIN.nx+i0], h10 = TERRAIN.heights[j0*TERRAIN.nx+i1];
+  var h01 = TERRAIN.heights[j1*TERRAIN.nx+i0], h11 = TERRAIN.heights[j1*TERRAIN.nx+i1];
   var h0 = h00+(h10-h00)*fx, h1 = h01+(h11-h01)*fx;
   return h0+(h1-h0)*fz;
+}
+/* ECOLOGY ZONE lookup (s46) — per-cell zone codes baked by
+   tools/bake-terrain.js from data/peninsula-geography-1849.json:
+   0 none | 1 dune_sand | 2 dune_scrub | 3 grassland | 4 oak_woodland |
+   5 tidal_marsh | 6 mudflat | 7 riparian_willow */
+function zoneAt(x,z){
+  var i = Math.round((x-WORLD.x0)/WORLD.cell), j = Math.round((z-WORLD.z0)/WORLD.cell);
+  if(i<0||j<0||i>=TERRAIN.nx||j>=TERRAIN.nz) return 0;
+  return TERRAIN.zones.charCodeAt(j*TERRAIN.nx+i)-48;
 }
 
 /* Village flat reference height — sampled from the real grid at the plaza,
@@ -1285,8 +1305,11 @@ var VILLAGE_Y = sampleTerrainGrid(PLAZA_CENTER.x, PLAZA_CENTER.z);
    pad into the real sampled heights near the plaza so streets/buildings
    sit naturally (real San Francisco streets climb noticeably from
    Montgomery towards Stockton; the village needs a walkable pad). */
-function terrainHeight(x,z){
-  var h = sampleTerrainGrid(x,z);
+/* terrainHeightFrom(h,x,z): the pad/gate logic applied to a PROVIDED base
+   sample — split out (s46) so the coast-band mesh subdivision can run the
+   same rule over its smoothed (Catmull-Rom) base samples. terrainHeight()
+   itself is unchanged in behavior. */
+function terrainHeightFrom(h,x,z){
   var dOut = distOutsideBox(x,z,VILLAGE_BOX);
   var villageBlend = smoothstep(0,240,dOut); // 0 inside, 1 far outside
   /* WATERLINE FIX (task #27, 2026-07-11): this blend used to run
@@ -1320,12 +1343,23 @@ function terrainHeight(x,z){
   var wBank = smoothstep(-80, -6, dShore);
   return lerp(padH, h, wBank);
 }
+function terrainHeight(x,z){ return terrainHeightFrom(sampleTerrainGrid(x,z), x, z); }
 /* alias: pre-rewrite code called the unified sampler groundHeight() */
 function groundHeight(x,z){ return terrainHeight(x,z); }
 
+var _SEALROCK_GREY = new THREE.Color(0x757b72);
 function terrainColor(x,z,h){
   var d = hash2(Math.floor(x*0.4), Math.floor(z*0.4));
   var dither = (fbm(x*0.08,z*0.08,2)-0.5)*0.05;
+  // s46: ecology zone with SOFT boundaries — the lookup point is jittered
+  // by a broad noise field so 31m cell steps / polygon sides never print
+  // as straight color seams (the zone polygons are coarse envelopes).
+  var zn = 0;
+  if(TERRAIN.zones){
+    var zjx = (fbm(x*0.012+7.3, z*0.012, 2)-0.5)*170;
+    var zjz = (fbm(x*0.012, z*0.012+3.1, 2)-0.5)*170;
+    zn = zoneAt(x+zjx, z+zjz);
+  }
 
   // palette anchors
   var wetMud   = new THREE.Color(0x5c4e3a);
@@ -1350,6 +1384,9 @@ function terrainColor(x,z,h){
     // through the shallow water and wherever the tide uncovers it, clearly
     // distinct from dry sand above and open water beyond.
     col.lerp(mudFlat, clamp01((h+1.0)/1.0)*0.8);
+    // s46: the Mission Bay tidal flat (zone 6) is silty and pale — the
+    // near-black cove-mud read at 1km scale looked like a stain, not a flat
+    if(zn===6) col.lerp(new THREE.Color(0x7a7059), 0.5);
   } else {
     col = sand.clone();
     // low sandy dunes -> mid scrub -> dry rocky tops (dark flanks vs pale flats)
@@ -1370,25 +1407,66 @@ function terrainColor(x,z,h){
       var leeT = clamp01((hW-hE)/leeD*4);
       col.lerp(scrub.clone().multiplyScalar(0.7), leeT*0.3*elevT);
     }
+    // ECOLOGY-ZONE GROUND (s46, data/peninsula-geography-1849.json): where
+    // a baked zone exists, its documented ground treatment overrides the
+    // generic elevation gradient (85% — a little base variation survives).
+    if(zn>0){
+      var zcol = null;
+      if(zn===1){
+        // Great Sand Bank: ACTIVE transverse dune ridges (prevailing NW
+        // wind) — crest direction wanders at two scales and the ridge
+        // field is masked patchy (belts of sharp slip-face banding,
+        // calmer open sand sheets between) so it never reads as wallpaper
+        var wander = Math.sin(x*0.0028 + z*0.0035)*1.8 + Math.sin(x*0.0009 - z*0.0013)*1.2;
+        var ridge = 0.5+0.5*Math.sin(x*0.045 + z*0.016 + wander*2.0);
+        var ridgeMask = 0.3+0.7*fbm(x*0.0045+11.0, z*0.0045, 2);
+        zcol = new THREE.Color(0xd2bd85).lerp(new THREE.Color(0xa9905e), (0.18 + ridge*0.72)*ridgeMask);
+        if(d>0.94) zcol.lerp(new THREE.Color(0x8c8a52), 0.3); // rare scrub fleck
+      } else if(zn===2){ // dune scrub: sand base, olive brush patches
+        zcol = new THREE.Color(0xcdbb84).lerp(new THREE.Color(0x6d7c44), 0.25+0.5*fbm(x*0.02,z*0.02,2));
+      } else if(zn===3){ // grassland/pasture: tawny coastal prairie
+        zcol = new THREE.Color(0xb3a35e).lerp(new THREE.Color(0x8a9552), 0.3+0.4*fbm(x*0.015,z*0.015,2));
+      } else if(zn===4){ // oak woodland floor: deeper green-brown
+        zcol = new THREE.Color(0x6b7a42).lerp(new THREE.Color(0x4c5e30), 0.5*fbm(x*0.03,z*0.03,2));
+      } else if(zn===5 && h<2.5){ // tidal marsh: tule green + rusty patches
+        zcol = new THREE.Color(0x77804a).lerp(new THREE.Color(0x9c7f4e), 0.35+0.45*fbm(x*0.03,z*0.03,2));
+      } else if(zn===6 && h<1.5){ // mudflat: dark wet sheen
+        zcol = new THREE.Color(0x4d4334).lerp(new THREE.Color(0x5c4e3a), 0.4*d);
+      } else if(zn===7 && h<6){ // riparian willow line: deep green band
+        zcol = new THREE.Color(0x5e7a3c).lerp(new THREE.Color(0x486030), 0.5*fbm(x*0.05,z*0.05,2));
+      }
+      if(zcol) col.lerp(zcol, 0.85);
+    }
     // village interior: dusty trodden earth
     var dOut = distOutsideBox(x,z,VILLAGE_BOX);
     var villageT = 1-smoothstep(0,260,dOut);
     col.lerp(village, villageT*0.55);
-    // wet mud / beach right at the waterline
-    var beachT = 1-smoothstep(0,7,h);
-    col.lerp(wetMud, beachT*0.55);
-    // INTERTIDAL FLATS (shoreline truth, 2026-07-11): the above-datum part
-    // of the mud band (h up to ~+0.45 out of the bake's tidal profile) is
-    // WET mud, not beach sand — dark, water-sheened, unmistakably distinct
-    // from the dry ground above the high-tide line.
-    col.lerp(mudFlat, (1-smoothstep(0.1,0.55,h))*0.85);
+    // wet mud / beach right at the waterline — SKIPPED on tidal marsh
+    // (zone 5): marsh is vegetated to the waterline, tule tone owns it
+    if(zn!==5){
+      var beachT = 1-smoothstep(0,7,h);
+      col.lerp(wetMud, beachT*0.55);
+      // INTERTIDAL FLATS (shoreline truth, 2026-07-11): the above-datum part
+      // of the mud band (h up to ~+0.45 out of the bake's tidal profile) is
+      // WET mud, not beach sand — dark, water-sheened, unmistakably distinct
+      // from the dry ground above the high-tide line.
+      col.lerp(mudFlat, (1-smoothstep(0.1,0.55,h))*0.85);
+    }
+    // s46: Seal Rocks islets are bare grey rock, not sand
+    if(x<-9740 && z>1350 && z<1950 && TERRAIN.geodata && TERRAIN.geodata.sealRocks){
+      var SRK = TERRAIN.geodata.sealRocks;
+      for(var sri=0; sri<SRK.length; sri++){
+        var srd = Math.hypot(x-SRK[sri][0], z-SRK[sri][1]);
+        if(srd<75){ col.lerp(_SEALROCK_GREY, 0.85*(1-smoothstep(30,75,srd))); break; }
+      }
+    }
   }
   // crisp darker waterline edge band for coast legibility at altitude.
   // Narrowed 3.5m -> 1.3m (s22): the band is height-based, and the new
   // gentle beach banks put |h|<3.5 ground across a 100m+ swath — the wide
   // near-black stain amplified the flat-shaded slope checkerboard.
   var edgeT = 1-smoothstep(0,1.3,Math.abs(h));
-  col.lerp(new THREE.Color(0x2c2418), edgeT*0.55);
+  col.lerp(new THREE.Color(0x2c2418), edgeT*0.55*(zn===5?0.15:1)); // marsh keeps its tule tone to the water's edge
 
   col.r = clamp01(col.r+dither); col.g = clamp01(col.g+dither); col.b = clamp01(col.b+dither);
   return col;
@@ -1403,14 +1481,14 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 
 var scene = new THREE.Scene();
-var camera = new THREE.PerspectiveCamera(52, window.innerWidth/window.innerHeight, 1, 30000);
+var camera = new THREE.PerspectiveCamera(52, window.innerWidth/window.innerHeight, 1, 45000); // far raised for the s46 15km ceiling
 
 scene.fog = new THREE.Fog(0xcfc2a0, 800, 4200);
 
 /* =====================================================================
    SKY DOME
    ===================================================================== */
-var SKY_R = 16000;
+var SKY_R = 24000; // s46: encloses the camera at the raised 15km ceiling over the rect domain
 var skyGeo = new THREE.SphereGeometry(SKY_R, 24, 16);
 var skyColors = new Float32Array(skyGeo.attributes.position.count*3);
 skyGeo.setAttribute("color", new THREE.BufferAttribute(skyColors,3));
@@ -1543,6 +1621,18 @@ function buildScatterMesh(geo, mat, samples, opts){
   return mesh;
 }
 function farFromVillage(x,z,margin){ return distOutsideBox(x,z,VILLAGE_BOX) > margin; }
+/* s46: rejection sampler over an arbitrary rect — the west-peninsula
+   ecology zones span kilometers, far beyond scatterSample's radius idiom. */
+function scatterRect(count, xMin, xMax, zMin, zMax, biomeTest, maxAttempts){
+  var out = [], tries = 0, cap = maxAttempts || count*10;
+  while(out.length<count && tries<cap){
+    tries++;
+    var x = xMin + rngBuild()*(xMax-xMin), z = zMin + rngBuild()*(zMax-zMin);
+    var h = terrainHeight(x,z);
+    if(biomeTest(x,z,h)) out.push({x:x,z:z,h:h});
+  }
+  return out;
+}
 
 /* LEGACY-STREET-MESH fix (2026-07-10): paintRoadVariation()/
    drapeGroundSegment()/drapeGroundStrip() — the old per-segment raised-box
@@ -1558,78 +1648,144 @@ function farFromVillage(x,z,margin){ return distOutsideBox(x,z,VILLAGE_BOX) > ma
    is deleted, not reconciled. */
 
 /* =====================================================================
-   TERRAIN — ONE mesh built directly from the baked 1846 heightmap grid
-   (384x384), replacing the old procedural inner-tile + outer-ring pair.
-   No seam, no square tile edge: the whole 12x12km baked box is one
-   continuous surface.
+   TERRAIN — ONE mesh built directly from the baked heightmap grid (s46:
+   544x504 rect peninsula domain, Pacific -> bay), with COAST-BAND
+   SUBDIVISION (screening #17's promoted facet-banding debt): any cell
+   that crosses the waterline band WITH real slope is subdivided KxK
+   (K=4, ~7.8m triangles) using Catmull-Rom-smoothed heights, so the
+   shoreline banks read as smooth grades at grazing sun instead of 31m
+   flat-shaded facet checkerboard. Crack-free by construction: fine
+   vertices on a border shared with an UNsubdivided cell are pinned to
+   that cell's linear edge; corners are exact grid heights; two
+   subdivided neighbors sample the same smooth function.
+   The mesh reads terrainHeight()'s pad/gate rule for every vertex (one
+   height rule, s22) via terrainHeightFrom() over the smoothed base.
    ===================================================================== */
-var terrainGeo = new THREE.PlaneGeometry(CFG.worldSize, CFG.worldSize, TERRAIN.n-1, TERRAIN.n-1);
-terrainGeo.rotateX(-Math.PI/2);
+var TERR_SUB_K = 4;
+var MESH_BASE_H, MESH_CELL_SUB, MESH_SUB_H = [];
+var TERRAIN_MESH_STATS = { verts:0, tris:0, subCells:0 };
+function _catmull(p0,p1,p2,p3,t){
+  return 0.5*((2*p1) + (-p0+p2)*t + (2*p0-5*p1+4*p2-p3)*t*t + (-p0+3*p1-3*p2+p3)*t*t*t);
+}
+function _gridHRaw(gi,gj){
+  gi = gi<0?0:(gi>TERRAIN.nx-1?TERRAIN.nx-1:gi);
+  gj = gj<0?0:(gj>TERRAIN.nz-1?TERRAIN.nz-1:gj);
+  return TERRAIN.heights[gj*TERRAIN.nx+gi];
+}
+function sampleTerrainSmooth(x,z){ // C1 bicubic (Catmull-Rom) over the baked grid
+  var fi = clamp((x-WORLD.x0)/WORLD.cell, 0, TERRAIN.nx-1.000001);
+  var fj = clamp((z-WORLD.z0)/WORLD.cell, 0, TERRAIN.nz-1.000001);
+  var i1 = Math.floor(fi), j1 = Math.floor(fj), fx = fi-i1, fz = fj-j1;
+  var r0 = _catmull(_gridHRaw(i1-1,j1-1), _gridHRaw(i1,j1-1), _gridHRaw(i1+1,j1-1), _gridHRaw(i1+2,j1-1), fx);
+  var r1 = _catmull(_gridHRaw(i1-1,j1  ), _gridHRaw(i1,j1  ), _gridHRaw(i1+1,j1  ), _gridHRaw(i1+2,j1  ), fx);
+  var r2 = _catmull(_gridHRaw(i1-1,j1+1), _gridHRaw(i1,j1+1), _gridHRaw(i1+1,j1+1), _gridHRaw(i1+2,j1+1), fx);
+  var r3 = _catmull(_gridHRaw(i1-1,j1+2), _gridHRaw(i1,j1+2), _gridHRaw(i1+1,j1+2), _gridHRaw(i1+2,j1+2), fx);
+  return _catmull(r0,r1,r2,r3,fz);
+}
+var terrainGeo = null;
 (function buildTerrain(){
-  var pos = terrainGeo.attributes.position;
-  var colors = new Float32Array(pos.count*3);
-  // WORLD-P0 fix (2026-07-09, fix 5 — relief shading): slope/aspect
-  // hillshading baked directly into vertex colors on top of terrainColor()'s
-  // lithograph palette — NW-light convention (light source to the upper-
-  // left), AO-darkened valleys, cooler-shaded / warmer-lit faces, so the
-  // terrain reads with cartographic depth at altitude. Skipped on the
-  // flattened village pad (no real slope there) and underwater (shading a
-  // seabed makes no visual sense).
-  var cellSize = CFG.worldSize/(TERRAIN.n-1);
+  var nx = TERRAIN.nx, nz = TERRAIN.nz, cell = WORLD.cell, K = TERR_SUB_K;
+  var cellsX = nx-1, cellsZ = nz-1;
+
+  // final (pad-blended) heights at every grid point — the ONE height rule
+  MESH_BASE_H = new Float32Array(nx*nz);
+  for(var j=0;j<nz;j++) for(var i=0;i<nx;i++){
+    MESH_BASE_H[j*nx+i] = terrainHeightFrom(TERRAIN.heights[j*nx+i], WORLD.x0+i*cell, WORLD.z0+j*cell);
+  }
+
+  // classify coast-band cells: cross the waterline band AND carry slope
+  // (flat marsh/mudflat excluded — no facets to smooth there)
+  var subFlag = new Uint8Array(cellsX*cellsZ);
+  var subCount = 0;
+  for(var cj=0;cj<cellsZ;cj++) for(var ci=0;ci<cellsX;ci++){
+    var h00=MESH_BASE_H[cj*nx+ci],     h10=MESH_BASE_H[cj*nx+ci+1],
+        h01=MESH_BASE_H[(cj+1)*nx+ci], h11=MESH_BASE_H[(cj+1)*nx+ci+1];
+    var mn=Math.min(h00,h10,h01,h11), mx=Math.max(h00,h10,h01,h11);
+    // tight band around the VISIBLE waterline (the grazing-sun banding zone);
+    // deep-shelf-only cells excluded — water covers them
+    if(mn<2.4 && mx>-1.2 && (mx-mn)>0.85){ subFlag[cj*cellsX+ci]=1; subCount++; }
+  }
+  function subNb(ci,cj){ return ci>=0 && cj>=0 && ci<cellsX && cj<cellsZ && subFlag[cj*cellsX+ci]===1; }
+
+  MESH_CELL_SUB = new Int32Array(cellsX*cellsZ); MESH_CELL_SUB.fill(-1);
+  var positions = [], indices = [];
+  for(j=0;j<nz;j++) for(i=0;i<nx;i++){
+    positions.push(WORLD.x0+i*cell, MESH_BASE_H[j*nx+i], WORLD.z0+j*cell);
+  }
+  for(cj=0;cj<cellsZ;cj++){
+    for(ci=0;ci<cellsX;ci++){
+      var a = cj*nx+ci, b = (cj+1)*nx+ci, c = (cj+1)*nx+ci+1, d = cj*nx+ci+1;
+      if(!subFlag[cj*cellsX+ci]){
+        indices.push(a,b,d, b,c,d); // same anti-diagonal split PlaneGeometry used
+        continue;
+      }
+      var cx0 = WORLD.x0+ci*cell, cz0 = WORLD.z0+cj*cell;
+      var Hloc = new Float32Array((K+1)*(K+1));
+      var vStart = positions.length/3;
+      for(var sb=0; sb<=K; sb++){
+        for(var sa=0; sa<=K; sa++){
+          var x = cx0 + sa*cell/K, z = cz0 + sb*cell/K, y;
+          var onW = sa===0, onE = sa===K, onN = sb===0, onS = sb===K;
+          if((onW||onE)&&(onN||onS)){
+            y = MESH_BASE_H[(cj+(onS?1:0))*nx + ci + (onE?1:0)]; // exact corner
+          } else if(onN && !subNb(ci,cj-1)){ y = lerp(MESH_BASE_H[a], MESH_BASE_H[d], sa/K); }
+          else if(onS && !subNb(ci,cj+1)){ y = lerp(MESH_BASE_H[b], MESH_BASE_H[c], sa/K); }
+          else if(onW && !subNb(ci-1,cj)){ y = lerp(MESH_BASE_H[a], MESH_BASE_H[b], sb/K); }
+          else if(onE && !subNb(ci+1,cj)){ y = lerp(MESH_BASE_H[d], MESH_BASE_H[c], sb/K); }
+          else { y = terrainHeightFrom(sampleTerrainSmooth(x,z), x, z); }
+          Hloc[sb*(K+1)+sa] = y;
+          positions.push(x, y, z);
+        }
+      }
+      MESH_CELL_SUB[cj*cellsX+ci] = MESH_SUB_H.length;
+      MESH_SUB_H.push(Hloc);
+      for(sb=0;sb<K;sb++) for(sa=0;sa<K;sa++){
+        var va = vStart+sb*(K+1)+sa,     vb = vStart+(sb+1)*(K+1)+sa,
+            vc = vStart+(sb+1)*(K+1)+sa+1, vd = vStart+sb*(K+1)+sa+1;
+        indices.push(va,vb,vd, vb,vc,vd);
+      }
+    }
+  }
+
+  // vertex colors: lithograph palette + NW-light hillshade + valley AO
+  // (WORLD-P0 fix 2026-07-09, unchanged rules — now sampled per-vertex)
+  var posArr = new Float32Array(positions);
+  var colArr = new Float32Array(posArr.length);
   var LIGHT = new THREE.Vector3(-0.55, 0.62, -0.55).normalize();
   var shadeCool = new THREE.Color(0x1c2a34), shadeWarm = new THREE.Color(0x3a2a14);
-  function gridH(gi,gj){
-    gi = gi<0?0:(gi>TERRAIN.n-1?TERRAIN.n-1:gi);
-    gj = gj<0?0:(gj>TERRAIN.n-1?TERRAIN.n-1:gj);
-    return TERRAIN.heights[gj*TERRAIN.n+gi];
-  }
-  for(var i=0;i<pos.count;i++){
-    var x = pos.getX(i), z = pos.getZ(i);
-    // direct 1:1 lookup (mesh resolution matches the baked grid exactly)
-    var gi = Math.round((x+CFG.worldSize/2)/CFG.worldSize*(TERRAIN.n-1));
-    var gj = Math.round((z+CFG.worldSize/2)/CFG.worldSize*(TERRAIN.n-1));
-    gi = clamp(gi,0,TERRAIN.n-1); gj = clamp(gj,0,TERRAIN.n-1);
-    // ONE height rule (s22 shoreline truth, 2026-07-11): the mesh reads
-    // terrainHeight() itself — pad blend + task #27's east-of-shoreline
-    // gate, identical to every other consumer. This loop used to keep a
-    // PRIVATE copy of the pad blend ("same rule as terrainHeight()")
-    // that silently missed the #27 gate — so the RENDERED mesh lifted
-    // the tide flats east of Montgomery to village height (a false 2-3
-    // block dry-sand apron, hulls reading as beached on it) while
-    // terrainHeight() said water and every placement system agreed.
-    // The user's Feb-1849 reference screening caught the divergence.
-    var h = terrainHeight(x,z);
-    var dOut = distOutsideBox(x,z,VILLAGE_BOX);
-    var villageBlend = smoothstep(0,240,dOut); // still read by the hillshade gates below
-    pos.setY(i,h);
-    var col = terrainColor(x,z,h);
-
-    // hillshade gate raised 0.2 -> 3.0 (s22): the beach bank / tide flats
-    // are near-flat authored ground — baked slope-shading there only
-    // painted the checkerboard harder. Real relief starts above the bank.
-    if(villageBlend>0.15 && h>3.0){
-      var hE = gridH(gi+1,gj), hW = gridH(gi-1,gj);
-      var hS = gridH(gi,gj+1), hN = gridH(gi,gj-1);
-      var dhdx = (hE-hW)/(2*cellSize), dhdz = (hS-hN)/(2*cellSize);
-      var nx=-dhdx, ny=1, nz=-dhdz;
-      var nlen = Math.sqrt(nx*nx+ny*ny+nz*nz);
-      nx/=nlen; ny/=nlen; nz/=nlen;
-      var ndotl = nx*LIGHT.x+ny*LIGHT.y+nz*LIGHT.z;
-      var shadeT = clamp01(1-(ndotl+0.15)/1.15); // 0 = fully lit (NW-facing), 1 = fully shaded
-      var liftT = villageBlend; // fade out near the village-pad edge
-      col.lerp(shadeCool, shadeT*0.30*liftT);
-      col.lerp(shadeWarm, (1-shadeT)*0.12*liftT);
-      // valley AO: a low point ringed by higher ground 2 cells out reads as
-      // a shaded hollow, independent of the directional term above.
-      var ringAvg = (gridH(gi+2,gj)+gridH(gi-2,gj)+gridH(gi,gj+2)+gridH(gi,gj-2))/4;
-      var aoT = clamp01((ringAvg-h)/14);
-      col.lerp(shadeCool, aoT*0.22*liftT);
+  var vCount = posArr.length/3;
+  for(var vi=0; vi<vCount; vi++){
+    var vx = posArr[vi*3], vy = posArr[vi*3+1], vz = posArr[vi*3+2];
+    var col = terrainColor(vx,vz,vy);
+    var dOut = distOutsideBox(vx,vz,VILLAGE_BOX);
+    var villageBlend = smoothstep(0,240,dOut);
+    if(villageBlend>0.15 && vy>3.0){
+      var hE = sampleTerrainGrid(vx+cell,vz), hW = sampleTerrainGrid(vx-cell,vz);
+      var hS = sampleTerrainGrid(vx,vz+cell), hN = sampleTerrainGrid(vx,vz-cell);
+      var dhdx = (hE-hW)/(2*cell), dhdz = (hS-hN)/(2*cell);
+      var nnx=-dhdx, nny=1, nnz=-dhdz;
+      var nlen = Math.sqrt(nnx*nnx+nny*nny+nnz*nnz);
+      nnx/=nlen; nny/=nlen; nnz/=nlen;
+      var ndotl = nnx*LIGHT.x+nny*LIGHT.y+nnz*LIGHT.z;
+      var shadeT = clamp01(1-(ndotl+0.15)/1.15);
+      col.lerp(shadeCool, shadeT*0.30*villageBlend);
+      col.lerp(shadeWarm, (1-shadeT)*0.12*villageBlend);
+      var ringAvg = (sampleTerrainGrid(vx+2*cell,vz)+sampleTerrainGrid(vx-2*cell,vz)+sampleTerrainGrid(vx,vz+2*cell)+sampleTerrainGrid(vx,vz-2*cell))/4;
+      var aoT = clamp01((ringAvg-vy)/14);
+      col.lerp(shadeCool, aoT*0.22*villageBlend);
     }
-
-    colors[i*3]=col.r; colors[i*3+1]=col.g; colors[i*3+2]=col.b;
+    colArr[vi*3]=col.r; colArr[vi*3+1]=col.g; colArr[vi*3+2]=col.b;
   }
-  terrainGeo.setAttribute("color", new THREE.BufferAttribute(colors,3));
+
+  terrainGeo = new THREE.BufferGeometry();
+  terrainGeo.setAttribute("position", new THREE.BufferAttribute(posArr,3));
+  terrainGeo.setAttribute("color", new THREE.BufferAttribute(colArr,3));
+  terrainGeo.setIndex(new THREE.BufferAttribute(new Uint32Array(indices),1));
   terrainGeo.computeVertexNormals();
+  TERRAIN_MESH_STATS.verts = vCount;
+  TERRAIN_MESH_STATS.tris = indices.length/3;
+  TERRAIN_MESH_STATS.subCells = subCount;
+  console.log("[verify] terrain mesh: "+vCount+" verts, "+(indices.length/3)+" tris, "+subCount+" coast cells subdivided "+K+"x"+K);
 })();
 var terrainMat = new THREE.MeshPhongMaterial({ vertexColors:true, flatShading:true, specular:0x000000, shininess:0,
   polygonOffset:true, polygonOffsetFactor:1, polygonOffsetUnits:1 });
@@ -1690,29 +1846,29 @@ var SPLAT_CLOSE_RES = IS_TOUCH ? 2048 : 4096;
    points, and PlaneGeometry's shared anti-diagonal orientation makes every
    sub-cell planar-coincident) — the decal IS the terrain surface plus a
    constant lift, no dips, no holes, at any slope. */
-var TERRAIN_CELL = CFG.worldSize/(TERRAIN.n-1);
-function snapGridDown(v){ return -CFG.worldSize/2 + Math.floor((v+CFG.worldSize/2)/TERRAIN_CELL)*TERRAIN_CELL; }
-function snapGridUp(v){ return -CFG.worldSize/2 + Math.ceil((v+CFG.worldSize/2)/TERRAIN_CELL)*TERRAIN_CELL; }
+var TERRAIN_CELL = WORLD.cell;
+function snapGridDown(v,o){ return o + Math.floor((v-o)/TERRAIN_CELL)*TERRAIN_CELL; }
+function snapGridUp(v,o){ return o + Math.ceil((v-o)/TERRAIN_CELL)*TERRAIN_CELL; }
 // BLUR fix (2026-07-10, iPad field test defect #4): pad sized so the
 // mid-zoom (300-600m) oblique camera's ground frustum stays inside the
 // crisp town tier — measured 600-700m+ reach from the plaza at 500m alt.
 var TOWN_BOX = (function(){
   var pad = 600;
-  return { xMin:snapGridDown(VILLAGE_BOX.xMin-pad), xMax:snapGridUp(VILLAGE_BOX.xMax+pad),
-           zMin:snapGridDown(VILLAGE_BOX.zMin-pad), zMax:snapGridUp(VILLAGE_BOX.zMax+pad) };
+  return { xMin:snapGridDown(VILLAGE_BOX.xMin-pad, WORLD.x0), xMax:snapGridUp(VILLAGE_BOX.xMax+pad, WORLD.x0),
+           zMin:snapGridDown(VILLAGE_BOX.zMin-pad, WORLD.z0), zMax:snapGridUp(VILLAGE_BOX.zMax+pad, WORLD.z0) };
 })();
 var TOWN_W = TOWN_BOX.xMax-TOWN_BOX.xMin, TOWN_H = TOWN_BOX.zMax-TOWN_BOX.zMin;
 // CLOSE tier box: the village core + the working waterfront (plaza, fire
 // block, Clay St landing / Central Wharf foot all inside).
 var CLOSE_BOX = (function(){
   var pad = 130;
-  return { xMin:snapGridDown(VILLAGE_BOX.xMin-pad), xMax:snapGridUp(VILLAGE_BOX.xMax+pad+60),
-           zMin:snapGridDown(VILLAGE_BOX.zMin-pad), zMax:snapGridUp(VILLAGE_BOX.zMax+pad) };
+  return { xMin:snapGridDown(VILLAGE_BOX.xMin-pad, WORLD.x0), xMax:snapGridUp(VILLAGE_BOX.xMax+pad+60, WORLD.x0),
+           zMin:snapGridDown(VILLAGE_BOX.zMin-pad, WORLD.z0), zMax:snapGridUp(VILLAGE_BOX.zMax+pad, WORLD.z0) };
 })();
 var CLOSE_W = CLOSE_BOX.xMax-CLOSE_BOX.xMin, CLOSE_H = CLOSE_BOX.zMax-CLOSE_BOX.zMin;
 
-function worldPx(x,z){ return { x:(x+CFG.worldSize/2)/CFG.worldSize*SPLAT_WORLD_RES, y:(z+CFG.worldSize/2)/CFG.worldSize*SPLAT_WORLD_RES }; }
-function worldPxLen(m){ return m/CFG.worldSize*SPLAT_WORLD_RES; }
+function worldPx(x,z){ return { x:(x-WORLD.x0)/WORLD.sizeX*SPLAT_WORLD_RES, y:(z-WORLD.z0)/WORLD.sizeZ*SPLAT_WORLD_RES }; }
+function worldPxLen(m){ return m/WORLD.sizeX*SPLAT_WORLD_RES; } // x-scale; z anisotropy is 8% — invisible at world tier
 function townPx(x,z){ return { x:(x-TOWN_BOX.xMin)/TOWN_W*SPLAT_TOWN_RES, y:(z-TOWN_BOX.zMin)/TOWN_H*SPLAT_TOWN_RES }; }
 function townPxLen(m){ return m/TOWN_W*SPLAT_TOWN_RES; }
 function closePx(x,z){ return { x:(x-CLOSE_BOX.xMin)/CLOSE_W*SPLAT_CLOSE_RES, y:(z-CLOSE_BOX.zMin)/CLOSE_H*SPLAT_CLOSE_RES }; }
@@ -2336,7 +2492,7 @@ function drawRoadLayer(t, runs, layerAlpha){
    top-level setup runs. renderGroundSplat() reads whatever's populated
    at call time; the first repaint happens on the first animate() frame,
    by which point every section below has already run. */
-var SPLAT_MISSION_PTS = [], SPLAT_ELCAMINO_PTS = [], SPLAT_DOOR_PATHS = [];
+var SPLAT_MISSION_PTS = [], SPLAT_ELCAMINO_PTS = [], SPLAT_PRESIDIO_PTS = [], SPLAT_DOOR_PATHS = [];
 var SPLAT_CLUTTER_PATHS = [], SPLAT_LEVELING_CART_PTS = [];
 var SPLAT_PLANK_APRONS = []; // {x0,z0,x1,z1,widthM,from} — pushed by the wharf builder
 
@@ -2436,6 +2592,8 @@ function renderGroundSplat(skewAngle){
     addRun("trail", "road", smoothRoutePts(SPLAT_MISSION_PTS, 14), 4.8, "#7d693f", {amp:1.1, seed:0.37, ruts:true, isStreet:true});
   if(SPLAT_ELCAMINO_PTS.length>1)
     addRun("faint", "road", smoothRoutePts(SPLAT_ELCAMINO_PTS, 14), 3.4, "#93805a", {amp:1.2, seed:0.61, isStreet:true});
+  if(SPLAT_PRESIDIO_PTS.length>1) // s46: the documented village->Black Point->Presidio horse trail (peninsula-1846.md §5.5)
+    addRun("faint", "road", smoothRoutePts(SPLAT_PRESIDIO_PTS, 14), 3.0, "#93805a", {amp:1.15, seed:0.44, isStreet:true});
 
   // Worn door-paths — thin, detail tiers only (invisible at world scale).
   SPLAT_DOOR_PATHS.forEach(function(p,i){
@@ -2791,25 +2949,37 @@ if(terrainGeo.index) splatWorldGeo.setIndex(terrainGeo.index);
   var pos = terrainGeo.attributes.position;
   var uv = new Float32Array(pos.count*2);
   for(var i=0;i<pos.count;i++){
-    uv[i*2]   = (pos.getX(i)+CFG.worldSize/2)/CFG.worldSize;
-    uv[i*2+1] = (pos.getZ(i)+CFG.worldSize/2)/CFG.worldSize;
+    uv[i*2]   = (pos.getX(i)-WORLD.x0)/WORLD.sizeX;
+    uv[i*2+1] = (pos.getZ(i)-WORLD.z0)/WORLD.sizeZ;
   }
   splatWorldGeo.setAttribute("uv", new THREE.BufferAttribute(uv,2));
 })();
 
-/* Exact triangle-true sample of the RENDERED terrain mesh surface (reads
-   terrainGeo's live position buffer with PlaneGeometry's a-b-d/b-c-d
-   split). With the GRID-SNAP DRAPE (see the tier boxes above) the draped
-   decal vertices land exactly on this surface — the decal cannot dip
-   below a terrain triangle anywhere, killing the pale z-clip holes. */
-var _terrPosAttr = terrainGeo.attributes.position;
+/* Exact triangle-true sample of the RENDERED terrain mesh surface. s46:
+   table-driven over MESH_BASE_H / MESH_SUB_H (the exact vertex heights
+   the coast-band-subdivided builder emitted, same a-b-d/b-c-d split), so
+   draped decal vertices still land exactly on the rendered surface —
+   including inside subdivided coast cells. NOTE for future runtime
+   terrain edits: mutating TERRAIN.heights requires rebuilding these
+   tables too, then invalidateGroundPaint() (road-master-spec §6). */
 function terrainMeshSurfaceY(x,z){
-  var n = TERRAIN.n, half = CFG.worldSize/2, cell = CFG.worldSize/(n-1);
-  var fi = clamp((x+half)/cell, 0, n-1-1e-6), fj = clamp((z+half)/cell, 0, n-1-1e-6);
+  var nx = TERRAIN.nx, cellsX = nx-1, cellsZ = TERRAIN.nz-1, cell = WORLD.cell;
+  var fi = clamp((x-WORLD.x0)/cell, 0, cellsX-1e-6), fj = clamp((z-WORLD.z0)/cell, 0, cellsZ-1e-6);
   var gi = Math.floor(fi), gj = Math.floor(fj);
   var fx = fi-gi, fz = fj-gj;
-  var ha=_terrPosAttr.getY(gj*n+gi),     hb=_terrPosAttr.getY((gj+1)*n+gi),
-      hc=_terrPosAttr.getY((gj+1)*n+gi+1), hd=_terrPosAttr.getY(gj*n+gi+1);
+  var so = MESH_CELL_SUB[gj*cellsX+gi];
+  var ha,hb,hc,hd;
+  if(so>=0){
+    var K = TERR_SUB_K, H = MESH_SUB_H[so];
+    var sfi = Math.min(fx*K, K-1e-6), sfj = Math.min(fz*K, K-1e-6);
+    var sa = Math.floor(sfi), sb = Math.floor(sfj);
+    fx = sfi-sa; fz = sfj-sb;
+    ha = H[sb*(K+1)+sa];     hb = H[(sb+1)*(K+1)+sa];
+    hc = H[(sb+1)*(K+1)+sa+1]; hd = H[sb*(K+1)+sa+1];
+  } else {
+    ha = MESH_BASE_H[gj*nx+gi];     hb = MESH_BASE_H[(gj+1)*nx+gi];
+    hc = MESH_BASE_H[(gj+1)*nx+gi+1]; hd = MESH_BASE_H[gj*nx+gi+1];
+  }
   return (fx+fz<=1) ? ha+(hd-ha)*fx+(hb-ha)*fz
                     : hc+(hd-hc)*(1-fz)+(hb-hc)*(1-fx);
 }
@@ -7355,6 +7525,11 @@ var farScatterMeshes = []; // trees / rock outcrops — fade further out than gr
   var scrubGeo = new THREE.ConeGeometry(0.32,0.85,5); scrubGeo.translate(0,0.42,0);
   var scrubMat = new THREE.MeshPhongMaterial({ color:0xffffff, flatShading:true, specular:0x000000, shininess:0 });
   var scrubSamples = scatterSample(SCT(3200), originX, originZ, 2300, scrubTest);
+  // s46 WEST ECOLOGY: wind-blown dune scrub across the zone-2 belts (SoMa
+  // field's outer reach + the Great Sand Bank's scrub fringes) — same mesh,
+  // zero extra draw calls
+  scrubSamples = scrubSamples.concat(scatterRect(SCT(1500), -9200, -1500, -1400, 7400,
+    function(x,z,h){ var zn=zoneAt(x,z); return (zn===2 || (zn===1 && hash2(Math.floor(x*0.2),Math.floor(z*0.2))>0.86)) && h>2 && h<90; }, SCT(1500)*14));
   var scrubMesh = buildScatterMesh(scrubGeo, scrubMat, scrubSamples, {
     minScale:0.7, maxScale:1.5, colors:[new THREE.Color(0x4d5c30), new THREE.Color(0x5e6e38), new THREE.Color(0x3f4a26)]
   });
@@ -7378,6 +7553,12 @@ var farScatterMeshes = []; // trees / rock outcrops — fade further out than gr
   var duneGeo = makeCrossPlanes(0.52,0.5,new THREE.Color(0xffffff),3);
   var duneMat = new THREE.MeshPhongMaterial({ color:0xffffff, vertexColors:true, side:THREE.DoubleSide, flatShading:true, specular:0x000000, shininess:0, transparent:true });
   var duneSamples = scatterSample(SCT(2800), originX, originZ, 2400, duneTest);
+  // s46 WEST: sparse dune grass on the Great Sand Bank (active dunes are
+  // mostly bare — tone carries the read; grass rides hollows) + grassland tufts
+  duneSamples = duneSamples.concat(scatterRect(SCT(1400), -9300, -5200, -100, 7400,
+    function(x,z,h){ return zoneAt(x,z)===1 && h>1.5 && hash2(Math.floor(x*0.3),Math.floor(z*0.3))>0.5; }, SCT(1400)*12));
+  duneSamples = duneSamples.concat(scatterRect(SCT(700), -8700, -1200, -1500, 9200,
+    function(x,z,h){ return zoneAt(x,z)===3 && h>1.5 && h<80; }, SCT(700)*14));
   var duneMesh = buildScatterMesh(duneGeo, duneMat, duneSamples, {
     minScale:0.7, maxScale:1.3, colors:[new THREE.Color(0x8c9a5c), new THREE.Color(0xa0a868), new THREE.Color(0x9cae6e)]
   });
@@ -7396,6 +7577,9 @@ var farScatterMeshes = []; // trees / rock outcrops — fade further out than gr
   var driftGeo = new THREE.BoxGeometry(1.7,0.22,0.32).toNonIndexed();
   var driftMat = new THREE.MeshPhongMaterial({ color:0x6b5a44, flatShading:true, specular:0x000000, shininess:0 });
   var driftSamples = scatterSample(SCT(220), originX, originZ, 2200, tideTest);
+  // s46: driftwood on the Ocean Beach strand
+  driftSamples = driftSamples.concat(scatterRect(SCT(120), -9750, -8700, 1700, 8200,
+    function(x,z,h){ return h>-0.4 && h<2.2; }, SCT(120)*20));
   var driftMesh = buildScatterMesh(driftGeo, driftMat, driftSamples, { tilt:0.5, yOffset:0.12, minScale:0.7, maxScale:1.3 });
   scene.add(driftMesh); scatterMeshes.push(driftMesh);
 
@@ -8506,6 +8690,33 @@ var MISSION_ROAD_PTS = []; // populated below — reused as an exclusion corrido
   LABELS.push({ name:"ROAD TO THE MISSION", cat:"route", x:midPt.x, z:midPt.z, y:null });
   var farPt = southRoute[southRoute.length-1];
   LABELS.push({ name:"EL CAMINO REAL", cat:"route", x:farPt.x, z:farPt.z, y:null });
+
+  // ---- s46: THE PRESIDIO TRAIL — documented from 1835 (peninsula-1846.md
+  // §5.5, solid: horse trail village -> Presidio VIA BLACK POINT). Same
+  // low-ground meander search as the Mission road; rendered as a faint
+  // single track in the world splat tier (no-map-overlay rule). ----
+  var nwCorner = gridToWorld(GEO.streetsU.stockton-15, GEO.streetsV.pacific-40);
+  var blackPoint = { x:-2300, z:-1080 }; // the land shoulder behind Black Point (Fort Mason)
+  var toBlackPt = findLowRoute(nwCorner.x, nwCorner.z, blackPoint.x, blackPoint.z, 12);
+  var toPresidio = findLowRoute(blackPoint.x, blackPoint.z, OUTPOSTS.presidio.x+90, OUTPOSTS.presidio.z+30, 12);
+  var presidioRoute = toBlackPt.concat(toPresidio.slice(1));
+  // keep the track out of open water / Washerwoman's Lagoon: nudge any
+  // wet waypoint to the nearest dry ground
+  presidioRoute.forEach(function(p){
+    if(terrainHeight(p.x,p.z) < 1.2){
+      for(var rr=30; rr<=120; rr+=30){
+        var done=false;
+        for(var aa=0; aa<8; aa++){
+          var ang=aa/8*Math.PI*2, tx=p.x+Math.cos(ang)*rr, tz=p.z+Math.sin(ang)*rr;
+          if(terrainHeight(tx,tz)>1.8){ p.x=tx; p.z=tz; done=true; break; }
+        }
+        if(done) break;
+      }
+    }
+  });
+  SPLAT_PRESIDIO_PTS = presidioRoute;
+  var pmid = presidioRoute[Math.floor(presidioRoute.length*0.6)];
+  LABELS.push({ name:"ROAD TO THE PRESIDIO", cat:"route", x:pmid.x, z:pmid.z, y:null });
 })();
 
 /* =========================================================================
@@ -9495,14 +9706,18 @@ function makeQuailGeo(){
   var head = makeBoxLocal(0.06,0.08,0.07, dark); head.translate(0,0.09,0.10);
   return mergeGeoms([body,head]); // ~0.25m — true quail scale
 }
-var QUAIL_PER_COVEY = 6, QUAIL_COVEYS = 2;
+var QUAIL_PER_COVEY = 6, QUAIL_COVEYS = 4; // s46: +2 coveys in the Great Sand Bank scrub (gameDensity california_quail -> great_sand_bank_west)
 var quailMesh = tagInspect(new THREE.InstancedMesh(makeQuailGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), QUAIL_PER_COVEY*QUAIL_COVEYS),
   "fauna", "California quail", "Coveys in the dune scrub and chaparral (fauna-1846.md).");
 quailMesh.count = 0; scene.add(quailMesh);
 var QUAIL_SITES = (function(){
-  var sites = scatterSample(QUAIL_COVEYS, PLAZA_CENTER.x-750, PLAZA_CENTER.z+120, 520,
+  var sites = scatterSample(2, PLAZA_CENTER.x-750, PLAZA_CENTER.z+120, 520,
     function(x,z,h){ return h>8 && h<50 && farFromVillage(x,z,60); }, 400);
-  while(sites.length<QUAIL_COVEYS){ var fx=PLAZA_CENTER.x-600-sites.length*90, fz=PLAZA_CENTER.z+220; sites.push({x:fx,z:fz,h:terrainHeight(fx,fz)}); }
+  while(sites.length<2){ var fx=PLAZA_CENTER.x-600-sites.length*90, fz=PLAZA_CENTER.z+220; sites.push({x:fx,z:fz,h:terrainHeight(fx,fz)}); }
+  // s46: west coveys in the Great Sand Bank dune scrub (the ~14 sq mi belt)
+  sites = sites.concat(scatterRect(2, -8600, -6000, 1200, 5600,
+    function(x,z,h){ var zn=zoneAt(x,z); return (zn===1||zn===2) && h>3; }, 900));
+  while(sites.length<QUAIL_COVEYS){ var wx=-7200-(sites.length*300), wz=2800; sites.push({x:wx,z:wz,h:terrainHeight(wx,wz)}); }
   return sites.map(function(s){ return { x:s.x, z:s.z, flushT:-1, hidden:false, hideUntil:0 }; });
 })();
 
@@ -11783,32 +11998,71 @@ function trySelectAtScreenXY(clientX, clientY){
   }
   function propMat(){ return new THREE.MeshPhongMaterial({ color:0xffffff, vertexColors:true, flatShading:true, specular:0x000000, shininess:0 }); }
 
+  // s46: the dune belts are DOCUMENTED treeless ("primarily sand dunes and
+  // scrub grasslands, devoid of trees" — peninsula-1846.md §2.4); the baked
+  // zones now make that enforceable for every tree species.
+  function inDuneZone(x,z){ var zn = zoneAt(x,z); return zn===1 || zn===2; }
   // ---- oaks: valley/lee-slope groves + a denser grove around Mission Dolores ----
-  function oakTest(x,z,h){ return h>6 && h<105 && clearOfManMade(x,z) && localRelief(x,z)<9 && leeBias(x,z)>-0.03; }
+  function oakTest(x,z,h){ return h>6 && h<105 && !inDuneZone(x,z) && clearOfManMade(x,z) && localRelief(x,z)<9 && leeBias(x,z)>-0.03; }
   var oakSamples = scatterSample(SCT(1250), originX, originZ, 2500, oakTest);
   function oakMissionTest(x,z,h){
     var dm = Math.hypot(x-OUTPOSTS.mission.x, z-OUTPOSTS.mission.z);
     return h>4 && h<75 && dm>85 && !nearMissionRoad(x,z,20);
   }
   oakSamples = oakSamples.concat(scatterSample(SCT(400), OUTPOSTS.mission.x, OUTPOSTS.mission.z, 520, oakMissionTest));
+  // ---- s46 WEST: oak/laurel groves in the documented sheltered Presidio
+  // valley pockets (peninsula-geography zones el_polin + lobos_creek_valley,
+  // baked zone 4) — Poisson-disk clustered per TECHNIQUES §2 (cluster
+  // centers with a blue-noise minimum spacing, trees packed within each). ----
+  (function(){
+    var centers = [], MINR = 85;
+    for(var t=0; t<900 && centers.length<26; t++){
+      var x = -7000 + rngBuild()*2700, z = -480 + rngBuild()*1360;
+      if(zoneAt(x,z)!==4) continue;
+      var ok = true;
+      for(var q=0;q<centers.length;q++){ if(Math.hypot(x-centers[q].x, z-centers[q].z)<MINR){ ok=false; break; } }
+      if(ok) centers.push({x:x,z:z});
+    }
+    centers.forEach(function(cc){
+      var n = 4 + Math.floor(rngBuild()*5);
+      for(var k=0;k<n;k++){
+        var a = rngBuild()*Math.PI*2, r = 5 + Math.sqrt(rngBuild())*26;
+        var gx = cc.x+Math.cos(a)*r, gz = cc.z+Math.sin(a)*r, gh = terrainHeight(gx,gz);
+        if(gh>2 && gh<95) oakSamples.push({x:gx, z:gz, h:gh});
+      }
+    });
+  })();
   var oakMesh = buildScatterMesh(makeOakGeo(), propMat(), oakSamples, { minScale:1.4, maxScale:2.7 });
   tagInspect(oakMesh, "tree", "Coast live oak", "Clustered in sheltered valleys and around Mission Dolores (peninsula-1846.md).");
   scene.add(oakMesh); farScatterMeshes.push(oakMesh);
 
   // ---- willows: low-lying flat ground (springs/creek proxy) + near the Mission's arroyo ----
-  function willowTest(x,z,h){ return h>1 && h<9 && clearOfManMade(x,z) && localRelief(x,z)<4; }
+  function willowTest(x,z,h){ return h>1 && h<9 && !inDuneZone(x,z) && clearOfManMade(x,z) && localRelief(x,z)<4; }
   var willowSamples = scatterSample(SCT(380), originX, originZ, 2400, willowTest);
   function willowMissionTest(x,z,h){
     var dm = Math.hypot(x-OUTPOSTS.mission.x, z-OUTPOSTS.mission.z);
     return h>2 && h<40 && dm<450 && !nearMissionRoad(x,z,20);
   }
   willowSamples = willowSamples.concat(scatterSample(SCT(160), OUTPOSTS.mission.x, OUTPOSTS.mission.z, 450, willowMissionTest));
+  // ---- s46 WEST: riparian willow lines — the Mission Creek corridor
+  // (dataset zone 7, Behr's eyewitness willows near the creek mouth),
+  // Lobos Creek banks, the lake margins, Washerwoman's Lagoon edge ----
+  willowSamples = willowSamples.concat(scatterRect(SCT(80), -1750, 450, 2580, 3060,
+    function(x,z,h){ return zoneAt(x,z)===7 && h>0.2 && h<6; }, SCT(80)*16));
+  willowSamples = willowSamples.concat(scatterRect(SCT(30), -7250, -4950, -180, 420,
+    function(x,z,h){ return h>0.5 && h<26 && zoneAt(x,z)!==1; }, SCT(30)*20)); // Lobos Creek valley floor
+  willowSamples = willowSamples.concat(scatterRect(SCT(36), -8600, -6850, 6500, 9200,
+    function(x,z,h){ return h>0.3 && h<9; }, SCT(36)*20)); // Lake Merced margin
+  willowSamples = willowSamples.concat(scatterSample(SCT(8), -2754, -816, 130,
+    function(x,z,h){ return h>0.3 && h<8; })); // Washerwoman's Lagoon edge
+  willowSamples = willowSamples.concat(scatterSample(SCT(9), -5700, 700, 160,
+    function(x,z,h){ var L=(TERRAIN.geodata.lakes[0]||{}).level||0; return h>L-0.5 && h<L+7; })); // Mountain Lake rim
   var willowMesh = buildScatterMesh(makeWillowGeo(), propMat(), willowSamples, { minScale:1.3, maxScale:2.3 });
   tagInspect(willowMesh, "tree", "Willow", "At springs and creek lines — the low wet ground's marker tree (peninsula-1846.md).");
   scene.add(willowMesh); farScatterMeshes.push(willowMesh);
 
   // ---- laurel/buckeye: sparse, scattered through the scrub band ----
-  function laurelTest(x,z,h){ return h>12 && h<80 && clearOfManMade(x,z) && localRelief(x,z)<14; }
+  function laurelTest(x,z,h){ return h>12 && h<80 && !inDuneZone(x,z) && clearOfManMade(x,z) && localRelief(x,z)<14; }
   var laurelSamples = scatterSample(SCT(700), originX, originZ, 2450, laurelTest);
   var laurelMesh = buildScatterMesh(makeLaurelGeo(), propMat(), laurelSamples, { minScale:1.3, maxScale:2.2 });
   tagInspect(laurelMesh, "tree", "California laurel / buckeye", "Scattered singles through the scrub band (peninsula-1846.md).");
@@ -11827,6 +12081,12 @@ function trySelectAtScreenXY(clientX, clientY){
   });
   function steepSlopeTest(x,z,h){ return h>16 && h<140 && clearOfManMade(x,z) && Math.abs(leeBias(x,z))>0.28; }
   boulderSamples = boulderSamples.concat(scatterSample(SCT(220), originX, originZ, 2500, steepSlopeTest));
+  // ---- s46 WEST: craggy rock on the baked Seal Rocks islets + the Point
+  // Lobos headland (the rocky coast the haul-out hangs off) ----
+  (TERRAIN.geodata.sealRocks||[]).forEach(function(r){
+    boulderSamples = boulderSamples.concat(scatterSample(5, r[0], r[1], 26, function(x,z,h){ return h>0.6; }, 120));
+  });
+  boulderSamples = boulderSamples.concat(scatterSample(14, -9280, 1150, 300, function(x,z,h){ return h>8 && h<130; }, 300));
   var boulderMesh = buildScatterMesh(makeBoulderGeo(), propMat(), boulderSamples, { minScale:1.6, maxScale:5.5 });
   tagInspect(boulderMesh, "outcrop", "Serpentine outcrop", "Grey-green rock on the Telegraph, Rincon, and Fort Point flanks (peninsula-1846.md).");
   scene.add(boulderMesh); farScatterMeshes.push(boulderMesh);
@@ -11834,8 +12094,249 @@ function trySelectAtScreenXY(clientX, clientY){
   // ---- chaparral band: denser coyote-brush clumps on mid slopes (joins the near-fade scatter group) ----
   function chapTest(x,z,h){ return h>16 && h<58 && farFromVillage(x,z,70); }
   var chapSamples = scatterSample(SCT(1400), originX, originZ, 2300, chapTest);
+  // s46 WEST: coyote-brush mounds through the dune-scrub belt + grassland edges
+  chapSamples = chapSamples.concat(scatterRect(SCT(800), -9200, -1500, -1400, 7500,
+    function(x,z,h){ var zn=zoneAt(x,z); return zn===2 && h>3 && h<95; }, SCT(800)*14));
   var chapMesh = buildScatterMesh(makeChaparralGeo(), propMat(), chapSamples, { minScale:0.8, maxScale:1.6 });
   scene.add(chapMesh); scatterMeshes.push(chapMesh);
+})();
+
+/* =====================================================================
+   s46 — WEST PENINSULA GEOGRAPHY (data/peninsula-geography-1849.json):
+   perched lake water, the Lobos Creek ribbon, tule marsh texture, and
+   the gameDensity fauna anchors (sea lions at Seal Rocks, waterfowl at
+   Merced + Mission Bay, deer at the oak/scrub boundaries). Draw-call
+   delta for this whole block: +6 (lake, ribbon, tule, sea lions, ducks,
+   deer) — all flora additions above ride existing instanced meshes.
+   ===================================================================== */
+(function buildWestGeography(){
+  var gd = TERRAIN.geodata || {};
+
+  // ---- Mountain Lake: PERCHED water plane at the baked level (the one
+  // water body well above the sea plane; Merced/Washerwoman's/creeks are
+  // carved below datum and read from the one bay water plane) ----
+  (gd.lakes||[]).forEach(function(L){
+    var shape = new THREE.Shape();
+    L.poly.forEach(function(p,i){ if(i===0) shape.moveTo(p[0],-p[1]); else shape.lineTo(p[0],-p[1]); });
+    var geo = new THREE.ShapeGeometry(shape);
+    geo.rotateX(-Math.PI/2); // shape (x,-z) -> world xz, normal up
+    var mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color:0x41707c, transparent:true, opacity:0.92 }));
+    mesh.position.y = L.level;
+    tagInspect(mesh, "water", L.label, "Spring-fed lake behind the dune belt (peninsula-1846.md §3.4; modern outline is a documented lower-bound proxy — the 1846 lake was larger).");
+    scene.add(mesh);
+  });
+
+  // ---- Lobos Creek: perched water ribbon down its carved valley ----
+  (gd.creeks||[]).forEach(function(C){
+    if(!C.ribbon) return;
+    var pts = [];
+    for(var i=0;i<C.pts.length-1;i++){
+      var a=C.pts[i], b=C.pts[i+1], seg=Math.hypot(b[0]-a[0],b[1]-a[1]), n=Math.max(2,Math.round(seg/24));
+      for(var k=0;k<n;k++) pts.push([lerp(a[0],b[0],k/n), lerp(a[1],b[1],k/n)]);
+    }
+    pts.push(C.pts[C.pts.length-1]);
+    var positions=[], w=C.width/2;
+    for(i=0;i<pts.length-1;i++){
+      var p0=pts[i], p1=pts[i+1];
+      var dx=p1[0]-p0[0], dz=p1[1]-p0[1], len=Math.hypot(dx,dz)||1;
+      var nx=-dz/len, nz=dx/len;
+      var y0=terrainHeight(p0[0],p0[1])+0.25, y1=terrainHeight(p1[0],p1[1])+0.25;
+      var A=[p0[0]+nx*w,y0,p0[1]+nz*w], B=[p0[0]-nx*w,y0,p0[1]-nz*w];
+      var Cq=[p1[0]+nx*w,y1,p1[1]+nz*w], D=[p1[0]-nx*w,y1,p1[1]-nz*w];
+      [A,B,Cq, B,D,Cq].forEach(function(p){ positions.push(p[0],p[1],p[2]); });
+    }
+    var geo=new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(positions),3));
+    geo.computeVertexNormals();
+    var mesh=new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color:0x4d747c, transparent:true, opacity:0.85 }));
+    tagInspect(mesh, "water", C.label, "The Presidio's principal fresh-water source (NPS/Presidio Trust; course is a modern proxy, fill).");
+    scene.add(mesh);
+  });
+
+  // ---- tule / marsh grass texture on the tidal marshes (zone 5/7) ----
+  var tuleGeo = (function(){
+    var p1 = new THREE.PlaneGeometry(0.5,1.25).toNonIndexed(); p1.translate(0,0.62,0);
+    var parts=[colorizeUniform(p1,new THREE.Color(0xffffff))];
+    for(var i=1;i<3;i++){ var p=p1.clone(); p.rotateY(Math.PI/3*i); parts.push(colorizeUniform(p,new THREE.Color(0xffffff))); }
+    return mergeGeoms(parts);
+  })();
+  var tuleMat = new THREE.MeshPhongMaterial({ color:0xffffff, vertexColors:true, side:THREE.DoubleSide, flatShading:true, specular:0x000000, shininess:0, transparent:true });
+  var tuleSamples = scatterRect(SCT(420), 200, 1350, 1700, 2950,
+    function(x,z,h){ var zn=zoneAt(x,z); return (zn===5||zn===7) && h>0.1 && h<1.4; }, SCT(420)*16);
+  tuleSamples = tuleSamples.concat(scatterRect(SCT(160), -1750, 450, 2580, 3060,
+    function(x,z,h){ return zoneAt(x,z)===7 && h>0.05 && h<1.6; }, SCT(160)*16));
+  tuleSamples = tuleSamples.concat(scatterRect(SCT(180), -4600, -3650, -1260, -930,
+    function(x,z,h){ return zoneAt(x,z)===5 && h>0.1 && h<1.4; }, SCT(180)*16));
+  var tuleMesh = buildScatterMesh(tuleGeo, tuleMat, tuleSamples, {
+    minScale:0.8, maxScale:1.5,
+    colors:[new THREE.Color(0x7a8a4c), new THREE.Color(0x8f9457), new THREE.Color(0x6d7c44), new THREE.Color(0x9c8a55)]
+  });
+  tagInspect(tuleMesh, "flora", "Tule marsh", "'Inconceivably thick' wetland at Mission Bay; the Crissy shore marsh (fauna-1846.md §3.3).");
+  scene.add(tuleMesh); scatterMeshes.push(tuleMesh);
+
+  // ---- SEA LIONS at Seal Rocks (fauna-1846.md §2.2, gameDensity sea_lion
+  // rarity 2 — the documented natural haul-out, a decade before the 1858
+  // Cliff House made it a tourist sight). TECHNIQUES §10 tethered-idle:
+  // static instances, head-raise sine in the vertex shader (aPart), zero
+  // per-frame JS beyond the shared time uniform. ----
+  function makeSeaLionGeo(){
+    var hide=new THREE.Color(0x6a5240), dark=new THREE.Color(0x53412f);
+    var parts=[];
+    var body=makeBoxLocal(0.62,0.42,1.95,hide); parts.push({g:body,p:0});
+    var chest=makeBoxLocal(0.52,0.56,0.62,hide); chest.translate(0,0,0.55); parts.push({g:chest,p:0});
+    var neck=makeBoxLocal(0.3,0.42,0.34,hide); neck.translate(0,0.5,0.78); parts.push({g:neck,p:1});
+    var head=makeBoxLocal(0.24,0.22,0.4,dark); head.translate(0,0.86,0.92); parts.push({g:head,p:1});
+    var tail=makeBoxLocal(0.3,0.12,0.5,dark); tail.translate(0,0.02,-1.1); parts.push({g:tail,p:2});
+    var flipL=makeBoxLocal(0.34,0.07,0.44,dark); flipL.translate(0.42,0.02,0.35); parts.push({g:flipL,p:0});
+    var flipR=makeBoxLocal(0.34,0.07,0.44,dark); flipR.translate(-0.42,0.02,0.35); parts.push({g:flipR,p:0});
+    return mergeGeomsParts(parts); // ~2.5m nose-to-tail — true CA sea lion bull scale
+  }
+  var SEALION_N = 14;
+  var seaLionMesh = (function(){
+    var geo = makeSeaLionGeo();
+    var phaseArr = new Float32Array(SEALION_N);
+    for(var i=0;i<SEALION_N;i++) phaseArr[i]=rngBuild()*Math.PI*2;
+    geo.setAttribute("instancePhase", new THREE.InstancedBufferAttribute(phaseArr,1));
+    var mat = new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0});
+    mat.onBeforeCompile = function(shader){
+      shader.uniforms.uFaunaTime = faunaTimeUniform;
+      shader.vertexShader = shader.vertexShader
+        .replace("#include <common>", "#include <common>\nattribute float aPart;\nattribute float instancePhase;\nuniform float uFaunaTime;")
+        .replace("#include <begin_vertex>", "#include <begin_vertex>\nfloat slHead = step(0.5,aPart)*(1.0-step(1.5,aPart));\nfloat slTail = step(1.5,aPart);\ntransformed.y += slHead*(0.5+0.5*sin(uFaunaTime*0.35+instancePhase))*0.30;\ntransformed.y += slTail*(0.5+0.5*sin(uFaunaTime*0.9+instancePhase*1.7))*0.10;");
+    };
+    var mesh = new THREE.InstancedMesh(geo, mat, SEALION_N);
+    tagInspect(mesh, "fauna", "California sea lion", "The documented haul-out colony at the rocks later named Seal Rocks (fauna-1846.md §2.2; natural colony predates the 1858 Seal Rock House).");
+    var m4=new THREE.Matrix4(), q=new THREE.Quaternion(), v=new THREE.Vector3(), s=new THREE.Vector3();
+    var rocks = gd.sealRocks||[[-9720,1673,7.5]];
+    var placed=0;
+    for(var ri=0; ri<rocks.length && placed<SEALION_N; ri++){
+      var r=rocks[ri];
+      var perRock = ri===0?7:(ri===1?4:3);
+      for(var k=0;k<perRock && placed<SEALION_N;k++){
+        for(var t=0;t<50;t++){
+          var a=rngBuild()*Math.PI*2, rad=3+Math.sqrt(rngBuild())*24;
+          var x=r[0]+Math.cos(a)*rad, z=r[1]+Math.sin(a)*rad, h=terrainHeight(x,z);
+          if(h>0.7 && h<r[2]+0.5){
+            q.setFromAxisAngle(_UP, rngBuild()*Math.PI*2);
+            var sc=0.8+rngBuild()*0.4; s.set(sc,sc,sc);
+            v.set(x,h,z);
+            m4.compose(v,q,s);
+            mesh.setMatrixAt(placed++, m4);
+            break;
+          }
+        }
+      }
+    }
+    mesh.count = placed;
+    mesh.instanceMatrix.needsUpdate = true;
+    scene.add(mesh);
+    return mesh;
+  })();
+
+  // ---- waterfowl rafts (gameDensity ducks_geese rarity 2: marsh + Merced) ----
+  function makeDuckGeo(){
+    var b=new THREE.Color(0x5c5142), d=new THREE.Color(0x39322a);
+    var body=makeBoxLocal(0.24,0.16,0.42,b);
+    var head=makeBoxLocal(0.09,0.12,0.1,d); head.translate(0,0.16,0.2);
+    return mergeGeoms([body,head]); // ~0.4m — true duck scale
+  }
+  var DUCK_N=22;
+  var duckMesh=(function(){
+    var mat=new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0});
+    var mesh=new THREE.InstancedMesh(makeDuckGeo(), mat, DUCK_N);
+    tagInspect(mesh,"fauna","Ducks and geese","Seasonal waterfowl rafts on Lake Merced and the Mission Bay shallows (fauna-1846.md — 'darkened the surface of every bay').");
+    var m4=new THREE.Matrix4(), q=new THREE.Quaternion(), v=new THREE.Vector3(), s=new THREE.Vector3(1,1,1);
+    var n=0;
+    function raft(cx,cz,r,count){
+      for(var k=0;k<count && n<DUCK_N;k++){
+        for(var t=0;t<30;t++){
+          var a=rngBuild()*Math.PI*2, rad=Math.sqrt(rngBuild())*r;
+          var x=cx+Math.cos(a)*rad, z=cz+Math.sin(a)*rad;
+          if(terrainHeight(x,z)<-0.25){
+            q.setFromAxisAngle(_UP, rngBuild()*Math.PI*2);
+            v.set(x, 0.34, z);
+            m4.compose(v,q,s);
+            mesh.setMatrixAt(n++, m4);
+            break;
+          }
+        }
+      }
+    }
+    raft(-7620,7900,320,12);   // Lake Merced
+    raft(760,2350,260,10);     // Mission Bay shallows
+    mesh.count=n;
+    mesh.instanceMatrix.needsUpdate=true;
+    scene.add(mesh);
+    return mesh;
+  })();
+
+  // ---- black-tailed deer at the oak/scrub boundaries (gameDensity rarity 3) ----
+  function makeDeerGeo(){
+    var tan=new THREE.Color(0x8a7050), dk=new THREE.Color(0x6a5540);
+    var parts=[];
+    [[-0.12,-0.34],[0.12,-0.34],[-0.12,0.3],[0.12,0.3]].forEach(function(o){
+      var leg=makeBoxLocal(0.07,0.62,0.07,dk); leg.translate(o[0],0,o[1]); parts.push({g:leg,p:0});
+    });
+    var body=makeBoxLocal(0.32,0.36,1.0,tan); body.translate(0,0.58,0); parts.push({g:body,p:0});
+    var neck=makeBoxLocal(0.12,0.4,0.14,tan); neck.rotateX(-0.5); neck.translate(0,0.94,0.44); parts.push({g:neck,p:1});
+    var head=makeBoxLocal(0.11,0.14,0.24,dk); head.translate(0,1.16,0.62); parts.push({g:head,p:1});
+    return mergeGeomsParts(parts); // ~1.5m body — true black-tailed scale
+  }
+  var DEER_N=8;
+  var deerMesh=(function(){
+    var geo=makeDeerGeo();
+    var phaseArr=new Float32Array(DEER_N);
+    for(var i=0;i<DEER_N;i++) phaseArr[i]=rngBuild()*Math.PI*2;
+    geo.setAttribute("instancePhase", new THREE.InstancedBufferAttribute(phaseArr,1));
+    var mat=new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0});
+    mat.onBeforeCompile=function(shader){
+      shader.uniforms.uFaunaTime = faunaTimeUniform;
+      shader.vertexShader = shader.vertexShader
+        .replace("#include <common>","#include <common>\nattribute float aPart;\nattribute float instancePhase;\nuniform float uFaunaTime;")
+        .replace("#include <begin_vertex>","#include <begin_vertex>\nfloat deerHead = step(0.5,aPart);\ntransformed.y -= deerHead*(0.5+0.5*sin(uFaunaTime*0.22+instancePhase))*0.42;");
+    };
+    var mesh=new THREE.InstancedMesh(geo,mat,DEER_N);
+    tagInspect(mesh,"fauna","Black-tailed deer","Browsing the oak-valley and dune-scrub edges (fauna-1846.md; regionally abundant, declining with settlement).");
+    var m4=new THREE.Matrix4(), q=new THREE.Quaternion(), v=new THREE.Vector3(), s=new THREE.Vector3();
+    var groups=[{x:-4820,z:-60,n:3},{x:-6280,z:240,n:3},{x:-2150,z:1320,n:2}];
+    var n=0;
+    groups.forEach(function(g){
+      for(var k=0;k<g.n && n<DEER_N;k++){
+        for(var t=0;t<40;t++){
+          var x=g.x+(rngBuild()-0.5)*90, z=g.z+(rngBuild()-0.5)*90, h=terrainHeight(x,z);
+          if(h>2 && h<105){
+            q.setFromAxisAngle(_UP, rngBuild()*Math.PI*2);
+            var sc=0.9+rngBuild()*0.18; s.set(sc,sc,sc);
+            v.set(x,h,z);
+            m4.compose(v,q,s);
+            mesh.setMatrixAt(n++,m4);
+            break;
+          }
+        }
+      }
+    });
+    mesh.count=n;
+    mesh.instanceMatrix.needsUpdate=true;
+    scene.add(mesh);
+    return mesh;
+  })();
+
+  window._westFauna = { seaLions:seaLionMesh.count, ducks:duckMesh.count, deer:deerMesh.count, tule:tuleSamples.length };
+
+  // ---- geographic labels for the west (§11 grammar; join the shared pool) ----
+  LABELS.push(
+    { name:"Pacific Ocean",        cat:"water",            x:-10400, z:3200, y:30 },
+    { name:"Mission Bay",          cat:"water", near:true, x:850,   z:2350, y:12 },
+    { name:"Lake Merced",          cat:"water", near:true, x:-7600, z:7900, y:8 },
+    { name:"Mountain Lake",        cat:"water", near:true, x:-5700, z:695,  y:null },
+    { name:"Lobos Creek",          cat:"water", near:true, x:-6100, z:190,  y:null },
+    { name:"Washerwoman's Lagoon", cat:"water", near:true, x:-2754, z:-816, y:null },
+    { name:"SEAL ROCKS",           cat:"region", x:-9880, z:1620, y:14 },
+    { name:"POINT LOBOS",          cat:"region", x:-9200, z:1150, y:null },
+    { name:"THE GREAT SAND BANK",  cat:"region", x:-7300, z:3600, y:null },
+    { name:"OCEAN BEACH",          cat:"region", x:-9380, z:4300, y:8 },
+    { name:"FORT POINT",           cat:"region", x:-6405, z:-1600, y:10 }
+  );
 })();
 
 (function buildLabels(){
@@ -13123,6 +13624,14 @@ function updateDirector(dt){
 /* debug/verification handle (used by the Phase-5 QA pass; harmless in prod) */
 window.__P1850 = {
   jump: function(iso){ jumpToDate(eventDateToSimDay(iso)); }, // P0-3: routes through jumpToDate's noon-default fix
+  // s46 QA — peninsula bake hooks
+  get world(){ return { x0:Math.round(WORLD.x0), z0:Math.round(WORLD.z0), xMax:Math.round(WORLD.xMax), zMax:Math.round(WORLD.zMax), cell:+WORLD.cell.toFixed(3), maxAltitude:CFG.maxAltitude }; },
+  get terrainMesh(){ return TERRAIN_MESH_STATS; },
+  get westFauna(){ return window._westFauna; },
+  zoneAt: function(x,z){ return zoneAt(x,z); },
+  invalidatePaint: function(){ invalidateGroundPaint(); return "redraped + repaint queued"; },
+  _scene: function(){ return scene; },
+  _renderer: function(){ return renderer; },
   // s44 QA — Director V2 hooks: the logged beat sequence, watch-mode toggle,
   // and speed control (all route through the real user-facing functions).
   get beatLog(){ return INTEREST.log.slice(); },
@@ -13735,12 +14244,14 @@ function applyCameraRig(dt){
   camera.position.set(camX,camY,camZ);
   camera.lookAt(CAM.focus.x, CAM.focus.y, CAM.focus.z);
 
-  // dynamic distance+height fog: closer/thicker near the ground, receding at altitude
+  // dynamic distance+height fog: closer/thicker near the ground, receding at
+  // altitude. s46: curve re-fit for the 15km ceiling — at the full-peninsula
+  // framing the old 26km fog-far read as haze soup over the whole west.
   var alt = camY-groundAtCam;
-  var altT = clamp01(alt/6000);
+  var altT = clamp01(alt/8000);
   var wetFogT = weatherState.wet*0.4; // rainy days pull the fog in a bit
-  scene.fog.near = lerp(60, 2600, altT) * (1-wetFogT*0.35);
-  scene.fog.far = lerp(650, 26000, altT) * (1-wetFogT*0.3);
+  scene.fog.near = lerp(60, 4200, altT) * (1-wetFogT*0.35);
+  scene.fog.far = lerp(650, 42000, altT) * (1-wetFogT*0.3);
   waterUniforms.uFogNear.value = scene.fog.near;
   waterUniforms.uFogFar.value = scene.fog.far;
   waterUniforms.uFogColor.value.copy(scene.fog.color);
@@ -13824,9 +14335,8 @@ function panBy(dx, dy){
   var sinY = Math.sin(CAM.yaw), cosY = Math.cos(CAM.yaw);
   var worldDX = -cosY*lat - sinY*fwd;
   var worldDZ =  sinY*lat - cosY*fwd;
-  var half = CFG.worldSize/2;
-  var nx = clamp(CAM.focusT.x + worldDX, -half, half);
-  var nz = clamp(CAM.focusT.z + worldDZ, -half, half);
+  var nx = clamp(CAM.focusT.x + worldDX, WORLD.x0, WORLD.xMax);
+  var nz = clamp(CAM.focusT.z + worldDZ, WORLD.z0, WORLD.zMax);
   CAM.focusT.x = nx; CAM.focusT.z = nz;
   CAM.focusT.y = groundHeight(nx, nz);
 }
@@ -13847,9 +14357,8 @@ var dragAnchor = null; // {x,z} terrain point pinned under the finger/centroid
 function anchorPan(cx, cy, pdx, pdy){
   var gCur = dragAnchor ? groundHit(cx, cy) : null;
   if(dragAnchor && gCur){
-    var half = CFG.worldSize/2;
-    var nx = clamp(CAM.focusT.x + (dragAnchor.x - gCur.x), -half, half);
-    var nz = clamp(CAM.focusT.z + (dragAnchor.z - gCur.z), -half, half);
+    var nx = clamp(CAM.focusT.x + (dragAnchor.x - gCur.x), WORLD.x0, WORLD.xMax);
+    var nz = clamp(CAM.focusT.z + (dragAnchor.z - gCur.z), WORLD.z0, WORLD.zMax);
     CAM.focusT.x = nx; CAM.focusT.z = nz;
     CAM.focusT.y = groundHeight(nx, nz);
   } else {
@@ -13868,7 +14377,7 @@ function groundHit(sx, sy){
   ray.setFromCamera({x:ndcX,y:ndcY}, camera);
   var ro = ray.ray.origin, rd = ray.ray.direction;
   if(Math.abs(rd.y) < 1e-6) return null;
-  var maxDist = CFG.worldSize*3, step = 40;
+  var maxDist = 60000, step = 40;
   var prevT = 0;
   for(var t=step; t<=maxDist; t+=step){
     var py = ro.y+rd.y*t, px = ro.x+rd.x*t, pz = ro.z+rd.z*t;
@@ -13880,7 +14389,7 @@ function groundHit(sx, sy){
         if(my-terrainHeight(mx,mz) > 0) lo=mid; else hi=mid;
       }
       var fx=ro.x+rd.x*hi, fz=ro.z+rd.z*hi;
-      if(Math.abs(fx)>CFG.worldSize/2 || Math.abs(fz)>CFG.worldSize/2) return null;
+      if(fx<WORLD.x0 || fx>WORLD.xMax || fz<WORLD.z0 || fz>WORLD.zMax) return null;
       return { x:fx, z:fz };
     }
     prevT = t;
@@ -14229,7 +14738,7 @@ function updateHud(alt){
    ===================================================================== */
 var clock = new THREE.Clock();
 document.getElementById("hud-loading").style.display = "none";
-console.log("[verify] terrain-1846.js loaded:", TERRAIN.n+"x"+TERRAIN.n, "grid,", TERRAIN.size+"m box. Village pad Y="+VILLAGE_Y.toFixed(2)+"m. Any [verify] warnings above indicate a building/street below the land threshold.");
+console.log("[verify] terrain-1846.js loaded:", TERRAIN.nx+"x"+TERRAIN.nz, "grid, x "+Math.round(WORLD.x0)+".."+Math.round(WORLD.xMax)+", z "+Math.round(WORLD.z0)+".."+Math.round(WORLD.zMax)+"m (peninsula domain). Village pad Y="+VILLAGE_Y.toFixed(2)+"m. Any [verify] warnings above indicate a building/street below the land threshold.");
 
 function animate(){
   requestAnimationFrame(animate);
