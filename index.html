@@ -551,6 +551,8 @@
     background:rgba(241,230,201,0.97); border:1px solid rgba(43,29,14,0.4);
     box-shadow:0 2px 16px rgba(0,0,0,0.45); font-family:'Fraunces',Georgia,serif;
     color:var(--ink); pointer-events:auto;
+    max-height:calc(100vh - 84px); overflow-y:auto; /* s54: the grown row list must scroll, not overflow, in landscape */
+    overscroll-behavior:contain;
   }
   #hud-menu-sheet.open{ display:block; }
   .hm-head{
@@ -652,6 +654,10 @@
       max-width:calc(100vw - 32px); box-sizing:border-box; } /* s54: the date chip must never clip off-screen */
     #hud-clock .date, #hud-clock .speed{ display:inline; }
     #hud-clock .speed{ margin-left:0.6em; opacity:0.7; }
+    /* s54: on touch phones the pill IS the speed indicator — the chip keeps
+       just the date (body prefix out-ranks the display:inline above; narrow
+       FINE-pointer windows keep the text since they have no pill). */
+    body.touch-device #hud-clock .speed{ display:none; }
     #hud-ghost{ top:56px; left:50%; }
     #paper-toggle.menu-forced{ display:block; top:100px; right:16px; }
     #hud-provenance.menu-forced{ display:block; top:56px; left:16px; max-width:60vw; font-size:0.55rem; letter-spacing:1px; white-space:normal; }
@@ -731,8 +737,8 @@
   <!-- s54 speed pill: segmented time control, coarse-pointer chrome.
        data-speed values are the SIM_SPEEDS keys; setSimSpeed() keeps the
        active segment highlighted, so the pill IS the speed indicator. -->
-  <div id="speed-pill" title="time — pause / live / follow / timelapse">
-    <div class="sp-seg" data-speed="0">&#10074;&#10074;</div>
+  <div id="speed-pill" title="time — pause/play / live / follow / timelapse">
+    <div class="sp-seg" data-speed="0" id="sp-pauseplay">&#9654;</div>
     <div class="sp-seg" data-speed="live">live</div>
     <div class="sp-seg" data-speed="x2">2&times;</div>
     <div class="sp-seg" data-speed="day">day</div>
@@ -742,7 +748,7 @@
   <div id="hud-menu-sheet">
     <div class="hm-head">MENU <span class="hm-close" id="hm-close">&times;</span></div>
     <!-- s54 MODES: the touch path for the V / N / G / P / T keys -->
-    <div class="hm-row hm-mode" id="hm-watch">Watch mode</div>
+    <div class="hm-row hm-mode" id="hm-watch">Director / watch mode</div>
     <div class="hm-row hm-mode" id="hm-paper">The paper</div>
     <div class="hm-row hm-mode" id="hm-ghost">Then / now ghost</div>
     <div class="hm-row hm-mode" id="hm-provenance">Documented only</div>
@@ -4946,12 +4952,15 @@ function updateSpeedPill(key){
   for(var i=0;i<segs.length;i++){
     segs[i].classList.toggle("active", segs[i].getAttribute("data-speed")===String(key));
   }
+  // first segment is a play/pause TOGGLE and shows the available action:
+  // ▶ while paused (tap = play), ❚❚ while running (tap = pause)
+  segs[0].innerHTML = key===0 ? "&#9654;" : "&#10074;&#10074;";
 }
 if(speedPillEl) speedPillEl.addEventListener("click", function(e){
   var seg = e.target.closest ? e.target.closest(".sp-seg") : null;
   if(!seg) return;
   var k = seg.getAttribute("data-speed");
-  if(k==="0"){ setSimSpeed(0); return; }
+  if(k==="0"){ setSimSpeed(simSpeedKey===0 ? "live" : 0); return; } // mirror the Space key: pause <-> LIVE
   if(k==="day"||k==="week"||k==="month") lastActiveSpeed = k; // mirror the 2/3/4 key handlers
   setSimSpeed(k);
 });
@@ -7484,6 +7493,16 @@ function showInspect(kindText, name, bodyHtml, opts){
   ipBodyEl.innerHTML = html;
   followReleaseEl.classList.remove("on"); // s54: only the person-follow openers re-show it
   inspectPanelEl.classList.add("on");
+  // s54 single-top-layer policy: on phone chrome the inspect bottom-sheet and
+  // the ☰ menu sheet occupy the same layer — opening one closes the other
+  // (the user finding: the sheet drew OVER the open menu, both half-visible).
+  document.getElementById("hud-menu-sheet").classList.remove("open");
+}
+/* s54: true while the phone-chrome media block (portrait narrow OR coarse
+   landscape short) is active — the layouts where bottom sheets collide. */
+function phoneChromeActive(){
+  return !!(window.matchMedia &&
+    window.matchMedia("(max-width:520px), (pointer:coarse) and (max-height:440px)").matches);
 }
 /* s54 FOLLOW RELEASE — the touch path for Esc: a 44px chip inside the
    inspect panel, shown only while a person/documented figure is followed. */
@@ -15885,7 +15904,13 @@ document.getElementById("hud-tilt-toggle").addEventListener("click", function(){
   var menuBtn = document.getElementById("hud-menu-toggle");
   var sheet = document.getElementById("hud-menu-sheet");
   var closeBtn = document.getElementById("hm-close");
-  menuBtn.addEventListener("click", function(e){ e.stopPropagation(); sheet.classList.toggle("open"); });
+  menuBtn.addEventListener("click", function(e){
+    e.stopPropagation();
+    var open = sheet.classList.toggle("open");
+    // s54 single-top-layer policy (see showInspect): on phone chrome the
+    // inspect bottom-sheet would draw over the opening menu — close it.
+    if(open && phoneChromeActive()) closeInspect();
+  });
   closeBtn.addEventListener("click", function(e){ e.stopPropagation(); sheet.classList.remove("open"); });
   document.querySelectorAll(".hm-row[data-target]").forEach(function(row){
     var target = document.getElementById(row.dataset.target);
