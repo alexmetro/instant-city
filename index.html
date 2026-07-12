@@ -543,8 +543,8 @@
      / this button) lives behind here instead of tiling the viewport ---- */
   #hud-menu-toggle{
     display:none; bottom:16px; left:16px; pointer-events:auto; cursor:pointer;
-    width:40px; height:40px; border-radius:50%; align-items:center; justify-content:center;
-    font-size:1.05rem; padding:0; z-index:13;
+    width:44px; height:44px; border-radius:50%; align-items:center; justify-content:center;
+    font-size:1.15rem; padding:0; z-index:13; /* s54: >=44px thumb target */
   }
   #hud-menu-sheet{
     display:none; position:fixed; bottom:64px; left:16px; width:210px; z-index:13;
@@ -566,8 +566,64 @@
   .hm-row:first-of-type{ border-top:none; }
   .hm-row::after{ content:"show"; font-size:0.55rem; opacity:0.5; letter-spacing:1.5px; font-variant:small-caps; }
   .hm-row.active::after{ content:"hide"; opacity:0.85; }
+  /* s54: MODE rows (watch/paper/ghost/documented/tilt) read on/off, not
+     show/hide; the sunrise-skip row is a one-shot action. */
+  .hm-row.hm-mode::after{ content:"off"; }
+  .hm-row.hm-mode.active::after{ content:"on"; opacity:0.85; }
+  .hm-row.hm-action::after{ content:"\2192"; opacity:0.55; }
+  .hm-row.hm-slider{ cursor:default; }
+  .hm-row.hm-slider::after{ content:none; }
+  .hm-row.hm-slider input[type=range]{
+    width:128px; margin-left:10px; accent-color:var(--ink);
+    touch-action:none; /* thumb drags must scrub the slider, never pan the map */
+  }
 
-  @media (max-width:520px){
+  /* ---- s54 TOUCH CONTROL SURFACE ---- */
+  /* Speed pill — THE speed indicator+control on touch devices (grounding.md
+     §10 tiers: pause / LIVE 1:1 / 2× follow / day / week / month per sec).
+     Hidden on fine-pointer desktops, where the keyboard keys + the HUD
+     clock's speed line already serve. Genuine chrome: receives taps, never
+     pans (UI_STEAL_SELECTOR). */
+  #speed-pill{
+    position:fixed; left:50%; bottom:14px; transform:translateX(-50%);
+    display:none; z-index:12; pointer-events:auto; cursor:pointer;
+    background:rgba(241,230,201,0.92); border:1px solid rgba(43,29,14,0.45);
+    box-shadow:0 2px 12px rgba(0,0,0,0.35);
+    font-family:'Fraunces',Georgia,serif; color:var(--ink);
+    user-select:none; -webkit-user-select:none; -webkit-touch-callout:none;
+    transition:opacity .5s ease;
+  }
+  #speed-pill .sp-seg{
+    min-width:42px; min-height:44px; box-sizing:border-box; padding:0 7px;
+    display:flex; align-items:center; justify-content:center;
+    font-size:0.6rem; letter-spacing:1.2px; font-variant:small-caps;
+    border-left:1px solid rgba(43,29,14,0.25);
+  }
+  #speed-pill .sp-seg:first-child{ border-left:none; }
+  #speed-pill .sp-seg.active{ background:var(--ink); color:var(--parchment); }
+  @media (pointer:coarse){
+    #speed-pill{ display:flex; }
+    #hud-clock .speed{ display:none; } /* the pill replaces the HUD speed text on touch */
+    #hud-ticker{ bottom:72px; }        /* clear the pill's bottom band */
+    #hud-scrubber{ bottom:112px; }
+    #hud-menu-toggle{ display:flex; }  /* the modes menu is reachable on every touch device */
+  }
+  /* follow-release chip (s54): shown inside the inspect panel while a
+     person/documented figure is followed — the touch path for Esc. */
+  #follow-release{
+    display:none; margin:6px 0 4px; min-height:44px; box-sizing:border-box;
+    align-items:center; justify-content:center; text-align:center;
+    border:1px solid rgba(43,29,14,0.6); background:rgba(43,29,14,0.07);
+    font-size:0.62rem; letter-spacing:2.5px; font-variant:small-caps; cursor:pointer;
+  }
+  #follow-release.on{ display:flex; }
+  #follow-release:hover{ background:rgba(43,29,14,0.14); }
+  /* idle chrome fade (s54): the touch controls dim to 60% after 4s of no
+     input, restore to full on any interaction (see pokeChrome()). */
+  #hud-menu-toggle{ transition:opacity .5s ease; }
+  body.chrome-idle #speed-pill, body.chrome-idle #hud-menu-toggle{ opacity:0.6; }
+
+  @media (max-width:520px), (pointer:coarse) and (max-height:440px){
     /* MOBILE CHROME OVERHAUL (usability fix, 2026-07-09): the map is the
        product — chrome must never cover more than a sliver of a phone
        screen. Default visible set is now exactly FOUR elements: the
@@ -578,7 +634,10 @@
        toggle) is hidden by default and only reachable via the ☰ sheet,
        which toggles a per-element .menu-forced class. The title still
        gets its traditional few seconds of unobstructed branding on load
-       (opacity animation below) before folding away like the rest. */
+       (opacity animation below) before folding away like the rest.
+       s54: the block now ALSO applies to phones in LANDSCAPE (pointer:
+       coarse + short viewport) — previously landscape got the full
+       desktop chrome and the masthead/date/hint panels collided. */
     #hud-title, #hud-seed, #paper-toggle, #hud-altitude, #hud-provenance,
     #hud-hint, #hud-hint-toggle, #hud-tilt-toggle{ display:none; }
     #hud-title{
@@ -589,14 +648,15 @@
     #hud-title .sub{ font-size:0.44rem; letter-spacing:1px; margin-top:1px; }
     #hud-title.menu-forced{ display:block; animation:none; opacity:1; visibility:visible; pointer-events:auto; }
     #hud-seed.menu-forced{ display:block; top:8px; right:16px; left:auto; font-size:0.55rem; padding:0.25em 0.55em; }
-    #hud-clock{ top:8px; left:16px; right:auto; min-width:0; font-size:0.66rem; text-align:left; padding:0.35em 0.85em; }
+    #hud-clock{ top:8px; left:16px; right:auto; min-width:0; font-size:0.66rem; text-align:left; padding:0.35em 0.85em;
+      max-width:calc(100vw - 32px); box-sizing:border-box; } /* s54: the date chip must never clip off-screen */
     #hud-clock .date, #hud-clock .speed{ display:inline; }
     #hud-clock .speed{ margin-left:0.6em; opacity:0.7; }
     #hud-ghost{ top:56px; left:50%; }
     #paper-toggle.menu-forced{ display:block; top:100px; right:16px; }
     #hud-provenance.menu-forced{ display:block; top:56px; left:16px; max-width:60vw; font-size:0.55rem; letter-spacing:1px; white-space:normal; }
-    #hud-altitude.menu-forced{ display:block; min-width:0; font-size:0.7rem; bottom:64px; left:auto; right:16px; }
-    #hud-hint.menu-forced{ display:block; bottom:64px; right:16px; max-width:min(240px,64vw); }
+    #hud-altitude.menu-forced{ display:block; min-width:0; font-size:0.7rem; bottom:150px; left:auto; right:16px; } /* s54: above the pill/ticker/scrubber stack */
+    #hud-hint.menu-forced{ display:block; bottom:150px; right:16px; max-width:min(240px,64vw); }
     #paper-pane{ width:100vw; }
     /* §11 inspect law: on narrow viewports the panel docks as a bottom
        sheet instead of a right rail (thumb reach + map stays visible). */
@@ -605,9 +665,20 @@
       border:none; border-top:2px solid var(--ink);
       box-shadow:0 -6px 18px rgba(0,0,0,0.45);
     }
-    #hud-menu-toggle{ display:flex; }
-    #hud-ticker{ max-width:min(60vw,420px); min-width:0; bottom:16px; }
-    #hud-scrubber{ bottom:56px; }
+    /* s54: on phone layouts the "?" chip folds away too — the help panel
+       lives behind the ☰ menu's Controls row instead (these selectors must
+       out-rank the body.touch-device rules above, hence the body prefix). */
+    body.touch-device #hud-hint-toggle{ display:none; }
+    body.touch-device #hud-hint.menu-forced{ display:block; bottom:150px; right:16px; max-width:min(240px,64vw); }
+    /* s54 bottom stack, thumb-first: ☰ + speed pill on the bottom edge,
+       ticker full-width above them, timeline scrubber full-width above
+       the ticker. safe-area padding keeps the pill off the iOS home bar. */
+    #hud-menu-toggle{ display:flex; left:10px; bottom:calc(10px + env(safe-area-inset-bottom, 0px)); }
+    #speed-pill{ left:auto; right:10px; transform:none; bottom:calc(10px + env(safe-area-inset-bottom, 0px)); }
+    #hud-ticker{ left:8px; right:8px; transform:none; max-width:none; min-width:0;
+      box-sizing:border-box; bottom:calc(64px + env(safe-area-inset-bottom, 0px)); }
+    #hud-scrubber{ left:8px; right:8px; width:auto; transform:none;
+      box-sizing:border-box; bottom:calc(100px + env(safe-area-inset-bottom, 0px)); }
   }
   @keyframes hudTitleAutoHide{ to{ opacity:0; visibility:hidden; pointer-events:none; } }
 </style>
@@ -657,9 +728,28 @@
   <div class="panel" id="hud-hint-toggle" title="controls">?</div>
   <div class="panel" id="hud-tilt-toggle" title="cinematic low-angle tilt (toggle)">&#10192;</div>
   <div class="panel" id="hud-menu-toggle" title="menu">&#9776;</div>
+  <!-- s54 speed pill: segmented time control, coarse-pointer chrome.
+       data-speed values are the SIM_SPEEDS keys; setSimSpeed() keeps the
+       active segment highlighted, so the pill IS the speed indicator. -->
+  <div id="speed-pill" title="time — pause / live / follow / timelapse">
+    <div class="sp-seg" data-speed="0">&#10074;&#10074;</div>
+    <div class="sp-seg" data-speed="live">live</div>
+    <div class="sp-seg" data-speed="x2">2&times;</div>
+    <div class="sp-seg" data-speed="day">day</div>
+    <div class="sp-seg" data-speed="week">wk</div>
+    <div class="sp-seg" data-speed="month">mo</div>
+  </div>
   <div id="hud-menu-sheet">
     <div class="hm-head">MENU <span class="hm-close" id="hm-close">&times;</span></div>
-    <div class="hm-row" id="hm-tilt" data-mode="tilt">Cinematic tilt</div>
+    <!-- s54 MODES: the touch path for the V / N / G / P / T keys -->
+    <div class="hm-row hm-mode" id="hm-watch">Watch mode</div>
+    <div class="hm-row hm-mode" id="hm-paper">The paper</div>
+    <div class="hm-row hm-mode" id="hm-ghost">Then / now ghost</div>
+    <div class="hm-row hm-mode" id="hm-provenance">Documented only</div>
+    <div class="hm-row hm-action" id="hm-skip">Skip to sunrise / sunset</div>
+    <div class="hm-row hm-mode" id="hm-tilt" data-mode="tilt">Cinematic tilt</div>
+    <div class="hm-row hm-slider" id="hm-tilt-slider">Camera tilt
+      <input type="range" id="tilt-range" min="-0.62" max="0.35" step="0.01" value="0"></div>
     <div class="hm-row" data-target="hud-title">Title</div>
     <div class="hm-row" data-target="hud-seed">Seed</div>
     <div class="hm-row" data-target="paper-toggle">Today's paper</div>
@@ -677,6 +767,8 @@
   <span class="ip-close" id="ip-close">&times;</span>
   <span class="ip-kind" id="ip-kind">&mdash;</span>
   <h3 id="ip-name">&mdash;</h3>
+  <!-- s54: touch path for Esc — visible only while following a person -->
+  <div id="follow-release">&#10005;&nbsp; release follow</div>
   <div id="ip-body"></div>
 </div>
 
@@ -4843,10 +4935,31 @@ function updateHashDate(){
 var clockDateEl = document.getElementById("clock-date");
 var clockSpeedEl = document.getElementById("clock-speed");
 var SPEED_LABELS = { 0:"PAUSED", live:"LIVE — 1:1", x2:"FOLLOW — 2×", day:"1 DAY / 2s", week:"1 WEEK / s", month:"1 MONTH / s" };
+/* s54 TOUCH CONTROL SURFACE — the segmented speed pill (coarse-pointer
+   chrome, see CSS). Taps route through the same setSimSpeed() the keyboard
+   uses; setSimSpeed() highlights the active segment, so the pill always
+   shows the current state. */
+var speedPillEl = document.getElementById("speed-pill");
+function updateSpeedPill(key){
+  if(!speedPillEl) return;
+  var segs = speedPillEl.children;
+  for(var i=0;i<segs.length;i++){
+    segs[i].classList.toggle("active", segs[i].getAttribute("data-speed")===String(key));
+  }
+}
+if(speedPillEl) speedPillEl.addEventListener("click", function(e){
+  var seg = e.target.closest ? e.target.closest(".sp-seg") : null;
+  if(!seg) return;
+  var k = seg.getAttribute("data-speed");
+  if(k==="0"){ setSimSpeed(0); return; }
+  if(k==="day"||k==="week"||k==="month") lastActiveSpeed = k; // mirror the 2/3/4 key handlers
+  setSimSpeed(k);
+});
 function setSimSpeed(key){
   var wasPaused = simSpeedKey===0;
   simSpeedKey = key;
   clockSpeedEl.textContent = SPEED_LABELS[key];
+  updateSpeedPill(key);
   if(key===0 && !wasPaused) updateHashDate(); // "update on pause"
 }
 setSimSpeed(0); // starts paused; Space toggles pause/LIVE, 1 = 2x follow, 2/3/4 for timelapse
@@ -7369,10 +7482,16 @@ function showInspect(kindText, name, bodyHtml, opts){
   }
   if(opts.hint) html += '<span class="ip-hint">'+opts.hint+'</span>';
   ipBodyEl.innerHTML = html;
+  followReleaseEl.classList.remove("on"); // s54: only the person-follow openers re-show it
   inspectPanelEl.classList.add("on");
 }
+/* s54 FOLLOW RELEASE — the touch path for Esc: a 44px chip inside the
+   inspect panel, shown only while a person/documented figure is followed. */
+var followReleaseEl = document.getElementById("follow-release");
+followReleaseEl.addEventListener("click", function(e){ e.stopPropagation(); closeInspect(); });
 function closeInspect(){
   inspectPanelEl.classList.remove("on");
+  followReleaseEl.classList.remove("on"); // s54
   SELECTED = null;
   followedSlot = null; followedDocumented = null;
   selRingMesh.visible = false;
@@ -12736,6 +12855,7 @@ function openPersonInspectorForSlot(slot){
   SELECTED = { kind:"person", slot:slot };
   setSelRing(slot._x, slot._z, 1.4);
   followedSlot = slot; followedDocumented = null;
+  followReleaseEl.classList.add("on"); // s54: touch path for Esc
   setZoomMeters(70);
 }
 function openPersonInspectorForDocumented(doc){
@@ -12752,6 +12872,7 @@ function openPersonInspectorForDocumented(doc){
   SELECTED = { kind:"documented", doc:doc };
   setSelRing(doc.x, doc.z, 2.2);
   followedDocumented = doc; followedSlot = null;
+  followReleaseEl.classList.add("on"); // s54: touch path for Esc
   setZoomMeters(90);
 }
 var provenanceOnly = false;
@@ -13467,23 +13588,27 @@ var ghostGroup = new THREE.Group();
   ghostGroup.userData.mats = [lineMat, gridMat];
   scene.add(ghostGroup);
 })();
+/* s54: G and T are now named functions so the ☰ menu rows (the no-keyboard
+   touch path) drive the exact same code as the keys. */
+function setGhost(on){
+  ghostVisible = on;
+  document.getElementById("hud-ghost").classList.toggle("on", ghostVisible);
+}
+function skipToSunriseSunset(){
+  // T FIX (fix sprint 2026-07-11 #2): advance the SIM clock to the next
+  // sunrise or sunset — the lighting now derives from the sim clock, so
+  // this is a real (small) time jump and round-trips cleanly:
+  // pre-dawn -> sunrise -> sunset -> next sunrise -> ...
+  var f = Math.floor(simDay), h = (simDay-f)*24;
+  var sp = daylightSpanForDay(simDay);
+  if(h < sp.sunrise-1/60)      simDay = clamp(f + sp.sunrise/24, 0, SIM_END_DAY);
+  else if(h < sp.sunset-1/60)  simDay = clamp(f + sp.sunset/24, 0, SIM_END_DAY);
+  else { var sp2 = daylightSpanForDay(f+1); simDay = clamp(f+1 + sp2.sunrise/24, 0, SIM_END_DAY); }
+  updateHashDate();
+}
 window.addEventListener("keydown", function(e){
-  if(e.key==="g"||e.key==="G"){
-    ghostVisible = !ghostVisible;
-    document.getElementById("hud-ghost").classList.toggle("on", ghostVisible);
-  }
-  if(e.key==="t"||e.key==="T"){
-    // T FIX (fix sprint 2026-07-11 #2): advance the SIM clock to the next
-    // sunrise or sunset — the lighting now derives from the sim clock, so
-    // this is a real (small) time jump and round-trips cleanly:
-    // pre-dawn -> sunrise -> sunset -> next sunrise -> ...
-    var f = Math.floor(simDay), h = (simDay-f)*24;
-    var sp = daylightSpanForDay(simDay);
-    if(h < sp.sunrise-1/60)      simDay = clamp(f + sp.sunrise/24, 0, SIM_END_DAY);
-    else if(h < sp.sunset-1/60)  simDay = clamp(f + sp.sunset/24, 0, SIM_END_DAY);
-    else { var sp2 = daylightSpanForDay(f+1); simDay = clamp(f+1 + sp2.sunrise/24, 0, SIM_END_DAY); }
-    updateHashDate();
-  }
+  if(e.key==="g"||e.key==="G") setGhost(!ghostVisible);
+  if(e.key==="t"||e.key==="T") skipToSunriseSunset();
 });
 
 /* =========================================================================
@@ -14722,6 +14847,12 @@ window.__P1850 = {
   },
   get date(){ return simDateISO(dateFromSimDay(simDay)); },
   get simDay(){ return simDay; },
+  // s54 QA — touch-control-surface hooks: current speed tier, mode states,
+  // and yaw (twist-orbit verification reads yawT against the gesture angle).
+  get speedKey(){ return simSpeedKey; },
+  get modes(){ return { watch:WATCH.on, paper:paperOpen, ghost:ghostVisible,
+    documentedOnly:provenanceOnly, tilt:cinematicTilt, pitchOff:+CAM.pitchOffT.toFixed(3) }; },
+  get yawState(){ return { yaw:+CAM.yaw.toFixed(4), yawT:+CAM.yawT.toFixed(4) }; },
   get population(){ return Math.round(populationAt(simDay)); }, // documented population (POP_CURVE) — QA-GATE stat spot-check
   get density(){ return Math.round(densityAt(simDay)); }, // visible structure/crowd density driver (DENSITY_CURVE), decoupled from population
   get calls(){ return renderer.info.render.calls; },
@@ -15373,7 +15504,7 @@ canvas.addEventListener("contextmenu", function(e){ e.preventDefault(); });
    selector below) opts out of map navigation; label chips count as map
    surface (drag pans, tap still opens them via their own click handlers). */
 var UI_STEAL_SELECTOR = "#paper-pane,#hud-menu-sheet,#hud-menu-toggle,#beat-card,"+
-  "#inspect-panel,#paper-toggle,"+
+  "#inspect-panel,#paper-toggle,#speed-pill,"+ /* s54: pill + (inside inspect-panel) release chip are genuine chrome */
   "#hud-hint-toggle,#hud-tilt-toggle,#hud-ticker,#hud-hint,#hud-seed,#hud-title,"+
   "#hud-clock,#hud-altitude,#horizon-ring,#touch-debug,.scr-tab,.scr-track,"+
   "a,button,input,textarea,select";
@@ -15494,7 +15625,11 @@ window.addEventListener("pointerdown", function(e){
   if(ptrs.size===2){
     var ids = Array.from(ptrs.keys());
     var p0 = ptrs.get(ids[0]), p1 = ptrs.get(ids[1]);
-    pinch = { ids:ids, d:Math.hypot(p1.x-p0.x,p1.y-p0.y), cx:(p0.x+p1.x)/2, cy:(p0.y+p1.y)/2 };
+    pinch = { ids:ids, d:Math.hypot(p1.x-p0.x,p1.y-p0.y), cx:(p0.x+p1.x)/2, cy:(p0.y+p1.y)/2,
+              // s54 TWIST ORBIT: inter-finger angle; twist engages only past
+              // ~10° accumulated rotation (Apple-Maps threshold) so an
+              // ordinary pinch never wobbles the yaw.
+              ang:Math.atan2(p1.y-p0.y, p1.x-p0.x), twist:false, twistAcc:0 };
     orbitActive = false; panActive = false;
     dragAnchor = groundHit(pinch.cx, pinch.cy); // pin the terrain under the centroid
     return;
@@ -15524,6 +15659,26 @@ window.addEventListener("pointermove", function(e){
     var d = Math.hypot(p1.x-p0.x, p1.y-p0.y);
     var cx = (p0.x+p1.x)/2, cy = (p0.y+p1.y)/2;
     CAM.tT = clamp(CAM.tT + (pinch.d-d)*0.0016, 0, 1);
+    /* s54 TWIST ORBIT (the standard maps two-finger rotate): the same two
+       pointers already do distance=zoom + centroid=pan; the inter-finger
+       ANGLE now drives CAM.yaw. Engages past ~10° accumulated twist so
+       pinch-zooms don't jitter the heading; once engaged it tracks 1:1
+       (derivation: screen angle of a world feature is -(yaw + const) in
+       y-up terms, so yawT += dAng(client coords) rotates the ground WITH
+       the fingers — verified against __P1850.toScreen bearings). The
+       centroid dragAnchor correction in anchorPan() then keeps the ground
+       point under the fingers, so the world pivots about the touch point,
+       not the screen center. */
+    var ang = Math.atan2(p1.y-p0.y, p1.x-p0.x);
+    var dAng = ang - pinch.ang;
+    if(dAng>Math.PI) dAng -= 2*Math.PI; else if(dAng<-Math.PI) dAng += 2*Math.PI;
+    pinch.ang = ang;
+    if(!pinch.twist){
+      pinch.twistAcc += dAng;
+      if(Math.abs(pinch.twistAcc) > 0.175) pinch.twist = true; // ~10°; engage without replaying the threshold (no snap)
+    } else {
+      CAM.yawT += dAng;
+    }
     anchorPan(cx, cy, cx-pinch.cx, cy-pinch.cy);
     pinch.d = d; pinch.cx = cx; pinch.cy = cy; // continuous re-baseline = 1:1 tracking
     return;
@@ -15742,6 +15897,70 @@ document.getElementById("hud-tilt-toggle").addEventListener("click", function(){
   document.getElementById("hm-tilt").addEventListener("click", function(){
     setCinematicTilt(!cinematicTilt);
   });
+})();
+
+/* ---- s54 MODES in the menu: the touch path for the V / N / G / P / T keys,
+   each row driving the exact same setter the key drives, with live on/off
+   state while the sheet is open. The camera-tilt slider is the chosen small
+   pitch control (a two-finger vertical-drag pitch would contend with the
+   existing two-finger centroid-pan, so the slider is the cleaner path). ---- */
+(function(){
+  var sheet = document.getElementById("hud-menu-sheet");
+  var rowWatch = document.getElementById("hm-watch");
+  var rowPaper = document.getElementById("hm-paper");
+  var rowGhost = document.getElementById("hm-ghost");
+  var rowProv  = document.getElementById("hm-provenance");
+  var rowTilt  = document.getElementById("hm-tilt");
+  var tiltRange = document.getElementById("tilt-range");
+  var tiltDragging = false;
+  rowWatch.addEventListener("click", function(){
+    setWatchMode(!WATCH.on);
+    if(WATCH.on) sheet.classList.remove("open"); // cede the screen to the director
+    syncMenuModes();
+  });
+  rowPaper.addEventListener("click", function(){ setPaperOpen(!paperOpen); syncMenuModes(); });
+  rowGhost.addEventListener("click", function(){ setGhost(!ghostVisible); syncMenuModes(); });
+  rowProv.addEventListener("click", function(){ setProvenanceOnly(!provenanceOnly); syncMenuModes(); });
+  document.getElementById("hm-skip").addEventListener("click", function(){ skipToSunriseSunset(); });
+  // sync immediately whenever the sheet is opened, too (the rAF tick below
+  // covers keyboard-driven changes while it sits open, but background/CDP
+  // tabs throttle rAF — never rely on it for the tap-response path)
+  document.getElementById("hud-menu-toggle").addEventListener("click", syncMenuModes);
+  tiltRange.addEventListener("pointerdown", function(){ tiltDragging = true; });
+  window.addEventListener("pointerup", function(){ tiltDragging = false; });
+  tiltRange.addEventListener("input", function(){
+    cinematicTilt = false;
+    document.getElementById("hud-tilt-toggle").classList.remove("on");
+    CAM.pitchOffT = clamp(parseFloat(tiltRange.value), PITCH_OFF_MIN, PITCH_OFF_MAX);
+    syncMenuModes();
+  });
+  function syncMenuModes(){
+    rowWatch.classList.toggle("active", WATCH.on);
+    rowPaper.classList.toggle("active", paperOpen);
+    rowGhost.classList.toggle("active", ghostVisible);
+    rowProv.classList.toggle("active", provenanceOnly);
+    rowTilt.classList.toggle("active", cinematicTilt);
+    if(!tiltDragging) tiltRange.value = CAM.pitchOffT;
+  }
+  (function tick(){ // cheap: 5 no-op class toggles, and only while the sheet is open
+    if(sheet.classList.contains("open")) syncMenuModes();
+    requestAnimationFrame(tick);
+  })();
+})();
+
+/* ---- s54 idle chrome fade: the new touch controls dim to 60% after 4s of
+   no input and restore to full on any interaction. ---- */
+(function(){
+  var t = null;
+  function pokeChrome(){
+    document.body.classList.remove("chrome-idle");
+    clearTimeout(t);
+    t = setTimeout(function(){ document.body.classList.add("chrome-idle"); }, 4000);
+  }
+  ["pointerdown","pointermove","wheel","keydown","touchstart"].forEach(function(ev){
+    window.addEventListener(ev, pokeChrome, {passive:true});
+  });
+  pokeChrome();
 })();
 
 /* =====================================================================
