@@ -9536,7 +9536,12 @@ function pickGamblingSite(){
   return { key:"gambling_"+s.name, label:s.name, x:s.x, z:s.z, activity:"stationary" };
 }
 var WORKSITE_PLAZA_MARKET = { key:"plazamarket", label:"Plaza market", x:PLAZA_CENTER.x, z:PLAZA_CENTER.z, activity:"market" };
-var WORKSITE_MISSION = { key:"mission", label:"Mission Dolores", x:OUTPOSTS.mission.x, z:OUTPOSTS.mission.z, activity:"stationary" };
+// s50 fix (found verifying rancheria inhabitants at LIVE): this worksite
+// sat at OUTPOSTS.mission exactly — the CHURCH's own center — so every
+// mission worker's stationary at-work pose (±3.6m clusterOffset) rendered
+// INSIDE the 34.7x6.7m church mesh, invisible. Moved to the open forecourt
+// SW of the church, clear of the building footprint and the cemetery plot.
+var WORKSITE_MISSION = { key:"mission", label:"Mission Dolores", x:OUTPOSTS.mission.x-14, z:OUTPOSTS.mission.z+12, activity:"stationary" };
 var WORKSITE_WHARF = (function(){
   var wharfV = (GEO.streetsV.clay+GEO.streetsV.washington)/2;
   var landPt = gridToWorld(GEO.streetsU.montgomery, wharfV);
