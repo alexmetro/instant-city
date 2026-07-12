@@ -1,0 +1,862 @@
+<!DOCTYPE html>
+<!--
+  PROJECT 1850 — "The Instant City" — Phase 1: "The Ground"
+  San Francisco, 1846. A hand-tinted-lithograph 3D terrain of the peninsula tip,
+  the Vioget-grid village around Portsmouth Square, and a then/now shoreline ghost.
+
+  RUN:
+    cd app
+    python -m http.server 8080
+    open http://localhost:8080/
+
+  ...or just double-click this file to open it directly (no build step, no server
+  required for the base experience; a local server avoids any browser file:// CORS
+  quirks with the Google Fonts stylesheet, which degrades gracefully if blocked).
+
+  One CDN dependency, pinned: three.js r128. Everything else — terrain, water,
+  buildings, ships, streets, sky, fog — is generated procedurally in this file.
+  No textures, no external art assets, no build step (a couple of small
+  procedural <canvas> textures — the flag, the chimney-smoke sprite — are
+  generated in-file too, per spec, and don't count as external assets).
+
+  PHASE 1 POLISH (close-range ground character + free flight):
+    - A1 detail-displacement patch: a small NW-SE dune-ripple bump-shaded
+      overlay that follows the camera near the ground.
+    - A2 ground scatter: seeded InstancedMesh sets — scrub tufts, dune
+      grass, rocks, driftwood/kelp on the tideline, wildflowers on the
+      western hills — fading out above ~1500m.
+    - A3 village clutter: barrels/crates/woodpiles, split-rail fences,
+      hitching posts, laundry lines, worn dirt paths, a wharf-stub with
+      two rowboats at the Montgomery St beach.
+    - A4 road treatment: wheel-rut + edge-wear vertex-color micro-pattern
+      on every street/track segment; the Mission Road additionally gets
+      dark hoofprint mottling.
+    - A5 water: an animated shoreline-foam ribbon following the real
+      baked-heightmap shoreline contour, low-sun-angle wave glint, and
+      stronger swell near the Golden Gate.
+    - A6 buildings: dark door/window insets, occasional lean-to sheds,
+      a few chimneys with drifting canvas-sprite smoke wisps.
+    - WASD/arrow-key fly navigation alongside the existing mouse/touch
+      orbit rig (see "B: WASD FLY NAVIGATION" further down).
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>San Francisco · 1846 — The Instant City</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="1846">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<meta name="theme-color" content="#f4f1e7">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,400;0,600;1,400&family=Playfair+Display:wght@700;900&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#2b1d0e;
+    --parchment:#f1e6c9;
+  }
+  html,body{
+    margin:0; padding:0; overflow:hidden; height:100%; background:#0a0a0a;
+    overscroll-behavior:none; /* s41: no rubber-band/pull-to-refresh contention on iOS */
+  }
+  canvas{
+    display:block; touch-action:none;
+    /* s41 iOS hardening: no long-press callout/loupe mid-drag-start */
+    -webkit-user-select:none; user-select:none; -webkit-touch-callout:none;
+  }
+  #hud{
+    position:fixed; inset:0; pointer-events:none;
+    font-family:'Fraunces', Georgia, serif;
+    color:var(--ink);
+    user-select:none;
+  }
+  .panel{
+    position:absolute;
+    background:rgba(241,230,201,0.88);
+    border:1px solid rgba(43,29,14,0.35);
+    box-shadow:0 2px 14px rgba(0,0,0,0.35);
+    padding:0.5em 1em;
+  }
+  #hud-title{
+    top:16px; left:50%; transform:translateX(-50%);
+    text-align:center; padding:0.4em 1.6em;
+  }
+  #hud-title h1{
+    margin:0; font-size:1.25rem; font-weight:600; letter-spacing:2px;
+  }
+  #hud-title .sub{
+    display:block; font-size:0.62rem; letter-spacing:3px; opacity:0.7; margin-top:2px;
+    font-style:italic;
+  }
+  #hud-altitude{
+    bottom:16px; left:16px; font-size:0.85rem; letter-spacing:0.5px; min-width:150px;
+  }
+  #hud-altitude .label{ font-size:0.6rem; letter-spacing:2px; opacity:0.65; display:block; }
+  #btn-fullscreen{
+    float:right; cursor:pointer; font-size:1.05rem; line-height:1; padding:2px 4px;
+    opacity:0.6; user-select:none; -webkit-user-select:none;
+  }
+  #btn-fullscreen:hover{ opacity:1; }
+  /* hide the button when already chromeless: standalone PWA launch, or no fullscreen API (iPhone Safari) */
+  @media (display-mode: standalone), (display-mode: fullscreen){ #btn-fullscreen{ display:none; } }
+  #hud-hint{
+    bottom:16px; right:16px; font-size:0.68rem; line-height:1.55; text-align:right;
+    max-width:250px;
+  }
+  #hud-ghost{
+    top:78px; left:50%; transform:translateX(-50%);
+    font-size:0.7rem; letter-spacing:2.5px; padding:0.3em 1em;
+    opacity:0; transition:opacity .4s ease;
+  }
+  #hud-ghost.on{ opacity:0.95; }
+  #hud-seed{
+    top:16px; left:16px; font-size:0.62rem; letter-spacing:1.5px; opacity:0.8;
+    padding:0.35em 0.7em;
+  }
+  /* §11 LABEL GRAMMAR (label & inspect overhaul, s42): world labels are
+     floating HALOED TEXT — no chips, no plates, no boxes (Google Maps is
+     the explicit gold standard). One base class + a category grammar so a
+     reader never confuses label types at a glance:
+       .wlbl-water  — blue-toned italic serif (Yerba Buena Cove, the bay)
+       .wlbl-region — large, very faint caps that own the high altitudes
+       .wlbl-zone   — letter-spaced caps, softer sepia (HAPPY VALLEY)
+       .wlbl-loc    — ink text + small period glyph, parchment halo, close zoom
+       .wlbl-ship   — light compact NAME · date
+       .wlbl-moment — documented-moment beats (Brannan's gold shout)
+     Streets keep .street-label below (already plate-free haloed text).
+     Halos are 4-way text-shadow strokes + a soft glow, picked per category
+     (dark halo under light text, parchment halo under ink text) so every
+     category survives ANY background, day or night (QA-GATE #4). */
+  .wlbl{
+    position:absolute; transform:translate(-50%,-50%);
+    /* s41 MOBILE-PAN FIX carried forward: labels are map surface — a drag
+       that STARTS on one must still pan (window-level nav handlers);
+       touch-action:none keeps iOS from pointercancel'ing such drags. */
+    touch-action:none; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none;
+    font-family:'Fraunces', Georgia, serif; white-space:nowrap;
+    opacity:0; transition:opacity .35s ease; pointer-events:none;
+    will-change:opacity;
+  }
+  .wlbl-water{
+    color:#9fc6dd; font-style:italic; font-size:0.76rem; letter-spacing:1px;
+    text-shadow:-1px -1px 0 rgba(14,17,20,0.8), 1px -1px 0 rgba(14,17,20,0.8),
+      -1px 1px 0 rgba(14,17,20,0.8), 1px 1px 0 rgba(14,17,20,0.8), 0 0 7px rgba(10,14,18,0.75);
+  }
+  .wlbl-region{
+    color:rgba(240,229,203,0.55); font-size:1.05rem; letter-spacing:8px; font-weight:400;
+    text-shadow:0 1px 3px rgba(16,13,8,0.75), 0 -1px 3px rgba(16,13,8,0.75), 0 0 9px rgba(16,13,8,0.6);
+  }
+  .wlbl-zone{
+    color:#d9c191; font-size:0.64rem; letter-spacing:4.5px; font-weight:600;
+    text-shadow:-1px -1px 0 rgba(24,18,10,0.85), 1px -1px 0 rgba(24,18,10,0.85),
+      -1px 1px 0 rgba(24,18,10,0.85), 1px 1px 0 rgba(24,18,10,0.85), 0 0 6px rgba(24,18,10,0.65);
+  }
+  .wlbl-route{ /* far-view track names (Mission road, El Camino Real): street voice, not region caps */
+    color:#efe2c4; font-size:0.62rem; font-weight:600; letter-spacing:2.5px;
+    text-shadow:0 1px 2px rgba(0,0,0,0.85), 0 0 6px rgba(0,0,0,0.55);
+  }
+  .wlbl-loc, .wlbl-ship, .wlbl-moment{ pointer-events:auto; cursor:pointer; }
+  .wlbl-loc:hover, .wlbl-ship:hover, .wlbl-moment:hover{ text-decoration:underline dotted; }
+  .wlbl-loc{
+    color:#2b1d0e; font-size:0.6rem; letter-spacing:1.6px; font-weight:600;
+    text-shadow:-1px -1px 0 rgba(241,230,201,0.92), 1px -1px 0 rgba(241,230,201,0.92),
+      -1px 1px 0 rgba(241,230,201,0.92), 1px 1px 0 rgba(241,230,201,0.92), 0 0 5px rgba(241,230,201,0.85);
+  }
+  .wlbl-loc .wg{
+    display:inline-block; width:12px; height:12px; vertical-align:-2px; margin-right:4px;
+    filter:drop-shadow(0 0 1px rgba(241,230,201,0.95)) drop-shadow(0 0 1.5px rgba(241,230,201,0.85));
+  }
+  .wlbl-loc .wg svg{ width:100%; height:100%; display:block; }
+  .wlbl-ship{
+    color:#eee1bd; font-size:0.56rem; font-weight:600; letter-spacing:1.4px;
+    text-shadow:-1px -1px 0 rgba(14,16,19,0.9), 1px -1px 0 rgba(14,16,19,0.9),
+      -1px 1px 0 rgba(14,16,19,0.9), 1px 1px 0 rgba(14,16,19,0.9),
+      0 1px 2px rgba(0,0,0,0.8), 0 0 6px rgba(10,13,17,0.7);
+  }
+  .wlbl-moment{
+    color:#f2e2b1; font-size:0.62rem; letter-spacing:1.2px; font-weight:600;
+    text-shadow:-1px -1px 0 rgba(22,16,9,0.9), 1px -1px 0 rgba(22,16,9,0.9),
+      -1px 1px 0 rgba(22,16,9,0.9), 1px 1px 0 rgba(22,16,9,0.9), 0 0 7px rgba(22,16,9,0.7);
+  }
+  /* mid-zoom (250-900m) business glyph tier — REBUILT s42 per §11: the
+     parchment roundel PLATE is gone; the engraved ink glyph now floats
+     directly on the ground with a parchment drop-shadow halo, same
+     ink+parchment-halo voice as .wlbl-loc (QA-GATE #3 findability kept). */
+  .biz-glyph{
+    position:absolute; transform:translate(-50%,-50%);
+    width:17px; height:17px;
+    filter:drop-shadow(0 0 1px rgba(241,230,201,0.95)) drop-shadow(0 0 1.5px rgba(241,230,201,0.9));
+    opacity:0; transition:opacity .35s ease;
+    pointer-events:none;
+  }
+  .biz-glyph svg{ width:100%; height:100%; display:block; }
+  /* STREET NAME LABELS (rebuilt 2026-07-10 as a DOM/CSS billboard pool —
+     see updateStreetLabels()): constant screen-space size at every
+     altitude, unlike the ground-decal plane it replaces. No chip/background
+     — reads as ink lying on the street itself, via a dark drop-shadow for
+     contrast against both the (now-lighter) daytime dirt tone and the
+     near-black night terrain. */
+  .street-label{
+    position:absolute; transform:translate(-50%,-50%);
+    color:#efe2c4; font-family:'Fraunces', Georgia, serif;
+    font-size:0.62rem; font-weight:600; letter-spacing:2.5px; white-space:nowrap;
+    /* s42: full 4-way stroke halo (was a soft drop-shadow only) — the name
+       must survive pale daytime sand as well as near-black night ground */
+    text-shadow:-1px -1px 0 rgba(20,15,8,0.8), 1px -1px 0 rgba(20,15,8,0.8),
+      -1px 1px 0 rgba(20,15,8,0.8), 1px 1px 0 rgba(20,15,8,0.8),
+      0 1px 2px rgba(0,0,0,0.85), 0 0 6px rgba(0,0,0,0.55);
+    opacity:0; transition:opacity .2s ease; /* fade matches the label engine's ~200ms show/hide band (see updateStreetLabels) */
+    will-change:transform,opacity;
+    pointer-events:none;
+  }
+  #hud-loading{
+    position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+    background:#101418; color:#e8dcb8; font-family:'Fraunces',Georgia,serif;
+    font-size:1rem; letter-spacing:3px; z-index:10;
+  }
+  #hud-clock{
+    top:16px; right:16px; text-align:right; min-width:190px;
+    font-size:0.85rem; letter-spacing:0.5px;
+  }
+  #hud-clock .date{ font-weight:600; }
+  #hud-clock .speed{
+    display:block; font-size:0.6rem; letter-spacing:2px; opacity:0.7; margin-top:2px;
+  }
+  #hud-ticker{
+    left:50%; bottom:16px; transform:translateX(-50%);
+    max-width:min(74vw,780px); min-width:280px;
+    font-size:0.72rem; letter-spacing:0.4px; text-align:center;
+    padding:0.45em 1.4em; opacity:0; transition:opacity .6s ease;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  #hud-ticker.on{ opacity:0.95; }
+  #hud-ticker .tdate{ font-weight:600; letter-spacing:1px; margin-right:0.6em; }
+  #hud-ticker.clickable{ pointer-events:auto; cursor:pointer; }
+
+  /* ---- PHASE 3: THE PAPER ---- */
+  #paper-toggle{
+    top:78px; right:16px; pointer-events:auto; cursor:pointer;
+    font-size:0.66rem; letter-spacing:2px; text-align:right; user-select:none;
+  }
+  #paper-toggle .pt-masthead{ display:block; font-family:'Playfair Display',Georgia,serif; font-weight:900; font-size:0.8rem; letter-spacing:1px; }
+  #paper-toggle .pt-hint{ display:block; opacity:0.6; font-size:0.55rem; margin-top:2px; }
+
+  #paper-pane{
+    position:fixed; top:0; right:0; bottom:0; width:min(430px,94vw);
+    background:linear-gradient(180deg, rgba(241,230,201,0.97), rgba(228,214,178,0.97));
+    border-left:2px solid var(--ink);
+    box-shadow:-10px 0 28px rgba(0,0,0,0.45);
+    transform:translateX(105%); transition:transform 0.4s ease;
+    z-index:8; pointer-events:auto; display:flex; flex-direction:column;
+    font-family:'Fraunces', Georgia, serif; color:var(--ink);
+  }
+  #paper-pane.open{ transform:translateX(0); }
+  /* period rag-paper tint: a few faint foxing blooms + a hair of fractal
+     grain, multiplied over the parchment gradient. z-index:-1 keeps it
+     under the pane's own normal-flow content (see stacking note) while
+     staying above the pane's ancestor. Purely decorative, no pointer events. */
+  #paper-pane::before{
+    content:""; position:absolute; inset:0; z-index:-1; pointer-events:none;
+    background:
+      radial-gradient(circle at 14% 18%, rgba(110,80,35,0.06), transparent 7%),
+      radial-gradient(circle at 82% 9%, rgba(110,80,35,0.05), transparent 6%),
+      radial-gradient(circle at 42% 62%, rgba(110,80,35,0.055), transparent 8%),
+      radial-gradient(circle at 88% 78%, rgba(110,80,35,0.06), transparent 7%),
+      radial-gradient(circle at 22% 92%, rgba(110,80,35,0.05), transparent 6%),
+      url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)' opacity='0.05'/></svg>");
+    mix-blend-mode:multiply;
+  }
+  .pp-head{ position:relative; padding:16px 18px 14px; text-align:center; border-bottom:2px solid var(--ink); }
+  .pp-head::after{
+    content:""; position:absolute; left:22px; right:22px; bottom:-5px; height:1px;
+    background:rgba(43,29,14,0.45);
+  }
+  .pp-head h2{
+    margin:0; font-size:1.55rem; letter-spacing:1.5px; font-weight:900;
+    font-family:'Playfair Display', Georgia, serif; text-transform:uppercase;
+  }
+  .pp-head .pp-issue-date{ display:block; font-size:0.66rem; letter-spacing:2px; opacity:0.75; margin-top:6px; font-variant:small-caps; }
+  .pp-close{
+    position:absolute; top:10px; right:12px; cursor:pointer; font-size:1.1rem;
+    line-height:1; opacity:0.6; user-select:none;
+  }
+  .pp-close:hover{ opacity:1; }
+  .pp-tabs{ display:flex; border-bottom:1px solid rgba(43,29,14,0.35); flex:0 0 auto; }
+  .pp-tab{
+    flex:1; padding:9px 4px; background:none; border:none; cursor:pointer;
+    font-family:'Fraunces', Georgia, serif; letter-spacing:2.5px; font-size:0.62rem;
+    font-variant:small-caps; color:var(--ink); opacity:0.55; border-bottom:3px solid transparent;
+  }
+  .pp-tab.active{ opacity:1; border-bottom-color:var(--ink); }
+  .pp-body{ flex:1 1 auto; overflow-y:auto; padding:14px 18px 24px; position:relative; }
+  .pp-noissue, .pp-suspended{
+    margin-top:18%; text-align:center; font-style:italic; font-size:0.95rem;
+    line-height:1.6; padding:0 8px;
+  }
+  .pp-suspended{
+    background:#1b1712; color:#d8c79a; margin:-14px -18px 0; padding:18% 24px;
+    min-height:100%; box-sizing:border-box;
+  }
+  .pp-suspended .pp-s-line{ display:block; letter-spacing:1px; }
+  .pp-suspended .pp-s-sub{ display:block; font-size:0.6rem; letter-spacing:2px; opacity:0.65; margin-top:14px; font-style:normal; }
+  .pp-nopaper-since{ text-align:center; font-size:0.65rem; letter-spacing:1.5px; opacity:0.65; margin-bottom:12px; }
+
+  .bs-columns{ column-count:2; column-gap:1.4em; column-rule:1px solid rgba(43,29,14,0.25); }
+  .bs-item{ break-inside:avoid; margin-bottom:1em; position:relative; }
+  /* printer's ornament in place of a box rule between broadsheet items */
+  .bs-item + .bs-item{ margin-top:0.3em; padding-top:1.1em; }
+  .bs-item + .bs-item::before{
+    content:"❧"; position:absolute; top:-0.15em; left:0; width:100%; text-align:center;
+    font-size:0.72rem; opacity:0.45; line-height:1;
+  }
+  .feed-item{
+    break-inside:avoid; margin-bottom:14px; padding:10px 2px 12px; background:none;
+    border:none; border-top:1px solid rgba(43,29,14,0.3);
+  }
+  .feed-item:first-child{ border-top:none; padding-top:0; }
+  .fi-chip{
+    display:block; font-size:0.58rem; letter-spacing:2px; font-weight:600;
+    font-variant:small-caps; opacity:0.72; margin-bottom:6px; border:none; padding:0;
+  }
+  .fi-chip.ad{ font-style:italic; opacity:0.9; }
+  .fi-headline{
+    font-weight:700; margin:0 0 4px; font-size:0.92rem; line-height:1.3;
+    font-variant:small-caps; letter-spacing:0.3px;
+  }
+  .fi-headline.flyable{ cursor:pointer; }
+  .fi-headline.flyable::after{ content:" ☞"; opacity:0.5; font-size:0.85em; }
+  .fi-headline.flyable:hover{ text-decoration:underline; text-decoration-style:dotted; }
+  .fi-text{ font-size:0.8rem; line-height:1.44; margin:0; text-align:justify; hyphens:auto; -webkit-hyphens:auto; }
+  .bs-item:first-child .fi-text::first-letter, .feed-item:first-child .fi-text::first-letter{
+    float:left; font-family:'Playfair Display',Georgia,serif; font-weight:900;
+    font-size:2.5em; line-height:0.82; padding:0.03em 0.07em 0 0;
+  }
+  .fi-receipt{ display:inline-block; margin-top:6px; font-size:0.6rem; letter-spacing:0.8px; opacity:0.7; color:var(--ink); }
+  .fi-receipt:hover{ opacity:1; }
+  .item-flash{ animation:ppFlash 1.4s ease 0s 2; }
+  @keyframes ppFlash{ 0%,100%{ background:rgba(255,255,255,0.18);} 50%{ background:rgba(200,150,60,0.45);} }
+  .pp-markets{
+    width:100%; margin-top:16px; border-collapse:collapse; break-inside:avoid;
+    font-size:0.68rem; border-top:3px double rgba(43,29,14,0.6); border-bottom:3px double rgba(43,29,14,0.6);
+  }
+  .pp-markets caption{ text-align:left; font-size:0.62rem; letter-spacing:2.5px; font-variant:small-caps; opacity:0.75; padding:6px 0 4px; }
+  .pp-markets th{
+    text-align:left; font-size:0.56rem; letter-spacing:1.5px; font-style:italic; font-weight:400;
+    opacity:0.65; padding:3px 6px 3px 0; border-bottom:1px solid rgba(43,29,14,0.3);
+  }
+  .pp-markets th:last-child{ text-align:right; }
+  .pp-markets td{ padding:2px 6px 2px 0; border-top:1px solid rgba(43,29,14,0.12); }
+  .pp-markets td:last-child{ text-align:right; white-space:nowrap; }
+
+  #horizon-ring{
+    position:fixed; top:0; left:0; right:0; z-index:6; pointer-events:none;
+    display:flex; justify-content:center; align-items:stretch; flex-wrap:wrap;
+    padding:10px 14px 8px; text-align:center;
+    background:linear-gradient(180deg, rgba(20,16,10,0.92), rgba(20,16,10,0.0));
+    color:#e9dcb4; font-family:'Fraunces', Georgia, serif;
+    opacity:0; transition:opacity 0.6s ease;
+  }
+  #horizon-ring.on{ opacity:0.97; }
+  #horizon-ring .hr-title{
+    flex:1 0 100%; font-size:0.62rem; letter-spacing:4px; opacity:0.75; margin-bottom:8px;
+  }
+  #horizon-ring .hr-item{
+    padding:0 16px; max-width:220px; font-size:0.66rem; line-height:1.35;
+    border-left:1px solid rgba(233,220,180,0.3);
+  }
+  #horizon-ring .hr-item:first-of-type{ border-left:none; }
+  #horizon-ring .hr-pos{ display:block; font-weight:600; letter-spacing:1.5px; }
+  #horizon-ring .hr-stale{ display:block; font-size:0.56rem; opacity:0.65; letter-spacing:1px; margin:1px 0 3px; }
+  #horizon-ring .hr-headline{ opacity:0.9; }
+
+  /* ---- INSPECT SIDE PANEL (§11 INSPECT LAW, s42): ONE persistent
+     edge-docked surface replacing the ship-inspector / building-inspector /
+     person-inspector popup trio. Right-docked on desktop; bottom sheet on
+     narrow viewports (see the max-width media block below). UPDATES IN
+     PLACE on every tap/click select. Newsprint-styled — same ink/parchment
+     voice as the paper pane. ---- */
+  #inspect-panel{
+    position:fixed; top:148px; right:0; width:272px; z-index:10; /* above the scrubber ribbon (9) — the bottom sheet must never render under it */
+    max-height:calc(100vh - 246px); overflow-y:auto; box-sizing:border-box;
+    background:linear-gradient(180deg, rgba(241,230,201,0.96), rgba(230,216,180,0.96));
+    border:1px solid rgba(43,29,14,0.5); border-right:none; border-left:3px double rgba(43,29,14,0.65);
+    box-shadow:-6px 2px 18px rgba(0,0,0,0.4);
+    font-family:'Fraunces', Georgia, serif; color:var(--ink);
+    font-size:0.72rem; line-height:1.45; padding:10px 14px 12px;
+    pointer-events:auto; display:none;
+  }
+  #inspect-panel.on{ display:block; }
+  #inspect-panel .ip-close{ position:absolute; top:6px; right:10px; cursor:pointer; opacity:0.6; font-size:1.1rem; line-height:1; }
+  #inspect-panel .ip-close:hover{ opacity:1; }
+  #inspect-panel .ip-kind{
+    display:inline-block; font-size:0.55rem; letter-spacing:2.2px; padding:2px 7px 1px;
+    border:1px solid var(--ink); opacity:0.85; margin-bottom:6px;
+  }
+  #inspect-panel .ip-kind.documented{ background:var(--ink); color:var(--parchment); opacity:1; }
+  #inspect-panel h3{
+    margin:0 14px 4px 0; font-size:0.95rem; letter-spacing:0.5px;
+    border-bottom:1px solid rgba(43,29,14,0.45); padding-bottom:5px; font-weight:600;
+  }
+  #inspect-panel .ip-label{ display:block; font-size:0.55rem; letter-spacing:1.5px; opacity:0.6; margin-top:7px; }
+  #inspect-panel .ip-field{ display:block; font-size:0.62rem; letter-spacing:0.6px; opacity:0.85; line-height:1.45; }
+  #inspect-panel a{ color:var(--ink); }
+  #inspect-panel .ip-fly, #inspect-panel .ip-paper{ text-decoration:underline; cursor:pointer; }
+  #inspect-panel .ip-now{ font-style:italic; opacity:0.95; }
+  #inspect-panel .ip-hint{ display:block; margin-top:8px; font-size:0.56rem; opacity:0.55; font-style:italic; }
+
+  #hud-provenance{
+    top:78px; left:16px; font-size:0.6rem; letter-spacing:2.2px; padding:0.32em 0.9em;
+    opacity:0; transition:opacity .3s ease; pointer-events:none;
+  }
+  #hud-provenance.on{ opacity:0.95; }
+
+  /* ---- PHASE 5: THE FATES ---- */
+  #beat-card{
+    position:fixed; left:50%; bottom:64px; transform:translateX(-50%) translateY(14px);
+    max-width:min(640px,88vw); text-align:center; z-index:7;
+    background:linear-gradient(180deg, rgba(241,230,201,0.95), rgba(228,214,178,0.95));
+    border:1px solid rgba(43,29,14,0.55); border-left:4px solid var(--ink);
+    box-shadow:0 3px 18px rgba(0,0,0,0.5); padding:10px 24px 9px;
+    font-family:'Fraunces',Georgia,serif; color:var(--ink);
+    opacity:0; transition:opacity .5s ease, transform .5s ease; pointer-events:none;
+  }
+  #beat-card.on{ opacity:0.97; transform:translateX(-50%) translateY(0); pointer-events:auto; }
+  #beat-card .bc-class{ display:block; font-size:0.56rem; letter-spacing:3.5px; opacity:0.7; }
+  #beat-card .bc-quote{ display:block; font-size:0.95rem; font-weight:600; line-height:1.35; margin:3px 0 2px; }
+  #beat-card .bc-date{ display:inline-block; font-size:0.6rem; letter-spacing:2px; opacity:0.75; margin-right:1.1em; }
+  #beat-card a{ font-size:0.6rem; color:var(--ink); letter-spacing:0.8px; }
+
+  /* ---- THE SCRUBBER — bottom timeline ribbon, above the ticker.
+     jul 1846 -> dec 1849, drag/click to jump, diamond notches at the
+     top-priority spine beats, [ / ] step a month, collapsible tab. ---- */
+  #hud-scrubber{
+    position:fixed; left:50%; bottom:56px; transform:translateX(-50%);
+    width:min(78vw,860px); z-index:9;
+    /* s41 MOBILE-PAN FIX: this ribbon spans ~78vw across the bottom-center —
+       exactly where a thumb starts an upward pan. The container no longer
+       eats pointer events; only the genuinely interactive pieces (tab,
+       track/handle/notches) do. Drags starting on the ribbon's dead space
+       now pan the map. touch-action:none on the track keeps iOS from
+       cancelling handle scrubs (its drag is pointermove-based). */
+    pointer-events:none;
+    padding:7px 18px 10px; user-select:none;
+    transition:opacity .3s ease, transform .3s ease;
+  }
+  #hud-scrubber .scr-tab, #hud-scrubber .scr-track{
+    pointer-events:auto; touch-action:none;
+    -webkit-user-select:none; user-select:none; -webkit-touch-callout:none;
+  }
+  #hud-scrubber.collapsed .scr-body{ display:none; }
+  #hud-scrubber .scr-tab{
+    position:absolute; left:50%; top:-13px; transform:translateX(-50%);
+    background:rgba(241,230,201,0.92); border:1px solid rgba(43,29,14,0.4); border-bottom:none;
+    font-size:0.6rem; letter-spacing:2px; padding:2px 10px 1px; cursor:pointer; opacity:0.85;
+  }
+  #hud-scrubber .scr-tab:hover{ opacity:1; }
+  #hud-scrubber .scr-years{ position:relative; height:12px; font-size:0.56rem; letter-spacing:1px; opacity:0.75; }
+  #hud-scrubber .scr-year{ position:absolute; transform:translateX(-50%); white-space:nowrap; }
+  #hud-scrubber .scr-track{
+    position:relative; height:20px; margin-top:2px;
+    border-top:1px solid rgba(43,29,14,0.5); cursor:pointer;
+  }
+  #hud-scrubber .scr-tick{ position:absolute; top:0; width:1px; height:5px; background:rgba(43,29,14,0.35); }
+  #hud-scrubber .scr-tick.year{ height:9px; background:rgba(43,29,14,0.65); }
+  #hud-scrubber .scr-notch{
+    position:absolute; top:2px; width:7px; height:7px; transform:translateX(-50%) rotate(45deg);
+    background:var(--ink); opacity:0.75; cursor:pointer;
+  }
+  #hud-scrubber .scr-notch:hover{ opacity:1; box-shadow:0 0 0 3px rgba(43,29,14,0.18); }
+  #hud-scrubber .scr-handle{
+    position:absolute; top:-4px; width:3px; height:24px; background:var(--ink);
+    transform:translateX(-50%); cursor:ew-resize; box-shadow:0 0 0 5px rgba(241,230,201,0.01);
+  }
+  #hud-scrubber .scr-handle::before{
+    content:""; position:absolute; left:50%; top:-4px; transform:translateX(-50%);
+    width:9px; height:9px; border-radius:50%; background:var(--ink);
+  }
+  #hud-scrubber .scr-chip{
+    position:absolute; bottom:100%; margin-bottom:6px; left:50%; transform:translateX(-50%);
+    background:rgba(20,16,10,0.92); color:#e9dcb4; font-size:0.62rem; letter-spacing:0.8px;
+    padding:4px 10px; white-space:nowrap; pointer-events:none; opacity:0; transition:opacity .12s ease;
+    border:1px solid rgba(233,220,180,0.35);
+  }
+  #hud-scrubber .scr-chip.on{ opacity:0.97; }
+  #hud-scrubber .scr-chip .sc-head{ display:block; font-weight:600; font-size:0.66rem; margin-top:1px; }
+  #seed-reshuffle{ pointer-events:auto; cursor:pointer; margin-left:0.5em; opacity:0.75; }
+  #seed-reshuffle:hover{ opacity:1; }
+
+  /* Watch mode (V): everything hides but the date, the beat card, the ticker
+     — and (s59, user directive) the INSPECT PANEL, which stays visible and
+     auto-populated with whoever is being followed (director person-beats
+     open it themselves; manual selections keep it too). */
+  body.watch-mode #hud-title, body.watch-mode #hud-seed, body.watch-mode #hud-altitude,
+  body.watch-mode #hud-hint, body.watch-mode #hud-hint-toggle, body.watch-mode #paper-toggle,
+  body.watch-mode #hud-ghost, body.watch-mode #hud-provenance,
+  body.watch-mode #horizon-ring{ display:none !important; }
+  /* s44: quick-cut fade between director beats */
+  #director-fade{
+    position:fixed; inset:0; background:#04050a; opacity:0;
+    pointer-events:none; z-index:30; transition:opacity .26s ease;
+  }
+  #director-fade.on{ opacity:1; }
+
+  /* ---- touch/mobile ---- */
+  #hud-hint-toggle{
+    display:none; bottom:16px; right:16px; pointer-events:auto; cursor:pointer;
+    width:40px; height:40px; border-radius:50%; align-items:center; justify-content:center;
+    font-size:0.95rem; padding:0;
+  }
+  body.touch-device #hud-hint{ display:none; }
+  body.touch-device #hud-hint.show{ display:block; bottom:62px; max-width:210px; }
+  body.touch-device #hud-hint-toggle{ display:flex; }
+
+  /* Enlarge tiny glyph tap targets to >=40px on touch without shifting their
+     visual position: equal padding + negative margin grows the hit box
+     outward while the glyph itself stays put (absolute-positioned parents
+     unaffected since offset is computed from the un-padded edge). */
+  body.touch-device .ip-close, body.touch-device .pp-close{
+    padding:13px; margin:-13px;
+  }
+  body.touch-device #seed-reshuffle{ padding:11px; margin:-11px; display:inline-block; }
+  body.touch-device .scr-tab{ padding:10px 14px 9px; }
+  body.touch-device .wlbl-ship, body.touch-device .wlbl-loc, body.touch-device .wlbl-moment{
+    padding:9px 12px;
+  }
+
+  /* ---- cinematic tilt toggle (desktop-visible standalone button; on
+     narrow screens it moves into the ☰ menu sheet instead — see below) ---- */
+  #hud-tilt-toggle{
+    bottom:80px; left:16px; pointer-events:auto; cursor:pointer;
+    width:40px; height:40px; border-radius:50%; display:flex;
+    align-items:center; justify-content:center; font-size:1.05rem; padding:0;
+    user-select:none; transition:background .2s ease, color .2s ease;
+  }
+  #hud-tilt-toggle.on{ background:rgba(43,29,14,0.88); color:var(--parchment); }
+
+  /* ---- ☰ mobile chrome menu: everything that isn't one of the four
+     always-on mobile elements (clock chip / collapsed timeline tab / ticker
+     / this button) lives behind here instead of tiling the viewport ---- */
+  #hud-menu-toggle{
+    display:none; bottom:16px; left:16px; pointer-events:auto; cursor:pointer;
+    width:44px; height:44px; border-radius:50%; align-items:center; justify-content:center;
+    font-size:1.15rem; padding:0; z-index:13; /* s54: >=44px thumb target */
+  }
+  #hud-menu-sheet{
+    display:none; position:fixed; bottom:64px; left:16px; width:210px; z-index:13;
+    background:rgba(241,230,201,0.97); border:1px solid rgba(43,29,14,0.4);
+    box-shadow:0 2px 16px rgba(0,0,0,0.45); font-family:'Fraunces',Georgia,serif;
+    color:var(--ink); pointer-events:auto;
+    max-height:calc(100vh - 84px); overflow-y:auto; /* s54: the grown row list must scroll, not overflow, in landscape */
+    overscroll-behavior:contain;
+  }
+  #hud-menu-sheet.open{ display:block; }
+  .hm-head{
+    display:flex; justify-content:space-between; align-items:center; padding:8px 12px;
+    font-size:0.62rem; letter-spacing:2.5px; border-bottom:1px solid rgba(43,29,14,0.3);
+    font-variant:small-caps; opacity:0.8;
+  }
+  .hm-close{ cursor:pointer; font-size:1.05rem; opacity:0.65; padding:4px 6px; margin:-4px -6px; }
+  .hm-row{
+    padding:11px 12px; font-size:0.72rem; letter-spacing:0.4px; cursor:pointer;
+    border-top:1px solid rgba(43,29,14,0.15); display:flex; justify-content:space-between; align-items:center;
+  }
+  .hm-row:first-of-type{ border-top:none; }
+  .hm-row::after{ content:"show"; font-size:0.55rem; opacity:0.5; letter-spacing:1.5px; font-variant:small-caps; }
+  .hm-row.active::after{ content:"hide"; opacity:0.85; }
+  /* s54: MODE rows (watch/paper/ghost/documented/tilt) read on/off, not
+     show/hide; the sunrise-skip row is a one-shot action. */
+  .hm-row.hm-mode::after{ content:"off"; }
+  .hm-row.hm-mode.active::after{ content:"on"; opacity:0.85; }
+  .hm-row.hm-action::after{ content:"\2192"; opacity:0.55; }
+  .hm-row.hm-slider{ cursor:default; }
+  .hm-row.hm-slider::after{ content:none; }
+  .hm-row.hm-slider input[type=range]{
+    width:128px; margin-left:10px; accent-color:var(--ink);
+    touch-action:none; /* thumb drags must scrub the slider, never pan the map */
+  }
+
+  /* ---- s54 TOUCH CONTROL SURFACE ---- */
+  /* Speed pill — THE speed indicator+control on touch devices (grounding.md
+     §10 tiers: pause / LIVE 1:1 / 2× follow / day / week / month per sec).
+     Hidden on fine-pointer desktops, where the keyboard keys + the HUD
+     clock's speed line already serve. Genuine chrome: receives taps, never
+     pans (UI_STEAL_SELECTOR). */
+  #speed-pill{
+    position:fixed; left:50%; bottom:14px; transform:translateX(-50%);
+    display:none; z-index:12; pointer-events:auto; cursor:pointer;
+    background:rgba(241,230,201,0.92); border:1px solid rgba(43,29,14,0.45);
+    box-shadow:0 2px 12px rgba(0,0,0,0.35);
+    font-family:'Fraunces',Georgia,serif; color:var(--ink);
+    user-select:none; -webkit-user-select:none; -webkit-touch-callout:none;
+    transition:opacity .5s ease;
+  }
+  #speed-pill .sp-seg{
+    min-width:42px; min-height:44px; box-sizing:border-box; padding:0 7px;
+    display:flex; align-items:center; justify-content:center;
+    font-size:0.6rem; letter-spacing:1.2px; font-variant:small-caps;
+    border-left:1px solid rgba(43,29,14,0.25);
+  }
+  #speed-pill .sp-seg:first-child{ border-left:none; }
+  #speed-pill .sp-seg.active{ background:var(--ink); color:var(--parchment); }
+  @media (pointer:coarse){
+    #speed-pill{ display:flex; }
+    #hud-clock .speed{ display:none; } /* the pill replaces the HUD speed text on touch */
+    #hud-ticker{ bottom:72px; }        /* clear the pill's bottom band */
+    #hud-scrubber{ bottom:112px; }
+    #hud-menu-toggle{ display:flex; }  /* the modes menu is reachable on every touch device */
+  }
+  /* follow-release chip (s54): shown inside the inspect panel while a
+     person/documented figure is followed — the touch path for Esc. */
+  #follow-release{
+    display:none; margin:6px 0 4px; min-height:44px; box-sizing:border-box;
+    align-items:center; justify-content:center; text-align:center;
+    border:1px solid rgba(43,29,14,0.6); background:rgba(43,29,14,0.07);
+    font-size:0.62rem; letter-spacing:2.5px; font-variant:small-caps; cursor:pointer;
+  }
+  #follow-release.on{ display:flex; }
+  #follow-release:hover{ background:rgba(43,29,14,0.14); }
+  /* idle chrome fade (s54): the touch controls dim to 60% after 4s of no
+     input, restore to full on any interaction (see pokeChrome()). */
+  #hud-menu-toggle{ transition:opacity .5s ease; }
+  body.chrome-idle #speed-pill, body.chrome-idle #hud-menu-toggle{ opacity:0.6; }
+
+  @media (max-width:520px), (pointer:coarse) and (max-height:440px){
+    /* MOBILE CHROME OVERHAUL (usability fix, 2026-07-09): the map is the
+       product — chrome must never cover more than a sliver of a phone
+       screen. Default visible set is now exactly FOUR elements: the
+       compact single-line clock chip (top), the collapsed timeline tab
+       and the ticker (bottom edge, non-overlapping), and the ☰ button
+       (bottom-left). Everything else (title, seed, paper masthead,
+       altitude readout, provenance flag, the controls hint, the tilt
+       toggle) is hidden by default and only reachable via the ☰ sheet,
+       which toggles a per-element .menu-forced class. The title still
+       gets its traditional few seconds of unobstructed branding on load
+       (opacity animation below) before folding away like the rest.
+       s54: the block now ALSO applies to phones in LANDSCAPE (pointer:
+       coarse + short viewport) — previously landscape got the full
+       desktop chrome and the masthead/date/hint panels collided. */
+    #hud-title, #hud-seed, #paper-toggle, #hud-altitude, #hud-provenance,
+    #hud-hint, #hud-hint-toggle, #hud-tilt-toggle{ display:none; }
+    #hud-title{
+      display:block; padding:0.28em 0.8em; max-width:70vw; top:8px;
+      animation: hudTitleAutoHide 0.6s ease 4.4s forwards;
+    }
+    #hud-title h1{ font-size:0.8rem; letter-spacing:1px; }
+    #hud-title .sub{ font-size:0.44rem; letter-spacing:1px; margin-top:1px; }
+    #hud-title.menu-forced{ display:block; animation:none; opacity:1; visibility:visible; pointer-events:auto; }
+    #hud-seed.menu-forced{ display:block; top:8px; right:16px; left:auto; font-size:0.55rem; padding:0.25em 0.55em; }
+    #hud-clock{ top:8px; left:16px; right:auto; min-width:0; font-size:0.66rem; text-align:left; padding:0.35em 0.85em;
+      max-width:calc(100vw - 32px); box-sizing:border-box; } /* s54: the date chip must never clip off-screen */
+    #hud-clock .date, #hud-clock .speed{ display:inline; }
+    #hud-clock .speed{ margin-left:0.6em; opacity:0.7; }
+    /* s54: on touch phones the pill IS the speed indicator — the chip keeps
+       just the date (body prefix out-ranks the display:inline above; narrow
+       FINE-pointer windows keep the text since they have no pill). */
+    body.touch-device #hud-clock .speed{ display:none; }
+    #hud-ghost{ top:56px; left:50%; }
+    #paper-toggle.menu-forced{ display:block; top:100px; right:16px; }
+    #hud-provenance.menu-forced{ display:block; top:56px; left:16px; max-width:60vw; font-size:0.55rem; letter-spacing:1px; white-space:normal; }
+    #hud-altitude.menu-forced{ display:block; min-width:0; font-size:0.7rem; bottom:150px; left:auto; right:16px; } /* s54: above the pill/ticker/scrubber stack */
+    #hud-hint.menu-forced{ display:block; bottom:150px; right:16px; max-width:min(240px,64vw); }
+    #paper-pane{ width:100vw; }
+    /* §11 inspect law: on narrow viewports the panel docks as a bottom
+       sheet instead of a right rail (thumb reach + map stays visible). */
+    #inspect-panel{
+      top:auto; right:0; left:0; bottom:0; width:auto; max-height:40vh;
+      border:none; border-top:2px solid var(--ink);
+      box-shadow:0 -6px 18px rgba(0,0,0,0.45);
+    }
+    /* s59 single-top-layer policy (watch mode on phone): while the inspect
+       bottom-sheet is open, the beat card STACKS ABOVE the sheet's reserved
+       40vh band instead of z-fighting under/over it. The sheet keeps the
+       bottom edge; the card yields upward — one owner per screen band. */
+    body.ip-open #beat-card{ bottom:calc(40vh + 14px); }
+    /* s54: on phone layouts the "?" chip folds away too — the help panel
+       lives behind the ☰ menu's Controls row instead (these selectors must
+       out-rank the body.touch-device rules above, hence the body prefix). */
+    body.touch-device #hud-hint-toggle{ display:none; }
+    body.touch-device #hud-hint.menu-forced{ display:block; bottom:150px; right:16px; max-width:min(240px,64vw); }
+    /* s54 bottom stack, thumb-first: ☰ + speed pill on the bottom edge,
+       ticker full-width above them, timeline scrubber full-width above
+       the ticker. safe-area padding keeps the pill off the iOS home bar. */
+    #hud-menu-toggle{ display:flex; left:10px; bottom:calc(10px + env(safe-area-inset-bottom, 0px)); }
+    #speed-pill{ left:auto; right:10px; transform:none; bottom:calc(10px + env(safe-area-inset-bottom, 0px)); }
+    #hud-ticker{ left:8px; right:8px; transform:none; max-width:none; min-width:0;
+      box-sizing:border-box; bottom:calc(64px + env(safe-area-inset-bottom, 0px)); }
+    #hud-scrubber{ left:8px; right:8px; width:auto; transform:none;
+      box-sizing:border-box; bottom:calc(100px + env(safe-area-inset-bottom, 0px)); }
+  }
+  @keyframes hudTitleAutoHide{ to{ opacity:0; visibility:hidden; pointer-events:none; } }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud-loading">ASSEMBLING THE PENINSULA&hellip;</div>
+<div id="hud">
+  <div class="panel" id="hud-title">
+    <h1>SAN FRANCISCO &middot; 1846</h1>
+    <span class="sub">the instant city &mdash; phase five, the fates</span>
+  </div>
+  <div class="panel" id="hud-seed">SEED <span id="seed-val">1846</span><span id="seed-reshuffle" title="new telling — same events, a new cast">&#10227;</span></div>
+  <div class="panel" id="hud-ghost">THEN / NOW &mdash; 2026 SHORELINE GHOST</div>
+  <div class="panel" id="hud-clock">
+    <span class="date" id="clock-date">&mdash;</span>
+    <span class="speed" id="clock-speed">PAUSED</span>
+  </div>
+  <div class="panel" id="hud-altitude">
+    <span class="label">ALTITUDE</span>
+    <span id="alt-val">&mdash;</span>
+    <span id="btn-fullscreen" title="full screen">&#x26F6;</span>
+  </div>
+  <div class="panel" id="hud-ticker">
+    <span class="tdate" id="ticker-date"></span><span id="ticker-text"></span>
+  </div>
+  <div class="panel" id="hud-hint">
+    drag &mdash; pan the ground &nbsp;&middot;&nbsp; right-drag &mdash; orbit<br>
+    <b>WASD</b> / arrows &mdash; fly (hold <b>Shift</b> to sprint) &nbsp;&middot;&nbsp; <b>Q</b> / <b>E</b> &mdash; rotate &nbsp;&middot;&nbsp; <b>R</b> / <b>F</b> &mdash; altitude<br>
+    scroll / pinch &mdash; zoom &nbsp;&middot;&nbsp; tap/click &mdash; inspect &nbsp;&middot;&nbsp; double-tap/dblclick &mdash; fly to &nbsp;&middot;&nbsp; <b>Esc</b> &mdash; release follow<br>
+    <b>G</b> &mdash; then/now ghost &nbsp;&middot;&nbsp; <b>T</b> &mdash; skip to next sunrise / sunset &nbsp;&middot;&nbsp; <b>P</b> &mdash; documented-only<br>
+    <b>Space</b> &mdash; pause / live (1:1) &nbsp;&middot;&nbsp; <b>1</b> &mdash; 2&times; follow &nbsp;&middot;&nbsp; <b>2 3 4</b> &mdash; day / week / month per second &nbsp;&middot;&nbsp; <b>N</b> &mdash; the paper<br>
+    <b>V</b> &mdash; watch mode (the auto-director takes the camera)
+  </div>
+
+  <div class="panel" id="paper-toggle" title="open today's paper (N)">
+    <span class="pt-masthead" id="pt-masthead-name">THE CALIFORNIAN</span>
+    <span class="pt-hint" id="pt-issue-date">no paper yet</span>
+  </div>
+
+  <div id="horizon-ring">
+    <span class="hr-title">THE WORLD AS KNOWN IN SAN FRANCISCO</span>
+    <!-- .hr-item nodes injected by updateHorizonRing() -->
+  </div>
+
+  <div class="panel" id="hud-provenance">RECORD ONLY &nbsp;&middot;&nbsp; P</div>
+  <div class="panel" id="hud-hint-toggle" title="controls">?</div>
+  <div class="panel" id="hud-tilt-toggle" title="cinematic low-angle tilt (toggle)">&#10192;</div>
+  <div class="panel" id="hud-menu-toggle" title="menu">&#9776;</div>
+  <!-- s54 speed pill: segmented time control, coarse-pointer chrome.
+       data-speed values are the SIM_SPEEDS keys; setSimSpeed() keeps the
+       active segment highlighted, so the pill IS the speed indicator. -->
+  <div id="speed-pill" title="time — pause/play / live / follow / timelapse">
+    <div class="sp-seg" data-speed="0" id="sp-pauseplay">&#9654;</div>
+    <div class="sp-seg" data-speed="live">live</div>
+    <div class="sp-seg" data-speed="x2">2&times;</div>
+    <div class="sp-seg" data-speed="day">day</div>
+    <div class="sp-seg" data-speed="week">wk</div>
+    <div class="sp-seg" data-speed="month">mo</div>
+  </div>
+</div>
+<!-- s54: the ☰ menu sheet lives at BODY level, not inside #hud — #hud is a
+     fixed-position stacking context with z-index:auto, so any z-indexed
+     body-level surface (scrubber 9, inspect panel 10) painted over the open
+     sheet no matter its own z-index. At body level its z-index:13 stacks
+     properly above both (same reasoning as the inspect panel's placement). -->
+<div id="hud-menu-sheet">
+    <div class="hm-head">MENU <span class="hm-close" id="hm-close">&times;</span></div>
+    <!-- s54 MODES: the touch path for the V / N / G / P / T keys -->
+    <div class="hm-row hm-mode" id="hm-watch">Director / watch mode</div>
+    <div class="hm-row hm-mode" id="hm-paper">The paper</div>
+    <div class="hm-row hm-mode" id="hm-ghost">Then / now ghost</div>
+    <div class="hm-row hm-mode" id="hm-provenance">Documented only</div>
+    <div class="hm-row hm-action" id="hm-skip">Skip to sunrise / sunset</div>
+    <div class="hm-row hm-mode" id="hm-tilt" data-mode="tilt">Cinematic tilt</div>
+    <div class="hm-row hm-slider" id="hm-tilt-slider">Camera tilt
+      <input type="range" id="tilt-range" min="-0.62" max="0.35" step="0.01" value="0"></div>
+    <div class="hm-row" data-target="hud-title">Title</div>
+    <div class="hm-row" data-target="hud-seed">Seed</div>
+    <div class="hm-row" data-target="paper-toggle">Today's paper</div>
+    <div class="hm-row" data-target="hud-altitude">Altitude</div>
+    <div class="hm-row" data-target="hud-provenance">Record-only flag</div>
+    <div class="hm-row" data-target="hud-hint">Controls</div>
+</div>
+
+<!-- §11 INSPECT LAW (s42): the ONE persistent inspect surface — replaces the
+     ship-inspector / building-inspector / person-inspector popups. Lives at
+     body level (NOT inside #hud, whose fixed-position stacking context would
+     pin it under the scrubber ribbon on the narrow-viewport bottom sheet). -->
+<div id="inspect-panel">
+  <span class="ip-close" id="ip-close">&times;</span>
+  <span class="ip-kind" id="ip-kind">&mdash;</span>
+  <h3 id="ip-name">&mdash;</h3>
+  <!-- s54: touch path for Esc — visible only while following a person -->
+  <div id="follow-release">&#10005;&nbsp; release follow</div>
+  <div id="ip-body"></div>
+</div>
+
+<div class="panel" id="hud-scrubber">
+  <div class="scr-tab" id="scr-tab" title="collapse/expand timeline">&#9600; TIMELINE</div>
+  <div class="scr-body">
+    <div class="scr-years" id="scr-years"></div>
+    <div class="scr-track" id="scr-track">
+      <div class="scr-chip" id="scr-chip"></div>
+      <div class="scr-handle" id="scr-handle"></div>
+    </div>
+  </div>
+</div>
+
+<div id="beat-card">
+  <span class="bc-class" id="bc-class"></span>
+  <span class="bc-quote" id="bc-quote"></span>
+  <span class="bc-date" id="bc-date"></span><a id="bc-receipt" href="#" target="_blank" rel="noopener">view the original page &rarr;</a>
+</div>
+<div id="director-fade"></div>
+
+<div id="paper-pane">
+  <div class="pp-head">
+    <span class="pp-close" id="pp-close" title="close (N)">&times;</span>
+    <h2 id="pp-masthead">THE CALIFORNIAN</h2>
+    <span class="pp-issue-date" id="pp-issue-date">&mdash;</span>
+  </div>
+  <div class="pp-tabs">
+    <button class="pp-tab active" id="pp-tab-broadsheet" type="button">BROADSHEET</button>
+    <button class="pp-tab" id="pp-tab-feed" type="button">FEED</button>
+  </div>
+  <div class="pp-body" id="pp-body"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="terrain-1846.js?v=s46"></script> <!-- ?v: cache-buster — bump when the bake format changes so a cached old bake can never pair with a new index.html -->
+<script src="events-1846-49.js"></script>
+<script src="feed-1846-49.js"></script>
+<script src="prices-1846-49.js"></script>
+<script src="roster-1846-49.js"></script>
+<script src="catalog-occupations.js"></script>
+<script src="catalog-activities.js"></script>
+<script src="catalog-reactions.js"></script>
+<script src="streets-geometry.js"></script>
+<script>
+/* @P1850 DEV LOADER — assembles the same module from src/ at runtime.
+   Identical semantics to the built index.html (one classic script, one
+   IIFE, original chunk order). Requires an http server (fetch). */
+(function(){
+  var FILES = ["core/00-boot.js","core/01-geography.js","core/02-scene.js","core/03-sim.js","core/04-roads.js","core/05-routing.js","core/06-debug.js","core/07-main.js","layers/terrain.js","layers/ground-paint.js","layers/zones-tint.js","layers/buildings.js","layers/doodads.js","layers/people.js","layers/ships.js","layers/fauna.js","layers/effects.js","layers/labels-inspect.js","layers/camera-input.js","layers/director.js","layers/ui-chrome.js"];
+  var RE = /^\/\* @P1850-CHUNK (\d+) — (.*) \*\/$/;
+  Promise.all(FILES.map(function(f){
+    return fetch('src/'+f).then(function(r){ if(!r.ok) throw new Error('fetch failed: src/'+f); return r.text(); });
+  })).then(function(texts){
+    var chunks = [];
+    texts.forEach(function(text){
+      var cur = null;
+      text.split('\n').forEach(function(line){
+        var m = RE.exec(line);
+        if(m){ if(cur) chunks.push(cur); cur = { seq:+m[1], body:[] }; }
+        else if(cur){ cur.body.push(line); }
+      });
+      if(cur){ if(cur.body.length && cur.body[cur.body.length-1]==='') cur.body.pop(); chunks.push(cur); }
+    });
+    chunks.sort(function(a,b){ return a.seq-b.seq; });
+    var s = document.createElement('script');
+    s.textContent = chunks.map(function(c){ return c.body.join('\n'); }).join('\n');
+    document.body.appendChild(s);
+  }).catch(function(e){
+    document.getElementById('hud-loading').textContent = 'DEV LOADER FAILED: '+e.message+' — serve app/ over http';
+    console.error(e);
+  });
+})();
+</script>
+</body>
+</html>

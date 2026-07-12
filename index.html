@@ -977,6 +977,17 @@ function fbm(x,y,octaves){
   return total/maxAmp; // ~0..1
 }
 
+
+/* ---- AUDIT REGISTRY plumbing (Great Split, layers-spec.md rules block) ----
+   Each layer registers its executable seed-rule audits from its OWN file via
+   registerAudit(layer, name, fn). fn is called lazily (post-load, by
+   __P1850.audits.runAll() or directly), so registering before the module
+   vars it reads are assigned is safe — var/function bindings are hoisted
+   module-wide. core/06-debug.js exposes the registry on __P1850.audits. */
+var __P1850_AUDITS = {};
+function registerAudit(layer, name, fn){
+  (__P1850_AUDITS[layer] = __P1850_AUDITS[layer] || {})[name] = fn;
+}
 /* =====================================================================
    GEOGRAPHY TRUTH (research/geography-shoreline.md §2, research/peninsula-1846.md)
    World coords: +X = east (toward the bay), +Z = south, Y = up.
@@ -9549,6 +9560,11 @@ function updateLaundryDay(day){
     var toward = { x: lerp(a.x, PLAZA_CENTER.x, 0.32), z: lerp(a.z, PLAZA_CENTER.z, 0.32) };
     SPLAT_CLUTTER_PATHS.push({ x0:a.x, z0:a.z, x1:toward.x, z1:toward.z });
   });
+})(); /* SEAM (Great Split, 2026-07-12): buildVillageClutter used to run on through the
+   WHARF GROWTH block; that block is closure-independent (verified: it declares every
+   local it uses) and belongs to the ships layer (layers-spec.md slot 7 owns wharf deck
+   structures) — it now runs as buildWharfGrowth() in layers/ships.js, chunk 30, at the
+   exact same point in module order. */
 
   /* ---- WHARF GROWTH (WORLD-P0 fix 2026-07-09, AUDIT H1 / GAPS item 5) ----
      Previously one static mesh, visible unchanged from July 1846 — 18
@@ -9565,6 +9581,8 @@ function updateLaundryDay(day){
          figures at the growing tip while under construction (behavior
          catalog wharf_builder, cheap: reuses makeOutpostPersonGeo-style
          static figures baked fresh each growth step). */
+(function buildWharfGrowth(){ /* SEAM (Great Split, 2026-07-12): extracted verbatim from
+   buildVillageClutter's tail (layers/doodads.js) — closure-independent, module globals only. */
   var WHARF_LANDING_START_DAY = eventDateToSimDay("1847-09-01");
   var CENTRAL_WHARF_START_DAY = eventDateToSimDay("1849-05-01");
   var CENTRAL_WHARF_FULL_LEN = 244; // ~800 ft
@@ -10443,6 +10461,27 @@ function updateWharfBoats(tSec){
   lighterMesh.instanceMatrix.needsUpdate = true;
 }
 
+
+/* ---- ships audits (layers-spec.md rules block): never dry; sailing paths
+   sample water-only; the channel corridor is honest water — wrap the existing
+   __P1850.shipAudit / sailAudit / channelAudit. ---- */
+registerAudit("ships", "dry", function(){
+  var r = window.__P1850.shipAudit();
+  return { pass: r.dry.length===0 && r.unplaced===0, date: r.date,
+           anchored: r.anchored, dry: r.dry, unplaced: r.unplaced, mud: r.mud, water: r.water };
+});
+registerAudit("ships", "sailPaths", function(){
+  var rs = window.__P1850.sailAudit();
+  var bad = rs.filter(function(v){ return v.dry.length>0; });
+  return { pass: bad.length===0, sailing: rs.length, violations: bad };
+});
+registerAudit("ships", "channel", function(){
+  var rs = window.__P1850.channelAudit();
+  var bad = rs.filter(function(c){ return c.shallow.length>0; });
+  return { pass: bad.length===0,
+           minDepths: rs.map(function(c){ return { path:c.name, minDepth:c.minDepth }; }),
+           violations: bad };
+});
 var spawnedBoats = [], spawnedCargo = [], spawnedTimber = [];
 function waterfrontTargets(pop){
   return {
@@ -10578,6 +10617,129 @@ var MISSION_ROAD_PTS = []; // populated below — reused as an exclusion corrido
   LABELS.push({ name:"ROAD TO THE PRESIDIO", cat:"route", x:pmid.x, z:pmid.z, y:null });
 })();
 
+
+/* ---- ground-paint audits (layers-spec.md rules block; registered here so the
+   audit code lives with the layer it polices — Great Split, 2026-07-12) ---- */
+
+/* shared probe helpers: pick the OWNER tier for a world point (tier ownership
+   cuts town paint inside CLOSE_BOX and world paint inside TOWN_BOX), and clear-
+   ance tests so probes never sit on someone else's legal paint. */
+function _gpInBox(x, z, B, m){ return x>=B.xMin+m && x<=B.xMax-m && z>=B.zMin+m && z<=B.zMax-m; }
+function _gpOwnerTier(x, z){
+  if(_gpInBox(x, z, CLOSE_BOX, 8)) return { name:"close", ctx:splatCloseCtx, pxFn:closePx, pxLenFn:closePxLen };
+  if(_gpInBox(x, z, TOWN_BOX, 8))  return { name:"town",  ctx:splatTownCtx,  pxFn:townPx,  pxLenFn:townPxLen };
+  return null; // world tier is too coarse for metrological probes — callers skip
+}
+function _gpAlphaAt(tier, x, z){
+  var p = tier.pxFn(x, z);
+  return tier.ctx.getImageData(Math.round(p.x), Math.round(p.y), 1, 1).data[3];
+}
+function _gpNearOtherStreet(x, z, selfId, m){
+  for(var i=0;i<PLACEMENT_STREET_SEGS.length;i++){
+    var sg = PLACEMENT_STREET_SEGS[i];
+    if(sg.id===selfId) continue;
+    if(distToSegXZ(x, z, sg.x0, sg.z0, sg.x1, sg.z1) < sg.halfW + m) return true;
+  }
+  return false;
+}
+function _gpNearPlaza(x, z, m){
+  var a = gridToWorld(GEO.plaza.uMin, GEO.plaza.vMin), b = gridToWorld(GEO.plaza.uMax, GEO.plaza.vMax);
+  return x >= Math.min(a.x,b.x)-m && x <= Math.max(a.x,b.x)+m &&
+         z >= Math.min(a.z,b.z)-m && z <= Math.max(a.z,b.z)+m;
+}
+
+registerAudit("ground-paint", "oneOwner", function(){
+  // one-owner-per-pixel (screening #11): outer tiers contribute NOTHING inside
+  // an inner tier's rect — wraps the existing __P1850.splatOwnership probes.
+  var probes = window.__P1850.splatOwnership();
+  var bad = probes.filter(function(p){ return p.alpha !== 0; });
+  return { pass: bad.length===0, probes: probes.length, violations: bad };
+});
+
+registerAudit("ground-paint", "constantWidth", function(){
+  /* CONSTANT-WIDTH sample check (s62 amendment, layers-spec.md): road width is
+     the CONSTANT class width, everywhere, always. For each street with S4
+     (full-surface) pieces in the current paint, measure the painted width by
+     alpha scan perpendicular to the centerline at up to 3 mid-block stations
+     (clear of junctions/plaza), and require every station ~= widthM and the
+     stations mutually constant. */
+  updateGridSwing(); // repaint synchronously if the splat is stale for this date/skew
+  var out = { pass:true, streetsProbed:0, stations:0, violations:[], skipped:[] };
+  if(!SPLAT_LAST_STATS){ return { pass:false, error:"no splat stats — paint never ran" }; }
+  STREETS_RUNTIME.forEach(function(s){
+    var rec = SPLAT_LAST_STATS.streets[s.id];
+    if(!rec || !rec.pieces || rec.pieces.length<2) return;
+    var s4idx = [];
+    for(var i=0;i<rec.pieces.length;i++) if(rec.pieces[i].st===4) s4idx.push(i);
+    if(!s4idx.length) return;
+    var widths = [], tried = 0;
+    for(var k=0; k<s4idx.length && widths.length<3 && tried<24; k+=Math.max(1,Math.floor(s4idx.length/8))){
+      tried++;
+      var i2 = s4idx[k], p = rec.pieces[i2];
+      var pPrev = rec.pieces[Math.max(0,i2-1)], pNext = rec.pieces[Math.min(rec.pieces.length-1,i2+1)];
+      var dx = pNext.x-pPrev.x, dz = pNext.z-pPrev.z, dl = Math.hypot(dx,dz);
+      if(dl<1) continue;
+      var nx = -dz/dl, nz = dx/dl; // lateral unit
+      if(terrainHeight(p.x,p.z)<=0.5) continue;
+      if(_gpNearOtherStreet(p.x, p.z, s.id, s.widthM/2 + 4)) continue; // junction / parallel-street bleed
+      if(_gpNearPlaza(p.x, p.z, 14)) continue;
+      var tier = _gpOwnerTier(p.x, p.z); if(!tier) continue;
+      var centerA = _gpAlphaAt(tier, p.x, p.z);
+      if(centerA < 50) continue; // not a solidly painted station (tile seam etc.) — not measurable
+      var thr = centerA*0.45, half = {}, sides = [1,-1];
+      for(var si=0; si<2; si++){
+        var sgn = sides[si], lastOn = 0, misses = 0;
+        for(var off=0.4; off<=s.widthM*0.85+3; off+=0.4){
+          var a2 = _gpAlphaAt(tier, p.x+nx*off*sgn, p.z+nz*off*sgn);
+          if(a2>=thr){ lastOn = off; misses = 0; } else if(++misses>=2) break;
+        }
+        half[sgn] = lastOn + 0.2;
+      }
+      widths.push(+(half[1]+half[-1]).toFixed(2));
+      out.stations++;
+    }
+    if(!widths.length){ out.skipped.push(s.id); return; }
+    out.streetsProbed++;
+    var mn = Math.min.apply(null,widths), mx = Math.max.apply(null,widths);
+    var tolAbs = Math.max(2.5, 0.35*s.widthM);
+    var bad = widths.some(function(w){ return Math.abs(w - s.widthM) > tolAbs; }) ||
+              (mx - mn) > Math.max(2.0, 0.30*s.widthM);
+    if(bad){ out.pass = false; out.violations.push({ id:s.id, widthM:s.widthM, measured:widths }); }
+  });
+  return out;
+});
+
+registerAudit("ground-paint", "eraPaint", function(){
+  /* ERA-PAINT check (layers-spec.md): IF simDay < a street's appear-day THEN
+     zero paint. Two teeth: (a) the paint registry — the last repaint recorded
+     no segs for any unappeared street; (b) a pixel probe set on unappeared
+     centerlines, clear of every OTHER street's ROW and the plaza, must read
+     alpha ~0 in the owning tier canvas. */
+  updateGridSwing();
+  var out = { pass:true, unappeared:0, probes:0, statsViolations:[], pixelViolations:[] };
+  STREETS_RUNTIME.forEach(function(s){
+    var gateDay = s.surveyedDay!=null ? s.surveyedDay : s.firstMentionDay;
+    if(gateDay==null || simDay>=gateDay) return; // appeared — outside this rule
+    out.unappeared++;
+    var rec = SPLAT_LAST_STATS && SPLAT_LAST_STATS.streets[s.id];
+    if(rec && ((rec.ghostSegs||0)+(rec.wornSegs||0)+(rec.pierSegs||0))>0) out.statsViolations.push(s.id);
+    var angle = s.swings ? CURRENT_STREET_SKEW : GRID_ROT_BASE, probed = 0;
+    for(var pi=0; pi+1<s.polyline.length && probed<8; pi++){
+      var A = gridToWorldAt(s.polyline[pi].u,   s.polyline[pi].v,   angle);
+      var B = gridToWorldAt(s.polyline[pi+1].u, s.polyline[pi+1].v, angle);
+      var mx=(A.x+B.x)/2, mz=(A.z+B.z)/2;
+      if(terrainHeight(mx,mz)<=0.5) continue;           // wet — water lots never paint anyway
+      if(_gpNearOtherStreet(mx, mz, s.id, 3)) continue; // a crossing street's legal paint
+      if(_gpNearPlaza(mx, mz, 16)) continue;
+      var tier = _gpOwnerTier(mx, mz); if(!tier) continue;
+      probed++; out.probes++;
+      var a3 = _gpAlphaAt(tier, mx, mz);
+      if(a3 > 12) out.pixelViolations.push({ id:s.id, x:Math.round(mx), z:Math.round(mz), alpha:a3, tier:tier.name });
+    }
+  });
+  if(out.statsViolations.length || out.pixelViolations.length) out.pass = false;
+  return out;
+});
 /* =========================================================================
    PHASE 4 — "THE PEOPLE"
    Ambient (bubble-tier) instanced walkers below peopleMaxAltitude (350m,
@@ -11581,6 +11743,14 @@ function worksiteForOccupation(occ, rng){
   return WORKSITE_PLAZA_MARKET;
 }
 
+
+/* ---- buildings audit (layers-spec.md rules block): a structure's footprint
+   intersects NO right-of-way, any era — wraps the existing __P1850.roadAudit
+   (s62 constant-width amendment; 0/1,890 at landing). ---- */
+registerAudit("buildings", "rightOfWay", function(){
+  var r = window.__P1850.roadAudit();
+  return { pass: r.violations===0, checked: r.checked, violations: r.violations, list: r.list };
+});
 /* =========================================================================
    PL-B item 1 — THE FULL DICE ENGINE (behavior-spec.md §3), replacing PL-A's
    flat per-slot coinflips (a fixed 40% doErrand, a fixed saloonWeight
@@ -14100,6 +14270,26 @@ function updateDocumentedMoments(alt){
   });
 }
 
+
+/* ---- people audits (layers-spec.md rules block): never inside a footprint;
+   apparent speed <=3 m/s — wraps the existing __P1850.walkAudit. Route
+   diversity wraps __P1850.routeDiversity between the sim's two busiest
+   documented hubs (the Plaza and the Clay St wharf). ---- */
+registerAudit("people", "walk", function(){
+  var r = window.__P1850.walkAudit();
+  return { pass: r.inFootprint===0 && (r.medianSpd==null || r.medianSpd<=3.0),
+           total: r.total, walkers: r.walkers, inFootprint: r.inFootprint,
+           medianSpd: r.medianSpd, roadShare: r.roadShare };
+});
+registerAudit("people", "routeDiversity", function(){
+  // liveness check: the weighted router returns real routes between the sim's
+  // two busiest documented hubs. distinct-count reported for screening eyes;
+  // a diversity FLOOR is deliberately not codified (layers-spec.md rules block
+  // has no such rule — selectivity: do not invent rules beyond the list).
+  var r = window.__P1850.routeDiversity(PLAZA_CENTER.x, PLAZA_CENTER.z, WORKSITE_WHARF.x, WORKSITE_WHARF.z, 10);
+  var routed = r.sigs.filter(function(s){ return s!=null; }).length;
+  return { pass: routed>0, routed: routed, distinct: r.distinct, sampled: 10 };
+});
 /* ---- 8. PERSON cards + Follow + provenance toggle (s42: rendered into
    the ONE inspect panel; the #person-inspector popup is deleted). ---- */
 var followedSlot = null, followedDocumented = null;
@@ -14410,6 +14600,24 @@ function trySelectAtScreenXY(clientX, clientY){
   return false;
 }
 
+
+/* ---- labels-inspect audit (layers-spec.md rules block): no overlapping
+   rendered labels, incl. UI rects — the existing computed check (worldLabels
+   boxes vs rectsOverlap + collectUIBlockerRects), consolidated. ---- */
+registerAudit("labels-inspect", "overlap", function(){
+  var labels = window.__P1850.worldLabels; // visible world labels with screen boxes
+  var ui = collectUIBlockerRects();
+  var overlaps = [];
+  for(var i=0;i<labels.length;i++){
+    for(var j=i+1;j<labels.length;j++)
+      if(rectsOverlap(labels[i], labels[j], -1)) // -1px: touching edges are legal
+        overlaps.push({ a:labels[i].text, b:labels[j].text });
+    for(var u=0;u<ui.length;u++)
+      if(rectsOverlap(labels[i], ui[u], -1))
+        overlaps.push({ a:labels[i].text, b:"UI#"+u });
+  }
+  return { pass: overlaps.length===0, labels: labels.length, uiRects: ui.length, overlaps: overlaps };
+});
 /* =====================================================================
    A2b: TREES, ROCK OUTCROPS & CHAPARRAL BAND — visual-richness pass.
    Historical grounding (research/peninsula-1846.md, geography-shoreline.md):
@@ -14895,6 +15103,65 @@ function updateLabels(alt){
   }
 }
 
+
+/* ---- terrain audit (layers-spec.md rules block; Earth Palette Law): midday
+   sunlit ground luminance 0.55-0.70, audited by framebuffer readback. Skips
+   (pass, with the reason stated) when the current frame can't host the probe —
+   night, or camera outside the 100-1500m band the law was calibrated in. ---- */
+registerAudit("terrain", "luminance", function(){
+  if(typeof nightFactor==="number" && nightFactor>0.05)
+    return { pass:true, skipped:"not midday (nightFactor="+nightFactor.toFixed(2)+")" };
+  var alt = lastKnownAlt||0;
+  if(!(alt>=100 && alt<=1500))
+    return { pass:true, skipped:"camera altitude "+Math.round(alt)+"m outside the 100-1500m calibration band" };
+  // candidate bare-ground points: rings around the camera focus, dry land,
+  // clear of every street ROW (roads are ground-paint's, not terrain's)
+  var pts=[], cx=CAM.focus.x, cz=CAM.focus.z;
+  for(var r=18; r<=alt*0.45 && pts.length<28; r+=15){
+    for(var a=0; a<6.28; a+=0.79){
+      var x=cx+Math.cos(a+r*0.7)*r, z=cz+Math.sin(a+r*0.7)*r;
+      if(terrainHeight(x,z)<=1.0) continue;
+      var clear=true;
+      for(var i=0;i<PLACEMENT_STREET_SEGS.length;i++){
+        var sg=PLACEMENT_STREET_SEGS[i];
+        if(distToSegXZ(x,z,sg.x0,sg.z0,sg.x1,sg.z1)<sg.halfW+4){ clear=false; break; }
+      }
+      // BARE ground only: the law is about terrain albedo, not structures or
+      // worn paint. canPlace() rejects points at buildings/props; the splat
+      // debug hooks (public QA surface) reject painted worn-earth pixels.
+      if(clear && !canPlace(x, z, 1.5, {})) clear = false;
+      if(clear){
+        try {
+          var D = window.__P1850._splatDebug;
+          if(x>CLOSE_BOX.xMin+6 && x<CLOSE_BOX.xMax-6 && z>CLOSE_BOX.zMin+6 && z<CLOSE_BOX.zMax-6){
+            if(D.closeAlphaAt(x,z)[3] > 8) clear = false;
+          } else if(x>TOWN_BOX.xMin+6 && x<TOWN_BOX.xMax-6 && z>TOWN_BOX.zMin+6 && z<TOWN_BOX.zMax-6){
+            if(D.townAlphaAt(x,z)[3] > 8) clear = false;
+          }
+        } catch(e) { /* pre-first-paint — keep the probe */ }
+      }
+      if(clear) pts.push({x:x,z:z});
+    }
+  }
+  if(pts.length<6) return { pass:true, skipped:"fewer than 6 clear ground probes in frame" };
+  window.__P1850.render(); // fresh frame in THIS task — stalled-rAF (CDP) safe, buffer still live
+  var gl = renderer.getContext(), W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;
+  var buf = new Uint8Array(4), lums = [];
+  var v = new THREE.Vector3();
+  pts.forEach(function(p){
+    v.set(p.x, terrainHeight(p.x,p.z), p.z).project(camera);
+    if(v.z>=1 || v.x<-0.95 || v.x>0.95 || v.y<-0.95 || v.y>0.95) return;
+    var sx = Math.round((v.x*0.5+0.5)*W), sy = Math.round((v.y*0.5+0.5)*H); // readPixels origin = bottom-left = NDC y
+    gl.readPixels(sx, sy, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+    lums.push((0.2126*buf[0]+0.7152*buf[1]+0.0722*buf[2])/255);
+  });
+  if(lums.length<6) return { pass:true, skipped:"probes projected off-screen" };
+  lums.sort(function(a,b){return a-b;});
+  var med = lums[Math.floor(lums.length/2)];
+  // law band 0.55-0.70; +-0.05 readback tolerance (shadow dither, probe scatter)
+  return { pass: med>=0.50 && med<=0.75, median:+med.toFixed(3), band:"0.55-0.70 (tol 0.05)",
+           n:lums.length, min:+lums[0].toFixed(3), max:+lums[lums.length-1].toFixed(3) };
+});
 /* =====================================================================
    THEN/NOW GHOST OVERLAY  ('G' toggles; fades in above ~500m)
    ===================================================================== */
@@ -16638,6 +16905,37 @@ window.__P1850 = {
   }
 };
 
+
+/* ---- CONSOLIDATED AUDIT REGISTRY (Great Split, 2026-07-12; layers-spec.md
+   rules block). __P1850.audits.<layer>.<name>() -> { pass:bool, ...detail }.
+   Layers registered lazily via registerAudit() (core/00-boot.js) from their
+   own files. runAll() executes the whole suite and returns the screening-
+   ready pass/fail summary — screenings run it wholesale; a failing audit
+   fails the landing. ---- */
+window.__P1850.audits = (function(){
+  var ns = {};
+  Object.keys(__P1850_AUDITS).forEach(function(layer){ ns[layer] = __P1850_AUDITS[layer]; });
+  ns.runAll = function(){
+    var t0 = performance.now(), results = [], pass = true;
+    Object.keys(__P1850_AUDITS).sort().forEach(function(layer){
+      Object.keys(__P1850_AUDITS[layer]).sort().forEach(function(name){
+        var r, tA = performance.now();
+        try { r = __P1850_AUDITS[layer][name](); }
+        catch(e){ r = { pass:false, error: String(e && e.message || e) }; }
+        var entry = { layer: layer, audit: name, pass: !!(r && r.pass),
+                      ms: +(performance.now()-tA).toFixed(1) };
+        if(r && r.skipped) entry.skipped = r.skipped;
+        entry.detail = r;
+        if(!entry.pass) pass = false;
+        results.push(entry);
+      });
+    });
+    return { pass: pass, date: simDateISO(dateFromSimDay(simDay)),
+             ran: results.length, failed: results.filter(function(x){ return !x.pass; }).length,
+             ms: +(performance.now()-t0).toFixed(1), results: results };
+  };
+  return ns;
+})();
 /* =====================================================================
    DAY / NIGHT CYCLE — SUN FROM THE SIM CLOCK (fix sprint 2026-07-11, P0)
    The old system ran its own wall-clock cycle (DAY_CYCLE_SECONDS=420, a

@@ -1,0 +1,6 @@
+# Byte-stability for the Great Split build (tools/build-app.js): the assembler
+# writes LF; keep html/js LF in the working tree so `--check` byte-compares true
+# on any fresh checkout regardless of core.autocrlf.
+*.html text eol=lf
+*.js text eol=lf
+*.md text eol=lf
