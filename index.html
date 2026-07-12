@@ -1509,15 +1509,18 @@ function terrainColor(x,z,h){
     zn = zoneAt(x+zjx, z+zjz);
   }
 
-  // palette anchors
+  // palette anchors — THE EARTH PALETTE LAW (s62, grounding.md §9): base
+  // albedos retuned so midday sunlit ground renders at ~0.55-0.70 luminance
+  // (AoE2:DE / RuneScape value world) under the ~1.03x noon rig. Ground is
+  // EARTH, not paper; parchment lives in the UI panels only.
   var wetMud   = new THREE.Color(0x5c4e3a);
   var mudFlat  = new THREE.Color(0x4d4334);  // intertidal wet-sheen mud — darker than any dry sand, browner than seabed
-  var sand     = new THREE.Color(0xd8c48c);
-  var duneGold = new THREE.Color(0xc9ad6c);
+  var sand     = new THREE.Color(0xb7a06f);  // beach/base sand: pale but never white (was 0xd8c48c, clipped white under the old rig)
+  var duneGold = new THREE.Color(0xa98e58);  // warm tan, not cream (was 0xc9ad6c)
   var scrub    = new THREE.Color(0x64773e);
   var scrubDry = new THREE.Color(0x8c8a52);
-  var rocky    = new THREE.Color(0xa9906a);
-  var village  = new THREE.Color(0xcbb488);
+  var rocky    = new THREE.Color(0x977e55);  // dry rocky tops with body (was 0xa9906a)
+  var village  = new THREE.Color(0xa8905f);  // town dirt: mid brown-tan (was 0xcbb488)
   var seabedShallow = new THREE.Color(0x4a6b5f);
   var seabedDeep    = new THREE.Color(0x1f3a4d);
 
@@ -1568,12 +1571,13 @@ function terrainColor(x,z,h){
         var wander = Math.sin(x*0.0028 + z*0.0035)*1.8 + Math.sin(x*0.0009 - z*0.0013)*1.2;
         var ridge = 0.5+0.5*Math.sin(x*0.045 + z*0.016 + wander*2.0);
         var ridgeMask = 0.3+0.7*fbm(x*0.0045+11.0, z*0.0045, 2);
-        zcol = new THREE.Color(0xd2bd85).lerp(new THREE.Color(0xa9905e), (0.18 + ridge*0.72)*ridgeMask);
+        // s62 earth palette: dune sand = warm tan (was 0xd2bd85 cream)
+        zcol = new THREE.Color(0xb59f6b).lerp(new THREE.Color(0x8d774c), (0.18 + ridge*0.72)*ridgeMask);
         if(d>0.94) zcol.lerp(new THREE.Color(0x8c8a52), 0.3); // rare scrub fleck
-      } else if(zn===2){ // dune scrub: sand base, olive brush patches
-        zcol = new THREE.Color(0xcdbb84).lerp(new THREE.Color(0x6d7c44), 0.25+0.5*fbm(x*0.02,z*0.02,2));
-      } else if(zn===3){ // grassland/pasture: tawny coastal prairie
-        zcol = new THREE.Color(0xb3a35e).lerp(new THREE.Color(0x8a9552), 0.3+0.4*fbm(x*0.015,z*0.015,2));
+      } else if(zn===2){ // dune scrub: sand base, olive brush patches (s62: tan base, was 0xcdbb84)
+        zcol = new THREE.Color(0xb0a06f).lerp(new THREE.Color(0x6d7c44), 0.25+0.5*fbm(x*0.02,z*0.02,2));
+      } else if(zn===3){ // grassland/pasture: sage coastal prairie with body (s62: was 0xb3a35e/0x8a9552 tawny-bright)
+        zcol = new THREE.Color(0x8f8a52).lerp(new THREE.Color(0x6f7d43), 0.3+0.4*fbm(x*0.015,z*0.015,2));
       } else if(zn===4){ // oak woodland floor: deeper green-brown
         zcol = new THREE.Color(0x6b7a42).lerp(new THREE.Color(0x4c5e30), 0.5*fbm(x*0.03,z*0.03,2));
       } else if(zn===5 && h<2.5){ // tidal marsh: tule green + rusty patches
@@ -1637,7 +1641,7 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 var scene = new THREE.Scene();
 var camera = new THREE.PerspectiveCamera(52, window.innerWidth/window.innerHeight, 1, 45000); // far raised for the s46 15km ceiling
 
-scene.fog = new THREE.Fog(0xcfc2a0, 800, 4200);
+scene.fog = new THREE.Fog(0xa89b7c, 800, 4200); // s62 earth palette: haze is earthy-atmospheric, not parchment (was 0xcfc2a0 — the far-ground white wash)
 
 /* =====================================================================
    SKY DOME
@@ -1665,12 +1669,18 @@ function paintSky(zenith, horizon){
 /* =====================================================================
    LIGHTS
    ===================================================================== */
-var sun = new THREE.DirectionalLight(0xfff1d0, 1.1);
+/* EARTH PALETTE LAW (s62, grounding.md §9): the old rig summed to a ~1.6x
+   multiplier on flat noon ground (sun 1.1·0.96 + hemi 0.55·sky + amb 0.12),
+   clipping any albedo above ~0.62 toward white — HALF of the user's
+   "ground almost white" finding was over-lighting, not albedo. The day rig
+   now sums to ~1.03x on sunlit flat ground (nothing clips; rendered value
+   ≈ albedo), with slopes/shadow sides keeping real depth. */
+var sun = new THREE.DirectionalLight(0xfff1d0, 0.72);
 sun.position.set(500,800,300);
 scene.add(sun);
-var hemi = new THREE.HemisphereLight(0x9fb4d8, 0x6b5a3e, 0.55);
+var hemi = new THREE.HemisphereLight(0x9fb4d8, 0x6b5a3e, 0.30);
 scene.add(hemi);
-var ambient = new THREE.AmbientLight(0xffffff, 0.12);
+var ambient = new THREE.AmbientLight(0xffffff, 0.09);
 scene.add(ambient);
 
 /* =====================================================================
@@ -2331,10 +2341,11 @@ var TILE_KIT = (function(){
 /* fragment block (s60 rewrite): PAINTED TILES carry the albedo story
    (class-keyed, splat-blended by vSurfW, world-space UVs, 2x zero-mean
    multiply, full <100m -> flat map tones by 250m); the s52 derivative-
-   noise DETAIL NORMALS are kept unchanged underneath (45->180m fade);
-   the PALETTE GRADE (AoE2:DE-style midtone value depth) rides furthest
-   (260->470m) so 300m framings still read rich while 500m+ map views
-   stay pixel-identical (uDetailAmp=0 kills all three — the fade proof).
+   noise DETAIL NORMALS are kept unchanged underneath (45->180m fade).
+   (s60's 260-470m distance-gated PALETTE GRADE was deleted in s62 —
+   superseded by the GLOBAL earth palette, grounding.md §9: the flat map
+   tones themselves are AoE2:DE-deep now, at every distance.)
+   uDetailAmp=0 still kills both layers — the fade proof holds.
    Injected after <color_fragment>; dtGrad is consumed by the normal patch. */
 var DETAIL_FRAG_TERRAIN = [
   "float dtFade = 0.0; vec2 dtGrad = vec2(0.0);",
@@ -2342,7 +2353,6 @@ var DETAIL_FRAG_TERRAIN = [
   "  float dCam = distance(vDetailWorld, cameraPosition);",
   "  dtFade = (1.0 - smoothstep(45.0, 180.0, dCam)) * uDetailAmp;",   // detail-NORMAL fade (s52, unchanged)
   "  float tileF = (1.0 - smoothstep(100.0, 250.0, dCam)) * uDetailAmp;", // painted-tile fade (s60)
-  "  float gFade = (1.0 - smoothstep(260.0, 470.0, dCam)) * uDetailAmp;", // palette-grade fade (s60)
   "  vec2 p = vDetailWorld.xz;",
   "  vec4 sw = vSurfW;",
   "  float mudW = min(1.0, sw.w + sw.z*uDetailWet*0.85);",   // wet season: town dirt churns to mud
@@ -2372,14 +2382,9 @@ var DETAIL_FRAG_TERRAIN = [
   "      dtGrad += mudW*mb.yz*0.012*(1.0-pool);",            // puddles read flat — gradient dies inside them
   "    }",
   "  }",
-  "  float gW = min(1.0, sw.x+sw.y+sw.z+sw.w);",             // PALETTE GRADE (s60): ground classes only
-  "  if(gFade > 0.003 && gW > 0.003){",
-  "    vec3 gc = diffuseColor.rgb;",
-  "    float gLum = dot(gc, vec3(0.299,0.587,0.114));",
-  "    vec3 rich = mix(vec3(gLum), gc, 1.18);",              // enrich: mild chroma lift (never a hue shift)
-  "    rich *= (1.0 - 0.28*smoothstep(0.30, 0.85, gLum));",  // pull the washed-bright ground DOWN into midtone range, leave shadows alone (AoE2:DE value depth)
-  "    diffuseColor.rgb = mix(gc, clamp(rich, 0.0, 1.0), gFade*gW);",
-  "  }",
+  // (s60's 260-470m distance-gated PALETTE GRADE deleted s62 — SUPERSEDED by
+  //  the global earth palette, grounding.md §9: the map itself is earthy now,
+  //  no distance-gated enrichment as the fix.)
   "}"
 ].join("\n");
 var DETAIL_FRAG_ROAD = [
@@ -2388,7 +2393,6 @@ var DETAIL_FRAG_ROAD = [
   "  float dCam = distance(vDetailWorld, cameraPosition);",
   "  dtFade = (1.0 - smoothstep(45.0, 180.0, dCam)) * uDetailAmp;",
   "  float tileF = (1.0 - smoothstep(100.0, 250.0, dCam)) * uDetailAmp;",
-  "  float gFade = (1.0 - smoothstep(260.0, 470.0, dCam)) * uDetailAmp;",
   "  vec2 p = vDetailWorld.xz;",
   "  if(tileF > 0.003){",                                       // PAINTED ROAD TILE (s60): compacted grain + wheel-polish bands
   "    vec2 q = vec2(dot(p,uGridDir), dot(p,vec2(-uGridDir.y,uGridDir.x)));", // travel-aligned domain — the bands ride the traffic axis
@@ -2405,13 +2409,7 @@ var DETAIL_FRAG_ROAD = [
   "    diffuseColor.rgb *= (1.0 - pool*0.07*dtFade);",
   "    dtGrad *= (1.0-pool*0.8);",
   "  }",
-  "  if(gFade > 0.003){",                                       // same grade as the ground — streets + dirt deepen TOGETHER (no tonal seam; §9 order preserved)
-  "    vec3 gc = diffuseColor.rgb;",
-  "    float gLum = dot(gc, vec3(0.299,0.587,0.114));",
-  "    vec3 rich = mix(vec3(gLum), gc, 1.18);",
-  "    rich *= (1.0 - 0.28*smoothstep(0.30, 0.85, gLum));",
-  "    diffuseColor.rgb = mix(gc, clamp(rich, 0.0, 1.0), gFade);",
-  "  }",
+  // (s60 260-470m palette grade deleted s62 — superseded by the global earth palette, §9)
   "}"
 ].join("\n");
 var DETAIL_FRAG_NORMAL = [
@@ -2838,11 +2836,9 @@ function roadPieceState(s, x, z, day, viogetFloor){
 }
 
 /* =====================================================================
-   NETWORK-FIRST STROKING (s27 sprint — road-master-spec §2/§3/§4).
-   Replaces the per-street alpha-stroke painter (paintRoad/wornStroke/
-   wornRuts/paintSurveyGhost/paintStub + the ROAD_EDGE_COL pale wide
-   edge-wear underlay halo system — ALL DELETED): streets are now stroked
-   as a NETWORK, one compositing layer per lifecycle class per era:
+   NETWORK-FIRST STROKING (s27) + CONSTANT-WIDTH AMENDMENT (s62 —
+   road-master-spec header, user ruling 2026-07-12, BINDING).
+   Streets stroke as a NETWORK, one compositing layer per lifecycle class:
      - every layer is drawn OPAQUE into a scratch canvas (overdraw is
        invisible, so intersections within a class are painted ONCE — a
        continuous surface, never two overlapping stroke layers);
@@ -2850,44 +2846,43 @@ function roadPieceState(s, x, z, day, viogetFloor){
        at the class alpha, after erasing what lies beneath it (one owner
        per ground pixel across classes too);
      - BUTT caps everywhere; true dead ends get a ragged noise-modulated
-       fade-out erase (no circular endcap blobs);
-     - edges are crisp with a narrow (<=1-2m) noise transition from
-       per-piece width jitter — the gaussian smear halo is gone;
-     - class grammar at altitude (§3, Google-Maps convention in brown):
-       S3/S4 = banded strip with darker edge casing painted as a
-       whole-layer under-pass (so casing only rims the OUTSIDE of the
-       unioned network, never crosses an intersection), S2 = thin defined
-       line, S1 = near-invisible scratched ghost;
-     - close-up texture (§4): S2 dark compacted path with ragged edges;
-       S3/S4 broken wheel-rut twins + hoof-churned center mottle on the
-       detail tiers; planked surfaces (documented only — the wharf
-       decking aprons) as transverse per-plank strokes, the documented
-       lighter-than-ground exception.
+       fade-out erase, AT MOST one street-width long (no circles, no
+       spike tails);
+   CONSTANT WIDTH (s62): exactly TWO rendered width families —
+     (1) an OFFICIAL STREET renders at its surveyed class width from the
+         master data, CONSTANT along its whole length and over time from
+         the day it first appears;
+     (2) a FOOTPATH/TRAIL renders at ONE narrow constant (~1.8m).
+   The §9b lifecycle is FILL/TREATMENT progression INSIDE that width:
+     S1 = faint right-of-way boundary hint (scratched edge lines at ±W/2),
+     S2 = the ROW hint + a trodden footpath line wandering INSIDE it,
+     S3 = partial fill (light wash + patchy worn bands + ruts),
+     S4 = full worn surface (tone wobble + ruts + churn),
+     planked where documented (wharf aprons — the lighter-than-ground
+     exception). NEVER width change: all width-interpolation/taper/jitter
+     code (taperA/B, _taperMul, per-class widths, frac-driven S2 width,
+     tapered Vioget stubs) is DELETED — it was the Frankenstein source of
+     ballooning junctions and alternating thick/thin strips.
+   Casing (§3) is a soft two-step edge GRADIENT painted as whole-layer
+   under-passes, so it rims only the OUTSIDE of the unioned network.
    ===================================================================== */
 var ROAD_COLS = {
-  ghost: "#8f7c55",           // darker than the pale sand, never lighter
+  ghost: "#8a7850",           // darker than the (s62 earth-palette) sand, never lighter
   trail: "#5f4c31",           // compacted foot path
-  faint: "#83714f",           // faint work tracks / clutter paths
+  faint: "#7d6b4a",           // faint work tracks / clutter paths
   r3:    "#6a563a", r3case:"#514028",
   r4:    "#75613f", r4case:"#4b3b26",
+  partialWash: "#8d7852",     // s62 S3 partial-fill wash — worn ground inside the right-of-way, still darker than terrain
   rut:   "#241a0f",
   plank: "#a68a58"           // documented lighter-than-ground exception (wharf decking)
 };
 var ROAD_LAYER_ALPHA = { ghost:0.16, faint:0.42, trail:0.78, r3:0.90, r4:0.95, plank:0.92 };
 
 /* Resample a run's raw centerline at ~7m with a seeded two-sine lateral
-   meander. Amplitude is the §9b right-of-way wander: widest on trails,
-   converging toward the platted centerline as state rises. `s0` is the
-   run's arc offset along the whole street so adjoining runs phase-match. */
-function roadMeanderAmp(bucket, widthM, platted){
-  // Platted rights-of-way constrain the wander (the trail drifts within
-  // the surveyed strip); unplatted desire paths wander more (§9b).
-  if(bucket==="trail") return platted ? Math.min(widthM*0.15, 1.9) : Math.min(widthM*0.30, 3.4);
-  if(bucket==="faint") return platted ? 1.6 : Math.min(widthM*0.35, 2.6);
-  if(bucket==="r3")    return Math.min(widthM*0.06, 0.8);
-  if(bucket==="r4")    return 0.12;
-  return 0.45; // ghost: a surveyor's scratch wobbles, it doesn't wander
-}
+   meander (country roads / trails / work paths only — a PLATTED street's
+   band never leaves its master centerline, s62 constant-width amendment;
+   the per-class roadMeanderAmp table was deleted with the width-morph
+   machinery). `s0` is the run's arc offset so adjoining runs phase-match. */
 function buildRunNodes(rawPts, amp, seed, s0){
   if(!rawPts || rawPts.length<2) return null;
   var STEP=7, nodes=[], dAcc=s0||0, ph1=seed*37.0, ph2=seed*91.0;
@@ -2935,7 +2930,9 @@ function _scrEndFade(ctx, pxFn, pxLenFn, nodes, atStart, widthM, seed, fadeFrac)
   if(!nodes || nodes.length<2) return;
   var total=0, i;
   for(i=0;i<nodes.length-1;i++) total += Math.hypot(nodes[i+1].x-nodes[i].x, nodes[i+1].z-nodes[i].z);
-  var L = Math.min(total*(fadeFrac||0.5), Math.max(widthM*2.2+6, 14));
+  // s62 (§2 + user finding): a ragged fade is AT MOST one street-width long
+  // — the old 2.2W+6 reach drew the "tapered spike" tails at terminations
+  var L = Math.min(total*(fadeFrac||0.5), Math.max(widthM, 8));
   var pts = atStart ? nodes : nodes.slice().reverse(); // pts[0] = the dead end
   // walk back L meters from the end
   var acc=0, backPt=pts[pts.length-1];
@@ -2957,121 +2954,156 @@ function _scrEndFade(ctx, pxFn, pxLenFn, nodes, atStart, widthM, seed, fadeFrac)
   // ragged nibbles at the tip
   var dirx = pe.x-pb.x, diry = pe.y-pb.y, dl = Math.hypot(dirx,diry)||1;
   dirx/=dl; diry/=dl;
+  var nibM = Math.min(widthM, 6); // s62: nibble geometry capped absolute — wide constant-width streets no longer scatter huge erase blobs
   for(var k=0;k<4;k++){
     var h1 = _strokeN(seed||0.5, 40+k*3), h2 = _strokeN(seed||0.5, 41+k*3);
-    var cx = pe.x - dirx*pxLenFn(widthM)*(0.2+h1*1.3) + (-diry)*pxLenFn(widthM)*(h2-0.5)*1.2;
-    var cy = pe.y - diry*pxLenFn(widthM)*(0.2+h1*1.3) + ( dirx)*pxLenFn(widthM)*(h2-0.5)*1.2;
+    var cx = pe.x - dirx*pxLenFn(nibM)*(0.2+h1*1.3) + (-diry)*pxLenFn(widthM)*(h2-0.5)*1.0;
+    var cy = pe.y - diry*pxLenFn(nibM)*(0.2+h1*1.3) + ( dirx)*pxLenFn(widthM)*(h2-0.5)*1.0;
     ctx.globalAlpha = 0.55+h1*0.4;
-    ctx.beginPath(); ctx.arc(cx, cy, Math.max(1, pxLenFn(widthM*(0.18+h2*0.22))), 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(cx, cy, Math.max(1, pxLenFn(nibM*(0.18+h2*0.22))), 0, Math.PI*2); ctx.fill();
   }
   ctx.restore();
 }
-/* Draw one road run into the scratch layer (opaque). Per-piece width
-   jitter (the <=1-2m crisp-edge noise transition) + tone wobble; interior
-   piece joints use round caps HIDDEN inside the opaque union, terminal
-   piece ends are butt (no blobs). */
-/* Per-node width multiplier for class-transition tapers: over ~16m at a
-   tapered end the road narrows toward its lower-class continuation. */
-var ROAD_TAPER_LEN = 16;
-function _runArcs(nodes){
-  var d=[0];
-  for(var i=1;i<nodes.length;i++) d.push(d[i-1]+Math.hypot(nodes[i].x-nodes[i-1].x, nodes[i].z-nodes[i-1].z));
-  return d;
-}
-function _taperMul(run, arcs, i){
-  var m = 1, total = arcs[arcs.length-1];
-  if(run.taperA) m = Math.min(m, lerp(0.35, 1, clamp01(arcs[i]/ROAD_TAPER_LEN)));
-  if(run.taperB) m = Math.min(m, lerp(0.35, 1, clamp01((total-arcs[i])/ROAD_TAPER_LEN)));
-  return m;
-}
-function _scrCasingRun(t, run){
-  if(!run.caseW || !t.detail) return;
-  var ctx = t.sctx;
-  ctx.globalAlpha = 1;
-  if(!run.taperA && !run.taperB){
-    _scrStroke(ctx, t.pxFn, t.pxLenFn, run.nodes, run.widthM, run.caseCol, "butt");
-    return;
-  }
-  var nodes = run.nodes, arcs = _runArcs(nodes);
-  for(var j=0;j<nodes.length-1;j++){
-    var mul = (_taperMul(run, arcs, j)+_taperMul(run, arcs, j+1))/2;
-    _scrStroke(ctx, t.pxFn, t.pxLenFn, [nodes[j], nodes[j+1]],
-      run.widthM*mul, run.caseCol, (j===0||j===nodes.length-2)?"butt":"round");
-  }
+/* CONSTANT-WIDTH PAINTER (s62 — road-master-spec CONSTANT-WIDTH AMENDMENT):
+   exactly two width families — a street's surveyed class width (constant
+   along its whole length and over time) and the ~1.8m footpath. ALL width
+   interpolation/taper/jitter code is deleted (it was the source of the
+   Frankenstein bulges/ballooning junctions). Lifecycle renders as FILL /
+   surface treatment inside the constant width (run.fill: "full" | "partial").
+
+   CASING: the old hard two-tone under-pass read as TWO SEPARATE DARK RAILS
+   at oblique angles. It is now a width-proportional inner edge GRADIENT —
+   two nested whole-layer passes stepping softly darker toward the rim; all
+   rim passes for the layer paint BEFORE any core, so the gradient only rims
+   the OUTSIDE of the unioned network (junctions painted once, clean). */
+var ROAD_CASE_W = 1.0; // per-side shaded-edge width (m), absolute — never class-scaled
+function _scrCasingPass(t, run, widthM, mixT){
+  var col = _mixCol(_parseSplatCol(run.col), _parseSplatCol(run.caseCol), mixT);
+  t.sctx.globalAlpha = 1;
+  _scrStroke(t.sctx, t.pxFn, t.pxLenFn, run.nodes, widthM, col, "butt");
 }
 function _scrRoadRun(t, run){
   var ctx = t.sctx, nodes = run.nodes;
   var base = _parseSplatCol(run.col);
   var coreW = (t.detail && run.caseW) ? Math.max(run.widthM - 2*run.caseW, run.widthM*0.6) : run.widthM;
-  var arcs = _runArcs(nodes);
+  var partial = run.fill==="partial";
   if(!t.detail){
-    // coarse world tier: one plain stroke — all jitter is sub-texel there
-    _scrStroke(ctx, t.pxFn, t.pxLenFn, nodes, coreW, run.col, "butt");
+    // coarse world tier: one plain constant stroke (partial fill reads as a
+    // lighter wash at map scale — the class grammar's "patchy" register)
+    _scrStroke(ctx, t.pxFn, t.pxLenFn, nodes, run.widthM,
+      partial ? _mixCol(base, _parseSplatCol(ROAD_COLS.partialWash), 0.45) : run.col, "butt");
     return;
   }
-  var seed = run.seed;
-  for(var j=0;j<nodes.length-1;j++){
-    var a = nodes[j], b = nodes[j+1];
-    var isEndA = (j===0), isEndB = (j===nodes.length-2);
-    // clip terminal round caps back inside the run so no cap protrudes
-    var dx=b.x-a.x, dz=b.z-a.z, len=Math.hypot(dx,dz)||1;
-    var mul = (_taperMul(run, arcs, j)+_taperMul(run, arcs, j+1))/2;
-    var w = coreW*mul*(0.95+0.10*_strokeN(seed, j*2+1));
-    var aa = isEndA ? a : {x:a.x-dx/len*w*0.4, z:a.z-dz/len*w*0.4};
-    var bb = isEndB ? b : {x:b.x+dx/len*w*0.4, z:b.z+dz/len*w*0.4};
-    // tone wobble kept subtle — larger values read as tiled panels at the
-    // close tier's resolution (s27 plaza-150m finding)
-    var dk = 1 + (_strokeN(seed, j*2)-0.5)*0.11;
-    _scrStroke(ctx, t.pxFn, t.pxLenFn, [aa,bb], w, _jitterCol(base, dk), "butt");
-  }
-  if(run.ruts && coreW>=3.4){
-    // broken wheel-rut twins tracking the (meandered) centerline; gaps
-    // correlated along the length so ruts come and go in irregular runs
-    var rutCol = _mixCol(_parseSplatCol(ROAD_COLS.rut), base, 0.35);
-    var rutOff = coreW*0.16;
-    [rutOff,-rutOff].forEach(function(off, side){
-      var line = splatOffsetPolyline(nodes, off);
-      var ph = seed*53.0 + side*2.7, d = 0, runPts = [];
+  var seed = run.seed, j, a, b, dx, dz, len, dk;
+  if(partial){
+    /* S3 PARTIAL FILL: a light worn wash across the constant width, with
+       broken opaque worn bands (wheel/foot lanes) inside it — patchy fill
+       progression, never width progression. */
+    _scrStroke(ctx, t.pxFn, t.pxLenFn, nodes, coreW, _mixCol(base, _parseSplatCol(ROAD_COLS.partialWash), 0.55), "butt");
+    var bandDefs = [ {off:-0.28, w:0.26, ph:0.0}, {off:-0.01, w:0.30, ph:2.2}, {off:0.25, w:0.24, ph:4.1} ];
+    for(var bi=0;bi<bandDefs.length;bi++){
+      var bd = bandDefs[bi];
+      var line = splatOffsetPolyline(nodes, coreW*bd.off);
+      var d = 0, runPts = [];
       for(var k=0;k<line.length;k++){
         if(k>0) d += Math.hypot(line[k].x-line[k-1].x, line[k].z-line[k-1].z);
-        var v = 0.5+0.5*Math.sin(d*0.09+ph) + (_strokeN(seed,700+k*2+side)-0.5)*0.55;
-        if(v > 0.34) runPts.push(line[k]);
-        if((v <= 0.34 || k===line.length-1) && runPts.length){
-          if(runPts.length>=2) _scrStroke(ctx, t.pxFn, t.pxLenFn, runPts, coreW*0.11, rutCol, "butt");
+        var v = 0.5+0.5*Math.sin(d*0.055+bd.ph+seed*31.0) + (_strokeN(seed, 900+k*2+bi)-0.5)*0.6;
+        if(v > 0.42) runPts.push(line[k]);
+        if((v <= 0.42 || k===line.length-1) && runPts.length){
+          if(runPts.length>=2){
+            dk = 1 + (_strokeN(seed, 950+k+bi*7)-0.5)*0.10;
+            _scrStroke(ctx, t.pxFn, t.pxLenFn, runPts, coreW*bd.w, _jitterCol(base, dk), "butt");
+          }
           runPts = [];
         }
       }
-    });
+    }
+  } else {
+    // S4 FULL FILL: constant width, per-segment tone wobble only
+    for(j=0;j<nodes.length-1;j++){
+      a = nodes[j]; b = nodes[j+1];
+      // clip terminal segment extensions back inside the run so nothing protrudes
+      dx=b.x-a.x; dz=b.z-a.z; len=Math.hypot(dx,dz)||1;
+      var aa = (j===0) ? a : {x:a.x-dx/len*coreW*0.4, z:a.z-dz/len*coreW*0.4};
+      var bb = (j===nodes.length-2) ? b : {x:b.x+dx/len*coreW*0.4, z:b.z+dz/len*coreW*0.4};
+      // tone wobble kept subtle — larger values read as tiled panels at the
+      // close tier's resolution (s27 plaza-150m finding)
+      dk = 1 + (_strokeN(seed, j*2)-0.5)*0.11;
+      _scrStroke(ctx, t.pxFn, t.pxLenFn, [aa,bb], coreW, _jitterCol(base, dk), "butt");
+    }
+  }
+  if(run.ruts && coreW>=3.4){
+    /* broken wheel-rut twins at TRUE wagon gauge (s62: absolute meters —
+       the old coreW-proportional offset/width scaled to ~3m dark lines on
+       the wide constant-width streets: the user's "two dark rails").
+       Wide streets get two travel lanes; the ruts stay thin and broken. */
+    var rutCol = _mixCol(_parseSplatCol(ROAD_COLS.rut), base, 0.5);
+    var rutOff = 0.78, rutW = 0.4;
+    var lanes = coreW>=9 ? [-coreW*0.18, coreW*0.18] : [0];
+    for(var li=0; li<lanes.length; li++){
+      var laneC = lanes[li];
+      [rutOff,-rutOff].forEach(function(off, side){
+        var line = splatOffsetPolyline(nodes, laneC+off);
+        var ph = seed*53.0 + side*2.7 + li*1.9, d2 = 0, runPts2 = [];
+        for(var k=0;k<line.length;k++){
+          if(k>0) d2 += Math.hypot(line[k].x-line[k-1].x, line[k].z-line[k-1].z);
+          var v = 0.5+0.5*Math.sin(d2*0.09+ph) + (_strokeN(seed,700+k*2+side+li*97)-0.5)*0.55;
+          if(v > 0.38) runPts2.push(line[k]);
+          if((v <= 0.38 || k===line.length-1) && runPts2.length){
+            if(runPts2.length>=2) _scrStroke(ctx, t.pxFn, t.pxLenFn, runPts2, rutW, rutCol, "butt");
+            runPts2 = [];
+          }
+        }
+      });
+    }
   }
   if(run.churn){
-    // hoof-churned center mottle (§4 worn street), detail tiers only
-    var churnCol = _mixCol(_parseSplatCol(ROAD_COLS.rut), base, 0.45);
+    // hoof-churned mottle (§4 worn street), detail tiers only — s62: blotch
+    // radius capped ABSOLUTE (the old coreW-proportional radius blew up to
+    // ~3m smudge blobs on wide streets, worst at junctions)
+    var churnCol = _mixCol(_parseSplatCol(ROAD_COLS.rut), base, 0.55);
     ctx.fillStyle = churnCol;
     for(var m=1;m<nodes.length-1;m++){
       var hh = _strokeN(seed, 300+m);
       if(hh>0.62){
-        var pc = t.pxFn(nodes[m].x + (_strokeN(seed,500+m)-0.5)*coreW*0.3, nodes[m].z + (_strokeN(seed,600+m)-0.5)*coreW*0.3);
-        ctx.globalAlpha = 0.5+(hh-0.62)*1.1;
-        ctx.beginPath(); ctx.arc(pc.x, pc.y, Math.max(1, t.pxLenFn(coreW*(0.08+hh*0.10))), 0, Math.PI*2); ctx.fill();
+        var pc = t.pxFn(nodes[m].x + (_strokeN(seed,500+m)-0.5)*coreW*0.35, nodes[m].z + (_strokeN(seed,600+m)-0.5)*coreW*0.35);
+        ctx.globalAlpha = 0.30+(hh-0.62)*0.8;
+        ctx.beginPath(); ctx.arc(pc.x, pc.y, Math.max(1, t.pxLenFn(Math.min(1.1, coreW*0.06+hh*0.4))), 0, Math.PI*2); ctx.fill();
         _scrGrow(pc, t.pxLenFn(coreW*0.2));
       }
     }
     ctx.globalAlpha = 1;
   }
 }
-/* Ghost run: a hand-surveyed scratch — short dashed pieces, gaps, lateral
-   wobble, tone jitter. Opaque in-layer; the layer alpha keeps it faint. */
+/* Ghost run — the surveyor's RIGHT-OF-WAY HINT (s62 constant-width
+   amendment): the full class width is marked by its BOUNDARIES — two
+   scratched, gappy edge lines at ±W/2 — never a filled band (§9
+   no-map-overlay: a plat is a promise; nearly invisible at altitude).
+   Narrow ways and the coarse world tier keep the old thin center scratch
+   (an edge pair is sub-texel there anyway). Opaque in-layer; the layer
+   alpha keeps it faint. */
 function _scrGhostRun(t, run){
   var ctx = t.sctx, nodes = run.nodes;
   var base = _parseSplatCol(run.col);
-  var w = Math.min(run.widthM*0.35, 1.5);
-  for(var j=0;j<nodes.length-1;j++){
-    var a=nodes[j], b=nodes[j+1];
-    var hh = hash2((a.x+b.x)*0.0105, (a.z+b.z)*0.0105);
-    if(hh > 0.80) continue; // gap — scratched, not vector-drawn
-    var dk = 0.85+hh*0.4;
-    _scrStroke(ctx, t.pxFn, t.pxLenFn, [a,b], w*(0.7+hh*0.6), _jitterCol(base, dk), "butt");
+  if(!t.detail || run.widthM < 3.5){
+    var w = Math.min(run.widthM*0.35, 1.5);
+    for(var j=0;j<nodes.length-1;j++){
+      var a=nodes[j], b=nodes[j+1];
+      var hh = hash2((a.x+b.x)*0.0105, (a.z+b.z)*0.0105);
+      if(hh > 0.80) continue; // gap — scratched, not vector-drawn
+      _scrStroke(ctx, t.pxFn, t.pxLenFn, [a,b], w*(0.7+hh*0.6), _jitterCol(base, 0.85+hh*0.4), "butt");
+    }
+    return;
   }
+  [ -run.widthM/2, run.widthM/2 ].forEach(function(off, side){
+    var line = splatOffsetPolyline(nodes, off);
+    for(var j=0;j<line.length-1;j++){
+      var a=line[j], b=line[j+1];
+      var hh = hash2((a.x+b.x)*0.0105+side*3.7, (a.z+b.z)*0.0105);
+      if(hh > 0.72) continue; // gappy scratch, not a drawn rule
+      _scrStroke(ctx, t.pxFn, t.pxLenFn, [a,b], 0.55+hh*0.5, _jitterCol(base, 0.82+hh*0.4), "butt");
+    }
+  });
 }
 /* Planked surface (§4, documented only): transverse plank strokes with
    per-plank tone jitter and gap lines — the documented lighter-than-
@@ -3125,10 +3157,14 @@ function drawRoadLayer(t, runs, layerAlpha){
   if(t._dirty){ ctx.clearRect(t._dirty.x0, t._dirty.y0, t._dirty.x1-t._dirty.x0, t._dirty.y1-t._dirty.y0); }
   _scrReset();
   ctx.save();
-  // casing under-pass for the whole layer FIRST (so casing rims only the
-  // outside of the unioned network, never crosses a junction)
+  // s62 gradient casing: TWO nested whole-layer under-passes (outer rim,
+  // then inner rim) before any core — a soft darker edge gradient inside
+  // the constant-width stroke, rimming only the OUTSIDE of the unioned
+  // network (junctions painted once; the old single hard pass read as two
+  // separate dark rails at oblique angles)
   if(t.detail){
-    for(var c=0;c<use.length;c++){ if(use[c].kind==="road" && use[c].caseW) _scrCasingRun(t, use[c]); }
+    for(var c=0;c<use.length;c++){ if(use[c].kind==="road" && use[c].caseW) _scrCasingPass(t, use[c], use[c].widthM, 0.62); }
+    for(var c2=0;c2<use.length;c2++){ if(use[c2].kind==="road" && use[c2].caseW) _scrCasingPass(t, use[c2], use[c2].widthM - use[c2].caseW, 0.30); }
   }
   for(var j=0;j<use.length;j++){
     var run = use[j];
@@ -3233,13 +3269,13 @@ function renderGroundSplat(skewAngle){
   function addRun(bucket, kind, rawPts, widthM, col, opts){
     opts = opts||{};
     var seed = opts.seed!=null?opts.seed:hash2(rawPts[0].x*0.037, rawPts[0].z*0.037);
-    var amp = opts.amp!=null?opts.amp:roadMeanderAmp(bucket, widthM);
+    var amp = opts.amp!=null?opts.amp:1.1; // explicit per-caller; default is a mild work-path wander
     var nodes = opts.noMeander ? rawPts : buildRunNodes(rawPts, amp, seed, opts.s0||0);
     if(!nodes || nodes.length<2) return null;
     var run = { bucket:bucket, kind:kind, nodes:nodes, widthM:widthM, col:col, seed:seed,
       caseW:opts.caseW||0, caseCol:opts.caseCol||null, ruts:!!opts.ruts, churn:!!opts.churn,
+      fill:opts.fill||"full", // s62 constant-width amendment: lifecycle is FILL progression, never width
       detailOnly:!!opts.detailOnly, isStreet:!!opts.isStreet,
-      taperA:!!opts.taperA, taperB:!!opts.taperB,
       fadeA:false, fadeB:!!opts.fadeB, fadeFrac:opts.fadeFrac||0.45, noEndFade:!!opts.noEndFade,
       bbox:null };
     run.bbox = runBBox(nodes);
@@ -3370,12 +3406,13 @@ function renderGroundSplat(skewAngle){
     lifePieces = pieceList;
     ROADSTATE_LAST[s.id] = { id:s.id, name:s.name, state:_rec.state, pieces:_rec.pieces };
 
-    /* ONE continuous meandered centerline for the whole painted extent —
-       the §9b right-of-way wander, with amplitude interpolated across
-       state transitions so a trail widening into a developing road never
-       jumps laterally at a class boundary. Class runs are node ranges
-       over this shared chain (adjacent runs share their boundary node). */
-    var BUCKET_BY_ST = { 1:"ghost", 2:"trail", 3:"r3", 4:"r4" };
+    /* ONE shared STRAIGHT chain for the whole painted extent (s62,
+       road-master-spec §1 + constant-width amendment): the master line is
+       inviolate — the platted band renders ON the centerline at constant
+       class width; only the S2 footpath INSIDE the right-of-way wanders.
+       Class runs are node ranges over this chain (adjacent runs share
+       their boundary node); the amplitude-interpolation machinery that
+       morphed width/meander across class boundaries is DELETED. */
     var seedS = _streetSeed(s.id);
     var totalArc = arc;
     function pieceIdxAt(d){
@@ -3383,55 +3420,69 @@ function renderGroundSplat(skewAngle){
       while(lo<hi){ var m=(lo+hi+1)>>1; if(lifePieces[m].s0<=d) lo=m; else hi=m-1; }
       return lo;
     }
-    function ampOfPiece(p){ return (p.wet || p.st<1) ? 0 : roadMeanderAmp(BUCKET_BY_ST[p.st]||"ghost", s.widthM, s.surveyedDay!=null); }
-    function ampAt(d){
-      var pIdx = pieceIdxAt(d);
-      var lp = lifePieces[pIdx];
-      var a = ampOfPiece(lp), BLEND = 14;
-      if(pIdx>0 && d-lp.s0<BLEND) a = lerp((a+ampOfPiece(lifePieces[pIdx-1]))/2, a, (d-lp.s0)/BLEND);
-      var sEnd = lp.s0+lp.len;
-      if(pIdx<lifePieces.length-1 && sEnd-d<BLEND) a = lerp((a+ampOfPiece(lifePieces[pIdx+1]))/2, a, (sEnd-d)/BLEND);
-      return a;
-    }
-    var ph1=seedS*37.0, ph2=seedS*91.0;
     var chain=[], dAcc=0;
     for(var cs=0; cs<pathPts.length-1; cs++){
       var A2=pathPts[cs], B2=pathPts[cs+1];
       var dx2=B2.x-A2.x, dz2=B2.z-A2.z, len2=Math.hypot(dx2,dz2);
       if(len2<1e-6) continue;
-      var nxp=-dz2/len2, nzp=dx2/len2;
       var n2=Math.max(1, Math.round(len2/7));
       for(var k2=(chain.length?1:0); k2<=n2; k2++){
-        var tt2=k2/n2, dArc=dAcc+len2*tt2;
-        var amp = ampAt(Math.min(dArc, totalArc-0.01));
-        var off = amp*(0.62*Math.sin(dArc*0.045+ph1)+0.38*Math.sin(dArc*0.016+ph2));
-        chain.push({ x:A2.x+dx2*tt2+nxp*off, z:A2.z+dz2*tt2+nzp*off, d:dArc });
+        var tt2=k2/n2;
+        chain.push({ x:A2.x+dx2*tt2, z:A2.z+dz2*tt2, d:dAcc+len2*tt2 });
       }
       dAcc+=len2;
     }
-    var curKey=null, curNodes=null, curUseMax=0, prevRunKey=null;
-    function flushRun(nextKey){
-      if(curKey==null || !curNodes || curNodes.length<2){ prevRunKey=curKey; curKey=null; curNodes=null; curUseMax=0; return; }
+    /* the trodden-footpath wander (S2 only): a seeded two-sine lateral
+       offset on the run's own nodes, clamped to stay INSIDE the ROW */
+    function meanderNodes(nodesIn, amp){
+      var ph1=seedS*37.0, ph2=seedS*91.0, out=[];
+      for(var i=0;i<nodesIn.length;i++){
+        var p=nodesIn[i];
+        var pA=nodesIn[Math.max(0,i-1)], pB=nodesIn[Math.min(nodesIn.length-1,i+1)];
+        var ddx=pB.x-pA.x, ddz=pB.z-pA.z, dl=Math.hypot(ddx,ddz)||1;
+        var off = amp*(0.62*Math.sin(p.d*0.045+ph1)+0.38*Math.sin(p.d*0.016+ph2));
+        out.push({x:p.x+(-ddz/dl)*off, z:p.z+(ddx/dl)*off});
+      }
+      return out;
+    }
+    var STREET_TRAIL_W = 1.8; // the footpath family's ONE narrow constant width
+    var curKey=null, curNodes=null;
+    function flushRun(){
+      if(curKey==null || !curNodes || curNodes.length<2){ curKey=null; curNodes=null; return; }
       if(curKey===-1){ // wet — pier hint over the tideflat
         PIER_RUNS.push({ pts:curNodes, widthM:s.widthM });
         _rec.pierSegs += curNodes.length-1;
-        prevRunKey=curKey; curKey=null; curNodes=null; curUseMax=0; return;
+        curKey=null; curNodes=null; return;
       }
-      if(curKey===0){ prevRunKey=curKey; curKey=null; curNodes=null; curUseMax=0; return; }
-      var bucket = BUCKET_BY_ST[curKey];
-      var frac = curKey===2 ? clamp01((curUseMax-ROAD_USE_T2)/(ROAD_USE_T3-ROAD_USE_T2)) : 0;
-      var widthM, col, caseW=0, caseCol=null, ruts=false, churn=false;
-      if(curKey===1){ widthM = s.widthM; col = ROAD_COLS.ghost; _rec.ghostSegs += curNodes.length-1; }
-      else if(curKey===2){ widthM = 1.6+1.2*frac; col = ROAD_COLS.trail; _rec.wornSegs += curNodes.length-1; }
-      else if(curKey===3){ widthM = s.widthM*0.55; col = ROAD_COLS.r3; caseW=0.8; caseCol=ROAD_COLS.r3case; ruts=true; _rec.wornSegs += curNodes.length-1; }
-      else { widthM = s.widthM; col = ROAD_COLS.r4; caseW=1.1; caseCol=ROAD_COLS.r4case; ruts=true; churn=true; _rec.wornSegs += curNodes.length-1; }
-      // WIDTH TAPER at class transitions: a road narrows into its lower-
-      // class continuation over ~16m instead of ending as a square slab
-      addRun(bucket, curKey===1?"ghost":"road", curNodes, widthM, col,
-        { seed:seedS, noMeander:true, caseW:caseW, caseCol:caseCol, ruts:ruts, churn:churn, isStreet:curKey>=2,
-          taperA: prevRunKey!=null && prevRunKey<curKey,
-          taperB: nextKey!=null && nextKey<curKey });
-      prevRunKey=curKey; curKey=null; curNodes=null; curUseMax=0;
+      if(curKey===0){ curKey=null; curNodes=null; return; }
+      /* CONSTANT-WIDTH AMENDMENT: lifecycle = FILL/TREATMENT progression
+         inside the constant class width, NEVER width change.
+           S1 — faint right-of-way boundary hint (full class width)
+           S2 — the ROW hint stays + a trodden footpath line INSIDE it
+           S3 — partial fill: light wash + patchy worn bands, edge gradient
+           S4 — full worn surface, edge gradient, ruts, churn */
+      if(curKey===1){
+        addRun("ghost", "ghost", curNodes, s.widthM, ROAD_COLS.ghost, { seed:seedS, noMeander:true });
+        _rec.ghostSegs += curNodes.length-1;
+      } else if(curKey===2){
+        if(s.surveyedDay!=null)
+          addRun("ghost", "ghost", curNodes, s.widthM, ROAD_COLS.ghost, { seed:seedS, noMeander:true });
+        var amp = s.surveyedDay!=null
+          ? Math.min(2.2, Math.max(0.8, s.widthM/2 - STREET_TRAIL_W))  // wander stays inside the platted ROW
+          : 2.8;                                                        // unplatted desire path — freer (§9b)
+        addRun("trail", "road", meanderNodes(curNodes, amp), STREET_TRAIL_W, ROAD_COLS.trail,
+          { seed:seedS, noMeander:true, isStreet:true });
+        _rec.wornSegs += curNodes.length-1;
+      } else if(curKey===3){
+        addRun("r3", "road", curNodes, s.widthM, ROAD_COLS.r3,
+          { seed:seedS, noMeander:true, caseW:ROAD_CASE_W, caseCol:ROAD_COLS.r3case, ruts:true, fill:"partial", isStreet:true });
+        _rec.wornSegs += curNodes.length-1;
+      } else {
+        addRun("r4", "road", curNodes, s.widthM, ROAD_COLS.r4,
+          { seed:seedS, noMeander:true, caseW:ROAD_CASE_W, caseCol:ROAD_COLS.r4case, ruts:true, churn:true, fill:"full", isStreet:true });
+        _rec.wornSegs += curNodes.length-1;
+      }
+      curKey=null; curNodes=null;
     }
     for(var ni=0; ni<chain.length; ni++){
       var node = chain[ni];
@@ -3440,18 +3491,18 @@ function renderGroundSplat(skewAngle){
       if(curKey===null){ curKey=key; curNodes=[node]; }
       else if(key!==curKey){
         curNodes.push(node); // shared boundary node — continuity across class runs
-        flushRun(key);
+        flushRun();
         curKey=key; curNodes=[node];
       } else {
         curNodes.push(node);
       }
-      curUseMax = Math.max(curUseMax, lpN.wet?0:lpN.use);
     }
-    flushRun(null);
+    flushRun();
 
     // Fading sandy stub past the surveyed edge — kept only for the
     // original Vioget streets whose extents really end in unsurveyed
-    // ground; painted as a faint tapering track with a ragged fade.
+    // ground; a FOOTPATH-family constant-width track with a ragged fade
+    // (s62: the old s.widthM*0.45 taper stubs were the "spike" artifacts).
     if(s.swings && _rec.state>=2 && chain.length>=2){
       var a0=s.polyline[i0], a1=s.polyline[i1], aNext=s.polyline[Math.min(i0+1,i1)], aPrev=s.polyline[Math.max(i1-1,i0)];
       [[a0,aNext],[a1,aPrev]].forEach(function(pair, side){
@@ -3469,7 +3520,7 @@ function renderGroundSplat(skewAngle){
           if(tEnd<0.15) return;
           eB = {x:lerp(eA.x,eB.x,tEnd), z:lerp(eA.z,eB.z,tEnd)};
         }
-        addRun("faint", "road", [eA,eB], s.widthM*0.45, "#7c6a4a",
+        addRun("faint", "road", [eA,eB], 1.8, "#7c6a4a",
           { seed:_streetSeed(s.id)+0.31+side*0.17, amp:2.2, fadeB:true, fadeFrac:0.75, noEndFade:true });
       });
     }
@@ -3979,15 +4030,29 @@ function distToSegXZ(x,z,x0,z0,x1,z1){
    whatever angle a street happens to be painted at post-swing (see
    updateGridSwing()'s comment on why buildings "never re-baked" is
    historically correct, not a bug). */
+/* s62 BUILDINGS-ON-ROADS FIX (road-master-spec constant-width amendment):
+   this list used to be built ONLY in the fixed Vioget frame (-6.5°), but
+   streets PAINT at GRID_ROT_BASE (-9.0°) after the Aug-1847 swing — and
+   non-swinging (post-O'Farrell) streets paint at -9.0° ALWAYS. The 2.5°
+   frame delta is up to ~26m of lateral divergence at the block extremes,
+   which is exactly how frontage rows ended up standing on the painted
+   roadway. Placement clearance is now the UNION of every frame a street
+   ever renders in: swinging streets contribute BOTH frames (the swing
+   sweep), non-swinging streets contribute the -9.0° frame they always
+   paint at. halfW is the street's CONSTANT surveyed class width — the
+   right-of-way is reserved at full width from day one. */
 var PLACEMENT_STREET_SEGS = (function(){
   var segs = [];
   STREETS_RUNTIME.forEach(function(s){
     var i1 = s.checkpoints.length ? s.checkpoints[s.checkpoints.length-1].extent[1] : s.polyline.length-1;
     var halfW = s.widthM/2;
-    for(var i=0;i<i1;i++){
-      var a=gridToWorld(s.polyline[i].u, s.polyline[i].v), b=gridToWorld(s.polyline[i+1].u, s.polyline[i+1].v);
-      segs.push({x0:a.x,z0:a.z,x1:b.x,z1:b.z,halfW:halfW});
-    }
+    var frames = s.swings ? [{a:VIOGET_SKEW,f:"vioget"}, {a:GRID_ROT_BASE,f:"base"}] : [{a:GRID_ROT_BASE,f:"base"}];
+    frames.forEach(function(fr){
+      for(var i=0;i<i1;i++){
+        var a=gridToWorldAt(s.polyline[i].u, s.polyline[i].v, fr.a), b=gridToWorldAt(s.polyline[i+1].u, s.polyline[i+1].v, fr.a);
+        segs.push({x0:a.x,z0:a.z,x1:b.x,z1:b.z,halfW:halfW,frame:fr.f,id:s.id});
+      }
+    });
   });
   return segs;
 })();
@@ -4399,7 +4464,13 @@ var LANDMARK_FOUNDED_ISO = {
   "Washington Arcade": "1849-01-01",
   "Bella Union": "1849-10-22"
 };
-var LANDMARK_DEFAULT_FOUNDED_ISO = "1847-01-01";
+/* s62: default moved 1847-01-01 -> 1847-09-01. denseRow/forceFrame stock is
+   ALIGNED to the corrected O'Farrell grid (GRID_ROT_BASE) — construction
+   aligned to a survey cannot logically predate that survey's completion
+   (Aug 1847). This also lets the road-footprint audit check post-survey
+   rows against only the frame their streets actually paint in while they
+   stand. Documented exceptions (City Hotel 1846) keep their own dates. */
+var LANDMARK_DEFAULT_FOUNDED_ISO = "1847-09-01";
 function landmarkFoundedDay(name){
   var iso = name ? (LANDMARK_FOUNDED_ISO[name] || LANDMARK_DEFAULT_FOUNDED_ISO) : LANDMARK_DEFAULT_FOUNDED_ISO;
   return eventDateToSimDay(iso);
@@ -4644,51 +4715,83 @@ function landmarkFoundedDay(name){
     // the corrected record.
     var nV = Math.min(GEO.streetsV.clay, GEO.streetsV.washington); // north edge = Washington St (corrected)
     var sV = Math.max(GEO.streetsV.clay, GEO.streetsV.washington); // south edge = Clay St (corrected)
+    /* s62 CONSTANT-WIDTH SETBACKS (road-master-spec amendment): the old
+       hand-nudged +8/+9m offsets were calibrated against the narrower
+       PAINTED streets of an earlier renderer — against the CONSTANT
+       surveyed class widths (Kearny 68'9" = 20.96m, Washington/Clay
+       49'1.5" = 14.97m) they put whole frontage rows ON the roadway.
+       Every offset below is now derived: centerline + halfW + 1.6m margin
+       + half the building's worst-case depth (3.4m × sizeMul), so fronts
+       align just clear of the right-of-way. And since these are documented
+       POST-SURVEY rows (denseRow aligns their yaw to GRID_ROT_BASE), their
+       positions convert through the SAME -9.0° frame the streets are
+       painted in after Aug 1847 — not the founding-village Vioget frame
+       (the 2.5° delta alone was ~6m of on-road drift here). */
+    var K_HALF = STREETS_RUNTIME_BY_ID["kearny"].widthM/2;
+    var W_HALF = STREETS_RUNTIME_BY_ID["washington"].widthM/2;
+    var C_HALF = STREETS_RUNTIME_BY_ID["clay"].widthM/2;
+    var M_HALF = STREETS_RUNTIME_BY_ID["montgomery"].widthM/2;
+    function fOff(halfW, sizeMul){ return halfW + 1.6 + 3.5*(sizeMul||1); }
+    /* Portsmouth Street (the corpus-attested mid-block lane at v=0, running
+       from the Plaza to the Montgomery landing) BISECTS this block in the
+       master data — the fill and mid-row lots must respect its constant
+       right-of-way like any other street (s62 audit finding). */
+    var _pStreet = STREETS_RUNTIME_BY_ID["portsmouth-street"];
+    var P_HALF = _pStreet ? _pStreet.widthM/2 : 0;
+    var P_V = _pStreet ? _pStreet.polyline[0].v : 0;
+    function dodgeMidLane(v, halfV){
+      if(!P_HALF) return v;
+      var lo = P_V - (P_HALF+1.4+halfV), hi = P_V + (P_HALF+1.4+halfV);
+      if(v>lo && v<hi) return (v<P_V) ? lo : hi;
+      return v;
+    }
     function put(u,v,rot,opts){
       opts = opts||{};
       opts.denseRow = true; // documented continuous frontage row (Alta account) — see placeBuilding()
-      var p = gridToWorld(u,v); placeBuilding(p.x,p.z,rot,opts);
+      var p = gridToWorldAt(u,v,GRID_ROT_BASE); placeBuilding(p.x,p.z,rot,opts);
     }
 
     // Kearny frontage, plaza-facing row — order per the Alta's loss list.
     // The Alta's account has this row running along Washington St (the
     // corrected north edge, nV) with two lots (Florence Saloon, Delmonico's)
     // toward the Clay St (south edge, sV) end near the plaza corner.
-    put(kU+8,  nV+9,  Math.PI/2, { name:"El Dorado",            sizeMul:1.45, tall:true, forceFrame:true });
-    put(kU+8,  nV+23, Math.PI/2, { name:"Parker House",         sizeMul:1.55, tall:true, forceFrame:true });
-    put(kU+8,  nV+36, Math.PI/2, { name:"Dennison's Exchange",  sizeMul:1.25, forceFrame:true, isIgnition:true });
-    put(kU+8,  nV+48, Math.PI/2, { name:"United States Restaurant", sizeMul:1.15, forceFrame:true });
-    put(kU+8,  nV+58, Math.PI/2, { name:"Hughs, Noel & Crenshaw", forceFrame:true });
-    put(kU+8,  sV-16, Math.PI/2, { name:"Florence Saloon", forceFrame:true });
-    put(kU+8,  sV-7,  Math.PI/2, { name:"Delmonico's",          sizeMul:1.2, forceFrame:true, fireproof:true }); // saved by its own roof crew (Alta)
+    put(kU+fOff(K_HALF,1.45), nV+fOff(W_HALF,1.45),  Math.PI/2, { name:"El Dorado",            sizeMul:1.45, tall:true, forceFrame:true });
+    put(kU+fOff(K_HALF,1.55), nV+fOff(W_HALF,1.55)+14, Math.PI/2, { name:"Parker House",         sizeMul:1.55, tall:true, forceFrame:true });
+    put(kU+fOff(K_HALF,1.25), dodgeMidLane(nV+fOff(W_HALF,1.25)+28, 4*1.25+1), Math.PI/2, { name:"Dennison's Exchange",  sizeMul:1.25, forceFrame:true, isIgnition:true });
+    put(kU+fOff(K_HALF,1.15), dodgeMidLane(nV+fOff(W_HALF,1.15)+40, 4*1.15+1), Math.PI/2, { name:"United States Restaurant", sizeMul:1.15, forceFrame:true });
+    put(kU+fOff(K_HALF,1),    dodgeMidLane(nV+fOff(W_HALF,1)+52, 5),    Math.PI/2, { name:"Hughs, Noel & Crenshaw", forceFrame:true });
+    put(kU+fOff(K_HALF,1),    sV-fOff(C_HALF,1)-9,     Math.PI/2, { name:"Florence Saloon", forceFrame:true });
+    put(kU+fOff(K_HALF,1.2),  sV-fOff(C_HALF,1.2),     Math.PI/2, { name:"Delmonico's",          sizeMul:1.2, forceFrame:true, fireproof:true }); // saved by its own roof crew (Alta)
 
     // Washington St frontage, running toward Montgomery — incl. the
     // Merchants' Exchange the authorities blew up, and the unfinished
     // Burgoyne & Co. brick store that finally stayed the fire.
-    put(kU+20, nV+8, 0, { name:"B. Ayres store", forceFrame:true });            // "in rear of the El Dorado" — 1st demolition
-    put(kU+32, nV+8, 0, { name:"Rosenbaum & Schaeffer", forceFrame:true });
-    put(kU+46, nV+8, 0, { name:"Merchants' Exchange",   sizeMul:1.3, forceFrame:true }); // Dunbar & Gibbs — 2nd demolition
-    put(kU+60, nV+8, 0, { name:"Washington Arcade", forceFrame:true });
-    put(kU+72, nV+8, 0, { name:"Central House", forceFrame:true });
-    put(kU+84, nV+8, 0, { name:"Geurschard & Van Beuren", sizeMul:1.15, forceFrame:true }); // 3rd demolition, by the Alcalde's order
-    put(kU+98, nV+8, 0, { name:"Baltimore Restaurant", forceFrame:true });
-    put(mU-8,  nV+8, 0, { name:"Burgoyne & Co. (brick, unfinished)", sizeMul:1.3, fireproof:true });
+    put(kU+20, nV+fOff(W_HALF,1), 0, { name:"B. Ayres store", forceFrame:true });            // "in rear of the El Dorado" — 1st demolition
+    put(kU+32, nV+fOff(W_HALF,1), 0, { name:"Rosenbaum & Schaeffer", forceFrame:true });
+    put(kU+46, nV+fOff(W_HALF,1.3), 0, { name:"Merchants' Exchange",   sizeMul:1.3, forceFrame:true }); // Dunbar & Gibbs — 2nd demolition
+    put(kU+60, nV+fOff(W_HALF,1), 0, { name:"Washington Arcade", forceFrame:true });
+    put(kU+72, nV+fOff(W_HALF,1), 0, { name:"Central House", forceFrame:true });
+    put(kU+84, nV+fOff(W_HALF,1.15), 0, { name:"Geurschard & Van Beuren", sizeMul:1.15, forceFrame:true }); // 3rd demolition, by the Alcalde's order
+    put(kU+98, nV+fOff(W_HALF,1), 0, { name:"Baltimore Restaurant", forceFrame:true });
+    put(mU-fOff(M_HALF,1.3),  nV+fOff(W_HALF,1.3), 0, { name:"Burgoyne & Co. (brick, unfinished)", sizeMul:1.3, fireproof:true });
 
     // interior + Clay-side fill to the documented ~50-building count
+    // (s62: fill kept clear of every right-of-way at constant class width,
+    // including the Portsmouth St mid-block lane)
     for(var i=0;i<30;i++){
-      var u = lerp(kU+16, mU-14, rngBuild());
-      var v = lerp(sV-12, nV+18, rngBuild());
+      var u = lerp(kU+K_HALF+6.5, mU-M_HALF-6.5, rngBuild());
+      var v = dodgeMidLane(lerp(sV-C_HALF-6.5, nV+W_HALF+11, rngBuild()), 5.2);
       put(u, v, rngBuild()<0.5?0:Math.PI/2, { forceFrame:true });
     }
 
     // scorched survivors just OUTSIDE the footprint (blanket crews kept
-    // them wet, per the Alta): the Verandah opposite the El Dorado, and
-    // the Bella Union / Haley House / Miners' Bank row across Washington
-    // (now correctly the NORTH side, nV-9, not the old buggy south side).
-    put(kU-9,  nV-9,  Math.PI/2, { name:"Verandah", sizeMul:1.15, forceFrame:true }); // kept out of the open Plaza block itself
-    put(kU-24, nV-9,  0, { name:"Miners' Bank", forceFrame:true });
-    put(kU-38, nV-9,  0, { name:"Bella Union", sizeMul:1.25, forceFrame:true });
-    put(kU-52, nV-9,  0, { name:"Haley House", sizeMul:1.15, forceFrame:true });
+    // them wet, per the Alta): the Verandah opposite the El Dorado (the
+    // NW corner of Kearny & Washington), and the Bella Union / Haley
+    // House / Miners' Bank row across Washington (the north side).
+    put(kU-fOff(K_HALF,1.15), nV-fOff(W_HALF,1.15), Math.PI/2, { name:"Verandah", sizeMul:1.15, forceFrame:true }); // kept out of the open Plaza block itself
+    put(kU-24, nV-fOff(W_HALF,1),    0, { name:"Miners' Bank", forceFrame:true });
+    put(kU-38, nV-fOff(W_HALF,1.25), 0, { name:"Bella Union", sizeMul:1.25, forceFrame:true });
+    put(kU-52, nV-fOff(W_HALF,1.15), 0, { name:"Haley House", sizeMul:1.15, forceFrame:true });
   })();
 
   /* GAPS-2026-07-09 item 3 (named landmarks): City Hotel — William A.
@@ -4706,8 +4809,16 @@ function landmarkFoundedDay(name){
      calibrated against the pre-fix (wrong) street identity, not an
      independent design choice, so it has to flip along with the fix. */
   (function(){
+    // s62 constant-width setback (same derivation as the fire block): Kearny
+    // halfW + margin + half-depth east of Kearny, Clay halfW + margin +
+    // half-depth south of Clay, converted through the post-survey frame.
     var kU2 = uVals[2], cV2 = GEO.streetsV.clay;
-    var p = gridToWorld(kU2+8, cV2+10);
+    var kHalf = STREETS_RUNTIME_BY_ID["kearny"].widthM/2, cHalf = STREETS_RUNTIME_BY_ID["clay"].widthM/2;
+    // +7m extra: City Hotel is documented 1846 construction, so unlike the
+    // post-survey fire block it COEXISTS with the pre-1847 Vioget-frame
+    // street paint — the extra margin clears the right-of-way in BOTH
+    // frames (~6.2m max divergence at this distance from the grid origin).
+    var p = gridToWorldAt(kU2+kHalf+8.6+3.5*1.35, cV2+cHalf+8.6+3.5*1.35, GRID_ROT_BASE);
     placeBuilding(p.x, p.z, Math.PI/2, { name:"City Hotel", sizeMul:1.35, tall:true, forceFrame:true, denseRow:true });
   })();
 
@@ -16220,6 +16331,46 @@ window.__P1850 = {
     STREETS_RUNTIME.forEach(function(s){ var r=self.roadState(s.id); out[s.id]=r?r.state:"S0"; });
     return out;
   },
+  roadAudit: function(){ /* s62 (road-master-spec constant-width amendment):
+    ZERO structures on any right-of-way at any era. Checks every placed or
+    placeable footprint (village incl. documented rows, growth candidates,
+    tent candidates) against the constant-class-width street segments in
+    EVERY frame a street ever renders in (PLACEMENT_STREET_SEGS). */
+    function rectPts(x,z,rot,hw,hd){
+      var c=Math.cos(rot), sn=Math.sin(rot), out=[];
+      [[-hw,-hd],[hw,-hd],[hw,hd],[-hw,hd],[0,0],[hw,0],[-hw,0],[0,hd],[0,-hd]].forEach(function(o){
+        out.push({x:x+o[0]*c-o[1]*sn, z:z+o[0]*sn+o[1]*c});
+      });
+      return out;
+    }
+    function onRoad(pts, pad, postSwingOnly){
+      for(var i=0;i<PLACEMENT_STREET_SEGS.length;i++){
+        var sg=PLACEMENT_STREET_SEGS[i];
+        // a structure founded AFTER the O'Farrell swing never coexists with
+        // the pre-1847 Vioget-frame paint — audit it only against the frame
+        // its streets actually render in while it stands
+        if(postSwingOnly && sg.frame==="vioget") continue;
+        for(var k=0;k<pts.length;k++){
+          if(distToSegXZ(pts[k].x,pts[k].z,sg.x0,sg.z0,sg.x1,sg.z1) < sg.halfW+(pad||0)-0.05) return {id:sg.id, frame:sg.frame};
+        }
+      }
+      return null;
+    }
+    var bad=[];
+    VILLAGE_BUILDING_SPOTS.forEach(function(b,i){
+      var postSwing = b.foundedDay!=null && b.foundedDay >= OFARRELL_SWING_END;
+      var hit = onRoad(rectPts(b.x,b.z,b.rot||0,(b.w||4)/2,(b.d||4)/2), 0, postSwing);
+      if(hit) bad.push({kind:"village", i:i, name:b.name||null, x:Math.round(b.x), z:Math.round(b.z), st:hit.id, frame:hit.frame});
+    });
+    growthBuildingCandidates.forEach(function(c,i){
+      if(onRoad([{x:c.x,z:c.z}], 3.2)) bad.push({kind:"growth", i:i, x:Math.round(c.x), z:Math.round(c.z)});
+    });
+    tentCandidates.forEach(function(c,i){
+      if(onRoad([{x:c.x,z:c.z}], 1.8)) bad.push({kind:"tent", i:i, x:Math.round(c.x), z:Math.round(c.z)});
+    });
+    return { checked: VILLAGE_BUILDING_SPOTS.length+growthBuildingCandidates.length+tentCandidates.length,
+             violations: bad.length, list: bad.slice(0,40) };
+  },
   terrainEdited: invalidateGroundPaint, // road-master-spec §6: terrain edits MUST invalidate ground paint
   _splatDebug: { townMesh:function(v){ splatTownMesh.visible=v; }, worldMesh:function(v){ splatWorldMesh.visible=v; },
     closeMesh:function(v){ splatCloseMesh.visible=v; },
@@ -16557,7 +16708,7 @@ var WATER_SHALLOW_BASE = new THREE.Color(0x8fc2c9);
 var cZenithDay = new THREE.Color(0x3d72a8), cHorizonDay = new THREE.Color(0xf3dfb0);
 var cZenithNight = new THREE.Color(0x0a0e2a), cHorizonNight = new THREE.Color(0x241f3f);
 var cSunDay = new THREE.Color(0xfff1d0), cSunDusk = new THREE.Color(0xff9c55), cSunNight = new THREE.Color(0x5a6fa8);
-var cFogDay = new THREE.Color(0xcfc2a0), cFogNight = new THREE.Color(0x1c2033);
+var cFogDay = new THREE.Color(0xa89b7c), cFogNight = new THREE.Color(0x1c2033); // s62: day fog retoned with the earth palette (was 0xcfc2a0 parchment)
 
 function updateDayNight(){
   var phase = timeOfDay*Math.PI*2;
@@ -16594,10 +16745,13 @@ function updateDayNight(){
      intentional (the glow must dominate), so the raised floor stands down
      while fireGlow burns. */
   var moonFloor = 1 - clamp01(fireGlow)*0.8;
-  sun.intensity = lerp(0.12+0.05*moonFloor, 1.15, dayT) + duskGlow*0.15;
+  // EARTH PALETTE LAW (s62): day endpoints retuned so flat noon ground sums
+  // to ~1.03x (was ~1.6x — clipped to white). Night floors untouched (s44
+  // night readability preserved); dusk glow term unchanged.
+  sun.intensity = lerp(0.12+0.05*moonFloor, 0.72, dayT) + duskGlow*0.13;
 
-  hemi.intensity = lerp(0.12+0.10*moonFloor, 0.6, dayT);
-  ambient.intensity = lerp(0.05+0.055*moonFloor, 0.14, dayT);
+  hemi.intensity = lerp(0.12+0.10*moonFloor, 0.30, dayT);
+  ambient.intensity = lerp(0.05+0.055*moonFloor, 0.09, dayT);
 
   var fogCol = cFogNight.clone().lerp(cFogDay, dayT);
   scene.fog.color.copy(fogCol);
