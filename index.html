@@ -4759,6 +4759,60 @@ var STORESHIP_INFO = (function(){
     "Apollo":           { pos: pos(128, sacramento+6),  list: 0.14, chipRank:3, groundedNote:"beached between Central Wharf and Howison's Pier" }
   };
 })();
+/* =====================================================================
+   DOCUMENTED VESSEL TYPES (s48 ship design upgrade). The newsprint that
+   supplies every arrival/departure usually names the rig too ("the brig
+   Euphemia", "whaler Niantic", "Am. barque Whiton") — this map is that
+   record, extracted from data/events.jsonl's headline/text/quote fields
+   per ship name (162 of the 170 in-window vessels carry a documented
+   rig). Classes: 0 = full-rigged SHIP (incl. whaleships, packets,
+   frigates, steamers — square rig on all three masts is the honest
+   silhouette for all of them at this LOD), 1 = BARQUE (square fore/main,
+   fore-and-aft mizzen), 2 = BRIG (two masts, square), 3 = SCHOONER
+   (fore-and-aft; sloops/scows/launches fold in here — closest silhouette).
+   Where the same hull appears under variant spellings each spelling keeps
+   its own vote (noisy newsprint; deterministic either way).
+   ===================================================================== */
+var SHIP_TYPE_RECORD = { "Adams":0,"Adelaide":2,"Alcolk":2,"Alice":3,"America":0,"Angola":1,
+  "Anita":1,"Apollo":0,"Armatta":0,"Auais":3,"Bark Angola":1,"Barnstable":0,
+  "Baycal":2,"Belfast":2,"Benj. Rush":0,"Brig Henry":2,"Brig Sabine":2,"Brig Silvan":2,
+  "Brooklyn":0,"Brutus":0,"COMMODORE SHUBRICK":3,"Cabinet":0,"Cadboro":3,"Cadborough":2,
+  "Callao":1,"Caroline":1,"Cayuga":2,"Citizen":0,"Citizens":0,"Clementine":0,
+  "Columbia":1,"Columbus":0,"Com. Shubrick":3,"Com. Stockton":2,"Commodore Shubrick":3,"Commodore Stockton":2,
+  "Confederacion":0,"Congress":0,"Constantine":2,"Corea":0,"Coreo de Cobija":0,"Correo de Cobija":2,
+  "Courier de Varp":0,"Currency Las":3,"Currency Lass":2,"Cyane":0,"Dale":0,"Don Quixot":1,
+  "Don Quixote":1,"ELIZABETH":2,"Eagle":0,"Edward":0,"Elizabeth":2,"Erie":0,
+  "Euphemia":2,"Euphrates":0,"Everline":2,"FLORA":1,"Ferdinand":0,"Flecha":2,
+  "Fletcher":2,"Flora":0,"Francisca":2,"Francisco":3,"Gen. Kearny":3,"General Harrison":0,
+  "Georgiana":1,"Greyhound":3,"Guypuacuana":1,"Guypuscuana":1,"Haalilio":3,"Henry":2,
+  "Herald":0,"Honolulu":3,"Huntress":0,"INDEPENDENCE":0,"Independence":0,"Indiana":3,
+  "Isaac Howland":0,"J. R. S.":2,"Janet":1,"Janette":1,"Japan":0,"Joven Guipiscoana":1,
+  "Joven Guipuzcoana":1,"Julia":3,"Julian":2,"K. Carter":3,"Kamehameha III":3,"Lady Adams":2,
+  "Laura Ann":2,"Levant":0,"Lexington":0,"Loo Choo":0,"Louia Perry":2,"Louise":2,
+  "MARY":3,"Magnet":0,"Magnolia":0,"Malek Adhel":2,"Maria Helena":0,"Maria Teresa":2,
+  "Mary":3,"Mary Ann":2,"Mary Frances":0,"Mary Francis":0,"Matilda":3,"Moscow":1,
+  "Mount Vernon":0,"Mt. Vernon":0,"Naslednich":1,"Natalia":1,"Niantic":0,"Obed Mitchell":0,
+  "Ochotsk":2,"Ochotz":2,"Olga":1,"Orbed Mitchell":0,"Pacifico":2,"Parachute":0,
+  "Paramatta":1,"Peacock":3,"Portsmouth":0,"Preble":0,"Prescott":0,"Prima Vera":2,
+  "Providence":2,"Rhone":0,"Roman":0,"S S, Taylor":2,"S. S. Taylor":3,"SS California":0,
+  "STERLING":0,"Sabine":2,"Saganaduck":3,"Santa Cruz":3,"Savannah":0,"Sloop rigged Scow":3,
+  "Southampton":0,"Spy":2,"Star":3,"Starling":3,"Susan Drew":0,"Sweeden":0,
+  "Tasso":1,"Tepic":2,"Tepid":2,"Tho's. H. Perkins":0,"Thomas H. Benton":2,"Thomas H. Perkins":0,
+  "Thomas H. Pirkins":0,"Toulon":1,"Triaad":0,"Triad":0,"Trovador":2,"Veloz":2,
+  "Vesper":0,"Virginia":0,"WHITON":1,"Wave":3,"Whiton":1,"Xylon":0 };
+/* PERIOD-MIX TABLE for vessels whose rig the record never names — the 8
+   undocumented in-window ships plus every coverage-gap fill arrival
+   (fill:true — these weights are ASSUMED, not documented per hull). The
+   weights are this corpus's own documented-rig ratio (162 typed vessels:
+   66 ship / 25 barque / 44 brig / 27 schooner = .41/.15/.27/.17), which
+   also matches the mixed square-rig majority of the 1849 SF arrival
+   aggregates. Deterministic draw per ship name / fill index. */
+var SHIP_FILL_MIX = [ [0,0.41],[1,0.15],[2,0.27],[3,0.17] ];
+function shipTypeFromRoll(h){ // h in [0,1)
+  var acc = 0;
+  for(var i=0;i<SHIP_FILL_MIX.length;i++){ acc += SHIP_FILL_MIX[i][1]; if(h < acc) return SHIP_FILL_MIX[i][0]; }
+  return 0;
+}
 // PRE-RUSH SHIP CURVE fix (task #28, 2026-07-11): "anchored forever once a
 // departure is never mentioned again" is the correct reading of the record
 // ONLY once desertion is actually the documented norm — timeline-spine.md:
@@ -4838,11 +4892,14 @@ var shipVisits = (function buildShipVisits(){
   visits.forEach(function(v){
     v.pathJitter = rngBuild();
     v.exitNorth = rngBuild()<0.5;
-    // QA-GATE ships debt: 3 vessel silhouettes (0=full ship 3-mast square-rigged,
-    // 1=brig 2-mast square-rigged, 2=schooner 2-mast fore-and-aft/gaff), assigned
-    // deterministically per ship NAME (not per visit) so a given vessel keeps the
-    // same silhouette across arrivals/departures.
-    v.shipType = cyrb128("shiptype-"+v.ship)[0] % 3;
+    // s48 ship design upgrade: 4 vessel classes (0=full-rigged ship, 1=barque,
+    // 2=brig, 3=schooner). Documented ships carry their recorded rig
+    // (SHIP_TYPE_RECORD, from the arrival notices themselves); the few
+    // undocumented ones draw deterministically per ship NAME from the
+    // period-mix table, so a given vessel keeps the same silhouette across
+    // arrivals/departures either way.
+    v.shipType = SHIP_TYPE_RECORD[v.ship] != null ? SHIP_TYPE_RECORD[v.ship]
+               : shipTypeFromRoll((cyrb128("shiptype-"+v.ship)[0] >>> 8) / 16777216);
     v._state = "future"; v._anchorPos = null; v._anchorIdx = -1; v._anchorYaw = rngBuild()*Math.PI*2;
     // WORLD-P0 fix: named storeships get a fixed documented grounding spot
     // + permanent list angle instead of the generic anchorage arc/slot —
@@ -4985,9 +5042,10 @@ var ANCHOR_SLOTS = (function(){
   return slots;
 })();
 
-/* true-scale hull footprints per vessel type (matches SHIP_TRUE_SCALE
-   applied to the prefab hulls below) for the sweep's collision check */
-var SHIP_DIMS = [ {hl:17.5, hb:4.8}, {hl:13.0, hb:4.1}, {hl:10.0, hb:3.0} ];
+/* true-scale hull footprints per vessel class (matches the SHIP_CLASS
+   dims the prefab hulls below are built at) for the sweep's collision
+   check: 0 full-rigged ship 35m, 1 barque 30m, 2 brig 26m, 3 schooner 20m */
+var SHIP_DIMS = [ {hl:17.5, hb:4.6}, {hl:15.0, hb:4.3}, {hl:13.0, hb:4.1}, {hl:10.0, hb:3.4} ];
 function _ptSegDistSq(px,pz, ax,az, bx,bz){
   var vx=bx-ax, vz=bz-az, wx=px-ax, wz=pz-az;
   var c1 = vx*wx+vz*wz;
@@ -5147,53 +5205,47 @@ function shipDesiredState(v, day){
 }
 
 /* =====================================================================
-   SHIP HULL/SAIL PREFABS (QA-GATE ships rebuild, 2026-07): length runs
-   along local Z, bow at +Z, to match this file's existing
-   yaw=atan2(dx,dz) convention used throughout this file. Each of the
-   3 vessel types gets its own hull (with a sheer line — raised bow block,
-   lower raised stern block, instead of a flat box — plus a raked
-   bowsprit) and its own sail rig, so the fleet reads as mixed shipping
-   rather than one repeated box. Furled (anchored) vs set (sailing) is
-   still the existing non-uniform-Y-scale trick in updateShips().
+   SHIP HULL/SAIL PREFABS (s48 SHIP DESIGN UPGRADE, 2026-07-11 — retires
+   the QA-GATE "squares in a parking lot" silhouette debt). Length runs
+   along local Z, bow at +Z, matching this file's yaw=atan2(dx,dz)
+   convention. Four true-scale vessel classes, each with:
+   - a LOFTED HULL SHELL (7 stations x 4 longitudinal rows: rail / sheer-
+     strake band / wale / keel) giving a real sheer line (bow + stern
+     rise), a flat transom stern, bulwarks (deck surface sunk 0.8m below
+     the rail), and a raked stem — bluff entry on the ship/barque
+     (merchantman/whaler hulls), progressively finer + more raked toward
+     the schooner (the clipper-bow read);
+   - a full spar plan (masts with rake, 2-3 yard tiers on square-rigged
+     masts, gaff+boom on fore-and-aft masts, bowsprit on everything) —
+     crossed yards are what give the 300-800m mast forest its texture;
+   - shroud fans + a forestay ribbon (standing-rigging hint <150m; they
+     alias away harmlessly at distance);
+   - painted sheer-strake band on ship/barque (the period painted-ports
+     look on packets/whalers) for day+night value contrast.
+   Dimensions are TRUE SCALE, built directly in meters (no post-scale):
+   ship 35m x 8.0m beam (documented range 30-46m; Gen. Harrison 126ft =
+   38.4m), barque 30m x 7.4m, brig 26m x 7.0m, schooner 20m x 5.6m —
+   geography-shoreline.md's ship-dimension citations. Set sails vs furled
+   bundles are separate per-class InstancedMeshes crossfaded by the
+   existing non-uniform-Y-scale trick in updateShips(); furled bundles
+   hang under the yards at anchor (the ghost fleet reads as laid-up
+   shipping, not paper cutouts); deserted storeships ride bare-poled.
    ===================================================================== */
-/* WORLD-P0 fix (2026-07-09, AUDIT S1): all three hull types were built
- * 40-60% undersized vs documented real dimensions (a full-rigged
- * merchantman like the General Harrison, 126 ft = 38.4m, vs. the old
- * 17m hull). Rather than re-tune every internal dimension by hand, each
- * type's finished hull+sail geometry is scaled up uniformly to a true-
- * scale target length — masts/yards/bowsprit/sails all scale together
- * since they're baked in the hull's own local space, so proportions are
- * preserved exactly, nothing is redrawn "bigger to be visible" (grounding.md
- * scale rule — this corrects an UNDER-scale bug, not an inflation). Targets:
- * full ship ~35m (documented range 30-46m), brig ~26m (24-30m), schooner
- * ~20m (18-27m) — geography-shoreline.md's ship-dimension citations.
- */
-var SHIP_TRUE_SCALE = { full: 35/17, brig: 26/13.5, schooner: 20/11.5 };
-function makeHullPartsGeo(length, beam, height, hullColor, deckColor){
-  var half = length/2;
-  var hull = makeBoxLocal(beam, height, length, hullColor); bake(hull, new THREE.Vector3(0,-height*0.42,0));
-  var deck = makeBoxLocal(beam*0.92, 0.26, length*0.94, deckColor); bake(deck, new THREE.Vector3(0,height*0.05,0));
-  // sheer line: a raised forecastle block at the bow (+Z) and a lower
-  // raised quarterdeck block at the stern (-Z) — reads as a real hull
-  // profile instead of a flat-topped box at mid/far distance.
-  var bow = makeBoxLocal(beam*0.8, height*0.6, length*0.20, hullColor); bake(bow, new THREE.Vector3(0, height*0.18, half*0.72));
-  var stern = makeBoxLocal(beam*0.86, height*0.4, length*0.14, hullColor); bake(stern, new THREE.Vector3(0, height*0.02, -half*0.78));
-  return [hull, deck, bow, stern];
-}
-function makeBowspritGeo(len, mastColor, hullHalfLen){
-  var g = makeBoxLocal(0.2,0.2,len,mastColor);
-  g.rotateX(-0.32); // raked upward toward the bow tip
-  g.translate(0, 1.05, hullHalfLen + len*0.32);
+function ShipGeoBuilder(){ this.pos = []; this.col = []; }
+ShipGeoBuilder.prototype.tri = function(a,b,c,col){
+  this.pos.push(a[0],a[1],a[2], b[0],b[1],b[2], c[0],c[1],c[2]);
+  for(var i=0;i<3;i++) this.col.push(col.r,col.g,col.b);
+};
+ShipGeoBuilder.prototype.quad = function(a,b,c,d,col){ this.tri(a,b,c,col); this.tri(a,c,d,col); };
+ShipGeoBuilder.prototype.geo = function(){
+  var g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(this.pos),3));
+  g.setAttribute("color", new THREE.BufferAttribute(new Float32Array(this.col),3));
   return g;
-}
-function makeSquareSailGeo(w,h,color){
-  var g = colorizeUniform(new THREE.PlaneGeometry(w,h).toNonIndexed(), color);
-  g.rotateY(Math.PI/2); // face athwartship, hung from a yard
-  return g;
-}
+};
 /* fore-and-aft (gaff) sail: a raw quad with a slanted head edge (peak at
-   the mast, tapering aft/down), the schooner's distinguishing silhouette
-   vs. the square-riggers' rectangles. */
+   the mast, tapering aft/down), the fore-and-aft rig's distinguishing
+   silhouette vs. the square-riggers' rectangles. */
 function makeGaffSailGeo(spanZ, hHigh, hLow, color){
   var A=[0,0,0], B=[0,hHigh,0], C=[0,hLow,-spanZ], D=[0,hLow*0.15,-spanZ];
   var tris = [A,B,C, A,C,D];
@@ -5204,114 +5256,293 @@ function makeGaffSailGeo(spanZ, hHigh, hLow, color){
   return colorizeUniform(g,color);
 }
 
-// ---- type 0: FULL SHIP — 3 masts, square-rigged fore/main/mizzen ----
-function makeFullShipHullGeo(){
-  var hullColor = new THREE.Color(0x362a1d), deckColor = new THREE.Color(0x6e5a3f), mastColor = new THREE.Color(0x4a3c2c);
-  var parts = makeHullPartsGeo(17, 4.6, 3.8, hullColor, deckColor);
-  var bowsprit = makeBowspritGeo(3.6, mastColor, 8.5);
-  var mFore = makeBoxLocal(0.3,7.2,0.3,mastColor); bake(mFore,new THREE.Vector3(0,0.6,5.2));
-  var mMain = makeBoxLocal(0.36,9.6,0.36,mastColor); bake(mMain,new THREE.Vector3(0,0.6,0));
-  var mMizzen = makeBoxLocal(0.28,6.4,0.28,mastColor); bake(mMizzen,new THREE.Vector3(0,0.6,-5.2));
-  var yFore = makeBoxLocal(4.2,0.16,0.16,mastColor); bake(yFore,new THREE.Vector3(0,6.2,5.2));
-  var yMain = makeBoxLocal(5.2,0.18,0.18,mastColor); bake(yMain,new THREE.Vector3(0,7.8,0));
-  var yMizzen = makeBoxLocal(3.4,0.14,0.14,mastColor); bake(yMizzen,new THREE.Vector3(0,5.4,-5.2));
-  var fullGeo = mergeGeoms(parts.concat([bowsprit,mFore,mMain,mMizzen,yFore,yMain,yMizzen]));
-  fullGeo.scale(SHIP_TRUE_SCALE.full, SHIP_TRUE_SCALE.full, SHIP_TRUE_SCALE.full);
-  return fullGeo;
+/* SHIP_CLASS — the four era classes. stations: z (frac of len, stern -0.5
+   -> bow +0.5), w (frac of half-beam), s (deck sheer rise, m), k (keel
+   depth frac — rises toward the ends). masts: z frac, h = truck height
+   above waterline (m), w spar width, rake (rad, negative = aft), yards =
+   [heightFrac-of-h, lenFrac-of-len] tiers, gaff = fore-and-aft spars. */
+var SHIP_CLASS = [
+  { name:"ship", len:35, beam:8.0, deck:2.7, bulwark:1.0, bowSheer:1.7, sternSheer:1.0, draft:1.8, rakeM:2.2, sprit:11,
+    topside:0x362a1d, bottom:0x2b2015, stripe:true, stripeCol:0xd8cfb8, deckCol:0x5f4e38, mast:0x4a3c2c, canvas:0xe2d8bc,
+    stations:[ {z:-0.50,w:0.62,s:1.00,k:0.55},{z:-0.35,w:0.90,s:0.45,k:0.90},{z:-0.10,w:1.00,s:0.05,k:1},
+               {z: 0.15,w:0.98,s:0.15,k:1},{z: 0.33,w:0.84,s:0.55,k:0.85},{z: 0.45,w:0.52,s:1.15,k:0.60} ],
+    masts:[ {z: 0.28, h:24.0, w:0.44, rake:-0.04, yards:[[0.40,0.50],[0.60,0.38],[0.77,0.26]]},
+            {z:-0.03, h:27.0, w:0.50, rake:-0.04, yards:[[0.40,0.52],[0.60,0.40],[0.77,0.28]]},
+            {z:-0.33, h:21.0, w:0.38, rake:-0.05, yards:[[0.44,0.36],[0.66,0.26]], gaff:{boom:0.26, gaffLen:0.20}} ] },
+  { name:"barque", len:30, beam:7.4, deck:2.5, bulwark:0.95, bowSheer:1.5, sternSheer:0.85, draft:1.7, rakeM:1.9, sprit:9.5,
+    topside:0x33281c, bottom:0x281e13, stripe:true, stripeCol:0xcfc4a4, deckCol:0x5f4e38, mast:0x4a3c2c, canvas:0xd6c9a6,
+    stations:[ {z:-0.50,w:0.60,s:0.85,k:0.55},{z:-0.35,w:0.89,s:0.40,k:0.90},{z:-0.10,w:1.00,s:0.03,k:1},
+               {z: 0.15,w:0.97,s:0.14,k:1},{z: 0.33,w:0.82,s:0.50,k:0.85},{z: 0.45,w:0.50,s:1.00,k:0.60} ],
+    masts:[ {z: 0.28, h:22.0, w:0.42, rake:-0.04, yards:[[0.40,0.50],[0.61,0.38],[0.78,0.26]]},
+            {z:-0.04, h:24.0, w:0.46, rake:-0.04, yards:[[0.40,0.52],[0.61,0.40],[0.78,0.28]]},
+            {z:-0.34, h:17.5, w:0.34, rake:-0.06, gaff:{boom:0.30, gaffLen:0.22}} ] }, // yardless mizzen — THE barque tell
+  { name:"brig", len:26, beam:7.0, deck:2.3, bulwark:0.90, bowSheer:1.2, sternSheer:0.70, draft:1.6, rakeM:2.0, sprit:10,
+    topside:0x3a2e22, bottom:0x2d2318, stripe:false, stripeCol:0x3a2e22, deckCol:0x5f4e38, mast:0x4a3c2c, canvas:0xcfc0a0,
+    stations:[ {z:-0.50,w:0.58,s:0.70,k:0.55},{z:-0.34,w:0.88,s:0.30,k:0.90},{z:-0.08,w:1.00,s:0.00,k:1},
+               {z: 0.16,w:0.95,s:0.15,k:1},{z: 0.34,w:0.76,s:0.50,k:0.85},{z: 0.46,w:0.42,s:0.90,k:0.60} ],
+    masts:[ {z: 0.26, h:20.0, w:0.40, rake:-0.04, yards:[[0.42,0.52],[0.64,0.40],[0.80,0.27]]},
+            {z:-0.22, h:21.5, w:0.42, rake:-0.05, yards:[[0.42,0.52],[0.64,0.40]], gaff:{boom:0.28, gaffLen:0.20}} ] },
+  { name:"schooner", len:20, beam:5.6, deck:1.9, bulwark:0.70, bowSheer:0.8, sternSheer:0.45, draft:1.3, rakeM:1.6, sprit:7,
+    topside:0x33281c, bottom:0x271d12, stripe:false, stripeCol:0x33281c, deckCol:0x63513a, mast:0x453824, canvas:0xc7b48d,
+    stations:[ {z:-0.50,w:0.50,s:0.45,k:0.50},{z:-0.33,w:0.80,s:0.20,k:0.85},{z:-0.06,w:1.00,s:0.00,k:1},
+               {z: 0.16,w:0.88,s:0.12,k:0.95},{z: 0.32,w:0.62,s:0.35,k:0.80},{z: 0.44,w:0.32,s:0.62,k:0.60} ],
+    masts:[ {z: 0.24, h:16.0, w:0.30, rake:-0.12, gaff:{boom:0.34, gaffLen:0.26}},
+            {z:-0.20, h:17.5, w:0.32, rake:-0.12, gaff:{boom:0.38, gaffLen:0.28}} ] }
+];
+// derived bowsprit geometry anchors (steeve ~17 deg, tip at 0.80 of spar length)
+SHIP_CLASS.forEach(function(C){
+  var a = 0.30;
+  C.spritAngle = a;
+  C.spritBase = { y: C.deck + C.bulwark + C.bowSheer - 0.6, z: C.len*0.5 + C.rakeM*0.55 };
+  C.spritTip  = { y: C.spritBase.y + Math.sin(a)*C.sprit*0.80, z: C.spritBase.z + Math.cos(a)*C.sprit*0.80 };
+});
+function makeShipHullGeo(ci){
+  var C = SHIP_CLASS[ci], L = C.len, hb = C.beam/2, deckTop = C.deck + C.bulwark;
+  var topC = new THREE.Color(C.topside), botC = new THREE.Color(C.bottom),
+      bandC = new THREE.Color(C.stripe ? C.stripeCol : C.topside),
+      deckC = new THREE.Color(C.deckCol), mastC = new THREE.Color(C.mast);
+  var B = new ShipGeoBuilder();
+  // longitudinal rows over the station table + a raked stem appended as a
+  // degenerate (zero-width) station so the same loft loop closes the bow
+  var railR=[], bandR=[], waleR=[], keelR=[], deckR=[];
+  C.stations.forEach(function(s){
+    var z = s.z*L, w = s.w*hb;
+    railR.push([w*0.94, deckTop+s.s,      z]);
+    bandR.push([w,      deckTop+s.s-0.55, z]);
+    waleR.push([w*0.90, 0.45,             z]);
+    keelR.push([0,     -C.draft*(s.k!=null?s.k:1), z]);
+    deckR.push([w*0.96, deckTop+s.s-0.80, z]);
+  });
+  var stemTopZ = L*0.5 + C.rakeM, stemBotZ = L*0.485;
+  railR.push([0, deckTop+C.bowSheer,      stemTopZ]);
+  bandR.push([0, deckTop+C.bowSheer-0.9,  lerp(stemBotZ, stemTopZ, 0.72)]);
+  waleR.push([0, 0.30,                    lerp(stemBotZ, stemTopZ, 0.30)]);
+  keelR.push([0, -C.draft*0.55,           stemBotZ]);
+  deckR.push([0, deckTop+C.bowSheer-0.80, lerp(stemBotZ, stemTopZ, 0.85)]);
+  var rows = [railR, bandR, waleR, keelR], rowCols = [bandC, topC, botC];
+  function mx(p){ return [-p[0], p[1], p[2]]; }
+  for(var i=0;i<railR.length-1;i++){
+    for(var r=0;r<3;r++){
+      var a=rows[r][i], b=rows[r][i+1], c=rows[r+1][i+1], d=rows[r+1][i];
+      B.quad(a,b,c,d, rowCols[r]);                  // starboard, +X out
+      B.quad(mx(d),mx(c),mx(b),mx(a), rowCols[r]);  // port mirror
+    }
+    B.quad(mx(deckR[i]), mx(deckR[i+1]), deckR[i+1], deckR[i], deckC); // deck, +Y (0.8m below the rail = bulwark)
+  }
+  // flat transom stern cap (-Z out)
+  B.quad(mx(railR[0]), railR[0], bandR[0], mx(bandR[0]), bandC);
+  B.quad(mx(bandR[0]), bandR[0], waleR[0], mx(waleR[0]), topC);
+  B.tri(mx(waleR[0]), waleR[0], keelR[0], botC);
+  // shroud lines (standing-rigging hint <150m): two thin ribbons per side
+  // per mast, rail to masthead — reads as rigging, never as canvas
+  function ribbon(a, b, w, col){
+    var dx = b[0]-a[0], dz = b[2]-a[2], dl = Math.hypot(dx,dz)||1;
+    var ox = -dz/dl*w, oz = dx/dl*w; // horizontal offset perpendicular to the run
+    B.quad([a[0]+ox,a[1],a[2]+oz],[b[0]+ox,b[1],b[2]+oz],[b[0]-ox,b[1],b[2]-oz],[a[0]-ox,a[1],a[2]-oz], col);
+    B.quad([a[0]-ox,a[1],a[2]-oz],[b[0]-ox,b[1],b[2]-oz],[b[0]+ox,b[1],b[2]+oz],[a[0]+ox,a[1],a[2]+oz], col);
+  }
+  C.masts.forEach(function(m){
+    var zM = m.z*L, yTop = m.h*0.64;
+    var top = [0, yTop, zM + Math.tan(m.rake||0)*(yTop - C.deck)];
+    [-1,1].forEach(function(sd){
+      ribbon([sd*hb*0.86, deckTop, zM-1.8], top, 0.05, mastC);
+      ribbon([sd*hb*0.86, deckTop, zM+1.8], top, 0.05, mastC);
+    });
+  });
+  var fm = C.masts[0];
+  var sA = [0, fm.h*0.86, fm.z*L], sB = [0, C.spritTip.y, C.spritTip.z];
+  B.quad([ 0.05,sA[1],sA[2]], [ 0.05,sB[1],sB[2]], [-0.05,sB[1],sB[2]], [-0.05,sA[1],sA[2]], mastC);
+  B.quad([-0.05,sA[1],sA[2]], [-0.05,sB[1],sB[2]], [ 0.05,sB[1],sB[2]], [ 0.05,sA[1],sA[2]], mastC);
+  var parts = [B.geo()];
+  // bowsprit (every class carries one — square-riggers AND schooners)
+  var sp = makeBoxLocal(0.30, 0.30, C.sprit, mastC);
+  sp.rotateX(-C.spritAngle);
+  sp.translate(0, C.spritBase.y + Math.sin(C.spritAngle)*C.sprit*0.30,
+                  C.spritBase.z + Math.cos(C.spritAngle)*C.sprit*0.30);
+  parts.push(sp);
+  // spar plan: raked masts, yard tiers (square rig), boom+gaff (fore-and-aft)
+  C.masts.forEach(function(m){
+    var zM = m.z*L;
+    var g = makeBoxLocal(m.w, m.h - C.deck, m.w, mastC);
+    g.rotateX(m.rake||0);
+    g.translate(0, C.deck, zM);
+    parts.push(g);
+    if(m.yards) m.yards.forEach(function(yd, ti){
+      var yAbs = yd[0]*m.h, zAt = zM + Math.tan(m.rake||0)*(yAbs - C.deck);
+      var yw = ti===0 ? 0.28 : 0.22;
+      var y = makeBoxLocal(yd[1]*L, yw, yw, mastC);
+      bake(y, new THREE.Vector3(0, yAbs-yw/2, zAt+0.15));
+      parts.push(y);
+    });
+    if(m.gaff){
+      var bl = m.gaff.boom*L;
+      var boom = makeBoxLocal(0.20, 0.20, bl, mastC);
+      bake(boom, new THREE.Vector3(0, C.deck+0.95, zM - bl/2 + 0.5));
+      parts.push(boom);
+      var gl = m.gaff.gaffLen*L;
+      var gf = makeBoxLocal(0.15, 0.15, gl, mastC);
+      gf.rotateX(0.55); // aft end rises
+      gf.translate(0, m.h*0.62 + Math.sin(0.55)*gl/2, zM - Math.cos(0.55)*gl/2 + 0.3);
+      parts.push(gf);
+    }
+  });
+  // deck furniture hint (house aft, cargo hatch forward)
+  var house = makeBoxLocal(C.beam*0.34, 0.9, L*0.14, new THREE.Color(C.deckCol).multiplyScalar(1.18));
+  bake(house, new THREE.Vector3(0, deckTop-0.8, -L*0.22)); parts.push(house);
+  var hatch = makeBoxLocal(C.beam*0.30, 0.35, L*0.10, new THREE.Color(C.deckCol).multiplyScalar(0.80));
+  bake(hatch, new THREE.Vector3(0, deckTop-0.8, L*0.12)); parts.push(hatch);
+  return mergeGeoms(parts);
 }
-function makeFullShipSailGeo(){
-  var sailColor = new THREE.Color(0xe6dcc0); // cream — "weathered sail tones" vary by type
-  var sFore = makeSquareSailGeo(4.0,4.6,sailColor); bake(sFore,new THREE.Vector3(0,4.4,5.2));
-  var sMain = makeSquareSailGeo(4.9,5.4,sailColor); bake(sMain,new THREE.Vector3(0,5.6,0));
-  var sMizzen = makeSquareSailGeo(3.2,3.6,sailColor); bake(sMizzen,new THREE.Vector3(0,4.0,-5.2));
-  var g = mergeGeoms([sFore,sMain,sMizzen]);
-  g.scale(SHIP_TRUE_SCALE.full, SHIP_TRUE_SCALE.full, SHIP_TRUE_SCALE.full);
-  return g;
+function makeShipSailGeo(ci){
+  var C = SHIP_CLASS[ci], L = C.len, base = new THREE.Color(C.canvas);
+  var parts = [], tone = 0;
+  function col(){ tone++; return base.clone().multiplyScalar(0.92 + hash2(tone*3.7, 5.5)*0.14); } // per-panel tone
+  C.masts.forEach(function(m){
+    var zM = m.z*L;
+    if(m.yards){
+      var prevY = C.deck + 1.6;
+      m.yards.forEach(function(yd){
+        var yAbs = yd[0]*m.h, zAt = zM + Math.tan(m.rake||0)*(yAbs - C.deck);
+        var top = yAbs - 0.25, h = top - prevY;
+        if(h > 0.8){
+          var p = colorizeUniform(new THREE.PlaneGeometry(yd[1]*L*0.92, h).toNonIndexed(), col());
+          p.translate(0, (top+prevY)/2, zAt+0.45);
+          parts.push(p);
+        }
+        prevY = yAbs + 0.25;
+      });
+    }
+    if(m.gaff){
+      var hH = (m.h - C.deck)*0.60;
+      parts.push(bake(makeGaffSailGeo(m.gaff.boom*L*0.85, hH, hH*0.75, col()), new THREE.Vector3(0, C.deck+1.15, zM+0.2)));
+    }
+  });
+  // jibs on the fore stay (all classes)
+  var fm = C.masts[0], zF = fm.z*L, tip = C.spritTip;
+  var B = new ShipGeoBuilder();
+  B.tri([0, tip.y+0.2, tip.z-0.4], [0, fm.h*0.82, zF+0.6], [0, C.deck+0.6, zF+1.6], col());
+  B.tri([0, tip.y+0.15, lerp(tip.z, zF, 0.35)], [0, fm.h*0.62, zF+0.4], [0, C.deck+0.5, zF+2.4], col());
+  parts.push(B.geo());
+  return mergeGeoms(parts);
+}
+function makeShipFurledGeo(ci){
+  var C = SHIP_CLASS[ci], L = C.len, parts = [], i = 0;
+  var canvasC = new THREE.Color(C.canvas).multiplyScalar(0.78); // rolled canvas, dust-grey
+  C.masts.forEach(function(m){
+    var zM = m.z*L;
+    if(m.yards) m.yards.forEach(function(yd){
+      i++;
+      var yAbs = yd[0]*m.h, zAt = zM + Math.tan(m.rake||0)*(yAbs - C.deck);
+      var b = makeBoxLocal(yd[1]*L*0.86, 0.34, 0.44, canvasC.clone().multiplyScalar(0.92 + hash2(i*3.1, 7.7)*0.16));
+      bake(b, new THREE.Vector3(0, yAbs-0.50, zAt+0.15));
+      parts.push(b);
+    });
+    if(m.gaff){
+      i++;
+      var bl = m.gaff.boom*L;
+      var bb = makeBoxLocal(0.40, 0.45, bl*0.80, canvasC.clone().multiplyScalar(0.95));
+      bake(bb, new THREE.Vector3(0, C.deck+1.05, zM - bl*0.36 + 0.5));
+      parts.push(bb);
+    }
+  });
+  var sb = makeBoxLocal(0.30, 0.30, C.sprit*0.45, canvasC.clone()); // jib stowed along the sprit
+  bake(sb, new THREE.Vector3(0, lerp(C.spritBase.y, C.spritTip.y, 0.4), lerp(C.spritBase.z, C.spritTip.z, 0.4)));
+  parts.push(sb);
+  return mergeGeoms(parts);
 }
 
-// ---- type 1: BRIG — 2 masts, square-rigged, prominent bowsprit ----
-function makeBrigHullGeo(){
-  var hullColor = new THREE.Color(0x3a2e22), deckColor = new THREE.Color(0x6e5a3f), mastColor = new THREE.Color(0x4a3c2c);
-  var parts = makeHullPartsGeo(13.5, 4.2, 3.4, hullColor, deckColor);
-  var bowsprit = makeBowspritGeo(4.4, mastColor, 6.75); // longer bowsprit — the brig's signature
-  var mFore = makeBoxLocal(0.3,8.0,0.3,mastColor); bake(mFore,new THREE.Vector3(0,0.5,3.6));
-  var mMain = makeBoxLocal(0.32,8.6,0.32,mastColor); bake(mMain,new THREE.Vector3(0,0.5,-3.0));
-  var yFore = makeBoxLocal(4.4,0.17,0.17,mastColor); bake(yFore,new THREE.Vector3(0,6.0,3.6));
-  var yMain = makeBoxLocal(4.8,0.17,0.17,mastColor); bake(yMain,new THREE.Vector3(0,6.6,-3.0));
-  var brigGeo = mergeGeoms(parts.concat([bowsprit,mFore,mMain,yFore,yMain]));
-  brigGeo.scale(SHIP_TRUE_SCALE.brig, SHIP_TRUE_SCALE.brig, SHIP_TRUE_SCALE.brig);
-  return brigGeo;
-}
-function makeBrigSailGeo(){
-  var sailColor = new THREE.Color(0xd6c9a6); // grey-tan, weathered
-  var sFore = makeSquareSailGeo(4.2,4.6,sailColor); bake(sFore,new THREE.Vector3(0,4.0,3.6));
-  var sMain = makeSquareSailGeo(4.6,5.0,sailColor); bake(sMain,new THREE.Vector3(0,4.4,-3.0));
-  var g = mergeGeoms([sFore,sMain]);
-  g.scale(SHIP_TRUE_SCALE.brig, SHIP_TRUE_SCALE.brig, SHIP_TRUE_SCALE.brig);
-  return g;
-}
-
-// ---- type 2: SCHOONER — 2 masts, fore-and-aft (gaff) rig, lower/rakish ----
-function makeSchoonerHullGeo(){
-  var hullColor = new THREE.Color(0x33281c), deckColor = new THREE.Color(0x63513a), mastColor = new THREE.Color(0x453824);
-  var parts = makeHullPartsGeo(11.5, 3.4, 2.9, hullColor, deckColor);
-  var bowsprit = makeBowspritGeo(2.6, mastColor, 5.75);
-  var mFore = makeBoxLocal(0.24,7.4,0.24,mastColor); bake(mFore,new THREE.Vector3(0,0.45,2.6));
-  var mMain = makeBoxLocal(0.26,7.8,0.26,mastColor); bake(mMain,new THREE.Vector3(0,0.45,-2.4));
-  var boomFore = makeBoxLocal(0.14,0.14,3.4,mastColor); bake(boomFore,new THREE.Vector3(0,1.6,1.0));
-  var boomMain = makeBoxLocal(0.14,0.14,3.8,mastColor); bake(boomMain,new THREE.Vector3(0,1.6,-4.1));
-  var schoonerGeo = mergeGeoms(parts.concat([bowsprit,mFore,mMain,boomFore,boomMain]));
-  schoonerGeo.scale(SHIP_TRUE_SCALE.schooner, SHIP_TRUE_SCALE.schooner, SHIP_TRUE_SCALE.schooner);
-  return schoonerGeo;
-}
-function makeSchoonerSailGeo(){
-  var sailColor = new THREE.Color(0xc7b48d); // darker, sun-browned canvas
-  var gFore = makeGaffSailGeo(3.2,5.8,1.7,sailColor); bake(gFore,new THREE.Vector3(0,1.7,2.6));
-  var gMain = makeGaffSailGeo(3.6,6.2,1.7,sailColor); bake(gMain,new THREE.Vector3(0,1.7,-2.4));
-  var g = mergeGeoms([gFore,gMain]);
-  g.scale(SHIP_TRUE_SCALE.schooner, SHIP_TRUE_SCALE.schooner, SHIP_TRUE_SCALE.schooner);
-  return g;
+/* overflow tier (the mast forest): three cluster silhouettes routed by
+   vessel class so the 600-1500m read keeps the fleet's documented rig
+   mix — crossed yards + furled-canvas hints give the forest its texture.
+   Mast heights match the full-hull tier (main trucks 17-26m) so the two
+   tiers blend seamlessly. */
+var CLUSTER_OF_TYPE = [0, 0, 1, 2]; // ship+barque -> 3-mast, brig -> 2-mast square, schooner -> fore-and-aft
+function makeMastClusterGeoVariant(kind){
+  var mastC = new THREE.Color(0x2b2216), hullC = new THREE.Color(0x3a2d1f), // hull tone matched to the full-hull tier's topside so the two tiers read as one fleet
+      bowC  = new THREE.Color(0x443426), canvasC = new THREE.Color(0x8d8168);
+  var parts = [];
+  function mast(z, h, w, rake){ var g = makeBoxLocal(w, h, w, mastC); g.rotateX(rake||0); g.translate(0, 1.0, z); parts.push(g); }
+  function yard(z, y, len){ var g = makeBoxLocal(len, 0.26, 0.26, mastC); bake(g, new THREE.Vector3(0, y, z)); parts.push(g); }
+  function bundle(z, y, len, j){ var g = makeBoxLocal(len*0.85, 0.40, 0.50, canvasC.clone().multiplyScalar(0.88 + hash2(j*3.3, 5.1)*0.24)); bake(g, new THREE.Vector3(0, y-0.45, z)); parts.push(g); }
+  function bundleZ(z, y, len, j){ var g = makeBoxLocal(0.50, 0.45, len, canvasC.clone().multiplyScalar(0.88 + hash2(j*3.3, 5.1)*0.24)); bake(g, new THREE.Vector3(0, y, z)); parts.push(g); }
+  function hullHint(len, beam){
+    var g = makeBoxLocal(beam, 1.7, len, hullC); parts.push(g);
+    var b = makeBoxLocal(beam*0.80, 1.1, len*0.18, bowC); bake(b, new THREE.Vector3(0, 1.5, len*0.38)); parts.push(b);
+    var q = makeBoxLocal(beam*0.85, 0.8, len*0.14, bowC); bake(q, new THREE.Vector3(0, 1.5, -len*0.40)); parts.push(q);
+    var sp = makeBoxLocal(0.28, 0.28, len*0.26, mastC); sp.rotateX(-0.30); sp.translate(0, 2.4, len*0.55); parts.push(sp);
+  }
+  if(kind===0){ // 3-masted square-rigger (ship/barque class, ~33m)
+    hullHint(32, 5.6);
+    mast(  9.6, 23.0, 0.42, -0.04); mast(-0.6, 26.0, 0.46, -0.04); mast(-10.4, 20.0, 0.36, -0.05);
+    yard(  9.6, 10.2, 15.5); yard(  9.6, 14.6, 11.5); yard(-0.6, 11.4, 17.5); yard(-0.6, 16.6, 13.0); yard(-10.4, 9.0, 12.0);
+    bundle( 9.6, 10.2, 15.5, 1); bundle(-0.6, 11.4, 17.5, 2); bundle(-0.6, 16.6, 13.0, 3); bundle(-10.4, 9.0, 12.0, 4);
+  } else if(kind===1){ // 2-masted square-rigger (brig class, ~25m)
+    hullHint(24, 5.0);
+    mast( 6.2, 19.5, 0.40, -0.04); mast(-5.4, 21.0, 0.42, -0.05);
+    yard( 6.2, 8.6, 13.0); yard( 6.2, 12.6, 10.0); yard(-5.4, 9.2, 13.5); yard(-5.4, 13.4, 10.5);
+    bundle(6.2, 8.6, 13.0, 11); bundle(6.2, 12.6, 10.0, 12); bundle(-5.4, 9.2, 13.5, 13);
+  } else { // fore-and-aft (schooner class, ~19m) — raked masts, booms, no yards
+    hullHint(18, 4.2);
+    mast( 4.4, 15.5, 0.32, -0.12); mast(-4.0, 17.0, 0.34, -0.12);
+    var b1 = makeBoxLocal(0.2, 0.2, 6.5, mastC); bake(b1, new THREE.Vector3(0, 2.6, 1.4)); parts.push(b1);
+    var b2 = makeBoxLocal(0.2, 0.2, 7.0, mastC); bake(b2, new THREE.Vector3(0, 2.6, -7.2)); parts.push(b2);
+    bundleZ(1.4, 3.25, 5.5, 21); bundleZ(-7.2, 3.25, 6.0, 22);
+  }
+  return mergeGeoms(parts);
 }
 
-// P0-2 fix (2026-07-10, screening #2): this geometry was NEVER run through
-// SHIP_TRUE_SCALE (unlike every full-hull/brig/schooner builder above, which
-// all end with a .scale(SHIP_TRUE_SCALE.x,...) call) — so at raw dimensions
-// its "masts" topped out ~3.5m above the waterline (m1's 7m height, centered
-// on local y=0 with no baked offset, so half of it sat BELOW sea level to
-// begin with). Real masts on these hulls run ~16-21m per makeFullShipHullGeo's
-// own mMain (9.6 * SHIP_TRUE_SCALE.full ~= 19.8m to the cap, plus the yard
-// higher still) — the overflow tier's masts were rendering at roughly a
-// fifth of true height, AND half-submerged, which is why the cove read as
-// scattered dark hull boxes ("confetti") instead of "a forest of masts":
-// the one element that should have dominated the silhouette (tall thin
-// verticals) was the smallest, most invisible part of the instance. Fixed
-// by (a) baking the masts up from the hull's waterline instead of centering
-// them through it, and (b) applying the same true-scale multiplier as the
-// full-hull ships so the mast forest reads at the same height class as the
-// full-hull tier's own masts.
-function makeMastClusterGeo(){
-  var mastColor = new THREE.Color(0x2b2216), hullColor = new THREE.Color(0x2f251a);
-  var mMain = makeBoxLocal(0.32,9.6,0.32,mastColor); bake(mMain, new THREE.Vector3(0,5.3,0));
-  var mFore = makeBoxLocal(0.26,7.2,0.26,mastColor); bake(mFore, new THREE.Vector3(0,4.1,4.6));
-  var yMain = makeBoxLocal(5.0,0.16,0.16,mastColor); bake(yMain, new THREE.Vector3(0,7.6,0));
-  var hullHint = makeBoxLocal(2.4,1.4,7.0,hullColor); bake(hullHint, new THREE.Vector3(0,0.2,0));
-  var geo = mergeGeoms([mMain,mFore,yMain,hullHint]);
-  geo.scale(SHIP_TRUE_SCALE.full, SHIP_TRUE_SCALE.full, SHIP_TRUE_SCALE.full);
-  return geo;
-}
-
-var SHIP_HULL_BUILDERS = [makeFullShipHullGeo, makeBrigHullGeo, makeSchoonerHullGeo];
-var SHIP_SAIL_BUILDERS = [makeFullShipSailGeo, makeBrigSailGeo, makeSchoonerSailGeo];
-var shipHullMeshes = SHIP_HULL_BUILDERS.map(function(fn){
-  var m = new THREE.InstancedMesh(fn(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), SHIP_CAP);
+/* instanced pools: one hull + one set-sail + one furled-bundle mesh per
+   class, three cluster meshes for the overflow forest. Every geometry
+   gets an inflated bounding sphere: r128 InstancedMesh frustum-culls by
+   the SHARED geometry sphere at the mesh origin, and hulls ride the
+   channel out to the Golden Gate (±4km) — without this, close framings
+   that exclude the world origin (e.g. the Clark's Point arrival shot)
+   would cull the whole fleet mid-view. */
+function _shipPoolGeo(g){ g.computeBoundingSphere(); g.boundingSphere.radius = 6000; return g; }
+var shipHullMeshes = [0,1,2,3].map(function(ci){
+  var m = new THREE.InstancedMesh(_shipPoolGeo(makeShipHullGeo(ci)), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), SHIP_CAP);
   m.count = 0; scene.add(m); return m;
 });
-var shipSailMeshes = SHIP_SAIL_BUILDERS.map(function(fn){
-  var m = new THREE.InstancedMesh(fn(), new THREE.MeshBasicMaterial({vertexColors:true, side:THREE.DoubleSide, transparent:true}), SHIP_CAP);
+var shipSailMeshes = [0,1,2,3].map(function(ci){
+  var m = new THREE.InstancedMesh(_shipPoolGeo(makeShipSailGeo(ci)), new THREE.MeshBasicMaterial({vertexColors:true, side:THREE.DoubleSide, transparent:true}), SHIP_CAP);
   m.count = 0; scene.add(m); return m;
 });
-var mastClusterMesh = new THREE.InstancedMesh(makeMastClusterGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), MAST_CAP);
-mastClusterMesh.count = 0; scene.add(mastClusterMesh);
+var shipFurlMeshes = [0,1,2,3].map(function(ci){
+  var m = new THREE.InstancedMesh(_shipPoolGeo(makeShipFurledGeo(ci)), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), SHIP_CAP);
+  m.count = 0; scene.add(m); return m;
+});
+var mastClusterMeshes = [0,1,2].map(function(k){
+  var m = new THREE.InstancedMesh(_shipPoolGeo(makeMastClusterGeoVariant(k)), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), MAST_CAP);
+  m.count = 0; scene.add(m); return m;
+});
+/* per-instance WEATHERED-CANVAS TONE JITTER (the people-system's
+   instanceTint pattern — the r128 workaround for missing setColorAt):
+   sails + furled bundles tint per vessel, clusters get a value jitter so
+   the anchored forest reads as weathered individuals, not one stamp. */
+function addShipTintAttr(mesh){
+  var cap = mesh.instanceMatrix.count;
+  var arr = new Float32Array(cap*3);
+  for(var i=0;i<arr.length;i++) arr[i] = 1;
+  var attr = new THREE.InstancedBufferAttribute(arr, 3);
+  mesh.geometry.setAttribute("instanceTint", attr);
+  mesh.material.onBeforeCompile = function(sh){
+    sh.vertexShader = sh.vertexShader
+      .replace("#include <common>", "#include <common>\nattribute vec3 instanceTint;\nvarying vec3 vShipTint;")
+      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvShipTint = instanceTint;");
+    sh.fragmentShader = sh.fragmentShader
+      .replace("#include <common>", "#include <common>\nvarying vec3 vShipTint;")
+      .replace("#include <color_fragment>", "#include <color_fragment>\ndiffuseColor.rgb *= vShipTint;");
+  };
+  return attr;
+}
+var shipSailTintAttrs = shipSailMeshes.map(addShipTintAttr);
+var shipFurlTintAttrs = shipFurlMeshes.map(addShipTintAttr);
+var mastClusterTintAttrs = mastClusterMeshes.map(addShipTintAttr);
+console.log("[verify] s48 ship classes — tris/hull: " + shipHullMeshes.map(function(m,i){
+  return SHIP_CLASS[i].name+" "+Math.round(m.geometry.attributes.position.count/3);
+}).join(", ") + "; sails: " + shipSailMeshes.map(function(m){ return Math.round(m.geometry.attributes.position.count/3); }).join("/") +
+"; furled: " + shipFurlMeshes.map(function(m){ return Math.round(m.geometry.attributes.position.count/3); }).join("/") +
+"; clusters: " + mastClusterMeshes.map(function(m){ return Math.round(m.geometry.attributes.position.count/3); }).join("/"));
 
 var SHIP_LABEL_POOL = 14;
 var shipLabelPool = [];
@@ -5331,7 +5562,7 @@ var shipLabelPool = [];
 /* s42 inspect law: per-frame instanceId -> visit maps so the tap/click
    raycaster can resolve a hull hit to its ship record (updateShips fills
    these in the same loop that writes the instance matrices). */
-var shipPickVisits = [[],[],[]], mastPickVisits = [];
+var shipPickVisits = [[],[],[],[]], mastPickVisits = [[],[],[]];
 
 /* =========================================================================
    COVERAGE-GAP FILL TRAFFIC (WORLD-P0 fix 2026-07-09, grounding.md's
@@ -5361,7 +5592,7 @@ var fillShipVisits = (function(){
     out.push({
       ship: "fill-"+i, arrive: arrive, depart: (rngBuild()<0.4 ? arrive+stay : null),
       pathJitter: rngBuild(), exitNorth: rngBuild()<0.5,
-      shipType: Math.floor(rngBuild()*3),
+      shipType: shipTypeFromRoll(rngBuild()), // period-mix table (fill:true weights — see SHIP_FILL_MIX)
       _state:"future", _anchorPos:null, _anchorIdx:-1, _anchorYaw: rngBuild()*Math.PI*2,
       isFill: true
     });
@@ -5412,6 +5643,15 @@ function updateShips(dt){
   allVisits.forEach(function(v){
     var st = shipDesiredState(v, simDay);
     v._state = st; v._renderMode = null;
+    // s48 storeship dress: the shed/gangway/signage mesh follows the hull's
+    // grounded state (built lazily after the waterfront systems load)
+    if(v.storeship && v.storeship._dress){
+      var dvis = st==="anchored";
+      if(v.storeship._dressVis !== dvis){
+        v.storeship._dressVis = dvis;
+        v.storeship._dress.forEach(function(dm){ dm.visible = dvis; });
+      }
+    }
     if(!v._anchorPos) return; // defensive; assignAnchorSlots covers every visit
     var LIn = SHIP_CHANNEL.len + v._appLen;
     var LOut = v._appLen + (v.exitNorth ? SHIP_NORTH.len : SHIP_CHANNEL.len);
@@ -5467,7 +5707,7 @@ function updateShips(dt){
   activeList = activeList.concat(activeAnchored);
 
   var labelCandidates = [];
-  var typeCounts = [0,0,0];
+  var typeCounts = [0,0,0,0];
   var gullTargets = []; // §10.2 gulls: up to 3 ships in camera range (sailing ships sort first in activeList); deserted storeships draw no working-harbor birds
   activeList.forEach(function(v){
     var pos, sailScale, y;
@@ -5510,22 +5750,58 @@ function updateShips(dt){
     shipPickVisits[ty][idx] = v; // s42 inspect law: instanceId -> visit for the tap raycaster
     setShipInstance(shipHullMeshes[ty], idx, pos.x, y, pos.z, v._yaw, 1, v.storeship && v._state==="anchored" ? v.storeship.list : 0);
     // sail uses a non-uniform Y scale (furled flat when anchored) instead of
-    // going through setShipInstance's uniform scale
+    // going through setShipInstance's uniform scale. s48: the X/Z scale
+    // collapses alongside Y (clamped, x5 ramp) so a struck sail vanishes
+    // instead of leaving a full-length pale sliver at the waterline.
     _shipQ.setFromAxisAngle(_UP, v._yaw);
-    _shipV.set(pos.x,y,pos.z); _shipS.set(1, sailScale, 1);
+    _shipV.set(pos.x,y,pos.z);
+    var sailXZ = clamp(sailScale*5, 0.001, 1);
+    _shipS.set(sailXZ, sailScale, sailXZ);
     _shipM4.compose(_shipV,_shipQ,_shipS);
     shipSailMeshes[ty].setMatrixAt(idx, _shipM4);
+    // s48: furled bundles crossfade opposite the set sails (bent canvas on
+    // the yards at anchor); deserted storeships ride bare-poled — their
+    // canvas was struck/rotted, which is exactly what distinguishes the
+    // hulk row from the working anchorage at a glance.
+    var furlScale = v.storeship ? 0.001 : clamp(1.1 - sailScale*1.1, 0.001, 1);
+    var furlXZ = clamp(furlScale*5, 0.001, 1);
+    _shipS.set(furlXZ, furlScale, furlXZ);
+    _shipM4.compose(_shipV, _shipQ, _shipS);
+    shipFurlMeshes[ty].setMatrixAt(idx, _shipM4);
+    // weathered-canvas tone jitter, stable per vessel across frames
+    if(!v._ctint){
+      var th1 = hash2((v.pathJitter||0.5)*91.3, 7.7), th2 = hash2((v.pathJitter||0.5)*17.9, 3.3);
+      var tb = 0.78 + th1*0.28, tw = (th2-0.5)*0.10;
+      v._ctint = [tb*(1+tw), tb, tb*(1-tw*0.6)];
+    }
+    shipSailTintAttrs[ty].setXYZ(idx, v._ctint[0], v._ctint[1], v._ctint[2]);
+    shipFurlTintAttrs[ty].setXYZ(idx, v._ctint[0], v._ctint[1], v._ctint[2]);
   });
   shipHullMeshes.forEach(function(m,ty){ m.count = typeCounts[ty]; m.instanceMatrix.needsUpdate = true; });
   shipSailMeshes.forEach(function(m,ty){ m.count = typeCounts[ty]; m.instanceMatrix.needsUpdate = true; });
+  shipFurlMeshes.forEach(function(m,ty){ m.count = typeCounts[ty]; m.instanceMatrix.needsUpdate = true; });
+  shipSailTintAttrs.forEach(function(a){ a.needsUpdate = true; });
+  shipFurlTintAttrs.forEach(function(a){ a.needsUpdate = true; });
 
   shipPickVisits.forEach(function(arr,ty){ arr.length = typeCounts[ty]; });
-  mastClusterMesh.count = overflow.length;
-  mastPickVisits = overflow; // s42 inspect law: overflow-tier instanceId -> visit
-  overflow.forEach(function(v,i){
-    setShipInstance(mastClusterMesh, i, v._anchorPos.x, 0.2, v._anchorPos.z, v._anchorYaw, 1);
+  // s48 overflow tier: route each anchored-overflow hull into the cluster
+  // silhouette matching its documented/period-mix class, so the 600-1500m
+  // mast forest keeps the fleet's rig mix instead of one repeated stamp
+  var clusterBuckets = [[],[],[]];
+  overflow.forEach(function(v){ clusterBuckets[CLUSTER_OF_TYPE[v.shipType]].push(v); });
+  mastPickVisits = clusterBuckets; // s42 inspect law: per-pool instanceId -> visit
+  mastClusterMeshes.forEach(function(m,k){
+    var arr = clusterBuckets[k];
+    m.count = arr.length;
+    for(var ci=0; ci<arr.length; ci++){
+      var cv = arr[ci];
+      setShipInstance(m, ci, cv._anchorPos.x, 0.2, cv._anchorPos.z, cv._anchorYaw, 1);
+      var tj = 0.82 + hash2((cv._anchorIdx+7)*3.7, 9.1)*0.32; // weathered value jitter — forest texture
+      mastClusterTintAttrs[k].setXYZ(ci, tj, tj, tj);
+    }
+    m.instanceMatrix.needsUpdate = true;
+    mastClusterTintAttrs[k].needsUpdate = true;
   });
-  mastClusterMesh.instanceMatrix.needsUpdate = true;
   window._gullShips = gullTargets; // read by updateFauna's §10.2 gull flock
 
   // label chips: ship name + date, while sailing and for a day after anchoring (spec §2)
@@ -6865,7 +7141,7 @@ function findShipArrivalRecord(name){
   });
   return best;
 }
-var SHIP_TYPE_NAME = ["full-rigged ship","brig","schooner"];
+var SHIP_TYPE_NAME = ["full-rigged ship","barque","brig","schooner"];
 function openShipInspector(v){
   // BUG FIX (2026-07-10, ghost-fleet P0) carried forward: undocumented
   // arrivals must key off the explicit arriveInferred flag, never
@@ -8077,6 +8353,80 @@ function mountSignBoard(spot, word, priceLine, yOffset){
 }
 
 /* =====================================================================
+   STORESHIP DRESS (s48) — the four documented conversions (Niantic,
+   General Harrison, Apollo storeships; Euphemia the town jail) were not
+   ships at anchor but SHIP-BUILDINGS: decks roofed over with wooden
+   sheds, gangways run to the shore, business signs on the housing (the
+   Niantic's famous painted "STORAGE"; the Apollo warehouse/saloon; the
+   Euphemia prison hulk). Each hulk gets a shed roof + side walls over
+   the waist (masts standing through the roof, as in the 1850-51
+   daguerreotypes), a plank gangway walked shoreward to the real mud
+   line, and a signage hint — all baked with the hull's own documented
+   grounding transform (position, yaw 0.3, permanent list), and gated
+   visible only while the visit is in its grounded/anchored state (the
+   dress never sails in with her). Placement source: STORESHIP_INFO's
+   documented cross-street groundings above.
+   ===================================================================== */
+(function buildStoreshipDress(){
+  var mat = new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, side:THREE.DoubleSide, specular:0x000000, shininess:0});
+  var SIGN_WORD = { "Niantic":"STORAGE", "General Harrison":"STORAGE", "Apollo":"STORES", "Euphemia":"JAIL" };
+  Object.keys(STORESHIP_INFO).forEach(function(name){
+    var info = STORESHIP_INFO[name];
+    var ci = SHIP_TYPE_RECORD[name]!=null ? SHIP_TYPE_RECORD[name] : 0;
+    var C = SHIP_CLASS[ci], L = C.len, hb = C.beam/2, deckY = C.deck;
+    // grounded-hull transform — must match setShipInstance's compose for
+    // storeships exactly (pos, y=0.05, yaw 0.3, list about local Z)
+    var q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), 0.3);
+    var ql = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,0,1), info.list);
+    q.multiply(ql);
+    var M = new THREE.Matrix4().compose(new THREE.Vector3(info.pos.x, 0.05, info.pos.z), q, new THREE.Vector3(1,1,1));
+    // shed over the waist, in ship-local space
+    var parts = [];
+    var shedW = C.beam + 1.6, shedL = L*0.52, wallC = new THREE.Color(0x6b5a41), roofC = new THREE.Color(0x54432f);
+    [[-1],[1]].forEach(function(sd){
+      var wall = makeBoxLocal(0.18, 2.3, shedL, wallC);
+      bake(wall, new THREE.Vector3(sd[0]*shedW/2, deckY, -L*0.04));
+      parts.push(wall);
+    });
+    var gable = makeGableRoof(shedW, shedL, 0.5, 1.5, roofC);
+    bake(gable, new THREE.Vector3(0, deckY+2.3, -L*0.04));
+    parts.push(gable);
+    var local = mergeGeoms(parts);
+    local.applyMatrix4(M);
+    // gangway: from the shoreward rail down to the first real mud above
+    // the waterline (walked against the baked heightmap, west side —
+    // local -X after the 0.3 yaw)
+    var start = new THREE.Vector3(-hb*0.9, deckY+0.3, L*0.10).applyMatrix4(M);
+    var dir = new THREE.Vector3(-1,0,0).applyQuaternion(q); dir.y = 0; dir.normalize();
+    var end = null;
+    for(var d=8; d<=42; d+=2){
+      var ex = info.pos.x + dir.x*d, ez = info.pos.z + dir.z*d;
+      if(terrainHeight(ex,ez) > 0.15){ end = new THREE.Vector3(ex, terrainHeight(ex,ez)+0.25, ez); break; }
+    }
+    if(!end) end = new THREE.Vector3(info.pos.x + dir.x*22, 0.35, info.pos.z + dir.z*22);
+    var glen = start.distanceTo(end);
+    var plank = makeBoxLocal(1.3, 0.14, glen, new THREE.Color(0x8a7350));
+    plank.translate(0, -0.07, glen/2); // pivot at the deck end, run along +Z
+    var dy = end.y - start.y;
+    plank.rotateX(Math.asin(clamp(-dy/glen, -1, 1)));
+    plank.rotateY(Math.atan2(end.x-start.x, end.z-start.z));
+    plank.translate(start.x, start.y, start.z);
+    var merged = mergeGeoms([local, plank]);
+    var mesh = new THREE.Mesh(merged, mat);
+    mesh.visible = false;
+    scene.add(mesh);
+    // signage hint on the shed's shore-facing side
+    var sp = new THREE.Vector3(-shedW/2 - 0.25, deckY + 1.7, -L*0.04).applyMatrix4(M);
+    var signRot = Math.atan2(dir.x, dir.z);
+    var sign = mountSignBoard({ x:sp.x, z:sp.z, y:0, rot:signRot, d:0 }, SIGN_WORD[name]||"STORAGE", null, sp.y);
+    sign.visible = false;
+    info._dress = [mesh, sign];
+    info._dressVis = false;
+  });
+  console.log("[verify] s48 storeship dress built for "+Object.keys(STORESHIP_INFO).length+" hulks (shed+gangway+sign, state-gated)");
+})();
+
+/* =====================================================================
    YARD OBJECTS (QA-GATE town-density debt, 2026-07): period yard objects
    at true scale around the village's own real building placements
    (VILLAGE_BUILDING_SPOTS, captured by placeBuilding() above) — outhouses,
@@ -8520,10 +8870,32 @@ var cargoCandidates  = beachCandidatePool(76, 203, 0.15, 0.55);
 var timberCandidates = beachCandidatePool(12, 307, 0.08, 0.30);
 
 function makeRowboatGeo(){
-  var hullColor = new THREE.Color(0x5c4530), rimColor = new THREE.Color(0x6e5a3f);
-  var hull = makeBoxLocal(1.5,0.55,3.6, hullColor);
-  var rim = makeBoxLocal(1.7,0.14,3.8, rimColor); bake(rim, new THREE.Vector3(0,0.5,0));
-  return mergeGeoms([hull, rim]);
+  // s48 harbor-craft upgrade: pointed bow (diamond prow), gunwale rim,
+  // two thwarts — a ship's boat instead of a floating box.
+  var hullColor = new THREE.Color(0x5c4530), rimColor = new THREE.Color(0x6e5a3f), thwartColor = new THREE.Color(0x7a6547);
+  var hull = makeBoxLocal(1.4,0.55,3.0, hullColor);
+  var prow = makeBoxLocal(1.0,0.55,1.0, hullColor); prow.rotateY(Math.PI/4); prow.translate(0,0.275,1.5);
+  var rim = makeBoxLocal(1.55,0.14,3.2, rimColor); bake(rim, new THREE.Vector3(0,0.5,-0.05));
+  var t1 = makeBoxLocal(1.3,0.08,0.28, thwartColor); bake(t1, new THREE.Vector3(0,0.34,0.5));
+  var t2 = makeBoxLocal(1.3,0.08,0.28, thwartColor); bake(t2, new THREE.Vector3(0,0.34,-0.7));
+  return mergeGeoms([hull, prow, rim, t1, t2]);
+}
+/* s48 SCOW / LIGHTER — the harbor workhorse of the storeship era: cargo
+   off the anchored fleet crossed the last quarter-mile to the beach in
+   flat-bottomed lighters (the lightering economy the wharf was built to
+   kill). Flat hull, blunt sloped bow ramp, low freeboard, single
+   spritsail mast with the sail stowed along the boom. */
+function makeScowGeo(){
+  var hullColor = new THREE.Color(0x4f3d2a), rimColor = new THREE.Color(0x62503a),
+      mastColor = new THREE.Color(0x453824), canvasColor = new THREE.Color(0x9a8c6e);
+  var hull = makeBoxLocal(3.0,0.75,7.6, hullColor);
+  var bowRamp = makeBoxLocal(3.0,0.7,1.6, hullColor); bowRamp.rotateX(-0.42); bowRamp.translate(0,0.30,4.1);
+  var rim = makeBoxLocal(3.2,0.16,7.8, rimColor); bake(rim, new THREE.Vector3(0,0.68,0));
+  var mast = makeBoxLocal(0.2,7.5,0.2, mastColor); bake(mast, new THREE.Vector3(0,0.6,1.6));
+  var sprit = makeBoxLocal(0.12,0.12,4.4, mastColor); sprit.rotateX(0.5); sprit.translate(0, 4.4, 1.6-Math.cos(0.5)*2.2);
+  var furl = makeBoxLocal(0.34,0.4,3.6, canvasColor); bake(furl, new THREE.Vector3(0,1.5,-0.2));
+  var tiller = makeBoxLocal(0.14,0.14,1.4, mastColor); bake(tiller, new THREE.Vector3(0.3,0.75,-3.6));
+  return mergeGeoms([hull, bowRamp, rim, mast, sprit, furl, tiller]);
 }
 function makeCargoPileGeo(){
   var barrelColor = new THREE.Color(0x6e5230), crateColor = new THREE.Color(0x8a6f47), sackColor = new THREE.Color(0x9c8a5e);
@@ -8571,9 +8943,21 @@ wharfBoatMesh.count = 0; scene.add(wharfBoatMesh);
 var WHARF_BOAT_JIT = [ {dx:-2.5, side:1,  yaw:0.35, heel:0.05, phase:0.0},
                        {dx:-6.8, side:1,  yaw:-0.5, heel:0.08, phase:2.1},
                        {dx:-4.2, side:-1, yaw:0.9,  heel:0.04, phase:4.4} ];
+/* s48: lighters (scows) working the water between the wharf head and the
+   anchorage — the fleet's cargo actually moved through these. Positions
+   ride the growing wharf tip seaward (+x is bayward all along the cove
+   frontage); depth-checked each frame so a growing wharf never leaves a
+   scow beached. */
+var LIGHTER_N = 4;
+var lighterMesh = new THREE.InstancedMesh(makeScowGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), LIGHTER_N);
+lighterMesh.count = 0; scene.add(lighterMesh);
+var LIGHTER_JIT = [ {dx:16, dz: 13, yaw: 1.25, heel:0.03, phase:1.0},
+                    {dx:30, dz:-17, yaw:-0.40, heel:0.05, phase:3.2},
+                    {dx:52, dz:  7, yaw: 2.40, heel:0.02, phase:5.0},
+                    {dx:22, dz: 34, yaw: 0.20, heel:0.04, phase:0.6} ];
 function updateWharfBoats(tSec){
   var tip = window._centralWharfTip;
-  if(!tip || tip.len<24){ wharfBoatMesh.count = 0; return; }
+  if(!tip || tip.len<24){ wharfBoatMesh.count = 0; lighterMesh.count = 0; return; }
   for(var i=0;i<WHARF_BOAT_N;i++){
     var b = WHARF_BOAT_JIT[i];
     var bx = tip.x + b.dx, bz = tip.z + b.side*(tip.deckW/2 + 2.6);
@@ -8582,6 +8966,18 @@ function updateWharfBoats(tSec){
   }
   wharfBoatMesh.count = WHARF_BOAT_N;
   wharfBoatMesh.instanceMatrix.needsUpdate = true;
+  var ln = 0;
+  if(tip.len >= 40){ // lighters appear once the wharf is a real cargo head
+    for(var li=0; li<LIGHTER_N; li++){
+      var L = LIGHTER_JIT[li];
+      var lx = tip.x + L.dx, lz = tip.z + L.dz;
+      if(terrainHeight(lx,lz) > -0.6) continue; // honest water only
+      var ly = 0.08 + Math.sin(tSec*0.7 + L.phase)*0.05;
+      setShipInstance(lighterMesh, ln++, lx, ly, lz, L.yaw, 1, L.heel);
+    }
+  }
+  lighterMesh.count = ln;
+  lighterMesh.instanceMatrix.needsUpdate = true;
 }
 
 var spawnedBoats = [], spawnedCargo = [], spawnedTimber = [];
@@ -11812,13 +12208,13 @@ function pickStreetAt(px, pz){
   return bestD<=thresh ? best : null;
 }
 function tryPickShip(raycaster){
-  var hits = raycaster.intersectObjects(shipHullMeshes.concat([mastClusterMesh]), false);
+  var hits = raycaster.intersectObjects(shipHullMeshes.concat(mastClusterMeshes), false);
   if(!hits.length) return false;
   var h = hits[0];
   var v = null;
   var ti = shipHullMeshes.indexOf(h.object);
   if(ti>=0) v = shipPickVisits[ti][h.instanceId];
-  else if(h.object===mastClusterMesh) v = mastPickVisits[h.instanceId];
+  else { var mi = mastClusterMeshes.indexOf(h.object); if(mi>=0) v = mastPickVisits[mi][h.instanceId]; }
   if(v){ openShipInspector(v); return true; }
   return false;
 }
@@ -13829,7 +14225,7 @@ window.__P1850 = {
     });
     return { anchored:anchored, sailing:sailing, anchoredInferredOnly:inferred };
   },
-  get masts(){ return { cap:MAST_CAP, rendered:mastClusterMesh.count, shipCap:SHIP_CAP, anchorSlots:ANCHOR_SLOTS.length }; },
+  get masts(){ return { cap:MAST_CAP, rendered:mastClusterMeshes.reduce(function(a,m){ return a+m.count; },0), byCluster:mastClusterMeshes.map(function(m){ return m.count; }), shipCap:SHIP_CAP, anchorSlots:ANCHOR_SLOTS.length }; },
   get buildings(){
     return { villageSpots:VILLAGE_BUILDING_SPOTS.length, candidates:growthBuildingCandidates.length,
       spawned:spawnedBuildings.length, target:growthTargets(densityAt(simDay)).buildings,
@@ -13840,7 +14236,7 @@ window.__P1850 = {
       rendered:personMeshes.reduce(function(a,m){return a+m.count;},0), alt:lastKnownAlt };
   },
   _debugMesh: function(name){
-    var map = { growthBuildingMesh:growthBuildingMesh, tentMesh:tentMesh, mastClusterMesh:mastClusterMesh,
+    var map = { growthBuildingMesh:growthBuildingMesh, tentMesh:tentMesh, mastClusterMesh:mastClusterMeshes[0],
       growthMaterialsMesh:growthMaterialsMesh, growthFrameMesh:growthFrameMesh, growthWallsMesh:growthWallsMesh,
       personMesh0:personMeshes[0] };
     var m = map[name]; if(!m) return null;
@@ -14006,7 +14402,7 @@ window.__P1850 = {
     return null;
   },
   _setFrustumCulled: function(name, val){
-    var map = { growthBuildingMesh:growthBuildingMesh, tentMesh:tentMesh, mastClusterMesh:mastClusterMesh,
+    var map = { growthBuildingMesh:growthBuildingMesh, tentMesh:tentMesh, mastClusterMesh:mastClusterMeshes[0],
       growthMaterialsMesh:growthMaterialsMesh, growthFrameMesh:growthFrameMesh, growthWallsMesh:growthWallsMesh,
       personMesh0:personMeshes[0] };
     var m = map[name]; if(m) m.frustumCulled = val;
