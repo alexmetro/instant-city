@@ -1384,6 +1384,22 @@ function distOutsideBox(x,z,b){
   var dz = Math.max(b.zMin-z, 0, z-b.zMax);
   return Math.sqrt(dx*dx+dz*dz);
 }
+/* KILL-THE-SQUARE (s60 PAINTERLY GROUND KIT): every village-edge treatment
+   (pad height blend, trodden-earth tint, hillshade gate, surface-class
+   shift) used to feather over distOutsideBox() with a UNIFORM width —
+   three coaxial rounded rectangles whose constant-width, constant-strength
+   ring read as a plinth boundary under the town at any altitude (the
+   user's "square"). One SHARED world-noise warp makes the feather width
+   wander ~0.55x-1.65x on ~130-400m lobes, so the boundary is an organic
+   worn-ground coastline, not a rect. Deterministic (hash noise, no seed),
+   and used by BOTH the height rule and the color/material rules so the
+   pad slope and the tone edge stay coincident. Early-outs bound the fbm
+   cost to the feather ring only (terrainHeight is a hot path). */
+function villageFeatherT(x,z,dOut,width){
+  if(dOut<=0) return 0;
+  if(dOut>=width*1.9) return 1;   // beyond the widest possible warped feather
+  return smoothstep(0, width, dOut*(0.55 + 1.1*fbm(x*0.0075+3.7, z*0.0075, 2)));
+}
 
 /* =====================================================================
    REAL TERRAIN — sampled from the baked 1846 heightmap (terrain-1846.js,
@@ -1443,7 +1459,7 @@ var VILLAGE_Y = sampleTerrainGrid(PLAZA_CENTER.x, PLAZA_CENTER.z);
    itself is unchanged in behavior. */
 function terrainHeightFrom(h,x,z){
   var dOut = distOutsideBox(x,z,VILLAGE_BOX);
-  var villageBlend = smoothstep(0,240,dOut); // 0 inside, 1 far outside
+  var villageBlend = villageFeatherT(x,z,dOut,240); // 0 inside, 1 far outside — noise-warped edge (s60 square kill)
   /* WATERLINE FIX (task #27, 2026-07-11): this blend used to run
      unconditionally, lifting anything within 240m of VILLAGE_BOX up toward
      the dry VILLAGE_Y height regardless of what the real (already
@@ -1569,10 +1585,16 @@ function terrainColor(x,z,h){
       }
       if(zcol) col.lerp(zcol, 0.85);
     }
-    // village interior: dusty trodden earth
+    // village interior: dusty trodden earth — s60 square kill: the edge is
+    // noise-warped (shared villageFeatherT) AND the tint strength is itself
+    // patchy, so the trodden zone reads as worn ground bleeding into scrub,
+    // never as a uniform lighter rectangle at altitude.
     var dOut = distOutsideBox(x,z,VILLAGE_BOX);
-    var villageT = 1-smoothstep(0,260,dOut);
-    col.lerp(village, villageT*0.55);
+    var villageT = 1-villageFeatherT(x,z,dOut,260);
+    // patch strength varies on ~300m lobes (NOT ~60m: per-vertex sampling at
+    // the 31m grid + flatShading printed tighter noise as pale hard-edged
+    // triangle facets — caught in s60 QA)
+    col.lerp(village, villageT*(0.40+0.24*fbm(x*0.0055,z*0.0055,2)));
     // wet mud / beach right at the waterline — SKIPPED on tidal marsh
     // (zone 5): marsh is vegetated to the waterline, tule tone owns it
     if(zn!==5){
@@ -1840,8 +1862,9 @@ function detailSurfWeights(x,z,h){
     var elevT = smoothstep(3,32,h);           // matches terrainColor()'s bands
     w0 = 1-elevT; w1 = elevT;
   }
-  // village interior: dusty trodden earth (same 260m feather as the tint)
-  var villageT = 1-smoothstep(0,260,distOutsideBox(x,z,VILLAGE_BOX));
+  // village interior: dusty trodden earth (same warped 260m feather as the
+  // tint — s60 square kill: material-class edge must match the tone edge)
+  var villageT = 1-villageFeatherT(x,z,distOutsideBox(x,z,VILLAGE_BOX),260);
   if(villageT>0){
     var k = villageT*0.9;
     w0*=(1-k); w1*=(1-k); w3*=(1-k); w2 = w2*(1-k)+k;
@@ -1933,7 +1956,7 @@ var terrainGeo = null;
     surfArr[vi*4]=sw[0]; surfArr[vi*4+1]=sw[1]; surfArr[vi*4+2]=sw[2]; surfArr[vi*4+3]=sw[3];
     var col = terrainColor(vx,vz,vy);
     var dOut = distOutsideBox(vx,vz,VILLAGE_BOX);
-    var villageBlend = smoothstep(0,240,dOut);
+    var villageBlend = villageFeatherT(vx,vz,dOut,240); // s60: same warped edge as the height pad — shading feather stays coincident
     if(villageBlend>0.15 && vy>3.0){
       var hE = sampleTerrainGrid(vx+cell,vz), hW = sampleTerrainGrid(vx-cell,vz);
       var hS = sampleTerrainGrid(vx,vz+cell), hN = sampleTerrainGrid(vx,vz-cell);
@@ -2043,46 +2066,319 @@ var DETAIL_GLSL_PARS = [
   "  return vec3(n.x, g);",
   "}"
 ].join("\n");
-/* fragment block: computes dtFade + class-keyed albedo delta + gradient.
+/* =====================================================================
+   PAINTERLY TILE KIT (s60 PAINTERLY GROUND KIT) — THE ANSWER to "what is
+   RuneScape / WoW / Civ / AoE2:DE remastered's trick to low-poly
+   high-fidelity up close": HAND-PAINTED TILING TEXTURES WITH BAKED VALUE
+   DETAIL (light and shadow painted INTO the albedo), SPLAT-BLENDED by
+   surface class + DOODAD DENSITY + a GRADED PALETTE — NOT per-pixel
+   procedural noise. At load we paint one seamless 512px (256 touch) tile
+   per surface class on canvas, deliberate strokes with a painter's value
+   range:
+     dirt  — clods with shadowed SE undersides + scuffed lighter NW tops
+     sand  — wind-ripple crests as highlight+shadow stroke pairs (NE-SW
+             crests, transverse to the NW prevailing wind, matching the
+             dune bands terrainColor() already lays down)
+     grass — layered blade-patch daubs in 3 greens, dark to light
+     mud   — dry: shrinkage plates with dark seams + curled lighter lips /
+             wet: darker soaked plates, seams filled, puddle glints
+             (states blended by uDetailWet, the same weatherState signal
+             that drives the ground tint — the 1849-50 mud winter)
+     road  — compacted fine grain + subtle wheel-polish bands along the
+             travel axis (the shader samples it in a uGridDir-rotated
+             domain, so canvas-horizontal IS the traffic direction)
+   SEAMLESS: every stroke pass is replayed at all 9 torus offsets (painted
+   on a torus). ZERO-MEAN: each finished tile is normalized to a 127.5
+   per-channel mean, so the shader's 2x multiply averages to identity —
+   the distance cross-fade (full <100m -> flat map tones by 250m) lands
+   exactly on the baked map palette (the s52 fade discipline + GPU-
+   readback fade proof still hold), night lighting dims it for free, and
+   streets can never be lightened above adjacent ground (grounding.md §9
+   no-map-overlay). The s52 derivative-noise DETAIL NORMALS layer is kept
+   unchanged underneath — tiles carry the value story, the analytic-
+   gradient bump keeps the sun response honest.
+   ===================================================================== */
+var TILE_STATS = { size:0, classes:[], paintMs:0 };
+var TILE_KIT = (function(){
+  var t0 = performance.now();
+  var S = IS_TOUCH ? 256 : 512;
+  var K = S/512; // strokes are authored at 512px scale
+  function tileRng(seed){ var s=(seed*2654435761)>>>0; return function(){ s=(s*1664525+1013904223)>>>0; return s/4294967296; }; }
+  function mkCanvas(){ var c=document.createElement("canvas"); c.width=c.height=S; return c; }
+  /* TORUS PAINT: run the stroke pass ONCE onto a transparent 3Sx3S guard
+     canvas (tile at the center), then composite the nine SxS blocks onto
+     the tile — every stroke that crosses an edge re-enters from the
+     opposite side, exactly the torus, at 1/9th the stroke cost of naive
+     9-offset replay. fn receives the guard context (pre-translated). */
+  function wrap9(ctx, fn){
+    var big=document.createElement("canvas"); big.width=big.height=S*3;
+    // willReadFrequently keeps the guard OFF the GPU: one accelerated
+    // surface in the chain makes normalizeMean's getImageData a ~300ms
+    // GPU-sync stall PER TILE (measured) — all-software paints in ~10ms
+    var bx=big.getContext("2d",{willReadFrequently:true});
+    bx.save(); bx.translate(S,S); fn(bx); bx.restore();
+    for(var a=0;a<3;a++) for(var b=0;b<3;b++) ctx.drawImage(big, a*S, b*S, S, S, 0, 0, S, S);
+  }
+  function normalizeMean(ctx){ // per-channel mean -> 127.5 (the zero-mean guarantee)
+    var img = ctx.getImageData(0,0,S,S), d = img.data, n = S*S;
+    var mr=0,mg=0,mb=0,i;
+    for(i=0;i<d.length;i+=4){ mr+=d[i]; mg+=d[i+1]; mb+=d[i+2]; }
+    mr=127.5-mr/n; mg=127.5-mg/n; mb=127.5-mb/n;
+    for(i=0;i<d.length;i+=4){
+      d[i]  =Math.max(0,Math.min(255,d[i]+mr));
+      d[i+1]=Math.max(0,Math.min(255,d[i+1]+mg));
+      d[i+2]=Math.max(0,Math.min(255,d[i+2]+mb));
+    }
+    ctx.putImageData(img,0,0);
+  }
+  function toTex(canvas){
+    var t = new THREE.CanvasTexture(canvas);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+    return t;
+  }
+  function rgba(r,g,b,a){ return "rgba("+r+","+g+","+b+","+a+")"; }
+  /* soft blotch/glint sprite, rendered ONCE then drawImage'd — canvas
+     radial gradients are ~2ms each and the torus replay multiplies them
+     x9; sprites cut the whole kit's paint time ~7x */
+  var _spriteCache = {};
+  function blotchSprite(color){
+    if(_spriteCache[color]) return _spriteCache[color];
+    var c=document.createElement("canvas"); c.width=c.height=64;
+    var x=c.getContext("2d",{willReadFrequently:true}); // software, same reason as the guard canvas
+    var g=x.createRadialGradient(32,32,0,32,32,32);
+    g.addColorStop(0,color); g.addColorStop(1,"rgba(0,0,0,0)");
+    x.fillStyle=g; x.fillRect(0,0,64,64);
+    _spriteCache[color]=c;
+    return c;
+  }
+  function blotch(ctx,color,bx,by,br,alpha){
+    ctx.globalAlpha=alpha;
+    ctx.drawImage(blotchSprite(color), bx-br, by-br, br*2, br*2);
+    ctx.globalAlpha=1;
+  }
+
+  function paintDirt(){
+    var c=mkCanvas(), x=c.getContext("2d",{willReadFrequently:true}); // normalizeMean reads back — software canvas skips the GPU sync stall
+    x.fillStyle="#8b7b60"; x.fillRect(0,0,S,S);
+    wrap9(x,function(x){ // param shadows the tile ctx: strokes land on the guard canvas
+      var R=tileRng(7), i;
+      for(i=0;i<70;i++){ // broad scuff-variance underpainting
+        var bx=R()*S, by=R()*S, br=(24+R()*46)*K, dk=R()<0.5;
+        blotch(x, dk?"rgb(96,82,60)":"rgb(168,150,116)", bx, by, br, dk?0.10:0.09);
+      }
+      for(i=0;i<220;i++){ // clods: body + shadowed SE underside + scuffed lighter NW top
+        var cx=R()*S, cy=R()*S, rx=(5+R()*13)*K, ry=rx*(0.55+R()*0.5), a=R()*Math.PI;
+        x.save(); x.translate(cx,cy); x.rotate(a);
+        x.fillStyle=rgba(150,132,102,(0.36+R()*0.22).toFixed(3));
+        x.beginPath(); x.ellipse(0,0,rx,ry,0,0,7); x.fill();
+        x.fillStyle="rgba(66,54,38,0.42)";
+        x.beginPath(); x.ellipse(rx*0.22,ry*0.32,rx*0.85,ry*0.6,0,0,7); x.fill();
+        x.fillStyle="rgba(186,168,132,0.42)";
+        x.beginPath(); x.ellipse(-rx*0.22,-ry*0.34,rx*0.5,ry*0.35,0,0,7); x.fill();
+        x.restore();
+      }
+      x.lineCap="round";
+      for(i=0;i<70;i++){ // dragged scuff streaks
+        var sx=R()*S, sy=R()*S, ln=(8+R()*22)*K, an=R()*Math.PI;
+        x.strokeStyle=R()<0.5?"rgba(180,162,128,0.16)":"rgba(80,66,48,0.16)";
+        x.lineWidth=(1+R()*2)*K;
+        x.beginPath(); x.moveTo(sx,sy); x.lineTo(sx+Math.cos(an)*ln, sy+Math.sin(an)*ln); x.stroke();
+      }
+    });
+    normalizeMean(x);
+    return toTex(c);
+  }
+  function paintSand(){
+    var c=mkCanvas(), x=c.getContext("2d",{willReadFrequently:true}); // normalizeMean reads back — software canvas skips the GPU sync stall
+    x.fillStyle="#cdb888"; x.fillRect(0,0,S,S);
+    wrap9(x,function(x){ // param shadows the tile ctx: strokes land on the guard canvas
+      var R=tileRng(13), i, diag=S*1.45, spacing=26*K;
+      x.lineCap="round";
+      for(i=0;i<Math.ceil(diag/spacing);i++){ // ripple crests: highlight+shadow pair, NE-SW
+        var off=-diag/2 + i*spacing + (R()-0.5)*8*K, amp=(3+R()*5)*K, ph=R()*7, wl=(52+R()*46)*K;
+        var crest=function(shift){
+          x.beginPath();
+          for(var t=-diag/2;t<=diag/2;t+=6*K){
+            var w=Math.sin(t/wl*6.283+ph)*amp;
+            var px=S/2 + t*0.7071 + (off+w+shift)*0.7071;
+            var py=S/2 - t*0.7071 + (off+w+shift)*0.7071;
+            if(t<=-diag/2+3*K) x.moveTo(px,py); else x.lineTo(px,py);
+          }
+        };
+        x.strokeStyle="rgba(238,218,168,0.5)"; x.lineWidth=3.4*K; crest(0); x.stroke();       // sunlit crest
+        x.strokeStyle="rgba(128,104,66,0.44)"; x.lineWidth=4.6*K; crest(4.6*K); x.stroke();   // slip-face shadow
+      }
+      for(i=0;i<900;i++){ // grain specks
+        x.fillStyle=R()<0.5?"rgba(120,100,66,0.18)":"rgba(240,222,178,0.18)";
+        x.fillRect(R()*S, R()*S, 1.4*K, 1.4*K);
+      }
+    });
+    normalizeMean(x);
+    return toTex(c);
+  }
+  function paintGrass(){
+    var c=mkCanvas(), x=c.getContext("2d",{willReadFrequently:true}); // normalizeMean reads back — software canvas skips the GPU sync stall
+    x.fillStyle="#6d7a45"; x.fillRect(0,0,S,S);
+    wrap9(x,function(x){ // param shadows the tile ctx: strokes land on the guard canvas
+      var R=tileRng(29), i, l;
+      for(i=0;i<130;i++){ // dark under-patches (the shadow layer)
+        var bx=R()*S, by=R()*S, br=(7+R()*16)*K;
+        x.fillStyle=rgba(58,70,34,(0.28+R()*0.14).toFixed(3));
+        x.beginPath(); x.ellipse(bx,by,br,br*0.7,R()*3,0,7); x.fill();
+      }
+      x.lineCap="round";
+      var GREENS=[[104,118,62],[136,148,84]]; // mid then light daubs — 3 greens with the base
+      for(l=0;l<2;l++){
+        var g=GREENS[l], nn=l===0?420:230;
+        for(i=0;i<nn;i++){
+          var sx=R()*S, sy=R()*S, ln=(3.5+R()*6)*K, an=-1.571+(R()-0.5)*1.5, bow=(R()-0.5)*2*K;
+          x.strokeStyle=rgba(g[0]+((R()*18)|0), g[1]+((R()*18)|0), g[2]+((R()*14)|0), 0.5);
+          x.lineWidth=(1.1+R()*1.3)*K;
+          x.beginPath(); x.moveTo(sx,sy);
+          x.quadraticCurveTo(sx+Math.cos(an)*ln*0.5+bow, sy+Math.sin(an)*ln*0.5, sx+Math.cos(an)*ln, sy+Math.sin(an)*ln);
+          x.stroke();
+        }
+      }
+    });
+    normalizeMean(x);
+    return toTex(c);
+  }
+  function paintMud(wet){
+    var c=mkCanvas(), x=c.getContext("2d",{willReadFrequently:true}); // normalizeMean reads back — software canvas skips the GPU sync stall
+    x.fillStyle = wet?"#584a38":"#6e5f49"; x.fillRect(0,0,S,S);
+    wrap9(x,function(x){ // param shadows the tile ctx: strokes land on the guard canvas
+      var R=tileRng(41), i, j; // SAME seed both states — plates line up dry->wet
+      for(i=0;i<60;i++){ // shrinkage plates: irregular blobs
+        var px=R()*S, py=R()*S, pr=(14+R()*22)*K, n=6+((R()*4)|0);
+        x.beginPath();
+        for(j=0;j<=n;j++){
+          var an=j/n*6.283, rr=pr*(0.75+R()*0.5);
+          var vx=px+Math.cos(an)*rr, vy=py+Math.sin(an)*rr*0.85;
+          if(j===0) x.moveTo(vx,vy); else x.lineTo(vx,vy);
+        }
+        x.closePath();
+        if(wet){
+          x.fillStyle=rgba(80,68,52,(0.40+R()*0.22).toFixed(3)); x.fill();   // soaked plates, seams filled
+          x.strokeStyle="rgba(46,38,28,0.35)"; x.lineWidth=2.4*K; x.stroke();
+        } else {
+          x.fillStyle=rgba(126,110,86,(0.30+R()*0.18).toFixed(3)); x.fill(); // dry plate top
+          x.strokeStyle="rgba(42,34,24,0.55)"; x.lineWidth=(2.4+R()*1.6)*K; x.stroke(); // dark seam
+          x.strokeStyle="rgba(150,134,108,0.20)"; x.lineWidth=1.2*K;         // curled lighter NW lip
+          x.save(); x.translate(-1.2*K,-1.2*K); x.stroke(); x.restore();
+        }
+      }
+      if(!wet){
+        x.lineCap="round";
+        for(i=0;i<50;i++){ // hairline cracks inside plates
+          var sx=R()*S, sy=R()*S, an2=R()*3.14, ln=(6+R()*14)*K;
+          x.strokeStyle="rgba(50,40,28,0.30)"; x.lineWidth=1*K;
+          x.beginPath(); x.moveTo(sx,sy);
+          x.lineTo(sx+Math.cos(an2)*ln*0.6, sy+Math.sin(an2)*ln*0.6);
+          x.lineTo(sx+Math.cos(an2+0.5)*ln, sy+Math.sin(an2+0.5)*ln);
+          x.stroke();
+        }
+      } else {
+        for(i=0;i<46;i++){ // puddle glint: pale sky-sheen pools + bright sparks
+          var qx=R()*S, qy=R()*S, qr=(4+R()*10)*K;
+          blotch(x, "rgb(160,166,162)", qx, qy, qr, 0.5);
+          if(R()<0.5){ x.fillStyle="rgba(226,230,222,0.7)"; x.fillRect(qx-1.4*K, qy-0.7*K, 3.2*K, 1.4*K); }
+        }
+      }
+    });
+    normalizeMean(x);
+    return toTex(c);
+  }
+  function paintRoad(){
+    var c=mkCanvas(), x=c.getContext("2d",{willReadFrequently:true}); // normalizeMean reads back — software canvas skips the GPU sync stall
+    x.fillStyle="#93826a"; x.fillRect(0,0,S,S);
+    wrap9(x,function(x){ // param shadows the tile ctx: strokes land on the guard canvas
+      var R=tileRng(57), i;
+      for(i=0;i<50;i++){ // broad worn patches
+        var bx=R()*S, by=R()*S, br=(20+R()*40)*K, dk=R()<0.5;
+        blotch(x, dk?"rgb(120,104,82)":"rgb(170,152,124)", bx, by, br, dk?0.08:0.07);
+      }
+      for(i=0;i<1400;i++){ // compacted fine grain
+        x.fillStyle=R()<0.5?"rgba(112,96,74,0.13)":"rgba(178,162,134,0.13)";
+        x.fillRect(R()*S, R()*S, 1.2*K, 1.2*K);
+      }
+      /* wheel-polish bands along canvas-horizontal (= the travel axis after
+         the shader's uGridDir rotation). Faint + zero-mean-normalized:
+         streets never lighten above adjacent ground (§9 no-map-overlay). */
+      var bands=[0.22,0.30,0.62,0.70];
+      for(i=0;i<bands.length;i++){
+        var by2=bands[i]*S + (R()-0.5)*6*K, bw=(5+R()*4)*K;
+        var g3=x.createLinearGradient(0,by2-bw,0,by2+bw);
+        g3.addColorStop(0,"rgba(0,0,0,0)");
+        g3.addColorStop(0.5,"rgba(186,170,140,0.16)");
+        g3.addColorStop(1,"rgba(0,0,0,0)");
+        x.fillStyle=g3; x.fillRect(-S,by2-bw,3*S,bw*2);
+        x.fillStyle="rgba(96,82,62,0.10)"; x.fillRect(-S,by2+bw*0.9,3*S,1.6*K); // faint rut-edge shadow
+      }
+    });
+    normalizeMean(x);
+    return toTex(c);
+  }
+
+  var kit = { sand:paintSand(), grass:paintGrass(), dirt:paintDirt(),
+              mud:paintMud(false), mudWet:paintMud(true), road:paintRoad() };
+  TILE_STATS.size=S;
+  TILE_STATS.classes=["dirt","sand","grass","mudDry","mudWet","road"];
+  TILE_STATS.paintMs=+(performance.now()-t0).toFixed(1);
+  console.log("[verify] painterly tile kit: 6 classes @ "+S+"px painted in "+TILE_STATS.paintMs+"ms");
+  return kit;
+})();
+/* fragment block (s60 rewrite): PAINTED TILES carry the albedo story
+   (class-keyed, splat-blended by vSurfW, world-space UVs, 2x zero-mean
+   multiply, full <100m -> flat map tones by 250m); the s52 derivative-
+   noise DETAIL NORMALS are kept unchanged underneath (45->180m fade);
+   the PALETTE GRADE (AoE2:DE-style midtone value depth) rides furthest
+   (260->470m) so 300m framings still read rich while 500m+ map views
+   stay pixel-identical (uDetailAmp=0 kills all three — the fade proof).
    Injected after <color_fragment>; dtGrad is consumed by the normal patch. */
 var DETAIL_FRAG_TERRAIN = [
   "float dtFade = 0.0; vec2 dtGrad = vec2(0.0);",
   "{",
   "  float dCam = distance(vDetailWorld, cameraPosition);",
-  "  dtFade = (1.0 - smoothstep(45.0, 180.0, dCam)) * uDetailAmp;",
-  "  if(dtFade > 0.003){",
-  "    vec2 p = vDetailWorld.xz;",
-  "    vec4 sw = vSurfW;",
-  "    float mudW = min(1.0, sw.w + sw.z*uDetailWet*0.85);",   // wet season: town dirt churns to mud
-  "    float dirtW = sw.z * (1.0 - uDetailWet*0.6);",
-  "    float alb = 0.0;",
-  "    if(sw.x > 0.02){",                                       // SAND: fine wind-ripple grain (NW-SE, matches the dune bands)
+  "  dtFade = (1.0 - smoothstep(45.0, 180.0, dCam)) * uDetailAmp;",   // detail-NORMAL fade (s52, unchanged)
+  "  float tileF = (1.0 - smoothstep(100.0, 250.0, dCam)) * uDetailAmp;", // painted-tile fade (s60)
+  "  float gFade = (1.0 - smoothstep(260.0, 470.0, dCam)) * uDetailAmp;", // palette-grade fade (s60)
+  "  vec2 p = vDetailWorld.xz;",
+  "  vec4 sw = vSurfW;",
+  "  float mudW = min(1.0, sw.w + sw.z*uDetailWet*0.85);",   // wet season: town dirt churns to mud
+  "  float dirtW = sw.z * (1.0 - uDetailWet*0.6);",
+  "  if(tileF > 0.003){",                                    // PAINTED TILES (s60): class-keyed, splat-blended albedo
+  "    vec3 tmul = vec3(0.0); float tw = 0.0;",
+  "    if(sw.x > 0.02){ tmul += sw.x*texture2D(uTileSand,  p*0.14).rgb; tw += sw.x; }",
+  "    if(sw.y > 0.02){ tmul += sw.y*texture2D(uTileGrass, p*0.19).rgb; tw += sw.y; }",
+  "    if(dirtW > 0.02){ tmul += dirtW*texture2D(uTileDirt, p*0.20).rgb; tw += dirtW; }",
+  "    if(mudW > 0.02){",
+  "      vec3 mt = mix(texture2D(uTileMud, p*0.15).rgb, texture2D(uTileMudWet, p*0.15).rgb, uDetailWet);",
+  "      tmul += mudW*mt; tw += mudW;",
+  "    }",
+  "    if(tw > 0.003){ tmul /= tw; diffuseColor.rgb *= mix(vec3(1.0), tmul*2.0, tileF*min(tw,1.0)); }", // 2x zero-mean multiply — fades to flat map tones exactly
+  "  }",
+  "  if(dtFade > 0.003){",                                   // DETAIL NORMALS (s52, kept): gradient only — the albedo is painted now
+  "    if(sw.x > 0.02){",                                    // SAND: wind-ripple + grain bump
   "      vec3 rip = dfield2(p, vec2(0.70710678,-0.70710678), vec2(0.55,2.6));",
   "      vec3 grn = dnoise2(p*4.6);",
-  "      alb += sw.x*(rip.x*0.045 + grn.x*0.028);",
   "      dtGrad += sw.x*(rip.yz*0.020 + grn.yz*0.0035);",
   "    }",
-  "    if(sw.y > 0.02){",                                       // GRASS/SCRUB: blade-tone stipple
-  "      vec3 st = dfbm2(p*3.8);",
-  "      alb += sw.y*st.x*0.04;",
-  "      dtGrad += sw.y*st.yz*0.0045;",
-  "    }",
-  "    if(dirtW > 0.02){",                                      // TRODDEN DIRT: clumpy clods + broad scuff variance
-  "      vec3 cl = dfbm2(p*1.6);",
-  "      vec3 sc2 = dnoise2(p*0.45);",
-  "      alb += dirtW*(cl.x*0.07 + sc2.x*0.035);",
-  "      dtGrad += dirtW*(cl.yz*0.011 + sc2.yz*0.012);",
-  "    }",
-  "    if(mudW > 0.02){",                                       // MUD: shrinkage cracks dry, pooled sheen-flats wet
-  "      vec3 mc = dfield2(p, vec2(0.92,0.39), vec2(1.9,1.9));", // rotated crack domain — no lattice-aligned cracks
-  "      float crack = (1.0 - smoothstep(0.03, 0.16, abs(mc.x))) * (1.0 - uDetailWet*0.75);",
+  "    if(sw.y > 0.02){ dtGrad += sw.y*dfbm2(p*3.8).yz*0.0045; }",   // GRASS: blade stipple bump
+  "    if(dirtW > 0.02){ dtGrad += dirtW*(dfbm2(p*1.6).yz*0.011 + dnoise2(p*0.45).yz*0.012); }", // DIRT: clod bump
+  "    if(mudW > 0.02){",
   "      vec3 mb = dfbm2(p*1.2);",
   "      float pool = smoothstep(0.12, 0.5, -mb.x) * uDetailWet;",
-  "      alb += mudW*(mb.x*0.04 - crack*0.10 - pool*0.07);",
-  "      dtGrad += mudW*mb.yz*0.012*(1.0-pool);",               // puddles read flat — gradient dies inside them
+  "      dtGrad += mudW*mb.yz*0.012*(1.0-pool);",            // puddles read flat — gradient dies inside them
   "    }",
-  "    alb = clamp(alb, -0.12, 0.12);",
-  "    diffuseColor.rgb *= (1.0 + alb*dtFade);",
+  "  }",
+  "  float gW = min(1.0, sw.x+sw.y+sw.z+sw.w);",             // PALETTE GRADE (s60): ground classes only
+  "  if(gFade > 0.003 && gW > 0.003){",
+  "    vec3 gc = diffuseColor.rgb;",
+  "    float gLum = dot(gc, vec3(0.299,0.587,0.114));",
+  "    vec3 rich = mix(vec3(gLum), gc, 1.18);",              // enrich: mild chroma lift (never a hue shift)
+  "    rich *= (1.0 - 0.28*smoothstep(0.30, 0.85, gLum));",  // pull the washed-bright ground DOWN into midtone range, leave shadows alone (AoE2:DE value depth)
+  "    diffuseColor.rgb = mix(gc, clamp(rich, 0.0, 1.0), gFade*gW);",
   "  }",
   "}"
 ].join("\n");
@@ -2091,20 +2387,30 @@ var DETAIL_FRAG_ROAD = [
   "{",
   "  float dCam = distance(vDetailWorld, cameraPosition);",
   "  dtFade = (1.0 - smoothstep(45.0, 180.0, dCam)) * uDetailAmp;",
-  "  if(dtFade > 0.003){",
-  "    vec2 p = vDetailWorld.xz;",
-  "    float alb = 0.0;",
-  "    vec3 gr = dfbm2(p*3.6);",                                // compacted fine grain
-  "    alb += gr.x*0.035; dtGrad += gr.yz*0.004;",
+  "  float tileF = (1.0 - smoothstep(100.0, 250.0, dCam)) * uDetailAmp;",
+  "  float gFade = (1.0 - smoothstep(260.0, 470.0, dCam)) * uDetailAmp;",
+  "  vec2 p = vDetailWorld.xz;",
+  "  if(tileF > 0.003){",                                       // PAINTED ROAD TILE (s60): compacted grain + wheel-polish bands
+  "    vec2 q = vec2(dot(p,uGridDir), dot(p,vec2(-uGridDir.y,uGridDir.x)));", // travel-aligned domain — the bands ride the traffic axis
+  "    diffuseColor.rgb *= mix(vec3(1.0), texture2D(uTileRoad, q*0.24).rgb*2.0, tileF);", // zero-mean: streets never lighten above ground (§9)
+  "  }",
+  "  if(dtFade > 0.003){",                                      // s52 detail normals, kept — gradient only
+  "    vec3 gr = dfbm2(p*3.6);",                                // compacted fine grain bump
+  "    dtGrad += gr.yz*0.004;",
   "    float scM = 0.5+0.5*dnoise2(p*0.11).x;",                 // scuff comes in worn patches, not wall-to-wall
   "    vec3 s1 = dfield2(p, uGridDir, vec2(0.35,2.6));",        // faint hoof/wheel scuff, elongated along travel
   "    vec3 s2 = dfield2(p, vec2(-uGridDir.y,uGridDir.x), vec2(0.35,2.6));", // the cross axis, weaker (no weave)
-  "    alb += (s1.x*0.018+s2.x*0.010)*scM; dtGrad += (s1.yz*0.0030+s2.yz*0.0017)*scM;",
+  "    dtGrad += (s1.yz*0.0030+s2.yz*0.0017)*scM;",
   "    float pool = smoothstep(0.15,0.5,-gr.x)*uDetailWet;",    // mud winter: churned pools in the low grain
-  "    alb -= pool*0.07;",
+  "    diffuseColor.rgb *= (1.0 - pool*0.07*dtFade);",
   "    dtGrad *= (1.0-pool*0.8);",
-  "    alb = clamp(alb, -0.10, 0.10);",
-  "    diffuseColor.rgb *= (1.0 + alb*dtFade);",                // zero-mean: streets never lighten above ground (§9)
+  "  }",
+  "  if(gFade > 0.003){",                                       // same grade as the ground — streets + dirt deepen TOGETHER (no tonal seam; §9 order preserved)
+  "    vec3 gc = diffuseColor.rgb;",
+  "    float gLum = dot(gc, vec3(0.299,0.587,0.114));",
+  "    vec3 rich = mix(vec3(gLum), gc, 1.18);",
+  "    rich *= (1.0 - 0.28*smoothstep(0.30, 0.85, gLum));",
+  "    diffuseColor.rgb = mix(gc, clamp(rich, 0.0, 1.0), gFade);",
   "  }",
   "}"
 ].join("\n");
@@ -2121,7 +2427,16 @@ function patchGroundDetailMaterial(mat, kind, prevHook){
     if(prevHook) prevHook(shader);
     shader.uniforms.uDetailAmp = { value: DETAIL_AMP_DEFAULT };
     shader.uniforms.uDetailWet = { value: 0 };
-    if(kind==="road") shader.uniforms.uGridDir = { value: new THREE.Vector2(Math.cos(GRID_ROT_BASE), Math.sin(GRID_ROT_BASE)) };
+    if(kind==="road"){
+      shader.uniforms.uGridDir = { value: new THREE.Vector2(Math.cos(GRID_ROT_BASE), Math.sin(GRID_ROT_BASE)) };
+      shader.uniforms.uTileRoad = { value: TILE_KIT.road };   // s60 painterly tile kit
+    } else {
+      shader.uniforms.uTileSand   = { value: TILE_KIT.sand };
+      shader.uniforms.uTileGrass  = { value: TILE_KIT.grass };
+      shader.uniforms.uTileDirt   = { value: TILE_KIT.dirt };
+      shader.uniforms.uTileMud    = { value: TILE_KIT.mud };
+      shader.uniforms.uTileMudWet = { value: TILE_KIT.mudWet };
+    }
     DETAIL_UNIFORM_SETS.push(shader.uniforms);
     var defs = (IS_TOUCH ? "#define DETAIL_LOWQ\n" : "");
     shader.vertexShader = defs + shader.vertexShader
@@ -2131,7 +2446,9 @@ function patchGroundDetailMaterial(mat, kind, prevHook){
         (kind==="terrain" ? "\nvSurfW = aSurf;" : ""));
     shader.fragmentShader = defs + shader.fragmentShader
       .replace("#include <common>", "#include <common>\n" + DETAIL_GLSL_PARS +
-        (kind==="terrain" ? "\nvarying vec4 vSurfW;" : "\nuniform vec2 uGridDir;"))
+        (kind==="terrain"
+          ? "\nvarying vec4 vSurfW;\nuniform sampler2D uTileSand;\nuniform sampler2D uTileGrass;\nuniform sampler2D uTileDirt;\nuniform sampler2D uTileMud;\nuniform sampler2D uTileMudWet;"
+          : "\nuniform vec2 uGridDir;\nuniform sampler2D uTileRoad;"))
       .replace("#include <color_fragment>", "#include <color_fragment>\n" + (kind==="terrain" ? DETAIL_FRAG_TERRAIN : DETAIL_FRAG_ROAD))
       .replace("#include <normal_fragment_begin>", "#include <normal_fragment_begin>\n" + DETAIL_FRAG_NORMAL);
   };
@@ -7013,9 +7330,10 @@ var GROUND_DRY = new THREE.Color(0xffffff), GROUND_WET = new THREE.Color(0xc9c2a
 var STREET_DRY = new THREE.Color(0xffffff), STREET_MUD = new THREE.Color(0x8a6f4a);
 var STREET_MUD_DEEP = new THREE.Color(0x655039); // churned 1849-50 deep mud (clm:env:30 "mud to five feet" — depicted as tone, not geometry)
 var _wetTint = new THREE.Color();
+var WET_OVERRIDE = null; // s60 QA: __P1850.wetOverride forces the wet/mud state for closeup verification
 function updateWetTint(){
-  var wet = weatherState.wet;
-  var mudF = weatherState.mud;
+  var wet = WET_OVERRIDE!=null ? WET_OVERRIDE : weatherState.wet;
+  var mudF = WET_OVERRIDE!=null ? WET_OVERRIDE : weatherState.mud;
   terrainMat.color.copy(GROUND_DRY).lerp(GROUND_WET, Math.max(wet*0.4, mudF*0.5));
   _wetTint.copy(STREET_DRY).lerp(STREET_MUD, Math.max(wet*0.6, mudF*0.85));
   if(mudF>0) _wetTint.lerp(STREET_MUD_DEEP, mudF*0.55); // documented winter reads darker than an ordinary wet day
@@ -8377,7 +8695,9 @@ function updateFarScatter(alt){
    ===================================================================== */
 var MICRO_RING_R = IS_TOUCH ? 60 : 80;
 var MICRO_CELL = 2.6;
-var MICRO_CHUNK_CAP = SCT(700), MICRO_TUFT_CAP = SCT(600);
+// s60 PAINTERLY GROUND KIT: keep-rates roughly doubled (the painterly-kit
+// formula's "doodad density" leg) — caps sized to the new worst case.
+var MICRO_CHUNK_CAP = SCT(1600), MICRO_TUFT_CAP = SCT(1500);
 var MICRO_ALT_HIDE = 250;         // hard off — well under any map framing
 function _microHash(ix,iz,k){ return hash2(ix*12.9898+k*3.7, iz*78.233-k*7.1); }
 function makeMicroChunkGeo(){     // one irregular flattened lump — reads as chip/stone/scrap by scale+tint
@@ -8421,6 +8741,7 @@ var MICRO_COLS = { // kept LIGHT: true-scale litter shows the camera mostly its 
   plank:  [new THREE.Color(0xb09a6e), new THREE.Color(0x9e8860)],
   shell:  [new THREE.Color(0xd4c9ae), new THREE.Color(0xc9bc9e), new THREE.Color(0xbcae90)],
   straw:  [new THREE.Color(0xc9ae64), new THREE.Color(0xd2b970)],
+  scat:   [new THREE.Color(0x4a3f2e), new THREE.Color(0x5c4e38)], // s60: droppings on the grazing flats — era-neutral animal sign
   grass:  [new THREE.Color(0x8c9a5c), new THREE.Color(0x7c8a4e), new THREE.Color(0x96a464)],
   dune:   [new THREE.Color(0xa0a868), new THREE.Color(0x949c5e)],
   reed:   [new THREE.Color(0x6b7a42), new THREE.Color(0x5e7038)]
@@ -8530,13 +8851,13 @@ function rebuildMicroScatter(camX, camZ){
       var groundY = h + ((stCls===1||plaza) ? lift : 0.01);
       if(stCls===1 || plaza){
         // compacted public surface: sparse stones + the odd chip pressed in
-        if(hKeep > 0.08) continue;
+        if(hKeep > 0.14) continue;
         if(inFootprint(x,z)) continue;
         var tp = h2<0.6 ? "stone" : "chip";
         pushChunk(x,z,groundY, 0.55+h3*0.5, 0.45+h3*0.3, 1, pick(MICRO_COLS[tp],h1), 0.15, h1, h2);
       } else if(dTown < 40){
         // town ground: working litter — chips, straw, stones, plank scraps
-        if(hKeep > 0.30) continue;
+        if(hKeep > 0.55) continue;
         if(inFootprint(x,z)) continue;
         if(h2 < 0.38){ pushChunk(x,z,groundY, 0.7+h3*0.8, 0.7+h3*0.4, 1, pick(MICRO_COLS.chip,h1), 0.3, h1, h2); }
         else if(h2 < 0.62){ pushTuft(x,z,groundY, 0.8+h3*0.6, 0.30+h3*0.15, pick(MICRO_COLS.straw,h1), h1); } // flattened straw wisp
@@ -8547,18 +8868,21 @@ function rebuildMicroScatter(camX, camZ){
       } else if(zn===1){
         // open sand: shell/stone specks; tufts only at the dune-scrub edge
         var nearScrub = (zoneAt(x+14,z)===2 || zoneAt(x-14,z)===2 || zoneAt(x,z+14)===2 || zoneAt(x,z-14)===2);
-        if(nearScrub && hKeep < 0.22){ pushTuft(x,z,groundY, 0.9+h3*0.7, 0.8+h3*0.6, pick(MICRO_COLS.dune,h1), h1); }
-        else if(hKeep < 0.14){ pushChunk(x,z,groundY, 0.4+h3*0.4, 0.5+h3*0.3, 1, pick(h2<0.55?MICRO_COLS.shell:MICRO_COLS.stone,h1), 0.2, h1, h2); }
+        if(nearScrub && hKeep < 0.34){ pushTuft(x,z,groundY, 0.9+h3*0.7, 0.8+h3*0.6, pick(MICRO_COLS.dune,h1), h1); }
+        else if(hKeep < 0.22){ pushChunk(x,z,groundY, 0.4+h3*0.4, 0.5+h3*0.3, 1, pick(h2<0.55?MICRO_COLS.shell:MICRO_COLS.stone,h1), 0.2, h1, h2); }
       } else if(zn===2){
-        if(hKeep < 0.20) pushTuft(x,z,groundY, 0.9+h3*0.7, 0.9+h3*0.6, pick(MICRO_COLS.dune,h1), h1);
+        if(hKeep < 0.35) pushTuft(x,z,groundY, 0.9+h3*0.7, 0.9+h3*0.6, pick(MICRO_COLS.dune,h1), h1);
       } else if(zn===3){
-        if(hKeep < 0.18) pushTuft(x,z,groundY, 0.9+h3*0.8, 1.0+h3*0.7, pick(MICRO_COLS.grass,h1), h1); // <=~540 worst case — the 600 cap never truncates the scan directionally
+        if(hKeep < 0.34) pushTuft(x,z,groundY, 0.9+h3*0.8, 1.0+h3*0.7, pick(MICRO_COLS.grass,h1), h1); // <=~1010 worst case — the 1500 cap never truncates the scan directionally
+        else if(hKeep < 0.40) pushChunk(x,z,groundY, 0.35+h3*0.3, 0.3, 1.4, pick(MICRO_COLS.scat,h1), 0.2, h1, h2); // s60: animal sign on the grazing flats
       } else if(zn===5 && h < 1.5){
-        if(hKeep < 0.35) pushTuft(x,z,groundY, 0.7+h3*0.5, 1.7+h3*1.0, pick(MICRO_COLS.reed,h1), h1); // reeds at the marsh edge
+        if(hKeep < 0.55) pushTuft(x,z,groundY, 0.7+h3*0.5, 1.7+h3*1.0, pick(MICRO_COLS.reed,h1), h1); // reeds at the marsh edge
       } else if(zn===4){
-        if(hKeep < 0.14) pushChunk(x,z,groundY, 0.6+h3*0.7, 0.7+h3*0.4, 1.6, pick(MICRO_COLS.chip,h1), 0.5, h1, h2); // oak-floor twigs
+        if(hKeep < 0.28) pushChunk(x,z,groundY, 0.6+h3*0.7, 0.7+h3*0.4, 1.6, pick(MICRO_COLS.chip,h1), 0.5, h1, h2); // oak-floor twigs
+      } else if(zn===6){
+        if(hKeep < 0.06) pushChunk(x,z,groundY, 0.4+h3*0.3, 0.35, 1.3, pick(MICRO_COLS.scat,h1), 0.2, h1, h2); // s60: sign on the mudflats
       } else {
-        if(hKeep < 0.10) pushChunk(x,z,groundY, 0.5+h3*0.6, 0.6+h3*0.4, 1, pick(MICRO_COLS.stone,h1), 0.3, h1, h2);
+        if(hKeep < 0.18) pushChunk(x,z,groundY, 0.5+h3*0.6, 0.6+h3*0.4, 1, pick(MICRO_COLS.stone,h1), 0.3, h1, h2);
       }
     }
   }
@@ -8590,6 +8914,294 @@ function updateMicroScatter(alt){
   if(!_microBuilt || dx*dx+dz*dz > 25) rebuildMicroScatter(cx, cz);
   microChunkMesh.visible = microChunkMesh.count>0;
   microTuftMesh.visible = microTuftMesh.count>0;
+}
+
+/* =====================================================================
+   DOODAD RING (s60 PAINTERLY GROUND KIT) — the "doodad density" leg of
+   the painterly-kit formula (hand-painted tiles + splat blend + DOODADS
+   + graded palette). Expands the s52 micro-litter ring into a fuller
+   pass of true-scale, era-neutral props (0.3-1.6m), keyed by ecology
+   zone + town proximity, same camera-centered deterministic-cell design
+   (per-cell world-space hash — never swims, despawns/respawns identically):
+     near buildings — firewood stacks, barrels, crates set against walls,
+       kept OUT of doorways via the walkBlockedAt oracle's own obstacle
+       frame (the +Z door-face apron the s59 door-paths use stays clear)
+     town interior/fringe — stones, cut stumps (the woodcutting ring),
+       grass clumps thinning toward the trodden core
+     grassland/scrub/oak — painted-texture grass clumps (the RuneScape/
+       WoW billboard-clump trick), stones, stumps
+     tideline — driftwood + kelp wrack;  flats — bleached bones
+   Placement law: nothing on water (h<0.45), nothing on streets' travel
+   lanes (PLACEMENT segs), nothing on the plaza, nothing inside/against
+   footprints-fences-rails (walkBlockedAt r=0.55). Rebuilds also on the
+   30-day route bucket so yard goods appear only beside REVEALED
+   buildings (era-honest). Hidden above 300m: map framings gain ZERO
+   draw calls; +9 draw calls close-in (one per pool).
+   ===================================================================== */
+var DOODAD_RING_R = IS_TOUCH ? 90 : 130;
+var DOODAD_CELL = 6.5;
+var DOODAD_ALT_HIDE = 300;
+function _doodadHash(ix,iz,k){ return hash2(ix*17.713+k*5.9, iz*43.129-k*11.3); }
+function makeGrassClumpTexture(){ // painted mini-texture: blades fanning from the root, 4 greens
+  var S=128, c=document.createElement("canvas"); c.width=c.height=S;
+  var x=c.getContext("2d");
+  var s=(97*2654435761)>>>0;
+  function R(){ s=(s*1664525+1013904223)>>>0; return s/4294967296; }
+  var GREENS=["#4f5e30","#66763e","#82914e","#98a45e"];
+  x.lineCap="round";
+  for(var i=0;i<26;i++){
+    var bx=S*0.5+(R()-0.5)*S*0.35, tipX=bx+(R()-0.5)*S*0.6, tipY=S*(0.04+R()*0.32);
+    x.strokeStyle=GREENS[(R()*GREENS.length)|0];
+    x.lineWidth=2+R()*3.5;
+    x.beginPath(); x.moveTo(bx,S*0.99);
+    x.quadraticCurveTo(bx+(tipX-bx)*0.25, S*0.55, tipX, tipY);
+    x.stroke();
+  }
+  return new THREE.CanvasTexture(c);
+}
+var DOODAD_POOLS = (function(){
+  function mk(geo, mat, cap){
+    var m = new THREE.InstancedMesh(geo, mat, cap);
+    m.count = 0;
+    // r128 setColorAt footgun (see micro ring): pre-allocate at cap or instances render black
+    m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(cap*3).fill(1), 3);
+    m.frustumCulled = false;
+    scene.add(m);
+    return { mesh:m, cap:cap };
+  }
+  function phong(opts){
+    var o = { flatShading:true, specular:0x000000, shininess:0, transparent:true };
+    for(var k in opts) o[k]=opts[k];
+    return new THREE.MeshPhongMaterial(o);
+  }
+  // grass clump: 3 crossed textured quads (hand-merged — mergeGeoms drops
+  // the UVs the painted mini-texture needs)
+  var clumpGeo = (function(){
+    var parts=[], i;
+    for(i=0;i<3;i++){
+      var p=new THREE.PlaneGeometry(0.8,0.5).toNonIndexed();
+      p.translate(0,0.24,0); p.rotateY(Math.PI/3*i+0.4);
+      parts.push(p);
+    }
+    var total=0;
+    parts.forEach(function(p2){ total+=p2.attributes.position.count; });
+    var pos=new Float32Array(total*3), uv=new Float32Array(total*2), off=0;
+    parts.forEach(function(p2){
+      pos.set(p2.attributes.position.array, off*3);
+      uv.set(p2.attributes.uv.array, off*2);
+      off+=p2.attributes.position.count;
+    });
+    var g=new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.BufferAttribute(pos,3));
+    g.setAttribute("uv", new THREE.BufferAttribute(uv,2));
+    g.computeVertexNormals();
+    return g;
+  })();
+  var clumpMat = phong({ map:makeGrassClumpTexture(), alphaTest:0.35, side:THREE.DoubleSide });
+  // cut stump: dark bole + pale fresh-cut top face
+  var stumpGeo = (function(){
+    var bole = colorizeUniform(new THREE.CylinderGeometry(0.24,0.30,0.34,7).toNonIndexed(), new THREE.Color(0x5f4c32));
+    bole.translate(0,0.17,0);
+    var cut = colorizeUniform(new THREE.CylinderGeometry(0.225,0.225,0.025,7).toNonIndexed(), new THREE.Color(0xc9b083));
+    cut.translate(0,0.345,0);
+    return mergeGeoms([bole,cut]);
+  })();
+  // firewood stack: two log courses
+  var woodGeo = (function(){
+    var logs=[], lc=new THREE.Color(0x5a4632), i;
+    for(i=0;i<3;i++){
+      var g=new THREE.CylinderGeometry(0.11,0.11,0.9,6).toNonIndexed();
+      g.rotateZ(Math.PI/2); g.translate(0,0.11,(i-1)*0.24);
+      logs.push(colorizeUniform(g,lc));
+    }
+    for(i=0;i<2;i++){
+      var g2=new THREE.CylinderGeometry(0.11,0.11,0.9,6).toNonIndexed();
+      g2.rotateZ(Math.PI/2); g2.translate(0,0.30,(i-0.5)*0.24);
+      logs.push(colorizeUniform(g2,new THREE.Color(0x64503a)));
+    }
+    return mergeGeoms(logs);
+  })();
+  var kelpGeo = (function(){
+    var g=new THREE.PlaneGeometry(0.4,1.3,1,3);
+    var p=g.attributes.position;
+    for(var i=0;i<p.count;i++) p.setX(i, p.getX(i)+Math.sin(p.getY(i)*3.0)*0.09);
+    g.rotateX(-Math.PI/2); g.translate(0,0.03,0);
+    return g;
+  })();
+  var stoneGeo=new THREE.DodecahedronGeometry(0.30,0); stoneGeo.translate(0,0.20,0);
+  var barrelGeo=new THREE.CylinderGeometry(0.28,0.32,0.85,8); barrelGeo.translate(0,0.425,0);
+  var crateGeo=new THREE.BoxGeometry(0.6,0.55,0.6).toNonIndexed(); crateGeo.translate(0,0.275,0);
+  var driftGeo=new THREE.BoxGeometry(1.6,0.20,0.28).toNonIndexed(); driftGeo.translate(0,0.10,0);
+  var boneGeo=new THREE.BoxGeometry(0.55,0.07,0.09).toNonIndexed(); boneGeo.translate(0,0.035,0);
+  return {
+    clump:  mk(clumpGeo, clumpMat, SCT(1100)),
+    stone:  mk(stoneGeo, phong({color:0xffffff}), SCT(500)),
+    stump:  mk(stumpGeo, phong({color:0xffffff, vertexColors:true}), SCT(160)),
+    wood:   mk(woodGeo,  phong({color:0xffffff, vertexColors:true}), SCT(80)),
+    barrel: mk(barrelGeo, phong({color:0x6e5230}), SCT(100)),
+    crate:  mk(crateGeo,  phong({color:0x8a6f47}), SCT(100)),
+    drift:  mk(driftGeo,  phong({color:0x6b5a44}), SCT(160)),
+    kelp:   mk(kelpGeo,   phong({color:0x3c3226, side:THREE.DoubleSide}), SCT(200)),
+    bone:   mk(boneGeo,   phong({color:0xffffff}), SCT(80))
+  };
+})();
+var DOODAD_COLS = {
+  stone: [new THREE.Color(0x8f8672), new THREE.Color(0x9c9280), new THREE.Color(0x7d7462)],
+  bone:  [new THREE.Color(0xcfc5ad), new THREE.Color(0xbfb49a)],
+  white: [new THREE.Color(0xffffff), new THREE.Color(0xe8e0d4), new THREE.Color(0xd8ccba)]
+};
+var DOODAD_STATS = { counts:{}, cells:0, lastMs:0 };
+var _doodadLastX=1e9, _doodadLastZ=1e9, _doodadBuilt=false, _doodadLastDayB=-1;
+function rebuildDoodads(camX, camZ){
+  var t0 = performance.now();
+  var R = DOODAD_RING_R, R2 = R*R, k;
+  var segs = [];
+  function collectSegs(list){
+    for(var i=0;i<list.length;i++){
+      var s = list[i], pad = s.halfW+4;
+      if(Math.max(s.x0,s.x1) < camX-R-pad || Math.min(s.x0,s.x1) > camX+R+pad ||
+         Math.max(s.z0,s.z1) < camZ-R-pad || Math.min(s.z0,s.z1) > camZ+R+pad) continue;
+      segs.push(s);
+    }
+  }
+  collectSegs(PLACEMENT_STREET_SEGS);
+  collectSegs(PLACEMENT_MISSION_SEGS);
+  function onStreet(x,z){
+    for(var i=0;i<segs.length;i++){
+      var s = segs[i];
+      if(distToSegXZ(x,z,s.x0,s.z0,s.x1,s.z1) < s.halfW+0.8) return true;
+    }
+    return false;
+  }
+  var m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), tq = new THREE.Quaternion(),
+      vv = new THREE.Vector3(), sv = new THREE.Vector3();
+  var YAX = new THREE.Vector3(0,1,0), XAX = new THREE.Vector3(1,0,0);
+  var n = {}; for(k in DOODAD_POOLS) n[k]=0;
+  var _edge = 1;
+  function push(pool, x,z,y, sc, tint, yaw, tilt, h2){
+    var P = DOODAD_POOLS[pool];
+    if(n[pool]>=P.cap) return;
+    q.setFromAxisAngle(YAX, yaw*Math.PI*2);
+    if(tilt){ tq.setFromAxisAngle(XAX, (h2-0.5)*tilt); q.multiply(tq); }
+    vv.set(x,y,z); sv.set(sc*_edge, sc*_edge, sc*_edge);
+    m4.compose(vv,q,sv);
+    P.mesh.setMatrixAt(n[pool], m4);
+    if(tint) P.mesh.setColorAt(n[pool], tint);
+    n[pool]++;
+  }
+  function pick(arr,h){ return arr[Math.floor(h*arr.length)%arr.length]; }
+  var i0 = Math.floor((camX-R)/DOODAD_CELL), i1 = Math.ceil((camX+R)/DOODAD_CELL);
+  var j0 = Math.floor((camZ-R)/DOODAD_CELL), j1 = Math.ceil((camZ+R)/DOODAD_CELL);
+  var nCells = 0;
+  for(var iz=j0; iz<=j1; iz++){
+    for(var ix=i0; ix<=i1; ix++){
+      var hKeep = _doodadHash(ix,iz,0);
+      var x = (ix + 0.5 + (_doodadHash(ix,iz,1)-0.5)*0.85)*DOODAD_CELL;
+      var z = (iz + 0.5 + (_doodadHash(ix,iz,2)-0.5)*0.85)*DOODAD_CELL;
+      var ddx = x-camX, ddz = z-camZ, d2 = ddx*ddx+ddz*ddz;
+      if(d2 > R2) continue;
+      nCells++;
+      var h = terrainMeshSurfaceY(x,z);
+      if(h < 0.45) continue;                          // never on water / the wet tide edge
+      _edge = 1-smoothstep(R-24,R-4,Math.sqrt(d2));
+      if(_edge < 0.05) continue;
+      if(onStreet(x,z)) continue;                     // travel lanes stay clear
+      if(_microInPlaza(x,z)) continue;
+      if(walkBlockedAt(x,z,simDay,0.55)) continue;    // the one collision oracle: footprints, fences, rails, walls
+      var h1 = _doodadHash(ix,iz,3), h2 = _doodadHash(ix,iz,4), h3 = _doodadHash(ix,iz,5);
+      var dTown = distOutsideBox(x,z,VILLAGE_BOX);
+      var zn = zoneAt(x,z);
+      var y = h + 0.01;
+      // yard goods: set against a REVEALED building wall, out of the doorway
+      var nb = (dTown < 90) ? walkBlockedAt(x,z,simDay,3.6) : null;
+      if(nb && nb.t===1 && nb.hw>1.6){
+        var dxb=x-nb.x, dzb=z-nb.z, cb=Math.cos(nb.rot), sb2=Math.sin(nb.rot);
+        var lx=dxb*cb-dzb*sb2, lz=dxb*sb2+dzb*cb;
+        if(lz > 0 && Math.abs(lx) < nb.hw*0.6) continue; // +Z door-face apron (s59 door-paths) stays clear
+        if(hKeep < 0.5){
+          if(h2 < 0.30) push("wood", x,z,y, 0.9+h3*0.25, pick(DOODAD_COLS.white,h1), Math.atan2(sb2,cb)/(Math.PI*2), 0, h2);
+          else if(h2 < 0.62) push("barrel", x,z,y, 0.9+h3*0.2, null, h1, 0, h2);
+          else if(h2 < 0.90) push("crate", x,z,y, 0.85+h3*0.3, null, h1, 0, h2);
+          else push("clump", x,z,y, 0.6+h3*0.4, null, h1, 0, h2);
+        }
+      } else if(dTown===0){
+        // town interior open lots: sparse stones + cut stumps (micro ring carries the litter)
+        if(hKeep < 0.10){
+          if(h2 < 0.6) push("stone", x,z,y, 0.5+h3*0.8, pick(DOODAD_COLS.stone,h1), h1, 0.2, h2);
+          else push("stump", x,z,y, 0.8+h3*0.5, null, h1, 0, h2);
+        }
+      } else if(dTown < 80){
+        // worn fringe: the woodcutting ring — clumps, stones, stumps
+        if(hKeep < 0.30){
+          if(h2 < 0.55) push("clump", x,z,y, 0.7+h3*0.7, null, h1, 0, h2);
+          else if(h2 < 0.80) push("stone", x,z,y, 0.5+h3*1.0, pick(DOODAD_COLS.stone,h1), h1, 0.2, h2);
+          else push("stump", x,z,y, 0.8+h3*0.5, null, h1, 0, h2);
+        }
+      } else if(h < 1.6 && zn!==5 && zn!==6){
+        // tideline wrack: driftwood + kelp thrown above the wet edge
+        if(hKeep < 0.10) push("drift", x,z,y+0.02, 0.7+h3*0.7, null, h1, 0.5, h2);
+        else if(hKeep < 0.32) push("kelp", x,z,y+0.02, 0.8+h3*0.8, null, h1, 0, h2);
+      } else if(zn===6){
+        if(hKeep < 0.05) push("bone", x,z,y, 0.7+h3*0.5, pick(DOODAD_COLS.bone,h1), h1, 0.15, h2); // bleached bone on the flats
+      } else if(zn===3){
+        if(hKeep < 0.30){
+          if(h2 < 0.72) push("clump", x,z,y, 0.7+h3*0.7, null, h1, 0, h2);
+          else if(h2 < 0.93) push("stone", x,z,y, 0.5+h3*1.1, pick(DOODAD_COLS.stone,h1), h1, 0.2, h2);
+          else push("bone", x,z,y, 0.7+h3*0.5, pick(DOODAD_COLS.bone,h1), h1, 0.15, h2);
+        }
+      } else if(zn===2){
+        if(hKeep < 0.26){
+          if(h2 < 0.8) push("clump", x,z,y, 0.7+h3*0.6, null, h1, 0, h2);
+          else push("stone", x,z,y, 0.5+h3*1.0, pick(DOODAD_COLS.stone,h1), h1, 0.2, h2);
+        }
+      } else if(zn===4){
+        if(hKeep < 0.24){
+          if(h2 < 0.35) push("stump", x,z,y, 0.9+h3*0.6, null, h1, 0, h2);
+          else push("clump", x,z,y, 0.7+h3*0.7, null, h1, 0, h2);
+        }
+      } else if(zn===1){
+        if(hKeep < 0.06){
+          if(h2 < 0.6) push("stone", x,z,y, 0.4+h3*0.8, pick(DOODAD_COLS.stone,h1), h1, 0.2, h2);
+          else push("bone", x,z,y, 0.7+h3*0.5, pick(DOODAD_COLS.bone,h1), h1, 0.15, h2);
+        }
+      } else {
+        if(hKeep < 0.10){
+          if(h2 < 0.7) push("clump", x,z,y, 0.7+h3*0.6, null, h1, 0, h2);
+          else push("stone", x,z,y, 0.5+h3*0.9, pick(DOODAD_COLS.stone,h1), h1, 0.2, h2);
+        }
+      }
+    }
+  }
+  for(k in DOODAD_POOLS){
+    var P = DOODAD_POOLS[k];
+    P.mesh.count = n[k];
+    P.mesh.instanceMatrix.needsUpdate = true;
+    if(P.mesh.instanceColor) P.mesh.instanceColor.needsUpdate = true;
+    DOODAD_STATS.counts[k] = n[k];
+  }
+  DOODAD_STATS.cells = nCells;
+  DOODAD_STATS.lastMs = +(performance.now()-t0).toFixed(2);
+  _doodadLastX = camX; _doodadLastZ = camZ; _doodadBuilt = true;
+  _doodadLastDayB = Math.floor(simDay/ROUTE_BUCKET_DAYS);
+}
+function updateDoodads(alt){
+  var k;
+  if(alt >= DOODAD_ALT_HIDE){
+    for(k in DOODAD_POOLS) DOODAD_POOLS[k].mesh.visible = false;
+    return;
+  }
+  var op = clamp01(1-smoothstep(200,290,alt));
+  var on = op > 0.01;
+  for(k in DOODAD_POOLS){
+    var P = DOODAD_POOLS[k];
+    P.mesh.material.opacity = op;
+    P.mesh.visible = on && P.mesh.count>0;
+  }
+  if(!on) return;
+  var cx = CAM.focus.x, cz = CAM.focus.z;   // look-at centered, same no-churn rule as the micro ring
+  var dx = cx-_doodadLastX, dz = cz-_doodadLastZ;
+  var dayB = Math.floor(simDay/ROUTE_BUCKET_DAYS);
+  if(!_doodadBuilt || dx*dx+dz*dz > 64 || dayB!==_doodadLastDayB) rebuildDoodads(cx, cz);
 }
 
 /* =====================================================================
@@ -15474,6 +16086,13 @@ window.__P1850 = {
   get detailSets(){ return DETAIL_UNIFORM_SETS.length; },
   get detailAmp(){ return DETAIL_AMP_DEFAULT; },
   set detailAmp(v){ DETAIL_AMP_DEFAULT = +v; for(var i=0;i<DETAIL_UNIFORM_SETS.length;i++) DETAIL_UNIFORM_SETS[i].uDetailAmp.value = +v; },
+  // s60 PAINTERLY GROUND KIT QA hooks: tile-kit census, doodad-ring census,
+  // and a wet override (forces the mud-winter wet state for closeup QA
+  // regardless of the current weatherState — null returns it to weather)
+  get tiles(){ return TILE_STATS; },
+  get doodads(){ return DOODAD_STATS; },
+  get wetOverride(){ return WET_OVERRIDE; },
+  set wetOverride(v){ WET_OVERRIDE = (v==null ? null : +v); updateWetTint(); },
   render: function(){ renderer.render(scene, camera); },
   tick: function(dt){ return applyCameraRig(dt||0.1); }, // manual frame-advance — CDP-automated tabs can report
                                                           // document.hidden=true and never fire rAF at all, so QA
@@ -16739,6 +17358,7 @@ function animate(){
   updateHud(alt);
   updateGroundScatter(alt);
   updateMicroScatter(alt); // GROUND MATERIALITY (s52) — camera-centered litter ring (replaces the retired A1 ripple film)
+  updateDoodads(alt);      // PAINTERLY GROUND KIT (s60) — zone/town-keyed doodad ring
   updateFarScatter(alt);
   updatePeople(dt, camera.position.x, camera.position.z, alt);
   updateArrivals();
