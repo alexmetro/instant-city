@@ -4330,27 +4330,74 @@ function makeOrchardTreeGeo(){
     placeOutpostPerson(geoms, x+w*0.7, z, rngBuild()*Math.PI*2, 0x3a332c, 0xcabf98, i%2===0);
   });
 
-  // (4) THE RANCHERIA — the former Indian rancheria, "occupied by
-  // remaining Indians" through this period, a distinct residential zone
-  // physically separate from the Californio-occupied quadrangle
-  // buildings (peninsula-1846.md §2.2) — simple huts, not adobes.
+  // (4) THE RANCHERIA — the former Indian rancheria at Mission Dolores,
+  // "occupied by remaining Indians" through 1835-1848, physically distinct
+  // from the Californio-occupied quadrangle (SF Planning archaeologist's
+  // memo quoted in peninsula-1846.md §2.1; clm:pen:24, clm:pen:32).
+  // NATIVE PRESENCE sprint (s50, native-presence-1846-49.md): rebuilt at
+  // ~5-family-dwellings scale (NPS/Milliken: "by 1850, only about five
+  // Ramaytush families remained" — clm:native:2; ~15 descendants by 1842,
+  // clm:pen:31). The original rancheria was rows of mission-built cabins
+  // (1793-1806, "~8 rows/100 cabins"), long since shrunk to this remnant —
+  // depicted as 3 low adobe-hint row cabins + 2 tule-hint dome shelters,
+  // TRUE modest scale (~3.5x2.8m cabins), no invented village sprawl and
+  // NO generic tribal iconography (research §6 DON'T). Positions are
+  // DETERMINISTIC and exported via RANCHERIA_SITE so the people system
+  // homes its (live, inspectable) inhabitants at these exact dwellings —
+  // the old baked statue is gone. Structures render only through 1848
+  // (clm:pen:32's zone window — separate mesh, gated in
+  // updateDistrictZones); the placement bearing off the church is a
+  // judgment (the memo says "distinct zone", not a bearing) — flagged as
+  // such per QA-GATE rule 1.
   (function(){
     var ang = 4.0, dist = 130;
     var rx = churchX+Math.cos(ang)*dist, rz = churchZ+Math.sin(ang)*dist;
-    for(var i=0;i<6;i++){
-      var x = rx+(rngBuild()-0.5)*60, z = rz+(rngBuild()-0.5)*60;
-      if(!canPlace(x,z,3,{streetMargin:2})) continue;
+    var rGeoms = [];
+    var tule = new THREE.Color(0xa9905d); // dry-reed tone, distinct from adobe
+    var dwellings = [];
+    // two loose "rows" (the record's own word for the layout), 5 dwellings
+    var offs = [ [-9,-4], [0,-5.5], [9,-4], [-4.5,5.5], [5,6.5] ];
+    for(var i=0;i<offs.length;i++){
+      var x = rx+offs[i][0], z = rz+offs[i][1];
       var y = terrainHeight(x,z);
       registerPlacement(x,z,3);
-      var hut = makeBoxLocal(2.6+rngBuild(),1.8,2.4+rngBuild(), hutColor);
-      var rot = rngBuild()*Math.PI;
-      bake(hut, new THREE.Vector3(x,y,z), rot);
-      geoms.push(hut);
-      var hutRoofG = makeGableRoof(2.6,2.4,0.3,0.9,hutRoof);
-      bake(hutRoofG, new THREE.Vector3(x,y+1.8,z), rot);
-      geoms.push(hutRoofG);
+      var rot = (i*0.83)%Math.PI;
+      if(i<3){ // adobe-hint row cabin
+        var w=3.2+((i*7)%10)*0.06, d=2.7, h=1.9;
+        var hut = makeBoxLocal(w,h,d, hutColor);
+        bake(hut, new THREE.Vector3(x,y,z), rot);
+        rGeoms.push(hut);
+        var hutRoofG = makeGableRoof(w,d,0.3,0.8,hutRoof);
+        bake(hutRoofG, new THREE.Vector3(x,y+h,z), rot);
+        rGeoms.push(hutRoofG);
+      } else { // tule-hint dome shelter (low reed dome, no invented decoration)
+        var dome = new THREE.SphereGeometry(1.7,8,5,0,Math.PI*2,0,Math.PI*0.52).toNonIndexed();
+        dome.scale(1,0.82,1);
+        colorizeUniform(dome, tule);
+        bake(dome, new THREE.Vector3(x,y,z), rot);
+        rGeoms.push(dome);
+      }
+      dwellings.push({x:x, z:z});
     }
-    placeOutpostPerson(geoms, rx, rz+8, rngBuild()*Math.PI*2, 0x36402e, 0x262c1e, false);
+    // a shared fire ring + drying frame — evidence of daily use (QA-GATE
+    // rule 7), not costume props
+    var ringY = terrainHeight(rx,rz+0.5);
+    var ring = new THREE.CylinderGeometry(0.55,0.6,0.22,8).toNonIndexed();
+    colorizeUniform(ring, new THREE.Color(0x4a4038));
+    bake(ring, new THREE.Vector3(rx,ringY,rz+0.5), 0);
+    rGeoms.push(ring);
+    var frameY = terrainHeight(rx+4,rz+2);
+    var rail = new THREE.BoxGeometry(2.4,0.08,0.08).toNonIndexed();
+    rail.translate(0,1.25,0); colorizeUniform(rail, new THREE.Color(0x6b5a40));
+    var legA = new THREE.CylinderGeometry(0.05,0.06,1.25,5).toNonIndexed(); legA.translate(-1.1,0.62,0); colorizeUniform(legA, new THREE.Color(0x6b5a40));
+    var legB = new THREE.CylinderGeometry(0.05,0.06,1.25,5).toNonIndexed(); legB.translate(1.1,0.62,0); colorizeUniform(legB, new THREE.Color(0x6b5a40));
+    var frame = mergeGeoms([rail,legA,legB]);
+    bake(frame, new THREE.Vector3(rx+4,frameY,rz+2), 0.5);
+    rGeoms.push(frame);
+    window.RANCHERIA_SITE = { cx:rx, cz:rz, dwellings:dwellings };
+    var rMesh = new THREE.Mesh(mergeGeoms(rGeoms), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, side:THREE.DoubleSide, specular:0x000000, shininess:0}));
+    scene.add(rMesh);
+    window.RANCHERIA_MESH = rMesh; // era-gated (through 1848) in updateDistrictZones
   })();
 
   // (5) THE ORCHARD — west of the mission complex, separated from it by
@@ -6556,6 +6603,16 @@ var DISTRICT_ZONES = [
     record:"Yerba Buena — the trading village around the Plaza; ~200 souls at the July 1846 flag-raising, renamed San Francisco January 1847 (timeline-spine.md)." },
   { name:"MISSION DOLORES",  cx:OUTPOSTS.mission.x,  cz:OUTPOSTS.mission.z,  r:190, color:0x93a674, revealDay:-1,
     record:"Mission San Francisco de Asís (founded 1776) — the peninsula's oldest settlement, secularized under Mexico; a cluster of adobes by 1846 (peninsula-1846.md)." },
+  // NATIVE PRESENCE sprint (s50): the documented remnant-community zone at
+  // the Mission — the ONLY Native settlement anywhere on this map, because
+  // the record documents no other ("no source documents an occupied
+  // Yelamu/Ramaytush village, camp, or seasonal-use site anywhere in the
+  // 1846-49 frame" — native-presence-1846-49.md §1, clm:native:3; a
+  // confirmed silence, not an omission). endDay per clm:pen:32's
+  // 1793-1848 window.
+  { name:"THE RANCHERIA",    cx:(window.RANCHERIA_SITE?RANCHERIA_SITE.cx:OUTPOSTS.mission.x-85), cz:(window.RANCHERIA_SITE?RANCHERIA_SITE.cz:OUTPOSTS.mission.z-98),
+    r:60, color:0xa9905d, revealDay:-1, endDay:eventDateToSimDay("1848-12-31"),
+    record:"The former Indian rancheria at Mission Dolores, 'occupied by remaining Indians' through 1848 — the last dwelling place of the Ramaytush Ohlone remnant community (~15 descendants by 1842; about five families by 1850, per NPS/Milliken). No source documents Native settlement anywhere else on the peninsula in this period (peninsula-1846.md §2.1-2.2; native-presence-1846-49.md)." },
   { name:"THE PRESIDIO",     cx:OUTPOSTS.presidio.x, cz:OUTPOSTS.presidio.z, r:190, color:0x88a0ad, revealDay:-1,
     record:"The Mexican-era military post at the Golden Gate — garrisoned only thinly by 1846 (peninsula-1846.md)." },
   { name:"HAPPY VALLEY",     cx:900, cz:950,          r:440, color:0xd8a15c, revealDay:eventDateToSimDay("1849-01-10"),
@@ -6569,6 +6626,7 @@ var DISTRICT_ZONES = [
   { name:"LITTLE CHILE",     cx:150, cz:-830,         r:130, color:0xb98a5a, revealDay:eventDateToSimDay("1848-10-25"),
     record:"The Chilean encampment at the base of Telegraph Hill, toward Clark's Point — attacked and plundered by the Hounds, July 15 1849 (police-courts.md)." }
 ];
+var RANCHERIA_END_DAY = eventDateToSimDay("1848-12-31"); // clm:pen:32 — the rancheria's documented occupancy window closes with 1848
 var ZONE_GRID_RES = 28; // (res+1)^2 verts per zone, land-masked once at build time
 var zoneVert = [
   "#include <common>",
@@ -6657,8 +6715,11 @@ var zoneLabelEls = DISTRICT_ZONES.map(function(z){ return z.el; }); // fed to th
 var _zoneV = new THREE.Vector3();
 function updateDistrictZones(alt){
   var cartoT = smoothstep(CFG.zoomTrueScaleFull, CFG.zoomCartoFull, alt);
+  // s50: rancheria structures render only through their documented window
+  // (clm:pen:32, occupied 1793-1848) — same simDay gate as the zone below.
+  if(window.RANCHERIA_MESH) RANCHERIA_MESH.visible = simDay<=RANCHERIA_END_DAY;
   DISTRICT_ZONES.forEach(function(z){
-    var revealed = z.revealDay<0 || simDay>=z.revealDay;
+    var revealed = (z.revealDay<0 || simDay>=z.revealDay) && (z.endDay==null || simDay<=z.endDay);
     var op = revealed ? cartoT : 0;
     // TIMELAPSE GROUND ABSTRACTION (fix sprint 2026-07-11 #4): a subtle
     // district activity glow joins the dimmed figure flow at ground-level
@@ -7391,7 +7452,14 @@ var LOC_POINTS = (function(){
     { name:"Central Wharf", glyph:"anchor", x:cw.x+120, z:cw.z, foundedDay:eventDateToSimDay("1849-05-01"),
       record:"Begun May 1849 off the foot of Clay Street and pushed ~800 feet out over the cove flats — the town's deep-water landing." },
     { name:"Mission Dolores", glyph:"church", x:OUTPOSTS.mission.x, z:OUTPOSTS.mission.z,
-      record:"Mission San Francisco de Asís (founded 1776) — the peninsula's oldest settlement, a cluster of adobes at the end of the sand-hill road." }
+      record:"Mission San Francisco de Asís (founded 1776) — the peninsula's oldest settlement, a cluster of adobes at the end of the sand-hill road." },
+    // s50 NATIVE PRESENCE: findability affordance (QA-GATE rule 3) for the
+    // small (~true-scale) rancheria dwelling cluster — label ends with the
+    // documented occupancy window (clm:pen:32), same gate as its tint zone.
+    { name:"The Rancheria", glyph:"house",
+      x:(window.RANCHERIA_SITE?RANCHERIA_SITE.cx:OUTPOSTS.mission.x-85), z:(window.RANCHERIA_SITE?RANCHERIA_SITE.cz:OUTPOSTS.mission.z-98),
+      endDay:eventDateToSimDay("1848-12-31"),
+      record:"The former Indian rancheria at Mission Dolores, 'occupied by remaining Indians' through 1848 — the dwelling place of the Ramaytush Ohlone remnant community (~15 descendants by 1842; about five families by 1850, per NPS/Milliken). No source documents Native settlement anywhere else on the peninsula in this period (peninsula-1846.md §2.1-2.2; native-presence-1846-49.md)." }
   ];
 })();
 var locLabelPool = [];
@@ -7420,7 +7488,7 @@ function updateLocPoints(alt){
   var fade = 1 - smoothstep(430, 530, alt);
   for(var i=0;i<LOC_POINTS.length;i++){
     var p = LOC_POINTS[i], el = p.el;
-    if(fade<0.02 || (p.foundedDay!=null && simDay<p.foundedDay)){ el.style.opacity=0; continue; }
+    if(fade<0.02 || (p.foundedDay!=null && simDay<p.foundedDay) || (p.endDay!=null && simDay>p.endDay)){ el.style.opacity=0; continue; }
     var y = terrainHeight(p.x,p.z)+4;
     _locLabelV.set(p.x,y,p.z).applyMatrix4(camera.matrixWorldInverse);
     if(_locLabelV.z>-1){ el.style.opacity=0; continue; }
@@ -9135,6 +9203,15 @@ var NAME_BANKS = {
                 last:["Freeman","Carter","Jackson","Reed","Bowman","Prince","Harding"] },
   hawaiian:   { first:["Kealoha","Kahale","Nahoa","Kaimana","Kanoa","Malia","Keoni","Pua"],
                 last:[], singleName:true },
+  // s50 NATIVE PRESENCE: mission-register single baptismal names — the form
+  // the record itself uses for the Mission Dolores community (cf. the one
+  // documented individual, Pedro Evencio, and the register style in
+  // demographics-society.md §5). Name pool fill:true; deliberately NOT
+  // invented "tribal" names (native-presence-1846-49.md §6 DON'T: no
+  // pan-Indian imagery/naming — mission survivors bore Spanish baptismal
+  // names in every period source we hold).
+  indigenous: { first:["Ignacio","Gregorio","Bruno","Fermín","Faustino","Marcelo","Tiburcio","Juana","Gertrudis","Dolores"],
+                last:[], singleName:true },
   french:     { first:["Jean","Pierre","Louis","Henri","Étienne","Marie","Adèle"],
                 last:["Dubois","Lefèvre","Moreau","Girard","Bonnet","Chevalier"] },
   chilean:    { first:["Manuel","Pedro","Diego","Rafael","Domingo","Rosa","Carmen"],
@@ -9166,6 +9243,26 @@ var ORIGINS = [
   { key:"californio", label:"Californio",            weight:1.1, earliestDay:0 },
   { key:"black",       label:"Black (American)",      weight:0.3, earliestDay:0 },
   { key:"hawaiian",    label:"Sandwich Islander",     weight:0.6, earliestDay:0 },
+  // s50 NATIVE PRESENCE (GAPS-2026-07-10 item 7, native-presence-1846-49.md
+  // §2/§6): the June/Aug 1847 town census counted 34 Indigenous of 459
+  // total = 7.4% (California Star Aug 28 1847 + 1855 Annals — clm:demo:4,
+  // clm:timeline:20). CALIBRATION NOTE: a weight of 0.56 would be the
+  // naive parallel to hawaiian's 0.6-for-8.7%, but indigenous slots never
+  // consume roster names (the corpus documents no named Native individual
+  // in the town core, §3), and it is precisely the roster's 1847-48
+  // first-mention dates that thin every OTHER origin's alive count by
+  // ~half at the census date — so 0.56 overshot the sampled 1847 share to
+  // ~17%. The census anchor is carried instead by: (a) this small random
+  // weight for anonymous town presence (the census's own 34-in-town), plus
+  // (b) the GUARANTEED rancheria households (RANCHERIA_TARGET + Pedro
+  // Evencio, built below) — together spot-checked in-browser to ≈7.4% of
+  // the alive register at mid-1847. ERA CURVE: the share then dilutes as
+  // the rush cohorts' earliestDay arrivals inflate the town, and thins
+  // further via staggered notAfterDay expiry (indigenousNotAfterDay below)
+  // toward the 1852 SF+SM census tail of 140 across BOTH counties
+  // (clm:demo:141). Dress: same period working clothes as every other
+  // laborer (WARDROBE.everyday) — no caricature, per research §6.
+  { key:"indigenous",  label:"Indigenous (Ramaytush/Mission)", weight:0.09, earliestDay:0 },
   { key:"french",      label:"French",                weight:0.7, earliestDay:eventDateToSimDay("1849-02-01") },
   { key:"chilean",     label:"Chilean/Peruvian",      weight:1.4, earliestDay:eventDateToSimDay("1848-10-25") },
   { key:"australian",  label:"Australian",            weight:1.0, earliestDay:eventDateToSimDay("1849-04-01") },
@@ -9183,6 +9280,7 @@ var ORIGIN_TINT = {
   californio: new THREE.Color(1.03,0.96,0.88),
   black:      new THREE.Color(0.86,0.76,0.67),
   hawaiian:   new THREE.Color(1.02,0.93,0.80),
+  indigenous: new THREE.Color(1.02,0.93,0.82),
   french:     new THREE.Color(1.00,0.99,0.96),
   chilean:    new THREE.Color(1.01,0.94,0.85),
   australian: new THREE.Color(0.99,0.98,0.96),
@@ -10859,6 +10957,7 @@ function nextHome(){
 }
 function homeLabelFor(home){
   if(home.type==="tent") return "a tent at "+(home.spot.label||"the camps");
+  if(home.spot.label) return home.spot.label; // s50: non-town homes (the Mission rancheria) carry their own label — never a street-pair guess 3.8km from any street
   var pair = nearestStreetPair(home.spot.x, home.spot.z);
   return (home.spot.boarding ? "a boarding house near " : "a cottage near ") + pair + " Streets";
 }
@@ -10917,6 +11016,7 @@ var SKIN_WEIGHTS_BY_ORIGIN = { /* fill:true (see comment above) */
   californio:[0.04,0.18,0.34,0.32,0.10,0.02],
   black:     [0.00,0.02,0.08,0.20,0.42,0.28],
   hawaiian:  [0.00,0.06,0.24,0.44,0.22,0.04],
+  indigenous:[0.00,0.05,0.26,0.42,0.23,0.04],
   french:    [0.34,0.40,0.20,0.05,0.008,0.002],
   chilean:   [0.03,0.16,0.36,0.32,0.11,0.02],
   australian:[0.30,0.40,0.22,0.06,0.015,0.005],
@@ -10932,19 +11032,64 @@ function pickSkinTone(originKey, rng){
 // pool indices — 0..2 are silhouettes (slot.sil routes there while
 // walking/standing); 3..5 are the pose-library pools (§6).
 var POOL_M=0, POOL_F=1, POOL_CHILD=2, POOL_SEATED=3, POOL_STOOPED=4, POOL_CARRY=5;
+/* ---- s50 NATIVE PRESENCE helpers (native-presence-1846-49.md) ----
+   Occupations: only the DOCUMENTED role set for the Mission community —
+   mission/adobe labor (§4, clm:pen:22), household/laundry work (§4,
+   demographics-society.md §3, Washerwoman's Lagoon), and rancho/herding
+   labor (the 1852 census household-attachment pattern, clm:demo:141 —
+   an inference-from-pattern for 1846-49, per §4). NEVER the generic town
+   catalog draw (§6 DON'T: no incidental town trades without a documented
+   basis). Weights fill:true within that documented set. */
+var INDIGENOUS_OCC_IDS = ["common_laborer","common_laborer","vaquero_herder","washerwoman_laundress","domestic_servant"];
+function pickIndigenousOccupation(rng){
+  return CATALOG_OCC_BY_ID[INDIGENOUS_OCC_IDS[Math.floor(rng()*INDIGENOUS_OCC_IDS.length)]] || null;
+}
+/* Era curve (ORIGINS comment above): a fraction of indigenous slots thin
+   out across 1849 toward the 1852 SF+SM census tail of 140 across BOTH
+   counties (clm:demo:141) — the town share dilutes from the documented
+   7.4% (1847) toward the near-invisibility the record itself describes
+   ("numerically invisible against the town's explosive growth",
+   demographics-society.md §5). The rancheria-anchored families and Pedro
+   Evencio persist (clm:native:2: ~5 families still at the Mission, 1850). */
+var INDIG_FADE_START = eventDateToSimDay("1849-02-01"), INDIG_FADE_END = eventDateToSimDay("1849-11-15");
+function indigenousNotAfterDay(rng){
+  return rng()<0.60 ? Math.round(lerp(INDIG_FADE_START, INDIG_FADE_END, rng())) : null;
+}
+var RANCHERIA_HOME_LABEL = "Mission Dolores (the old rancheria)";
+/* Agendas for invented indigenous bios: drawn from the DOCUMENTED role set
+   only (fill:true phrasing of §4's mission labor / laundry / rancho
+   pattern), instead of the town AGENDAS pool ("passage money for the
+   mines" etc., which would claim an undocumented town life). */
+var INDIGENOUS_AGENDAS = [
+  "working the Mission's fields and adobes",
+  "washing for the town at the freshwater lagoon",
+  "hired out to a rancho household for the season",
+  "keeping the Mission herd with the vaqueros"
+];
+// gender-split spouse pools for the rancheria household fill (the mixed
+// NAME_BANKS pool was naming husbands as wives) — same register style.
+var INDIGENOUS_SPOUSE_F = ["Juana","Gertrudis","Dolores","Marcela","Faustina"];
+var INDIGENOUS_SPOUSE_M = ["Ignacio","Gregorio","Bruno","Tiburcio"];
 var ALL_PEOPLE_SLOTS = (function(){
   var slots = [], id = 0, missionAssigned = 0, MISSION_TARGET = 5;
   var ranchAssigned = 0, RANCH_TARGET = 3; // GAPS-2026-07-10 item A: keep a small herder presence at the pastures
+  var rancheriaAssigned = 0, RANCHERIA_TARGET = 4; // + Pedro Evencio below ≈ the ~5 families of clm:native:2
 
   for(var ri=0; ri<ROUTINE_CAP; ri++){
     var originKey = pickWeighted(ALL_ORIGIN_KEYS, ORIGINS_BY_KEY);
     var origin = ORIGINS_BY_KEY[originKey];
     // behavior-spec.md §0: real names from the roster first, best-attested
     // first (the builder's own sort order) — invented people only once the
-    // roster is exhausted.
-    var rosterPerson = nextRosterPerson();
+    // roster is exhausted. s50: indigenous slots never draw a roster name —
+    // the roster is newsprint town figures, and the corpus documents NO
+    // named Native individual inside the town core in this window
+    // (native-presence-1846-49.md §3); their names come from the
+    // mission-register bank instead, and the one documented individual
+    // (Pedro Evencio) gets his own dedicated slot below.
+    var rosterPerson = origin.key==="indigenous" ? null : nextRosterPerson();
     var era = eraColumnForDay(origin.earliestDay);
     var occ = (rosterPerson && rosterPerson.occ) ? CATALOG_OCC_BY_ID[rosterPerson.occ] : pickCatalogOccupation(era, origin.key, rngBuild);
+    if(origin.key==="indigenous") occ = pickIndigenousOccupation(rngBuild); // documented role set only (helper comment above)
     // vaquero is the standard Californio cattle-herding role of the pre-rush
     // economy (catalog vaquero_herder: documented, demographics-society.md §2)
     // — same guaranteed-minimum pattern as MISSION_TARGET below; never
@@ -10961,9 +11106,25 @@ var ALL_PEOPLE_SLOTS = (function(){
     var skinC = pickSkinTone(origin.key, rngBuild);
     var traits = rollTraits(rngBuild);
 
-    var home = nextHome();
-    var work = worksiteForOccupation(occ, rngBuild);
-    if(origin.key==="californio" && missionAssigned<MISSION_TARGET && rngBuild()<0.5){ work = WORKSITE_MISSION; missionAssigned++; }
+    // s50: ALL story-level (routine, named-bio) Native presence anchors to
+    // Mission Dolores — home at the documented rancheria dwellings, work at
+    // the Mission grounds / grazing pastures (research §6 DO: "anchor any
+    // individually-named or story-level Native presence to Mission
+    // Dolores, not the Yerba Buena village core"). Town-street presence at
+    // the census share is carried by the anonymous extras below.
+    var isRancheriaSlot = origin.key==="indigenous";
+    var home, work;
+    if(isRancheriaSlot){
+      var dws = (window.RANCHERIA_SITE && RANCHERIA_SITE.dwellings) || [{x:OUTPOSTS.mission.x-85, z:OUTPOSTS.mission.z-98}];
+      var dw = dws[rancheriaAssigned % dws.length];
+      home = { spot:{x:dw.x, z:dw.z, w:3, d:2.6, label:RANCHERIA_HOME_LABEL}, revealDay:0, type:"rancheria" };
+      work = (occ && occ.id==="vaquero_herder") ? WORKSITE_RANCH_MISSION : WORKSITE_MISSION;
+      rancheriaAssigned++;
+    } else {
+      home = nextHome();
+      work = worksiteForOccupation(occ, rngBuild);
+      if(origin.key==="californio" && missionAssigned<MISSION_TARGET && rngBuild()<0.5){ work = WORKSITE_MISSION; missionAssigned++; }
+    }
 
     var homePos = { x: home.spot.x + (rngBuild()-0.5)*(home.type==="tent"?2.2:(home.spot.w||3)*0.7),
                     z: home.spot.z + (rngBuild()-0.5)*(home.type==="tent"?2.2:(home.spot.d||3)*0.7) };
@@ -10974,7 +11135,7 @@ var ALL_PEOPLE_SLOTS = (function(){
     var sundayPoly  = buildRoutePoly(homePos.x,homePos.z, PLAZA_CENTER.x,PLAZA_CENTER.z);
     // behavior-spec.md §1: a pious minority attends the town chapel once it
     // exists (from CHURCH_REVEAL_DAY) rather than the Plaza's Sunday crowd.
-    var sundayGoesToChurch = traits.faith==="pious" && rngBuild()<0.55;
+    var sundayGoesToChurch = !isRancheriaSlot && traits.faith==="pious" && rngBuild()<0.55; // s50: Mission residents live beside the Mission church itself — never routed to the town chapel
     var churchPoly = (sundayGoesToChurch && CHURCH_SPOT) ? buildRoutePoly(homePos.x,homePos.z, CHURCH_SPOT.x, CHURCH_SPOT.z) : null;
 
     // PL-B item 1: the midday-break/evening-out free choices are now
@@ -10996,7 +11157,11 @@ var ALL_PEOPLE_SLOTS = (function(){
       var familyChance = era==="1846-1848" ? 0.42 : 0.07;
       if(rngBuild() < familyChance){
         var fBank = NAME_BANKS[origin.key] || NAME_BANKS.american;
-        var spouseFirst = fBank.first[Math.floor(rngBuild()*fBank.first.length)];
+        // s50: gender-appropriate spouse pool for indigenous households
+        // (the mixed single-name bank was naming husbands as wives)
+        var spouseFirst = origin.key==="indigenous"
+          ? (isMale ? INDIGENOUS_SPOUSE_F : INDIGENOUS_SPOUSE_M)[Math.floor(rngBuild()*(isMale?INDIGENOUS_SPOUSE_F:INDIGENOUS_SPOUSE_M).length)]
+          : fBank.first[Math.floor(rngBuild()*fBank.first.length)];
         var nChildRoll = rngBuild();
         var nChildren = nChildRoll<0.45?0 : nChildRoll<0.75?1 : nChildRoll<0.93?2 : 3;
         family = { spouseFirst:spouseFirst, children:nChildren };
@@ -11038,8 +11203,12 @@ var ALL_PEOPLE_SLOTS = (function(){
          rationale as the extras fix: the roster name is cosmetic flavor
          for the inspector card, not the simulated person's sole identity
          — the LIFE persists; only the name's documented presence window
-         belongs to the record. notBeforeDay (arrival floor) untouched. */
-      notAfterDay: null,
+         belongs to the record. notBeforeDay (arrival floor) untouched.
+         s50 exception (deliberate, era-honest — NOT the old roster bug):
+         indigenous slots beyond the ~5 anchored rancheria families thin
+         out across 1849 per the documented dilution curve
+         (indigenousNotAfterDay above; clm:demo:141 tail anchor). */
+      notAfterDay: (isRancheriaSlot && rancheriaAssigned>RANCHERIA_TARGET) ? indigenousNotAfterDay(rngBuild) : null,
       bio:null, _x:homePos.x, _z:homePos.z, _distSq:1e18, _now:"", _pose:"idle"
     });
   }
@@ -11048,7 +11217,7 @@ var ALL_PEOPLE_SLOTS = (function(){
   for(var ei=0; ei<EXTRA_POOL_SIZE; ei++){
     var originKey2 = pickWeighted(ALL_ORIGIN_KEYS, ORIGINS_BY_KEY);
     var origin2 = ORIGINS_BY_KEY[originKey2];
-    var rosterPerson2 = nextRosterPerson(); // real names keep filling density-fill slots after the routine cast (§0: "invented people only beyond the roster")
+    var rosterPerson2 = origin2.key==="indigenous" ? null : nextRosterPerson(); // real names keep filling density-fill slots after the routine cast (§0: "invented people only beyond the roster"); s50: never a newsprint name on an indigenous slot (see the routine loop's comment)
     var isMale2 = rngBuild() < genderMaleFrac(origin2.earliestDay);
     if(rosterPerson2 && rosterPerson2.gender==="f") isMale2 = false;
     // TECHNIQUES §1.3 child silhouette: a small, era-honest fraction of the
@@ -11086,7 +11255,14 @@ var ALL_PEOPLE_SLOTS = (function(){
       wanderPoly:wanderPoly, homePos:{x:wanderPoly.segs[0].a.x, z:wanderPoly.segs[0].a.z},
       homeLabel: isMissionTraveler ? "on the Mission road" : ("about "+nearestStreetPair(wanderPoly.segs[0].a.x, wanderPoly.segs[0].a.z)+" Streets"),
       work:null, workPos:null, workLabel:null,
-      notBeforeDay: Math.max(rosterFirstDay2!=null?rosterFirstDay2:0, origin2.earliestDay),
+      // s50: an indigenous extra's TOWN presence is census-dated (the 34
+      // counted mid-1847, clm:demo:4), not documented back to day 0 — so
+      // their register onset staggers across the census's own run-up,
+      // instead of claiming continuous town-core presence from July 1846
+      // (which only the Mission community has, per the record).
+      notBeforeDay: origin2.key==="indigenous"
+        ? Math.round(rngBuild()*eventDateToSimDay("1847-06-01"))
+        : Math.max(rosterFirstDay2!=null?rosterFirstDay2:0, origin2.earliestDay),
       // BUGFIX (close-range legibility pass, 2026-07-10): extras are
       // anonymous ambient density-fill (see comment at their loop's top) —
       // a roster name is cosmetic flavor for the inspector card, not their
@@ -11099,11 +11275,103 @@ var ALL_PEOPLE_SLOTS = (function(){
       // 1849 gold rush even started, leaving the entire back half of the
       // timeline's streets and plaza completely empty of people on every
       // platform. Extras never expire this way; notBeforeDay (arrival
-      // floor) is untouched.
-      notAfterDay: null,
+      // floor) is untouched. s50 exception (deliberate, era-honest):
+      // indigenous extras carry the documented dilution curve — see
+      // indigenousNotAfterDay above (clm:demo:141 tail anchor).
+      notAfterDay: origin2.key==="indigenous" ? indigenousNotAfterDay(rngBuild) : null,
       bio:null, _x:wanderPoly.segs[0].a.x, _z:wanderPoly.segs[0].a.z, _distSq:1e18, _now:"about the streets", _pose:"walk"
     });
   }
+
+  /* ---- s50 GUARANTEED RANCHERIA HOUSEHOLDS — the random origin draw
+     alone can't promise the documented remnant community exists on every
+     seed, so the rancheria is topped up to RANCHERIA_TARGET resident
+     household heads (+ Pedro Evencio below ≈ the ~5 families the NPS/
+     Milliken record puts at Mission Dolores, clm:native:2). Same
+     guaranteed-minimum pattern as MISSION_TARGET/RANCH_TARGET above.
+     These persist through sim end (the record keeps them there past
+     1849); names are mission-register bank draws (invented, shown as
+     PERSON — UNRECORDED), occupations from the documented role set. ---- */
+  while(rancheriaAssigned < RANCHERIA_TARGET){
+    var rOrigin = ORIGINS_BY_KEY.indigenous;
+    var rOcc = pickIndigenousOccupation(rngBuild);
+    var rDws = (window.RANCHERIA_SITE && RANCHERIA_SITE.dwellings) || [{x:OUTPOSTS.mission.x-85, z:OUTPOSTS.mission.z-98}];
+    var rDw = rDws[rancheriaAssigned % rDws.length];
+    var rMale = isMaleForOccupation(rOcc, 0.6, rngBuild);
+    var rWardrobe = pickWardrobe(rOcc, rOrigin, rMale, rngBuild);
+    var rTraits = rollTraits(rngBuild);
+    var rHomePos = { x:rDw.x+(rngBuild()-0.5)*2.0, z:rDw.z+(rngBuild()-0.5)*2.0 };
+    var rWork = (rOcc && rOcc.id==="vaquero_herder") ? WORKSITE_RANCH_MISSION : WORKSITE_MISSION;
+    var rWorkPos = { x:rWork.x, z:rWork.z };
+    // household-fill flavor (same fill:true layer as the town family roll):
+    // these ARE the record's "families" — each guaranteed head carries one.
+    var rSpousePool = rMale ? INDIGENOUS_SPOUSE_F : INDIGENOUS_SPOUSE_M;
+    var rFamily = { spouseFirst:rSpousePool[Math.floor(rngBuild()*rSpousePool.length)], children:1+Math.floor(rngBuild()*2) };
+    slots.push({
+      id:id++, kind:"routine", origin:rOrigin, gender:rMale?"male":"female", variant:rMale?POOL_M:POOL_F,
+      sil:rMale?POOL_M:POOL_F, coatC:rWardrobe.coat, hatC:rWardrobe.hat, skinC:pickSkinTone("indigenous",rngBuild), _scale:0.94+rngBuild()*0.12,
+      occ:rOcc, roster:null, traits:rTraits, needs:{food:0,social:0}, family:rFamily, originTint:ORIGIN_TINT.indigenous,
+      sundayGoesToChurch:false, churchPoly:null,
+      lateralJitter:(rngBuild()-0.5)*2.2, clusterOffset:{ x:(rngBuild()-0.5)*3.6, z:(rngBuild()-0.5)*3.6 },
+      isLanternCandidate: rngBuild()<0.32,
+      home:{ spot:{x:rDw.x, z:rDw.z, w:3, d:2.6, label:RANCHERIA_HOME_LABEL}, revealDay:0, type:"rancheria" },
+      homePos:rHomePos, homeLabel:RANCHERIA_HOME_LABEL,
+      work:rWork, workPos:rWorkPos, workLabel:rWork.label, workActivity:rWork.activity,
+      commutePoly:buildRoutePoly(rHomePos.x,rHomePos.z, rWorkPos.x,rWorkPos.z),
+      errandPoly:buildRoutePoly(rWorkPos.x,rWorkPos.z, PLAZA_CENTER.x,PLAZA_CENTER.z),
+      sundayPoly:buildRoutePoly(rHomePos.x,rHomePos.z, PLAZA_CENTER.x,PLAZA_CENTER.z),
+      _midday:null, _doEvening:false, _evening:null, _scheduleDay:-1,
+      notBeforeDay:0, notAfterDay:null,
+      bio:null, _x:rHomePos.x, _z:rHomePos.z, _distSq:1e18, _now:"", _pose:"idle"
+    });
+    rancheriaAssigned++;
+  }
+
+  /* ---- s50 PEDRO EVENCIO — the ONE individually documented Native
+     resident of the window (clm:demo:142, demographics-society.md §5,
+     native-presence-1846-49.md §1): married a Patwin woman from the Sonoma
+     mission system at Mission Dolores in December 1846; identified as late
+     as 1893 as "the last (Ramaytush) Native American of San Mateo." A
+     dedicated, always-present routine slot spanning the WHOLE sim window
+     (notBeforeDay 0, notAfterDay null — his documented life spans 1846
+     through 1893), homed at the rancheria, inspectable like any person;
+     his card carries the documented facts + source verbatim (docFacts/
+     docSource, rendered in openPersonInspectorForSlot). His day-to-day
+     occupation is NOT documented — common laborer at the Mission grounds
+     is distribution fill, legitimate per behavior-spec.md §0 ("occupation
+     unknown in the record -> distribution fill"), and his card never
+     claims it as record. ---- */
+  (function(){
+    var origin = ORIGINS_BY_KEY.indigenous;
+    var occ = CATALOG_OCC_BY_ID["common_laborer"] || null;
+    var dws = (window.RANCHERIA_SITE && RANCHERIA_SITE.dwellings) || [{x:OUTPOSTS.mission.x-85, z:OUTPOSTS.mission.z-98}];
+    var dw = dws[dws.length-1];
+    var homePos = { x:dw.x+1.2, z:dw.z+1.0 };
+    var work = WORKSITE_MISSION;
+    var workPos = { x:work.x, z:work.z };
+    var wardrobe = pickWardrobe(occ, origin, true, rngBuild); // same period working clothes as any laborer — no costume marker
+    slots.push({
+      id:id++, kind:"routine", origin:origin, gender:"male", variant:POOL_M,
+      sil:POOL_M, coatC:wardrobe.coat, hatC:wardrobe.hat, skinC:pickSkinTone("indigenous",rngBuild), _scale:1.0,
+      occ:occ,
+      roster:{ name:"Pedro Evencio", role:null, occ:null, gender:null, first:null, last:null, mentions:null, src:"clm:demo:142" },
+      docFacts:'Married a Patwin woman from the Sonoma mission system at Mission Dolores in December 1846. Identified as late as 1893 as "the last (Ramaytush) Native American of San Mateo."',
+      docSource:"demographics-society.md §5 (claim clm:demo:142); native-presence-1846-49.md §1",
+      traits:rollTraits(rngBuild), needs:{food:0,social:0}, family:null, originTint:ORIGIN_TINT.indigenous,
+      sundayGoesToChurch:false, churchPoly:null,
+      lateralJitter:(rngBuild()-0.5)*2.2, clusterOffset:{ x:(rngBuild()-0.5)*3.6, z:(rngBuild()-0.5)*3.6 },
+      isLanternCandidate:false,
+      home:{ spot:{x:dw.x, z:dw.z, w:3, d:2.6, label:RANCHERIA_HOME_LABEL}, revealDay:0, type:"rancheria" },
+      homePos:homePos, homeLabel:RANCHERIA_HOME_LABEL,
+      work:work, workPos:workPos, workLabel:work.label, workActivity:work.activity,
+      commutePoly:buildRoutePoly(homePos.x,homePos.z, workPos.x,workPos.z),
+      errandPoly:buildRoutePoly(workPos.x,workPos.z, PLAZA_CENTER.x,PLAZA_CENTER.z),
+      sundayPoly:buildRoutePoly(homePos.x,homePos.z, PLAZA_CENTER.x,PLAZA_CENTER.z),
+      _midday:null, _doEvening:false, _evening:null, _scheduleDay:-1,
+      notBeforeDay:0, notAfterDay:null,
+      bio:null, _x:homePos.x, _z:homePos.z, _distSq:1e18, _now:"", _pose:"idle"
+    });
+  })();
   return slots;
 })();
 
@@ -11476,7 +11744,9 @@ function generateBio(slot){
     slot.bio = {
       name: rp.name,
       origin: slot.origin ? slot.origin.label : "unrecorded",
-      arrivedYear: dateFromSimDay(rp.first ? eventDateToSimDay(rp.first) : Math.max(slot.notBeforeDay,0)).getUTCFullYear(),
+      // s50: the Indigenous population did not "arrive" — they are the
+      // original population (native-presence-1846-49.md §1).
+      arrivedYear: (slot.origin && slot.origin.key==="indigenous") ? "native-born" : dateFromSimDay(rp.first ? eventDateToSimDay(rp.first) : Math.max(slot.notBeforeDay,0)).getUTCFullYear(),
       trade: rpOcc ? rpOcc.label : (rp.role || "—"),
       role: rp.role || null, mentions: rp.mentions || null,
       agenda: null, family: familyLineFor(slot),
@@ -11489,14 +11759,18 @@ function generateBio(slot){
   var name = bank.singleName ? first : (first+" "+bank.last[Math.floor(rng()*bank.last.length)]);
   var earliestDay = Math.max(slot.notBeforeDay,0), latestDay = Math.max(earliestDay, simDay);
   var arrivedDay = earliestDay + rng()*Math.max(1,(latestDay-earliestDay));
-  var occ = slot.occ || pickCatalogOccupation(eraColumnForDay(arrivedDay), slot.origin.key, rng);
+  // s50: indigenous bios draw trade + agenda from the DOCUMENTED role set
+  // only (pickIndigenousOccupation / INDIGENOUS_AGENDAS — see their
+  // comments), never the generic town catalog/agenda pools.
+  var isIndig = slot.origin.key==="indigenous";
+  var occ = slot.occ || (isIndig ? pickIndigenousOccupation(rng) : pickCatalogOccupation(eraColumnForDay(arrivedDay), slot.origin.key, rng));
   var wageRe = occ ? TRADE_WAGE_ITEM[occ.id] : null;
   var wageRec = wageRe ? findPriceByItem(wageRe) : null;
   slot.bio = {
-    name:name, origin:slot.origin.label, arrivedYear:dateFromSimDay(arrivedDay).getUTCFullYear(),
+    name:name, origin:slot.origin.label, arrivedYear: isIndig ? "native-born" : dateFromSimDay(arrivedDay).getUTCFullYear(),
     trade: occ ? occ.label : "laborer",
     role: null, mentions: null,
-    agenda:AGENDAS[Math.floor(rng()*AGENDAS.length)], family: familyLineFor(slot),
+    agenda:(isIndig ? INDIGENOUS_AGENDAS[Math.floor(rng()*INDIGENOUS_AGENDAS.length)] : AGENDAS[Math.floor(rng()*AGENDAS.length)]), family: familyLineFor(slot),
     wage: wageRec ? formatPrice(wageRec) : null
   };
   return slot.bio;
@@ -12063,17 +12337,24 @@ function openPersonInspectorForSlot(slot){
     var worksArticle = /^the /i.test(slot.workLabel||"") ? 'works ' : 'works the ';
     detailHtml += '; '+worksArticle+'<a href="#" class="ip-fly" onclick="__piFlyTo('+slot.workPos.x.toFixed(1)+','+slot.workPos.z.toFixed(1)+',110);return false;">'+escapeHTML(slot.workLabel)+'</a>';
   }
-  detailHtml += bio.role ? (". Printed in the record as \""+escapeHTML(bio.role)+"\".") : (". "+escapeHTML(bio.agenda)+".");
+  detailHtml += bio.role ? (". Printed in the record as \""+escapeHTML(bio.role)+"\".") : (bio.agenda ? ". "+escapeHTML(bio.agenda)+"." : ".");
   if(bio.family) detailHtml += escapeHTML(bio.family);
   html += ipRow("HOME"+(slot.workPos?" &middot; WORK":""), detailHtml);
+  // s50: documented-individual card rows (Pedro Evencio, clm:demo:142) —
+  // the record's facts verbatim + their source, no invented dialogue or
+  // motive (spec §15).
+  if(slot.docFacts){
+    html += ipRow("FROM THE RECORD", escapeHTML(slot.docFacts));
+    if(slot.docSource) html += ipRow("SOURCE", escapeHTML(slot.docSource));
+  }
   html += '<span class="ip-label">NOW</span><span class="ip-field ip-now" id="ip-now">'+escapeHTML(slot._now||"—")+'</span>';
   _ipMention = bio.role ? findPaperMention(bio.name) : null; // only roster names can be in print
   if(_ipMention){
     html += '<span class="ip-label">RECEIPT</span><span class="ip-field"><a href="#" class="ip-paper" onclick="return false;">in the paper: '
       + escapeHTML(_ipMention.headline)+' →</a></span>';
   }
-  showInspect(bio.role ? "PERSON — FROM THE RECORD" : "PERSON — UNRECORDED", bio.name, html,
-    { hint:"Esc — release" });
+  showInspect(slot.docFacts ? "PERSON — DOCUMENTED" : (bio.role ? "PERSON — FROM THE RECORD" : "PERSON — UNRECORDED"), bio.name, html,
+    { hint:"Esc — release", documented:!!slot.docFacts });
   SELECTED = { kind:"person", slot:slot };
   setSelRing(slot._x, slot._z, 1.4);
   followedSlot = slot; followedDocumented = null;
@@ -12261,6 +12542,7 @@ function tryPickGroundEntity(gx, gz, alt){
     for(i=0;i<DISTRICT_ZONES.length;i++){
       var z = DISTRICT_ZONES[i];
       if(z.revealDay>=0 && simDay<z.revealDay) continue;
+      if(z.endDay!=null && simDay>z.endDay) continue; // s50: the rancheria's zone window closes after 1848
       if(Math.hypot(z.cx-gx, z.cz-gz) <= z.r*0.85){ openZoneInspector(z); return true; }
     }
   }
@@ -13304,6 +13586,14 @@ var DIRECTOR_BEATS = (function(){
   // own director beat too).
   var LITTLE_CHILE_ZONE = DISTRICT_ZONES.filter(function(z){ return z.name==="LITTLE CHILE"; })[0];
   EVENTS_RAW.forEach(function(e){
+    // s50 NATIVE PRESENCE: Montgomery's Sept 15 1846 Indian-labor
+    // proclamation (the priority-8 bible spine record) — a documented
+    // moment at the plaza/headquarters, quoted verbatim in the record's
+    // own words, receipt to the Star's republication (CS18470306.1.4).
+    if(e.date==="1846-09-15" && e.type==="proclamation" && (e.priority||0)>=8){
+      beats.push({ simDay:e.simDay+0.3, cls:"moment", pri:7, x:PLAZA_CENTER.x, z:PLAZA_CENTER.z, alt:220,
+        headline:e.headline, dateISO:e.date, receipt:(e.prov&&e.prov.url)||null });
+    }
     if(e.date==="1849-07-15" && /Hounds attack Little Chile/i.test(e.headline||"")){
       beats.push({ simDay:e.simDay+0.25, cls:"moment", pri:8,
         x:(LITTLE_CHILE_ZONE?LITTLE_CHILE_ZONE.cx:PLAZA_CENTER.x), z:(LITTLE_CHILE_ZONE?LITTLE_CHILE_ZONE.cz:PLAZA_CENTER.z), alt:180,
@@ -13400,6 +13690,11 @@ var SCRUB_NOTCHES = (function(){
     { date:"1846-07-09", headline:"Montgomery raises the U.S. flag at Yerba Buena plaza" },
     { date:"1846-07-31", headline:"Ship Brooklyn lands Brannan and the Mormon settlers" },
     { date:"1846-08-15", headline:null },
+    // s50 NATIVE PRESENCE: the Montgomery Indian-labor proclamation, issued
+    // at Yerba Buena headquarters on its true date (native-presence-1846-49.md
+    // §3; corpus CS18470306.1.4 / CS18470220.1.4) — headline + date only,
+    // no editorializing (VOICE RULE).
+    { date:"1846-09-15", headline:'Montgomery proclamation on Indian labor, issued at Yerba Buena headquarters' },
     { date:"1847-01-23", headline:"Renaming ordinance published: Yerba Buena becomes San Francisco" },
     { date:"1848-05-11", headline:'Brannan — "Gold! Gold from the American River!"' },
     { date:"1848-05-29", headline:"The Californian suspends publication" },
