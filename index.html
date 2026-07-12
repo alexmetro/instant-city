@@ -489,15 +489,14 @@
   #seed-reshuffle{ pointer-events:auto; cursor:pointer; margin-left:0.5em; opacity:0.75; }
   #seed-reshuffle:hover{ opacity:1; }
 
-  /* Watch mode (V): everything hides but the date, the beat card, the ticker */
+  /* Watch mode (V): everything hides but the date, the beat card, the ticker
+     — and (s59, user directive) the INSPECT PANEL, which stays visible and
+     auto-populated with whoever is being followed (director person-beats
+     open it themselves; manual selections keep it too). */
   body.watch-mode #hud-title, body.watch-mode #hud-seed, body.watch-mode #hud-altitude,
   body.watch-mode #hud-hint, body.watch-mode #hud-hint-toggle, body.watch-mode #paper-toggle,
   body.watch-mode #hud-ghost, body.watch-mode #hud-provenance,
-  body.watch-mode #inspect-panel, body.watch-mode #horizon-ring{ display:none !important; }
-  /* s44 DIRECTOR V2: during a director person-follow beat the inspect panel
-     (who they are — name/trade/what they're doing, facts only) stays visible
-     in watch mode; everything else stays hidden. */
-  body.watch-mode.watch-follow #inspect-panel.on{ display:block !important; }
+  body.watch-mode #horizon-ring{ display:none !important; }
   /* s44: quick-cut fade between director beats */
   #director-fade{
     position:fixed; inset:0; background:#04050a; opacity:0;
@@ -671,6 +670,11 @@
       border:none; border-top:2px solid var(--ink);
       box-shadow:0 -6px 18px rgba(0,0,0,0.45);
     }
+    /* s59 single-top-layer policy (watch mode on phone): while the inspect
+       bottom-sheet is open, the beat card STACKS ABOVE the sheet's reserved
+       40vh band instead of z-fighting under/over it. The sheet keeps the
+       bottom edge; the card yields upward — one owner per screen band. */
+    body.ip-open #beat-card{ bottom:calc(40vh + 14px); }
     /* s54: on phone layouts the "?" chip folds away too — the help panel
        lives behind the ☰ menu's Controls row instead (these selectors must
        out-rank the body.touch-device rules above, hence the body prefix). */
@@ -2393,12 +2397,26 @@ function roadLifeInit(){
   tentCandidates.forEach(function(c,i){ contribs.push({x:c.x, z:c.z, tent:true, r:dayForTentIndex(i)}); });
   // Routed-traffic corridors: Dijkstra over the sim's own walker graph
   // between its real hubs, weighted; camp pairs gate on the camps' arrival.
+  // s59 HONESTY: corridors now use the SAME road-lifecycle-weighted router
+  // people route with (graphPathWeighted), so §9b's closed-form traffic
+  // accrues to the segments people actually walk. _roadLife is assigned
+  // BEFORE the pairs are routed: during corridor routing the traf term is
+  // still empty, so edge states evaluate frontage-only (breaks the
+  // corridors->state->corridors cycle deterministically); the piece cache
+  // primed with empty-traf data is cleared right after.
   var hvDay = HAPPY_VALLEY_REVEAL_DAY;
   var corridorEdges = [];
+  var docS4 = {
+    "kearny":     eventDateToSimDay("1850-04-01"),
+    "montgomery": eventDateToSimDay("1850-04-01"),
+    "washington": eventDateToSimDay("1850-04-01"),
+    "clay":       eventDateToSimDay("1850-04-01")
+  };
+  _roadLife = { PS:PS, contribs:contribs, corridorEdges:corridorEdges, docS4:docS4, pieceCache:{} };
   function addPair(aKey, bKey, w, fromDay){
     var ai = STREET_GRAPH.idx[aKey], bi = STREET_GRAPH.idx[bKey];
     if(ai==null || bi==null) return;
-    var p = graphPath(ai, bi);
+    var p = graphPathWeighted(ai, bi, Math.max(fromDay, 0), -1, true);
     if(!p) return;
     for(var i=0;i<p.length-1;i++){
       var A = STREET_GRAPH.nodes[p[i]], B = STREET_GRAPH.nodes[p[i+1]];
@@ -2411,18 +2429,10 @@ function roadLifeInit(){
   addPair("wharf", "camp_happyvalley", 0.35, hvDay);
   addPair("plaza", "camp_edge", 0.22, hvDay);
   addPair("plaza", "camp_western", 0.22, hvDay);
-  // Documented S4 forcers (research/infrastructure.md §3) — all outside
-  // the current Dec-31-1849 window, encoded for timeline completeness:
-  // spring 1850 grading/planking campaign ("a few streets graded and
-  // planked for one or two squares at a time", FoundSF "Conditions 1850")
-  // and the Mission Plank Road's Jul 25 1851 opening.
-  var docS4 = {
-    "kearny":     eventDateToSimDay("1850-04-01"),
-    "montgomery": eventDateToSimDay("1850-04-01"),
-    "washington": eventDateToSimDay("1850-04-01"),
-    "clay":       eventDateToSimDay("1850-04-01")
-  };
-  _roadLife = { PS:PS, contribs:contribs, corridorEdges:corridorEdges, docS4:docS4, pieceCache:{} };
+  // (docS4 — the documented S4 forcers, research/infrastructure.md §3, all
+  // outside the current Dec-31-1849 window — moved up with the _roadLife
+  // assignment above so corridor routing can see it.)
+  _roadLife.pieceCache = {}; // s59: drop entries primed during corridor routing (frontage-only traf)
   return _roadLife;
 }
 function _distPtSeg2(px,pz, ax,az, bx,bz){
@@ -3614,6 +3624,23 @@ var OUTPOSTS = {
 var PLACEMENT_INDEX = []; // {x,z,r} — every accepted footprint, any class, any spawner
 function registerPlacement(x,z,r){ PLACEMENT_INDEX.push({x:x,z:z,r:r||3}); }
 
+/* s59 MOVEMENT NATURALISM — walkability obstacle registries. Unlike
+   PLACEMENT_INDEX (bounding circles, half-diagonal radii — fine for
+   spawn rejection, far too fat for pedestrians), these carry the EXACT
+   shapes routing/collision needs: oriented rects for buildings (bake-yaw
+   convention, same local frame the yard-fence builder uses), circles for
+   tents/domes, thin segments for fences/corral rails. Builders whose
+   geometry is otherwise thrown away (fences, corrals, outposts) push
+   here; the big candidate arrays (VILLAGE_BUILDING_SPOTS, growth, tents)
+   are read directly by walkMaskInit() further down. reveal = the simDay
+   the obstacle first exists (default: always). */
+var WALK_RECTS = [];   // {x,z,rot,hw,hd,reveal}
+var WALK_CIRCLES = []; // {x,z,r,reveal}
+var WALK_SEGS = [];    // {x0,z0,x1,z1} — thin barriers (halfW ~0.35)
+function registerWalkRect(x,z,rot,hw,hd,reveal){ WALK_RECTS.push({x:x,z:z,rot:rot||0,hw:hw,hd:hd,reveal:(reveal==null?-1e9:reveal)}); }
+function registerWalkCircle(x,z,r,reveal){ WALK_CIRCLES.push({x:x,z:z,r:r,reveal:(reveal==null?-1e9:reveal)}); }
+function registerWalkSeg(x0,z0,x1,z1){ WALK_SEGS.push({x0:x0,z0:z0,x1:x1,z1:z1}); }
+
 function distToSegXZ(x,z,x0,z0,x1,z1){
   var dx=x1-x0, dz=z1-z0, len2=dx*dx+dz*dz;
   var t = len2>0 ? ((x-x0)*dx+(z-z0)*dz)/len2 : 0;
@@ -4662,6 +4689,7 @@ function makeOrchardTreeGeo(){
   var churchW=34.7, churchD=6.7, churchH=6.4, churchRot=0.2;
   var churchX=o.x, churchZ=o.z, churchY=terrainHeight(churchX,churchZ);
   registerPlacement(churchX, churchZ, Math.hypot(churchW,churchD)/2);
+  registerWalkRect(churchX, churchZ, churchRot, churchW/2, churchD/2); // s59: walkers route around the church, not through it
   var churchBody = makeBoxLocal(churchW,churchH,churchD,adobe);
   bake(churchBody, new THREE.Vector3(churchX,churchY,churchZ), churchRot);
   geoms.push(churchBody);
@@ -4705,6 +4733,7 @@ function makeOrchardTreeGeo(){
     // with a generous hand-built jitter (±~20°). One draw either way.
     var w=6.5+rngBuild()*2.5, d=5.5+rngBuild()*2, h=3+rngBuild(), rot=churchRot+(rngBuild()-0.5)*0.7;
     registerPlacement(x,z,Math.hypot(w,d)/2);
+    registerWalkRect(x,z,rot,w/2,d/2); // s59 walkability
     var body = makeBoxLocal(w,h,d, adobe.clone().lerp(adobeDark, rngBuild()*0.5));
     bake(body, new THREE.Vector3(x,y,z), rot);
     geoms.push(body);
@@ -4745,6 +4774,7 @@ function makeOrchardTreeGeo(){
       var x = rx+offs[i][0], z = rz+offs[i][1];
       var y = terrainHeight(x,z);
       registerPlacement(x,z,3);
+      if(i<3) registerWalkRect(x,z, ((i*0.83)%0.24)-0.12, 1.9, 1.4); else registerWalkCircle(x,z,1.8); // s59: cabins as rects, tule domes as circles
       // s56 BUILDING-YAW AUDIT: the record's own word for the layout is
       // "rows" — cabins in a row share a facing. The old (i*0.83)%π gave
       // each dwelling an unrelated ~47°-stepped yaw that broke the row
@@ -4837,6 +4867,7 @@ function makeOrchardTreeGeo(){
       if(rngBuild()<0.22) continue; // gap — collapsed section
       var mx=cx+(lx0+lx1)/2, mz=cz+(lz0+lz1)/2, my=terrainHeight(mx,mz);
       if(my<=1) continue;
+      registerWalkSeg(cx+lx0, cz+lz0, cx+lx1, cz+lz1); // s59: quadrangle wall blocks walkers (gaps stay passable)
       var segLen = Math.hypot(lx1-lx0, lz1-lz0);
       var yaw = Math.atan2(lx1-lx0, lz1-lz0);
       var hgt = 1.2+rngBuild()*2.4; // ruined -> a couple of intact yards
@@ -4867,6 +4898,7 @@ function makeOrchardTreeGeo(){
     if(y<=1 || terrainSlopeDeg(x,z)>20) return;
     registerPlacement(x,z,Math.hypot(bldg.w,bldg.d)/2);
     var rot = rngBuild()*0.3;
+    registerWalkRect(x,z,rot,bldg.w/2,bldg.d/2); // s59 walkability
     var body = makeBoxLocal(bldg.w,bldg.h,bldg.d, wall.clone().lerp(wallRuin,0.3));
     bake(body, new THREE.Vector3(x,y,z), rot);
     geoms.push(body);
@@ -7037,13 +7069,21 @@ var DISTRICT_ZONES = [
   { name:"HAPPY VALLEY",     cx:900, cz:950,          r:440, color:0xd8a15c, revealDay:eventDateToSimDay("1849-01-10"),
     record:"The 1849 canvas city south of the cove — hundreds of tents pitched among the dunes and scrub as the rush crowds outran the town's rooms (demographics-society.md)." },
   // GAPS-2026-07-09 item 3 (1849 bible-tier events): the Chilean immigrant
-  // encampment at Clark's Point (clm demographics-society.md §3 / research
-  // police-courts.md), site of the Hounds' July 15 1849 attack. Placement
-  // approximate (toward the waterfront at the base of Telegraph Hill/Clark's
-  // Point, per the record — no lot-level position survives); revealed on
-  // ORIGINS' own documented Chilean-arrival onset (1848-10-25).
-  { name:"LITTLE CHILE",     cx:150, cz:-830,         r:130, color:0xb98a5a, revealDay:eventDateToSimDay("1848-10-25"),
-    record:"The Chilean encampment at the base of Telegraph Hill, toward Clark's Point — attacked and plundered by the Hounds, July 15 1849 (police-courts.md)." }
+  // encampment, site of the Hounds' July 15 1849 attack. s59 PLACEMENT FIX
+  // (user-caught): the record is BLOCK-PRECISE, not vague —
+  // demographics-society.md §"Little Chile (Chilecito)": "On the block
+  // bounded by Montgomery, Kearny, Pacific, and Jackson Streets near
+  // Telegraph Hill/Broadway" (modern plaque near Kearny & Columbus). This
+  // supersedes the old "no lot-level position survives" note. Center is
+  // DERIVED from the street grid (midpoint of that documented block via
+  // gridToWorld) so it survives any future re-projection; radius ~ the
+  // block. Revealed on ORIGINS' documented Chilean-arrival onset
+  // (1848-10-25); Hounds record text kept.
+  (function(){
+    var pMid = gridToWorld((GEO.streetsU.kearny+GEO.streetsU.montgomery)/2, (GEO.streetsV.pacific+GEO.streetsV.jackson)/2);
+    return { name:"LITTLE CHILE", cx:pMid.x, cz:pMid.z, r:65, color:0xb98a5a, revealDay:eventDateToSimDay("1848-10-25"),
+      record:"Little Chile (Chilecito) — the Chilean quarter on the block bounded by Montgomery, Kearny, Pacific and Jackson Streets, at the base of Telegraph Hill — attacked and plundered by the Hounds, July 15 1849 (demographics-society.md §Little Chile; police-courts.md)." };
+  })()
 ];
 var RANCHERIA_END_DAY = eventDateToSimDay("1848-12-31"); // clm:pen:32 — the rancheria's documented occupancy window closes with 1848
 var ZONE_GRID_RES = 28; // (res+1)^2 verts per zone, land-masked once at build time
@@ -7564,6 +7604,7 @@ function showInspect(kindText, name, bodyHtml, opts){
   ipBodyEl.innerHTML = html;
   followReleaseEl.classList.remove("on"); // s54: only the person-follow openers re-show it
   inspectPanelEl.classList.add("on");
+  document.body.classList.add("ip-open"); // s59: phone chrome stacks the beat card above the sheet
   // s54 single-top-layer policy: on phone chrome the inspect bottom-sheet and
   // the ☰ menu sheet occupy the same layer — opening one closes the other
   // (the user finding: the sheet drew OVER the open menu, both half-visible).
@@ -7581,6 +7622,7 @@ var followReleaseEl = document.getElementById("follow-release");
 followReleaseEl.addEventListener("click", function(e){ e.stopPropagation(); closeInspect(); });
 function closeInspect(){
   inspectPanelEl.classList.remove("on");
+  document.body.classList.remove("ip-open"); // s59
   followReleaseEl.classList.remove("on"); // s54
   SELECTED = null;
   followedSlot = null; followedDocumented = null;
@@ -8665,6 +8707,7 @@ function updateLaundryDay(day){
       var t=(i+0.5)/segN, fx=ln.p0.x+dx*t, fz=ln.p0.z+dz*t, fh=terrainHeight(fx,fz);
       if(fh<=1) continue;
       fenceMatrices.push({x:fx,z:fz,h:fh,rotY:yaw});
+      registerWalkSeg(ln.p0.x+dx*(i/segN), ln.p0.z+dz*(i/segN), ln.p0.x+dx*((i+1)/segN), ln.p0.z+dz*((i+1)/segN)); // s59: rails block walkers
     }
   });
   var fenceMesh = new THREE.InstancedMesh(fenceGeo, fenceMat, Math.max(fenceMatrices.length,1));
@@ -9297,6 +9340,7 @@ var SIGN_BUILDING_SPOTS = []; // {x,z,y,rot,w,d,word} — reused by Phase 4's ho
         if(fh<=1) continue;
         if(spot.foundedDay!=null) continue; // s56: no yard fence around an era-gated landmark (rng draws consumed above so the stream holds)
         fenceMatrices.push({x:fx,z:fz,h:fh,rotY:yaw});
+        registerWalkSeg(a.x+dx*(i/segN), a.z+dz*(i/segN), a.x+dx*((i+1)/segN), a.z+dz*((i+1)/segN)); // s59: only PLACED rails block — gates/gaps stay passable
       }
     });
   });
@@ -10091,22 +10135,386 @@ function graphPath(fromIdx, toIdx){
   path.reverse();
   return path;
 }
+/* =========================================================================
+   s59 MOVEMENT NATURALISM — WALKABILITY MASK + WEIGHTED, DIVERSE ROUTING.
+
+   1. THE MASK: every building footprint (founding village, landmarks,
+      growth candidates at their deterministic reveal days, tents, outpost
+      structures), fence rail, corral rail and the Presidio wall lives in a
+      16m-bucket spatial hash of EXACT shapes (oriented rects / circles /
+      thin segments). walkBlockedAt(x,z,day) is the one collision oracle:
+      route building, detours, lateral-jitter clamping and QA all read it.
+      Era-honest: an obstacle blocks only from its reveal day (quantized to
+      the 30-day route bucket, so a route never clips a building that pops
+      mid-bucket).
+   2. ROUTING: graphPathWeighted() = Dijkstra over the same STREET_GRAPH,
+      edge cost = length x roadLifecycleFactor^personRoadPref x personJitter.
+      Lifecycle factors read grounding.md §9b state per edge per 30-day
+      bucket (S4/S3 cheap, S2 moderate, ghost/open ground expensive but
+      PERMITTED — corner-cutting is period truth, wall-following robots are
+      not). personRoadPref + per-edge jitter are counter-based hashes of
+      (person, lifeVariant) — stable within a telling, rewind-exact, re-dealt
+      only by the reshuffle glyph. 10 same-OD walkers therefore spread over
+      the block grid instead of stacking on one shortest path.
+   3. DETOURS + DOORS: any polyline segment that crosses an obstacle is
+      locally re-routed by a small bounded A* over ~1.6m cells (string-pulled
+      back to a natural line); an endpoint INSIDE a footprint (a home, a
+      shop) exits via the building's own door face first, so walks read as
+      door -> street -> door. No teleports anywhere: every position change
+      rides a polyline.
+   All thresholds fill:true tunables.
+   ========================================================================= */
+var WALK_PERSON_R = 0.35, WALK_BUCKET = 16, WALK_CELL = 1.6;
+var ROUTE_BUCKET_DAYS = 30;
+var _walkHash = null, _walkObstacleCount = 0;
+function walkMaskInit(){
+  if(_walkHash) return;
+  var obs = [];
+  VILLAGE_BUILDING_SPOTS.forEach(function(sp){
+    obs.push({t:1, x:sp.x, z:sp.z, rot:sp.rot||0, hw:(sp.w||4)/2, hd:(sp.d||4)/2, reveal:(sp.foundedDay!=null?sp.foundedDay:-1e9)});
+  });
+  growthBuildingCandidates.forEach(function(c,i){
+    obs.push({t:1, x:c.x, z:c.z, rot:c.rot||0, hw:2.5, hd:2.0, reveal:dayForBuildingIndex(i)});
+  });
+  tentCandidates.forEach(function(c,i){
+    obs.push({t:2, x:c.x, z:c.z, r:1.9, reveal:dayForTentIndex(i)});
+  });
+  WALK_RECTS.forEach(function(r){ obs.push({t:1, x:r.x, z:r.z, rot:r.rot, hw:r.hw, hd:r.hd, reveal:r.reveal}); });
+  WALK_CIRCLES.forEach(function(c){ obs.push({t:2, x:c.x, z:c.z, r:c.r, reveal:c.reveal}); });
+  WALK_SEGS.forEach(function(s){ obs.push({t:3, x0:s.x0, z0:s.z0, x1:s.x1, z1:s.z1, reveal:-1e9}); });
+  _walkObstacleCount = obs.length;
+  _walkHash = {};
+  var m = WALK_PERSON_R + 0.5;
+  obs.forEach(function(o){
+    var xMin,xMax,zMin,zMax;
+    if(o.t===1){ var rr=Math.hypot(o.hw,o.hd)+m; xMin=o.x-rr; xMax=o.x+rr; zMin=o.z-rr; zMax=o.z+rr; }
+    else if(o.t===2){ xMin=o.x-o.r-m; xMax=o.x+o.r+m; zMin=o.z-o.r-m; zMax=o.z+o.r+m; }
+    else { xMin=Math.min(o.x0,o.x1)-m; xMax=Math.max(o.x0,o.x1)+m; zMin=Math.min(o.z0,o.z1)-m; zMax=Math.max(o.z0,o.z1)+m; }
+    for(var bx=Math.floor(xMin/WALK_BUCKET); bx<=Math.floor(xMax/WALK_BUCKET); bx++)
+      for(var bz=Math.floor(zMin/WALK_BUCKET); bz<=Math.floor(zMax/WALK_BUCKET); bz++){
+        var k=bx+","+bz;
+        (_walkHash[k]||(_walkHash[k]=[])).push(o);
+      }
+  });
+}
+/* Reveal days quantize to the END of the route bucket so a leg built for
+   this bucket already avoids anything that will stand before the bucket
+   closes — no mid-bucket clipping through fresh construction. */
+function _walkRevealHorizon(day){ return (Math.floor(day/ROUTE_BUCKET_DAYS)+1)*ROUTE_BUCKET_DAYS; }
+function walkBlockedAt(x,z,day,r){
+  if(!_walkHash) walkMaskInit();
+  var arr = _walkHash[Math.floor(x/WALK_BUCKET)+","+Math.floor(z/WALK_BUCKET)];
+  if(!arr) return null;
+  var R = r!=null ? r : WALK_PERSON_R;
+  for(var i=0;i<arr.length;i++){
+    var o = arr[i];
+    if(o.reveal>day) continue;
+    if(o.t===1){
+      var dx=x-o.x, dz=z-o.z, c=Math.cos(o.rot), s=Math.sin(o.rot);
+      var lx=dx*c-dz*s, lz=dx*s+dz*c; // inverse of the bake-yaw local->world frame (see buildYardFencesAndPaths' toWorld)
+      if(Math.abs(lx)<o.hw+R && Math.abs(lz)<o.hd+R) return o;
+    } else if(o.t===2){
+      var ddx=x-o.x, ddz=z-o.z, rr=o.r+R;
+      if(ddx*ddx+ddz*ddz<rr*rr) return o;
+    } else {
+      if(distToSegXZ(x,z,o.x0,o.z0,o.x1,o.z1)<0.35+R) return o;
+    }
+  }
+  return null;
+}
+/* An endpoint inside a footprint (homePos in a cottage, a shop worksite)
+   exits through the obstacle's own faces — the +Z "door face" (the same
+   local face the splat door-paths use) tried first — then ring-searches. */
+function walkExitPoint(x,z,day){
+  var o = walkBlockedAt(x,z,day);
+  if(!o) return null;
+  var cands = [], m = WALK_PERSON_R+0.9, i, a;
+  if(o.t===1){
+    var c=Math.cos(o.rot), s=Math.sin(o.rot);
+    [[0,o.hd+m],[0,-(o.hd+m)],[o.hw+m,0],[-(o.hw+m),0]].forEach(function(l){
+      cands.push({x:o.x+l[0]*c+l[1]*s, z:o.z-l[0]*s+l[1]*c});
+    });
+  } else if(o.t===2){
+    for(i=0;i<8;i++){ a=(i/8)*Math.PI*2; cands.push({x:o.x+Math.cos(a)*(o.r+m), z:o.z+Math.sin(a)*(o.r+m)}); }
+  }
+  for(var rad=2.4; rad<=15; rad+=3.1) for(i=0;i<12;i++){
+    a=(i/12)*Math.PI*2;
+    cands.push({x:x+Math.cos(a)*rad, z:z+Math.sin(a)*rad});
+  }
+  for(i=0;i<cands.length;i++){
+    var p=cands[i];
+    if(terrainHeight(p.x,p.z)>0.15 && !walkBlockedAt(p.x,p.z,day)) return p;
+  }
+  return null;
+}
+function _walkFreeSeg(ax,az,bx,bz,day){
+  var d = Math.hypot(bx-ax,bz-az);
+  var n = Math.max(1, Math.ceil(d/1.2));
+  for(var i=1;i<=n;i++){
+    var t=i/n;
+    if(walkBlockedAt(ax+(bx-ax)*t, az+(bz-az)*t, day)) return false;
+  }
+  return true;
+}
+/* Local A* around whatever blocks a straight segment: bounded box, coarse
+   cells (adaptive for long spurs), octile heuristic, no corner cutting,
+   water (terrain <= 0.15) blocked, hard expansion cap — then string-pulled
+   so the detour reads as a person skirting a wall, not a grid crawl. */
+function walkDetour(ax,az,bx,bz,day){
+  var pad = 34;
+  var spanX = Math.abs(bx-ax)+2*pad, spanZ = Math.abs(bz-az)+2*pad;
+  var cell = Math.max(WALK_CELL, Math.max(spanX,spanZ)/200);
+  var xMin=Math.min(ax,bx)-pad, zMin=Math.min(az,bz)-pad;
+  var W=Math.ceil(spanX/cell), H=Math.ceil(spanZ/cell);
+  function cellXZ(ix,iz){ return {x:xMin+(ix+0.5)*cell, z:zMin+(iz+0.5)*cell}; }
+  function freeCell(ix,iz){
+    if(ix<0||iz<0||ix>=W||iz>=H) return false;
+    var p=cellXZ(ix,iz);
+    if(terrainHeight(p.x,p.z)<=0.15) return false;
+    return !walkBlockedAt(p.x,p.z,day);
+  }
+  function toCell(x,z){ return {ix:clamp(Math.floor((x-xMin)/cell),0,W-1), iz:clamp(Math.floor((z-zMin)/cell),0,H-1)}; }
+  function nudgeFree(cc){
+    if(freeCell(cc.ix,cc.iz)) return cc;
+    for(var r=1;r<=4;r++) for(var dx=-r;dx<=r;dx++) for(var dz=-r;dz<=r;dz++){
+      if(Math.max(Math.abs(dx),Math.abs(dz))!==r) continue;
+      if(freeCell(cc.ix+dx,cc.iz+dz)) return {ix:cc.ix+dx, iz:cc.iz+dz};
+    }
+    return null;
+  }
+  var s0=nudgeFree(toCell(ax,az)), g=nudgeFree(toCell(bx,bz));
+  if(!s0||!g) return null;
+  var open=[], gs={}, came={}, closed={};
+  function key(ix,iz){ return ix+iz*512; }
+  function hDist(ix,iz){ var adx=Math.abs(ix-g.ix), adz=Math.abs(iz-g.iz); return (Math.max(adx,adz)+0.4142*Math.min(adx,adz))*1.02; }
+  var k0=key(s0.ix,s0.iz);
+  gs[k0]=0; open.push({ix:s0.ix,iz:s0.iz,f:hDist(s0.ix,s0.iz)});
+  var DIRS=[[1,0,1],[-1,0,1],[0,1,1],[0,-1,1],[1,1,1.4142],[1,-1,1.4142],[-1,1,1.4142],[-1,-1,1.4142]];
+  var pops=0, found=false;
+  while(open.length && pops<6000){
+    var bi=0, oi;
+    for(oi=1;oi<open.length;oi++) if(open[oi].f<open[bi].f) bi=oi;
+    var cur=open.splice(bi,1)[0]; pops++;
+    var ck=key(cur.ix,cur.iz);
+    if(closed[ck]) continue;
+    closed[ck]=1;
+    if(cur.ix===g.ix && cur.iz===g.iz){ found=true; break; }
+    for(var di=0;di<8;di++){
+      var D=DIRS[di], nx=cur.ix+D[0], nz=cur.iz+D[1];
+      var nk=key(nx,nz);
+      if(closed[nk] || !freeCell(nx,nz)) continue;
+      if(D[2]>1 && (!freeCell(cur.ix+D[0],cur.iz) || !freeCell(cur.ix,cur.iz+D[1]))) continue;
+      var ng=gs[ck]+D[2];
+      if(gs[nk]==null || ng<gs[nk]){ gs[nk]=ng; came[nk]=ck; open.push({ix:nx,iz:nz,f:ng+hDist(nx,nz)}); }
+    }
+  }
+  if(!found) return null;
+  var cells=[], k=key(g.ix,g.iz);
+  var guard=0;
+  while(k!=null && k!==k0 && guard++<20000){ cells.push(k); k=came[k]; }
+  cells.reverse();
+  var pts = cells.map(function(kk){ var iz=Math.floor(kk/512), ix=kk-iz*512; return cellXZ(ix,iz); });
+  // string-pull: greedy furthest-visible waypoint from each anchor
+  var pulled=[], cx0=ax, cz0=az, idx=0, guard2=0;
+  while(idx<pts.length && guard2++<80){
+    if(_walkFreeSeg(cx0,cz0,bx,bz,day)) break;
+    var far=idx;
+    for(var j=pts.length-1;j>=idx;j--){ if(_walkFreeSeg(cx0,cz0,pts[j].x,pts[j].z,day)){ far=j; break; } }
+    cx0=pts[far].x; cz0=pts[far].z;
+    pulled.push(pts[far]); idx=far+1;
+  }
+  return pulled;
+}
+/* Post-process any waypoint list: obstacle-crossing segments get detoured. */
+function walkAdjustPts(pts, day){
+  if(!pts || pts.length<2) return pts;
+  var out=[pts[0]];
+  for(var i=1;i<pts.length;i++){
+    var a=out[out.length-1], b=pts[i];
+    if(!_walkFreeSeg(a.x,a.z,b.x,b.z,day)){
+      var det = walkDetour(a.x,a.z,b.x,b.z,day);
+      if(det) for(var j=0;j<det.length;j++) out.push(det[j]);
+    }
+    out.push(b);
+  }
+  return out;
+}
+
+/* ---- road-lifecycle edge costs (grounding.md §9b feeds routing) ---- */
+var _walkStreetSegs = null; // placement-frame street pieces WITH street refs (routing costs + the road-share QA audit)
+function walkStreetSegsInit(){
+  if(_walkStreetSegs) return _walkStreetSegs;
+  var segs=[];
+  STREETS_RUNTIME.forEach(function(s){
+    var i1 = s.checkpoints.length ? s.checkpoints[s.checkpoints.length-1].extent[1] : s.polyline.length-1;
+    var viogetExt = (s.surveyedDay!=null && s.surveyedDay<=0 && s.checkpoints.length) ? s.checkpoints[0].extent : null;
+    for(var i=0;i<i1;i++){
+      var a=gridToWorld(s.polyline[i].u, s.polyline[i].v), b=gridToWorld(s.polyline[i+1].u, s.polyline[i+1].v);
+      segs.push({x0:a.x,z0:a.z,x1:b.x,z1:b.z,halfW:s.widthM/2,s:s,vf:!!(viogetExt && i>=viogetExt[0] && (i+1)<=viogetExt[1])});
+    }
+  });
+  _walkStreetSegs = segs;
+  return segs;
+}
+function nearestStreetSegRef(x,z,maxOver){
+  var segs=walkStreetSegsInit(), best=null, bestD=maxOver;
+  for(var i=0;i<segs.length;i++){
+    var sg=segs[i], d=distToSegXZ(x,z,sg.x0,sg.z0,sg.x1,sg.z1)-sg.halfW;
+    if(d<bestD){ bestD=d; best=sg; }
+  }
+  return best;
+}
+var ROAD_STATE_COST = [2.3, 1.9, 1.35, 1.05, 1.0]; // S0..S4 cost-per-meter factor (fill:true tunables)
+var _edgeMetaReady=false, _edgeCostCache={};
+function edgeMetaInit(){
+  if(_edgeMetaReady) return;
+  _edgeMetaReady = true;
+  var eIdx=0;
+  function isCamp(k){ return k.indexOf("camp_")===0; }
+  function isM(k){ return k.indexOf("mroad_")===0 || k==="mission"; }
+  for(var u=0;u<STREET_GRAPH.nodes.length;u++){
+    var nu=STREET_GRAPH.nodes[u];
+    STREET_GRAPH.edges[u].forEach(function(e){
+      var nv=STREET_GRAPH.nodes[e.to];
+      var mx=(nu.x+nv.x)/2, mz=(nu.z+nv.z)/2;
+      var kU=nu.key, kV=nv.key, kind="street", ref=null;
+      if(isM(kU)||isM(kV)) kind="mroad";
+      else if(isCamp(kU)||isCamp(kV)) kind="spur";
+      else if(kU==="plaza"||kV==="plaza") kind="plaza";
+      else if(kU==="wharf"||kV==="wharf") kind="wharf";
+      else ref = nearestStreetSegRef(mx,mz,6);
+      e.meta = { i:eIdx++, mx:mx, mz:mz, kind:kind, ref:ref,
+        ukey:(Math.min(u,e.to)*1024+Math.max(u,e.to)) }; // canonical undirected id — jitter is direction-symmetric
+    });
+  }
+}
+function edgeStateFactor(meta, day){
+  if(meta.kind==="mroad") return 1.12; // the documented Mission road — a real used way
+  if(meta.kind==="plaza") return 1.10; // cutting across the open square is period truth
+  if(meta.kind==="wharf") return 1.05;
+  if(meta.kind==="spur")  return 1.45; // squatter tracks out to the camps
+  if(!meta.ref) return 1.9;            // unmapped = open ground
+  var st = roadPieceState(meta.ref.s, meta.mx, meta.mz, day, meta.ref.vf).st;
+  return ROAD_STATE_COST[st];
+}
+function edgeCosts(day){
+  edgeMetaInit();
+  var bucket = Math.floor(day/ROUTE_BUCKET_DAYS);
+  if(_edgeCostCache[bucket]) return _edgeCostCache[bucket];
+  var evalDay = (bucket+0.5)*ROUTE_BUCKET_DAYS;
+  var arr = [];
+  for(var u=0;u<STREET_GRAPH.nodes.length;u++)
+    STREET_GRAPH.edges[u].forEach(function(e){ arr[e.meta.i] = edgeStateFactor(e.meta, evalDay); });
+  _edgeCostCache[bucket] = arr; // ~43 buckets over the whole sim — tiny
+  return arr;
+}
+/* Weighted Dijkstra. who<0 = neutral (corridors, QA); who>=0 = a person:
+   personal road-preference exponent (corner-cutters vs road-keepers) +
+   stable per-edge cost jitter, both counter-based hashes on lifeVariant —
+   rewind-exact within a telling, re-dealt only by the reshuffle glyph. */
+function graphPathWeighted(fromIdx, toIdx, day, who, freshCosts){
+  edgeMetaInit();
+  var costs = freshCosts ? null : edgeCosts(day);
+  var personal = (who!=null && who>=0);
+  var roadExp = personal ? 0.55 + 0.9*hash2(who*0.913+7.31, lifeVariant*1.7+2.13) : 1.0;
+  var n = STREET_GRAPH.nodes.length;
+  var dist=new Array(n).fill(Infinity), prev=new Array(n).fill(-1), visited=new Array(n).fill(false);
+  dist[fromIdx]=0;
+  for(var iter=0;iter<n;iter++){
+    var u=-1, best=Infinity;
+    for(var i=0;i<n;i++) if(!visited[i]&&dist[i]<best){ best=dist[i]; u=i; }
+    if(u===-1||u===toIdx) break;
+    visited[u]=true;
+    STREET_GRAPH.edges[u].forEach(function(e){
+      var f = costs ? costs[e.meta.i] : edgeStateFactor(e.meta, day);
+      var w = e.d * Math.pow(f, roadExp);
+      if(personal) w *= 0.85 + 0.30*hash2(who*0.377+e.meta.ukey*0.0131, lifeVariant*2.3+5.7);
+      var nd = dist[u]+w;
+      if(nd<dist[e.to]){ dist[e.to]=nd; prev[e.to]=u; }
+    });
+  }
+  if(dist[toIdx]===Infinity) return null;
+  var path=[toIdx];
+  while(prev[path[path.length-1]]!==-1) path.push(prev[path[path.length-1]]);
+  path.reverse();
+  return path;
+}
+
 /* Builds a walkable polyline from one exact world point to another, routed
-   via the street graph: a short direct spur onto the graph at each end,
-   then the shortest legal chain of street segments in between. */
-function buildRoutePoly(x0,z0,x1,z1){
-  var n0 = nearestGraphNode(x0,z0), n1 = nearestGraphNode(x1,z1);
-  var nodePath = graphPath(n0,n1);
-  var pts = [{x:x0,z:z0}];
+   via the street graph: door-exit spurs onto the graph at each end, a
+   person-weighted legal chain of street segments between, obstacle detours
+   applied to every segment. opt = {day, who} — omitted (legacy callers)
+   falls back to the current simDay and a neutral route. */
+function buildRoutePoly(x0,z0,x1,z1,opt){
+  opt = opt||{};
+  var day = opt.day!=null ? opt.day : (typeof simDay!=="undefined" ? simDay : 0);
+  var who = opt.who!=null ? opt.who : -1;
+  var mDay = _walkRevealHorizon(day); // avoid anything standing by bucket end — no mid-bucket clipping
+  var d0 = walkExitPoint(x0,z0,mDay), d1 = walkExitPoint(x1,z1,mDay);
+  var n0 = nearestGraphNode(d0?d0.x:x0, d0?d0.z:z0), n1 = nearestGraphNode(d1?d1.x:x1, d1?d1.z:z1);
+  var nodePath = graphPathWeighted(n0,n1,day,who);
+  // An indoor endpoint (homePos in a cottage, a shop worksite) is replaced
+  // by its DOOR point: the rendered walk is door -> street -> door, and no
+  // walking figure ever samples inside a footprint. The step across the
+  // wall plane happens off-stage (the schedule's stationary anchor states
+  // render at the interior anchor = indoors, hidden under the roof).
+  var pts = [d0 || {x:x0,z:z0}];
   if(nodePath){ nodePath.forEach(function(ni){ pts.push({x:STREET_GRAPH.nodes[ni].x, z:STREET_GRAPH.nodes[ni].z}); }); }
   else { pts.push({x:STREET_GRAPH.nodes[n0].x, z:STREET_GRAPH.nodes[n0].z}); pts.push({x:STREET_GRAPH.nodes[n1].x, z:STREET_GRAPH.nodes[n1].z}); }
-  pts.push({x:x1,z:z1});
-  return buildPolyline(pts, false);
+  pts.push(d1 || {x:x1,z:z1});
+  // SPUR REJOIN (s59): a door connected only to the NEAREST NODE makes a
+  // walker overshoot along the street and double back. Instead, leave/join
+  // the road at the closest PASSING POINT: project each terminal anchor
+  // onto the route's earlier segments; if truncating there saves real
+  // distance, cut the route at the projection (plausible corner-cutting at
+  // the joints only — mid-route stays on the roads). Any blocked hop from
+  // the projection to the door is detoured by walkAdjustPts below — which
+  // IS the natural walk around the building to its entrance.
+  function segProj(px,pz, a,b){
+    var dx=b.x-a.x, dz=b.z-a.z, l2=dx*dx+dz*dz;
+    var t = l2>0 ? clamp(((px-a.x)*dx+(pz-a.z)*dz)/l2, 0, 1) : 0;
+    var qx=a.x+dx*t, qz=a.z+dz*t;
+    return { x:qx, z:qz, d:Math.hypot(px-qx,pz-qz) };
+  }
+  function pathLen(arr,i0,i1){ var L=0; for(var i=i0;i<i1;i++) L+=Math.hypot(arr[i+1].x-arr[i].x, arr[i+1].z-arr[i].z); return L; }
+  function rejoinEnd(){
+    if(pts.length<4) return;
+    var endA = pts[pts.length-1], best=null, bi=-1;
+    for(var i=0;i<pts.length-2;i++){
+      var pr = segProj(endA.x,endA.z, pts[i], pts[i+1]);
+      if(!best || pr.d<best.d){ best=pr; bi=i; }
+    }
+    if(!best) return;
+    var saved = pathLen(pts, bi, pts.length-1) + 0
+              - (Math.hypot(best.x-pts[bi].x,best.z-pts[bi].z) + best.d);
+    if(saved>4){ pts = pts.slice(0,bi+1); pts.push({x:best.x,z:best.z}); pts.push(endA); }
+  }
+  function rejoinStart(){
+    if(pts.length<4) return;
+    var startA = pts[0], best=null, bi=-1;
+    for(var i=1;i<pts.length-1;i++){
+      var pr = segProj(startA.x,startA.z, pts[i], pts[i+1]);
+      if(!best || pr.d<best.d){ best=pr; bi=i; }
+    }
+    if(!best) return;
+    var saved = pathLen(pts, 0, bi+1)
+              - (best.d + Math.hypot(pts[bi+1].x-best.x, pts[bi+1].z-best.z));
+    if(saved>4){ var tail = pts.slice(bi+1); pts = [startA, {x:best.x,z:best.z}].concat(tail); }
+  }
+  rejoinEnd(); rejoinStart();
+  for(var i=pts.length-2;i>=0 && pts.length>2;i--)
+    if(Math.hypot(pts[i+1].x-pts[i].x,pts[i+1].z-pts[i].z)<0.6) pts.splice(i+1,1);
+  return buildPolyline(walkAdjustPts(pts, mDay), false);
 }
 /* A "wander" polyline for ambient (non-routine) extras: a random walk of
    street-graph hops from a random start node — no destination, but still
-   100% graph-legal, so density-filler people respect the grid too. */
-function buildWanderPoly(rng){
+   100% graph-legal, so density-filler people respect the grid too.
+   s59: each hop is now road-lifecycle-weighted (one rng draw per hop via a
+   weighted CDF — the seeded draw COUNT is unchanged, so the build stream
+   holds), so ambient strollers favor worn streets over ghost plat lines. */
+function buildWanderPoly(rng, day){
+  edgeMetaInit();
+  if(day==null) day = 0;
   var cur = Math.floor(rng()*STREET_GRAPH.nodes.length), prev=-1;
   var pts = [{x:STREET_GRAPH.nodes[cur].x, z:STREET_GRAPH.nodes[cur].z}];
   var hops = 5+Math.floor(rng()*6);
@@ -10115,11 +10523,17 @@ function buildWanderPoly(rng){
     if(!neigh || neigh.length===0) break;
     var choices = neigh.filter(function(e){ return e.to!==prev; });
     if(choices.length===0) choices = neigh;
-    var pick = choices[Math.floor(rng()*choices.length)];
+    var wts=[], tot=0, ci;
+    for(ci=0;ci<choices.length;ci++){ var w=1/Math.pow(edgeStateFactor(choices[ci].meta, day), 1.4); wts.push(w); tot+=w; }
+    var r=rng()*tot, pick=choices[choices.length-1];
+    for(ci=0;ci<choices.length;ci++){ r-=wts[ci]; if(r<=0){ pick=choices[ci]; break; } }
     prev = cur; cur = pick.to;
     pts.push({x:STREET_GRAPH.nodes[cur].x, z:STREET_GRAPH.nodes[cur].z});
   }
-  return buildPolyline(pts, false);
+  // wander polys live for the extra's WHOLE presence window and are never
+  // rebuilt (rebuilding would teleport a mid-loop walker) — so they avoid
+  // every obstacle that will EVER stand, not just this bucket's.
+  return buildPolyline(walkAdjustPts(pts, 1e9), false);
 }
 function worldToGridApprox(x,z){
   // exact inverse of gridToWorld(): un-register the terrain-frame origin
@@ -10258,8 +10672,13 @@ function resolveClusterPlan(slot, day){
   var carry = !slot.isChild && rng()<0.15; // one mid-errand member stopped to chat, crate still shouldered
   var ch = cyrb128(seedHashValue()+"|cluster|"+anchorI+"|"+dayKey);
   var crng = sfc32(ch[0],ch[1],ch[2],ch[3]);
+  var ccx = anchor.x + (crng()-0.5)*3.0, ccz = anchor.z + (crng()-0.5)*3.0;
+  // s59 walkability: a jittered centroid landing inside a footprint snaps
+  // back to the anchor itself (anchors are open ground by construction) —
+  // deterministic, same result for every member of the day's group.
+  if(walkBlockedAt(ccx, ccz, day)){ ccx = anchor.x; ccz = anchor.z; }
   slot._cluster = { anchor:anchor, h0:h0, h1:h0+durH, r:r, ang:ang, faceJit:faceJit, carry:carry,
-    cx: anchor.x + (crng()-0.5)*3.0, cz: anchor.z + (crng()-0.5)*3.0 };
+    cx:ccx, cz:ccz };
 }
 var CONSTRUCTION_SITES = growthBuildingCandidates.slice(0, Math.min(30, growthBuildingCandidates.length))
   .map(function(c,i){ return { key:"construction_"+i, label:"a house going up nearby", x:c.x, z:c.z, activity:"construction" }; });
@@ -10590,13 +11009,33 @@ function resolveDailySchedule(slot, day){
   slot._scheduleDay = dayKey;
   slot.needs.food += 1; slot.needs.social += 1; // "rise until acted on" (behavior-spec.md §3)
 
+  // s59 micro speed variance: each routine walker owns a purposeful pace
+  // (~1.4-1.85 m/s, median ~1.6) — hash-dealt off slot.id, no rng-stream
+  // draw, stable across rewinds. Extras already amble at their own speed.
+  if(slot.walkMps==null) slot.walkMps = 1.38 + 0.47*hash2(slot.id*0.617+3.31, 9.13);
+
+  // s59 ROUTE BUCKETS: the standing legs (commute/errand/Sunday/chapel) are
+  // re-routed once per 30-day bucket — road lifecycle states have moved, new
+  // construction stands. Pure function of (bucket, person, lifeVariant):
+  // rewind lands in the same bucket -> the identical route. The swap happens
+  // here (calendar-day rollover / fresh jump), never mid-walk at LIVE.
+  var bucket = Math.floor(day/ROUTE_BUCKET_DAYS);
+  if(slot._routeBucket!==bucket && slot.workPos){
+    slot._routeBucket = bucket;
+    slot.commutePoly = buildRoutePoly(slot.homePos.x,slot.homePos.z, slot.workPos.x,slot.workPos.z, {day:day, who:slot.id});
+    slot.errandPoly  = buildRoutePoly(slot.workPos.x,slot.workPos.z, PLAZA_CENTER.x,PLAZA_CENTER.z, {day:day, who:slot.id});
+    slot.sundayPoly  = buildRoutePoly(slot.homePos.x,slot.homePos.z, PLAZA_CENTER.x,PLAZA_CENTER.z, {day:day, who:slot.id});
+    if(slot.sundayGoesToChurch && CHURCH_SPOT)
+      slot.churchPoly = buildRoutePoly(slot.homePos.x,slot.homePos.z, CHURCH_SPOT.x,CHURCH_SPOT.z, {day:day, who:slot.id});
+  }
+
   var isTent = slot.home && slot.home.type==="tent";
   var campfireSite = { x:slot.homePos.x, z:slot.homePos.z, label:"the campfire" };
 
   var mAct = pickActivity(MIDDAY_POOL, slot, day, "midday");
   if(mAct){
     var mSite = isTent ? campfireSite : venueForActivity(mAct, slot, day, "midday");
-    var mPoly = isTent ? null : buildRoutePoly(slot.workPos.x,slot.workPos.z, mSite.x,mSite.z);
+    var mPoly = isTent ? null : buildRoutePoly(slot.workPos.x,slot.workPos.z, mSite.x,mSite.z, {day:day, who:slot.id});
     slot._midday = { act:mAct, site:mSite, poly:mPoly };
     var mr = NEED_RELIEF[mAct.id];
     if(mr){
@@ -10612,7 +11051,7 @@ function resolveDailySchedule(slot, day){
     var eAct = pickActivity(EVENING_POOL, slot, day, "evening");
     if(eAct){
       var eSite = isTent ? campfireSite : venueForActivity(eAct, slot, day, "evening");
-      var ePoly = isTent ? null : buildRoutePoly(slot.workPos.x,slot.workPos.z, eSite.x,eSite.z);
+      var ePoly = isTent ? null : buildRoutePoly(slot.workPos.x,slot.workPos.z, eSite.x,eSite.z, {day:day, who:slot.id});
       var isDrunkWalk = eAct.id==="drink_at_saloon" && slot.traits.drink==="heavy-drinker" && diceRoll(slot.id,day,"drunk")<0.4;
       slot._evening = { act:eAct, site:eSite, poly:ePoly, isDrunkWalk:isDrunkWalk };
       var er = NEED_RELIEF[eAct.id];
@@ -10661,7 +11100,7 @@ function updateArrivals(){
     var cache = _arrivalCache[key];
     if(!cache){
       var dest = arrivalDestination(rngBuild);
-      cache = _arrivalCache[key] = { poly: buildRoutePoly(WORKSITE_WHARF.x, WORKSITE_WHARF.z, dest.x, dest.z) };
+      cache = _arrivalCache[key] = { poly: buildRoutePoly(WORKSITE_WHARF.x, WORKSITE_WHARF.z, dest.x, dest.z, {day:v.arrive, who:100000+Math.floor(v.arrive)}) };
     }
     var rowT = clamp(age/(ARRIVAL_WINDOW_DAYS*ARRIVAL_ROW_FRAC), 0, 1);
     if(rowT<1 && boatN<arrivalBoatMesh.instanceMatrix.count){
@@ -10924,6 +11363,7 @@ var PRESIDIO_GRAZE_PTS = buildGrazePoints(PASTURE_PRESIDIO.x, PASTURE_PRESIDIO.z
         geoms.push(post);
         if(i<nSeg && !(s===2 && i===Math.floor(nSeg/2))){ // one open gate on the far side
           var t2=(i+1)/nSeg, qx=cx+lerp(A[0],B[0],t2), qz=cz+lerp(A[1],B[1],t2);
+          registerWalkSeg(px,pz,qx,qz); // s59: corral rails block walkers; the gate segment stays open
           var mx=(px+qx)/2, mz=(pz+qz)/2, my=terrainHeight(mx,mz);
           var segLen=Math.hypot(qx-px,qz-pz), yaw=Math.atan2(qx-px,qz-pz);
           [0.55,1.02].forEach(function(rh){
@@ -11763,13 +12203,14 @@ var ALL_PEOPLE_SLOTS = (function(){
                     z: home.spot.z + (rngBuild()-0.5)*(home.type==="tent"?2.2:(home.spot.d||3)*0.7) };
     var workPos = { x:work.x, z:work.z };
 
-    var commutePoly = buildRoutePoly(homePos.x,homePos.z, workPos.x,workPos.z);
-    var errandPoly  = buildRoutePoly(workPos.x,workPos.z, PLAZA_CENTER.x,PLAZA_CENTER.z);
-    var sundayPoly  = buildRoutePoly(homePos.x,homePos.z, PLAZA_CENTER.x,PLAZA_CENTER.z);
+    var slotDay0 = Math.max(origin.earliestDay, home.revealDay||0); // s59: initial legs routed for the arrival-day bucket (rebuilt per bucket by resolveDailySchedule)
+    var commutePoly = buildRoutePoly(homePos.x,homePos.z, workPos.x,workPos.z, {day:slotDay0, who:id});
+    var errandPoly  = buildRoutePoly(workPos.x,workPos.z, PLAZA_CENTER.x,PLAZA_CENTER.z, {day:slotDay0, who:id});
+    var sundayPoly  = buildRoutePoly(homePos.x,homePos.z, PLAZA_CENTER.x,PLAZA_CENTER.z, {day:slotDay0, who:id});
     // behavior-spec.md §1: a pious minority attends the town chapel once it
     // exists (from CHURCH_REVEAL_DAY) rather than the Plaza's Sunday crowd.
     var sundayGoesToChurch = !isRancheriaSlot && traits.faith==="pious" && rngBuild()<0.55; // s50: Mission residents live beside the Mission church itself — never routed to the town chapel
-    var churchPoly = (sundayGoesToChurch && CHURCH_SPOT) ? buildRoutePoly(homePos.x,homePos.z, CHURCH_SPOT.x, CHURCH_SPOT.z) : null;
+    var churchPoly = (sundayGoesToChurch && CHURCH_SPOT) ? buildRoutePoly(homePos.x,homePos.z, CHURCH_SPOT.x, CHURCH_SPOT.z, {day:slotDay0, who:id}) : null;
 
     // PL-B item 1: the midday-break/evening-out free choices are now
     // resolved PER CALENDAR DAY by the dice engine (resolveDailySchedule,
@@ -11878,7 +12319,7 @@ var ALL_PEOPLE_SLOTS = (function(){
     // the Mission always reads as used, not just when a Californio
     // routine-slot's workplace happens to be assigned there.
     var isMissionTraveler = ei<6 && typeof MISSION_ROAD_PTS!=="undefined" && MISSION_ROAD_PTS.length>1;
-    var wanderPoly = isMissionTraveler ? buildPolyline(MISSION_ROAD_PTS, false) : buildWanderPoly(rngBuild);
+    var wanderPoly = isMissionTraveler ? buildPolyline(MISSION_ROAD_PTS, false) : buildWanderPoly(rngBuild, origin2.earliestDay);
     var rosterFirstDay2 = (rosterPerson2 && rosterPerson2.first) ? eventDateToSimDay(rosterPerson2.first) : null;
     var traits2 = rollTraits(rngBuild);
     // PL-B item 4 (grit): 1849 street-sleepers — trait+arrival-weighted, per
@@ -11953,6 +12394,7 @@ var ALL_PEOPLE_SLOTS = (function(){
     // these ARE the record's "families" — each guaranteed head carries one.
     var rSpousePool = rMale ? INDIGENOUS_SPOUSE_F : INDIGENOUS_SPOUSE_M;
     var rFamily = { spouseFirst:rSpousePool[Math.floor(rngBuild()*rSpousePool.length)], children:1+Math.floor(rngBuild()*2) };
+    var rId = id; // s59: the literal's id++ evaluates before the route-poly properties — capture the slot's own id for {who:}
     slots.push({
       id:id++, kind:"routine", origin:rOrigin, gender:rMale?"male":"female", variant:rMale?POOL_M:POOL_F,
       sil:rMale?POOL_M:POOL_F, coatC:rWardrobe.coat, hatC:rWardrobe.hat, skinC:pickSkinTone("indigenous",rngBuild), _scale:0.94+rngBuild()*0.12,
@@ -11963,9 +12405,9 @@ var ALL_PEOPLE_SLOTS = (function(){
       home:{ spot:{x:rDw.x, z:rDw.z, w:3, d:2.6, label:RANCHERIA_HOME_LABEL}, revealDay:0, type:"rancheria" },
       homePos:rHomePos, homeLabel:RANCHERIA_HOME_LABEL,
       work:rWork, workPos:rWorkPos, workLabel:rWork.label, workActivity:rWork.activity,
-      commutePoly:buildRoutePoly(rHomePos.x,rHomePos.z, rWorkPos.x,rWorkPos.z),
-      errandPoly:buildRoutePoly(rWorkPos.x,rWorkPos.z, PLAZA_CENTER.x,PLAZA_CENTER.z),
-      sundayPoly:buildRoutePoly(rHomePos.x,rHomePos.z, PLAZA_CENTER.x,PLAZA_CENTER.z),
+      commutePoly:buildRoutePoly(rHomePos.x,rHomePos.z, rWorkPos.x,rWorkPos.z, {day:0, who:rId}),
+      errandPoly:buildRoutePoly(rWorkPos.x,rWorkPos.z, PLAZA_CENTER.x,PLAZA_CENTER.z, {day:0, who:rId}),
+      sundayPoly:buildRoutePoly(rHomePos.x,rHomePos.z, PLAZA_CENTER.x,PLAZA_CENTER.z, {day:0, who:rId}),
       _midday:null, _doEvening:false, _evening:null, _scheduleDay:-1,
       notBeforeDay:0, notAfterDay:null,
       bio:null, _x:rHomePos.x, _z:rHomePos.z, _distSq:1e18, _now:"", _pose:"idle"
@@ -11996,6 +12438,7 @@ var ALL_PEOPLE_SLOTS = (function(){
     var work = WORKSITE_MISSION;
     var workPos = { x:work.x, z:work.z };
     var wardrobe = pickWardrobe(occ, origin, true, rngBuild); // same period working clothes as any laborer — no costume marker
+    var pId = id; // s59: same id-capture as the rancheria loop above
     slots.push({
       id:id++, kind:"routine", origin:origin, gender:"male", variant:POOL_M,
       sil:POOL_M, coatC:wardrobe.coat, hatC:wardrobe.hat, skinC:pickSkinTone("indigenous",rngBuild), _scale:1.0,
@@ -12010,9 +12453,9 @@ var ALL_PEOPLE_SLOTS = (function(){
       home:{ spot:{x:dw.x, z:dw.z, w:3, d:2.6, label:RANCHERIA_HOME_LABEL}, revealDay:0, type:"rancheria" },
       homePos:homePos, homeLabel:RANCHERIA_HOME_LABEL,
       work:work, workPos:workPos, workLabel:work.label, workActivity:work.activity,
-      commutePoly:buildRoutePoly(homePos.x,homePos.z, workPos.x,workPos.z),
-      errandPoly:buildRoutePoly(workPos.x,workPos.z, PLAZA_CENTER.x,PLAZA_CENTER.z),
-      sundayPoly:buildRoutePoly(homePos.x,homePos.z, PLAZA_CENTER.x,PLAZA_CENTER.z),
+      commutePoly:buildRoutePoly(homePos.x,homePos.z, workPos.x,workPos.z, {day:0, who:pId}),
+      errandPoly:buildRoutePoly(workPos.x,workPos.z, PLAZA_CENTER.x,PLAZA_CENTER.z, {day:0, who:pId}),
+      sundayPoly:buildRoutePoly(homePos.x,homePos.z, PLAZA_CENTER.x,PLAZA_CENTER.z, {day:0, who:pId}),
       _midday:null, _doEvening:false, _evening:null, _scheduleDay:-1,
       notBeforeDay:0, notAfterDay:null,
       bio:null, _x:homePos.x, _z:homePos.z, _distSq:1e18, _now:"", _pose:"idle"
@@ -12464,7 +12907,12 @@ function isSundayForDay(day){ return dateFromSimDay(Math.floor(day)).getUTCDay()
 function sampleWithJitter(poly, t01, lateralJitter){
   var p = pointOnPolyline(poly, clamp(t01,0,1)*poly.total);
   var len = Math.hypot(p.dx,p.dz)||1;
-  return { x:p.x+(-p.dz/len)*lateralJitter, z:p.z+(p.dx/len)*lateralJitter, dx:p.dx, dz:p.dz };
+  var jx = p.x+(-p.dz/len)*lateralJitter, jz = p.z+(p.dx/len)*lateralJitter;
+  // s59 cheap slide-along: the route centerline is collision-free by
+  // construction; if this person's lane offset would shave a wall/fence,
+  // give up the offset for that stretch instead of clipping.
+  if(lateralJitter && walkBlockedAt(jx, jz, simDay)) return { x:p.x, z:p.z, dx:p.dx, dz:p.dz };
+  return { x:jx, z:jz, dx:p.dx, dz:p.dz };
 }
 /* ONE INTEGRATOR (fix sprint 2026-07-11, supersedes the 2026-07-09
    "two-speed" wall-clock band-aid — that stateful walkT01 accumulator is
@@ -12498,11 +12946,12 @@ function sampleWithJitter(poly, t01, lateralJitter){
    displacement), never to a clock, so gait always matches motion in both
    modes. */
 var PERSON_WALK_MPS = 1.6; // purposeful errand pace; extras amble at their own 0.8-1.5
-function walkProg(h, h0, poly){
-  // deterministic walk progress: fraction of the route covered at
-  // PERSON_WALK_MPS in the sim-seconds elapsed since the window opened at
-  // hour h0 — pure function of the sim clock, exact under rewind/jump.
-  return clamp(((h - h0)*3600*PERSON_WALK_MPS)/Math.max(20, poly.total), 0, 1);
+function walkProg(h, h0, poly, mps){
+  // deterministic walk progress: fraction of the route covered at the
+  // person's own pace (s59 micro speed variance — slot.walkMps, hash-dealt
+  // ~1.4-1.85, median ~1.6) in the sim-seconds elapsed since the window
+  // opened at hour h0 — pure function of the sim clock, exact under rewind/jump.
+  return clamp(((h - h0)*3600*(mps||PERSON_WALK_MPS))/Math.max(20, poly.total), 0, 1);
 }
 /* s44 grammar helper: work labels like "the Mission grazing grounds" already
    carry their article — avoid "the the" in NOW lines. */
@@ -12527,13 +12976,13 @@ function computeRoutinePosition(slot, day){
     if(h<7 || h>=21){ label="asleep at home"; }
     else if(h<8){ label="waking, a Sunday"; }
     else if(h<8.5){
-      wt = walkProg(h, 8, sundayDestPoly);
+      wt = walkProg(h, 8, sundayDestPoly, slot.walkMps);
       if(wt>=1){ x=sundayDestX; z=sundayDestZ; pose="market"; label=sundayAtLabel; }
       else { pp=sampleWithJitter(sundayDestPoly,wt,slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking to "+sundayDestLabel; }
     }
     else if(h<12.5){ x=sundayDestX; z=sundayDestZ; pose="market"; label=sundayAtLabel; }
     else if(h<13){
-      wt = walkProg(h, 12.5, sundayDestPoly);
+      wt = walkProg(h, 12.5, sundayDestPoly, slot.walkMps);
       if(wt>=1){ label="at home, the Sabbath"; }
       else { pp=sampleWithJitter(sundayDestPoly,1-wt,slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking home"; }
     }
@@ -12542,7 +12991,7 @@ function computeRoutinePosition(slot, day){
     if(h<5.5 || h>=21){ label="asleep at home"; }
     else if(h<6.5){ label="waking for the day"; }
     else if(h<7.5){
-      wt = walkProg(h, 6.5, slot.commutePoly);
+      wt = walkProg(h, 6.5, slot.commutePoly, slot.walkMps);
       if(wt>=1){ x=slot.workPos.x; z=slot.workPos.z; pose=slot.workActivity; label="at work — "+theLabel(slot.workLabel); }
       else { pp=sampleWithJitter(slot.commutePoly,wt,slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking to "+theLabel(slot.workLabel); }
     }
@@ -12557,13 +13006,13 @@ function computeRoutinePosition(slot, day){
       var m = slot._midday, mPose = ACT_POSE[m.act.id] || "stationary";
       if(m.poly){
         if(h<12.4){
-          wt = walkProg(h, 12, m.poly);
+          wt = walkProg(h, 12, m.poly, slot.walkMps);
           if(wt>=1){ x=m.site.x; z=m.site.z; pose=mPose; label=m.act.label+(m.site.label?(" — "+m.site.label):""); }
           else { pp=sampleWithJitter(m.poly,wt,slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking to "+(m.site.label||m.act.label.toLowerCase()); }
         }
         else if(h<13.0){ x=m.site.x; z=m.site.z; pose=mPose; label=m.act.label+(m.site.label?(" — "+m.site.label):""); }
         else {
-          wt = walkProg(h, 13.0, m.poly);
+          wt = walkProg(h, 13.0, m.poly, slot.walkMps);
           if(wt>=1){ x=slot.workPos.x; z=slot.workPos.z; pose=slot.workActivity; label="at work — "+theLabel(slot.workLabel); }
           else { pp=sampleWithJitter(m.poly,1-wt,slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking back to "+theLabel(slot.workLabel); }
         }
@@ -12571,7 +13020,7 @@ function computeRoutinePosition(slot, day){
     }
     else if(h<18){ x=slot.workPos.x; z=slot.workPos.z; pose=slot.workActivity; label="at work — "+theLabel(slot.workLabel); }
     else if(h<19){
-      wt = walkProg(h, 18, slot.commutePoly);
+      wt = walkProg(h, 18, slot.commutePoly, slot.walkMps);
       if(wt>=1){ label="at home"; }
       else { pp=sampleWithJitter(slot.commutePoly,1-wt,slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking home"; }
     }
@@ -12579,7 +13028,7 @@ function computeRoutinePosition(slot, day){
       var e = slot._evening, ePose = ACT_POSE[e.act.id] || "evening";
       if(e.poly){
         if(h<19.3){
-          wt = walkProg(h, 19, e.poly);
+          wt = walkProg(h, 19, e.poly, slot.walkMps);
           if(wt>=1){ x=e.site.x; z=e.site.z; pose=ePose; label=e.act.label+(e.site.label?(" — "+e.site.label):"")+", of an evening"; }
           else { pp=sampleWithJitter(e.poly,wt,slot.lateralJitter); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk"; label="walking to "+(e.site.label||e.act.label.toLowerCase()); }
         }
@@ -12590,7 +13039,7 @@ function computeRoutinePosition(slot, day){
           // perpendicular weave on top of the normal lateral jitter, only
           // when today's dice picked drink_at_saloon for a heavy-drinker.
           var weaveJit = e.isDrunkWalk ? slot.lateralJitter + Math.sin(peopleClock*3.1+slot.id*1.7)*1.6 : slot.lateralJitter;
-          wt = walkProg(h, 20.7, e.poly);
+          wt = walkProg(h, 20.7, e.poly, slot.walkMps);
           if(wt>=1){ label="at home"; }
           else {
             pp=sampleWithJitter(e.poly,1-wt,weaveJit); x=pp.x;z=pp.z;dx=pp.dx;dz=pp.dz; pose="walk";
@@ -12609,7 +13058,11 @@ function computeRoutinePosition(slot, day){
     z = lerp(slot.work.pairA.z, slot.work.pairB.z, ct);
     dx = slot.work.pairB.x-slot.work.pairA.x; dz = slot.work.pairB.z-slot.work.pairA.z;
   } else if(pose==="market"||pose==="evening"||pose==="stationary"||pose==="construction"||pose==="idle"){
-    x += slot.clusterOffset.x*0.4; z += slot.clusterOffset.z*0.4;
+    // s59: the cluster offset yields when the anchor is OUTDOORS and the
+    // offset would land in a wall/fence. Indoor anchors (work rendered at
+    // the building's own spot) keep their offsets — indoors is indoors.
+    var cox = x + slot.clusterOffset.x*0.4, coz = z + slot.clusterOffset.z*0.4;
+    if(!(walkBlockedAt(cox,coz,day) && !walkBlockedAt(x,z,day))){ x = cox; z = coz; }
     if(!dx && !dz){ dx = slot.clusterOffset.x||0.1; dz = slot.clusterOffset.z||1; }
   } else if(pose==="fish"){
     x += slot.lateralJitter*1.4; dx = 1; dz = 0.15; // facing the bay, roughly east
@@ -12659,8 +13112,11 @@ function movePolyWalker(slot, poly, dist){
   var p = pointOnPolyline(poly,d);
   var dx = forward?p.dx:-p.dx, dz = forward?p.dz:-p.dz;
   var len = Math.hypot(dx,dz)||1;
-  slot._x = p.x + (-dz/len)*slot.lateralJitter;
-  slot._z = p.z + (dx/len)*slot.lateralJitter;
+  var jx = p.x + (-dz/len)*slot.lateralJitter, jz = p.z + (dx/len)*slot.lateralJitter;
+  // s59 slide-along: lane offset yields to walls/fences (centerline is clear)
+  if(slot.lateralJitter && walkBlockedAt(jx, jz, simDay)){ jx = p.x; jz = p.z; }
+  slot._x = jx;
+  slot._z = jz;
   slot._dx=dx; slot._dz=dz; slot._pose="walk";
 }
 /* AMBIENT FLOW — the timelapse mover (day/week/month tiers + scrub drag;
@@ -14166,7 +14622,7 @@ function applyFireCrowd(slot, day){
       _fleeBudget--;
       var spot = FIRE.spectatorSpots[slot.id % FIRE.spectatorSpots.length];
       slot._spect = spot;
-      slot._fleePoly = buildRoutePoly(slot._x, slot._z, spot.x, spot.z);
+      slot._fleePoly = buildRoutePoly(slot._x, slot._z, spot.x, spot.z, {day:day, who:slot.id});
       slot._fleeStart = peopleClock;
       slot._spOffX = (hash2(slot.id*0.37,1.7)-0.5)*14;
       slot._spOffZ = (hash2(slot.id*0.53,4.1)-0.5)*14;
@@ -14971,6 +15427,8 @@ function updateDirector(dt){
 /* debug/verification handle (used by the Phase-5 QA pass; harmless in prod) */
 window.__P1850 = {
   jump: function(iso){ jumpToDate(eventDateToSimDay(iso)); }, // P0-3: routes through jumpToDate's noon-default fix
+  jumpDay: function(day){ jumpToDate(day); }, // s59 QA: fractional-day jumps (sample specific hours)
+  dayOf: function(iso){ return eventDateToSimDay(iso); },
   // s46 QA — peninsula bake hooks
   get world(){ return { x0:Math.round(WORLD.x0), z0:Math.round(WORLD.z0), xMax:Math.round(WORLD.xMax), zMax:Math.round(WORLD.zMax), cell:+WORLD.cell.toFixed(3), maxAltitude:CFG.maxAltitude }; },
   get terrainMesh(){ return TERRAIN_MESH_STATS; },
@@ -15175,6 +15633,43 @@ window.__P1850 = {
       out.push({ id:s.id, kind:s.kind, x:+s._x.toFixed(2), z:+s._z.toFixed(2), pose:s._pose, appSpd:+(s._appSpd||0).toFixed(3) });
     }); });
     return out;
+  },
+  /* s59 QA — movement-naturalism hooks */
+  walkBlocked: function(x,z){ return !!walkBlockedAt(x,z,simDay); },
+  get walkMask(){ walkMaskInit(); return { obstacles:_walkObstacleCount, buckets:Object.keys(_walkHash).length }; },
+  route: function(who,x0,z0,x1,z1){ // node-key signature of one person's route (diversity/rewind QA)
+    var mDay=_walkRevealHorizon(simDay);
+    var d0=walkExitPoint(x0,z0,mDay), d1=walkExitPoint(x1,z1,mDay);
+    var n0=nearestGraphNode(d0?d0.x:x0,d0?d0.z:z0), n1=nearestGraphNode(d1?d1.x:x1,d1?d1.z:z1);
+    var p=graphPathWeighted(n0,n1,simDay,who);
+    return p ? p.map(function(ni){ return STREET_GRAPH.nodes[ni].key; }).join(">") : null;
+  },
+  routeDiversity: function(x0,z0,x1,z1,n){ // n same-OD walkers -> distinct route count
+    n=n||10; var self=this, sigs=[], seen={}, distinct=0;
+    for(var w=0;w<n;w++){ var sg=self.route(w,x0,z0,x1,z1); sigs.push(sg); if(sg!=null && !seen[sg]){ seen[sg]=1; distinct++; } }
+    return { distinct:distinct, sigs:sigs };
+  },
+  walkAudit: function(){ // rendered-figure collision + road-share audit at the CURRENT frame
+    var res={ total:0, walkers:0, inFootprint:0, inFootprintIds:[], nearRoad:0, onS2plus:0, spds:[] };
+    personMeshSlots.forEach(function(arr){ arr.forEach(function(s){
+      if(!s) return;
+      res.total++;
+      if(s._pose==="walk"){
+        res.walkers++;
+        if((s._appSpd||0)>0.2) res.spds.push(+(s._appSpd||0).toFixed(3));
+        if(walkBlockedAt(s._x, s._z, simDay, 0)){ res.inFootprint++; res.inFootprintIds.push(s.id); } // r=0: strictly inside a footprint
+        var ref = nearestStreetSegRef(s._x, s._z, 4);
+        if(ref){
+          res.nearRoad++;
+          var st = roadPieceState(ref.s, s._x, s._z, simDay, ref.vf).st;
+          if(st>=2) res.onS2plus++;
+        }
+      }
+    }); });
+    res.spds.sort(function(a,b){return a-b;});
+    res.medianSpd = res.spds.length ? res.spds[Math.floor(res.spds.length/2)] : null;
+    res.roadShare = res.nearRoad ? +(res.onS2plus/res.nearRoad).toFixed(3) : null;
+    return res;
   },
   get beat(){ return DIRECTOR.beat ? DIRECTOR.beat.cls+": "+DIRECTOR.beat.headline : null; },
   get tents(){ return { candidates:tentCandidates.length, spawned:spawnedTents.length, meshCount:tentMesh.count }; },
