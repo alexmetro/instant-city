@@ -829,6 +829,31 @@
 "use strict";
 
 /* =====================================================================
+   SIM CLOCK CONSTANTS — hoisted to the very top of the module (s56 P0
+   fix). These used to live down in the Phase-2 section (~line 4839),
+   AFTER buildVillage() had already run — so every parse-time call of
+   eventDateToSimDay() before that point (landmarkFoundedDay() inside
+   placeBuilding(), the exact trap the OFARRELL_SWING comment documents)
+   silently computed with SIM_START_MS === undefined and returned NaN.
+   Concretely: all 49 era-gated landmark buildings (the Dec-1849 fire
+   block, El Dorado, Parker House, City Hotel, ...) got foundedDay:NaN,
+   and updateEraGating()'s `simDay >= NaN` is false forever — they were
+   permanently buried at EVERY date, leaving their baked contact shadows
+   orphaned on empty ground (the user-reported "shadows with no bodies").
+   Nothing here depends on anything else in the module, so the top is the
+   one place this can never happen again.
+   ===================================================================== */
+var SIM_START_MS = Date.UTC(1846,6,1);                    // July 1, 1846
+var SIM_END_DAY = (Date.UTC(1850,0,1)-SIM_START_MS)/86400000; // through Dec 31, 1849
+function dateFromSimDay(day){ return new Date(SIM_START_MS + day*86400000); }
+function eventDateToSimDay(dateStr){
+  var y = +dateStr.slice(0,4);
+  var m = dateStr.length>=7 ? (+dateStr.slice(5,7)-1) : 0;
+  var d = dateStr.length>=10 ? +dateStr.slice(8,10) : 1;
+  return (Date.UTC(y,m,d)-SIM_START_MS)/86400000;
+}
+
+/* =====================================================================
    CONFIG
    ===================================================================== */
 var CFG = {
@@ -4125,7 +4150,16 @@ function landmarkFoundedDay(name){
     // in the as-built Vioget frame; documented post-survey frontage rows
     // (denseRow — the Dec 1849 fire block) align to the corrected O'Farrell
     // base grid, same split the growth candidates below use.
-    var rot = rotBase + (rngBuild()-0.5)*2*(jitterDeg*Math.PI/180) + (opts.denseRow ? GRID_ROT_BASE : VIOGET_SKEW);
+    // s56 YAW-FRAME FIX (a sibling the 34858c0 re-projection missed):
+    // bake()'s three.js yaw is the NEGATIVE of the world angle (Ry(a) maps
+    // local +X to world angle -a in atan2(z,x) terms), while gridToWorld's
+    // skew rotates the streets to world angle +skew. Adding the skew here
+    // therefore rotated every building 2×skew AWAY from its street — an
+    // invisible 5° when VIOGET_SKEW was +2.5°, a glaring 13°/18° once the
+    // measured re-projection set the frames to -6.5°/-9.0°. The bake yaw
+    // must be -(gridAngle + skew); rotBase (0/π/2) and the symmetric
+    // jitter are sign-invariant, so the one rngBuild() draw is unchanged.
+    var rot = -(rotBase + (opts.denseRow ? GRID_ROT_BASE : VIOGET_SKEW)) + (rngBuild()-0.5)*2*(jitterDeg*Math.PI/180);
     var isAdobe = opts.forceFrame ? false : rngBuild()<0.55;
     var bodyColor = new THREE.Color(isAdobe? adobeColors[Math.floor(rngBuild()*adobeColors.length)] : frameColors[Math.floor(rngBuild()*frameColors.length)]);
     var roofColor = new THREE.Color(isAdobe? roofColorsAdobe[Math.floor(rngBuild()*roofColorsAdobe.length)] : roofColorsFrame[Math.floor(rngBuild()*roofColorsFrame.length)]);
@@ -4349,8 +4383,14 @@ scene.add(windowsMesh);
    Keeps the July 1846 view to the founding village + growth buildings
    only — no 1849 gambling row three years early.
    ===================================================================== */
-var ERA_GATE = VILLAGE_BUILDING_SPOTS.filter(function(s){ return s.foundedDay!=null && s.vStart!=null; }).map(function(s){
-  return { spot:s, groundY:s.y, _visible:null };
+var ERA_GATE = [];
+VILLAGE_BUILDING_SPOTS.forEach(function(s, idx){
+  // spotIdx doubles as this building's instance id in buildingShadowMesh
+  // (s56 fix: the contact-shadow decal is gated WITH its building — an
+  // unfounded building must not leave an orphan shadow blob on bare
+  // ground). Indices are stable: the chapel is pushed AFTER this runs,
+  // appended at the end.
+  if(s.foundedDay!=null && s.vStart!=null) ERA_GATE.push({ spot:s, spotIdx:idx, groundY:s.y, _visible:null });
 });
 (function snapshotEraGateSlices(){
   var bPos = buildingsMesh.geometry.attributes.position.array;
@@ -4364,6 +4404,7 @@ var ERA_GATE = VILLAGE_BUILDING_SPOTS.filter(function(s){ return s.foundedDay!=n
   });
   console.log("[verify] era-gated landmarks:", ERA_GATE.length, "buildings hidden until their founding date.");
 })();
+var _egM4 = new THREE.Matrix4(), _egQ = new THREE.Quaternion(), _egV = new THREE.Vector3(), _egS = new THREE.Vector3();
 function updateEraGating(){
   if(ERA_GATE.length===0) return;
   var bPos = buildingsMesh.geometry.attributes.position, bCol = buildingsMesh.geometry.attributes.color;
@@ -4397,6 +4438,18 @@ function updateEraGating(){
       }
     }
     if(s._signMesh) s._signMesh.visible = visible;
+    // s56: gate the contact-shadow decal WITH its building — before this,
+    // buildingShadowMesh was baked once for every spot and never touched
+    // again, so a not-yet-founded building left a dark orphan blob on
+    // empty ground (the user's "shadows with no bodies" P0).
+    if(typeof buildingShadowMesh !== "undefined" && buildingShadowMesh){
+      _egQ.setFromAxisAngle(_UP, s.rot||0);
+      _egV.set(s.x, visible ? s.y+0.04 : s.y-9999, s.z);
+      _egS.set((s.w||4)*1.3, 1, (s.d||4)*1.3);
+      _egM4.compose(_egV, _egQ, _egS);
+      buildingShadowMesh.setMatrixAt(rec.spotIdx, _egM4);
+      buildingShadowMesh.instanceMatrix.needsUpdate = true;
+    }
   });
   if(touched){ bPos.needsUpdate = true; bCol.needsUpdate = true; wPos.needsUpdate = true; }
 }
@@ -4425,6 +4478,7 @@ function updateEraGating(){
   var mat = new THREE.MeshPhongMaterial({ color:0x574a3a, flatShading:true, specular:0x000000, shininess:0 });
   var recs = [];
   VILLAGE_BUILDING_SPOTS.forEach(function(spot){
+    if(spot.foundedDay!=null) return; // s56: no bare plinth standing years before its era-gated building (no rng consumed here)
     var minY = lowestCornerY(spot);
     var gap = spot.y - minY;
     if(gap < 0.35) return; // flat enough — no visible stilt gap
@@ -4644,7 +4698,12 @@ function makeOrchardTreeGeo(){
     var x = churchX+Math.cos(ang)*dist, z = churchZ+Math.sin(ang)*dist;
     if(!canPlace(x,z,7,{streetMargin:2})) return;
     var y = terrainHeight(x,z);
-    var w=6.5+rngBuild()*2.5, d=5.5+rngBuild()*2, h=3+rngBuild(), rot=rngBuild()*Math.PI;
+    // s56 BUILDING-YAW AUDIT: the Californio adobes ringing the Mission
+    // read as full buildings, and rngBuild()*π gave them arbitrary ~45°+
+    // yaws unrelated to anything. The historical cluster loosely followed
+    // the Mission complex's own alignment — so they square to churchRot
+    // with a generous hand-built jitter (±~20°). One draw either way.
+    var w=6.5+rngBuild()*2.5, d=5.5+rngBuild()*2, h=3+rngBuild(), rot=churchRot+(rngBuild()-0.5)*0.7;
     registerPlacement(x,z,Math.hypot(w,d)/2);
     var body = makeBoxLocal(w,h,d, adobe.clone().lerp(adobeDark, rngBuild()*0.5));
     bake(body, new THREE.Vector3(x,y,z), rot);
@@ -4686,7 +4745,12 @@ function makeOrchardTreeGeo(){
       var x = rx+offs[i][0], z = rz+offs[i][1];
       var y = terrainHeight(x,z);
       registerPlacement(x,z,3);
-      var rot = (i*0.83)%Math.PI;
+      // s56 BUILDING-YAW AUDIT: the record's own word for the layout is
+      // "rows" — cabins in a row share a facing. The old (i*0.83)%π gave
+      // each dwelling an unrelated ~47°-stepped yaw that broke the row
+      // read entirely. Row-aligned (the offs rows run along world X, so
+      // base yaw 0) with a small deterministic hand-built wobble (±~7°).
+      var rot = ((i*0.83)%0.24)-0.12;
       if(i<3){ // adobe-hint row cabin
         var w=3.2+((i*7)%10)*0.06, d=2.7, h=1.9;
         var hut = makeBoxLocal(w,h,d, hutColor);
@@ -4835,22 +4899,15 @@ function makeOrchardTreeGeo(){
    splatTownMat ground-splat materials (wet-weather tint).
    ========================================================================= */
 
-/* ---- helpers shared by everything below ---- */
-var SIM_START_MS = Date.UTC(1846,6,1);                    // July 1, 1846
-var SIM_END_DAY = (Date.UTC(1850,0,1)-SIM_START_MS)/86400000; // through Dec 31, 1849
-function dateFromSimDay(day){ return new Date(SIM_START_MS + day*86400000); }
-function eventDateToSimDay(dateStr){
-  var y = +dateStr.slice(0,4);
-  var m = dateStr.length>=7 ? (+dateStr.slice(5,7)-1) : 0;
-  var d = dateStr.length>=10 ? +dateStr.slice(8,10) : 1;
-  return (Date.UTC(y,m,d)-SIM_START_MS)/86400000;
-}
+/* ---- helpers shared by everything below ----
+   (SIM_START_MS / SIM_END_DAY / dateFromSimDay / eventDateToSimDay moved
+   to the TOP of the module, s56 P0 fix — see the SIM CLOCK CONSTANTS
+   block up there for why parse-order mattered.) */
 /* O'Farrell's Feb-Aug 1847 grid-swing window (see updateGridSwing() up in
-   the GEO/gridToWorld section) — MUST be assigned here, after
-   SIM_START_MS/eventDateToSimDay actually exist; assigning it up near
-   gridToWorld (its original location) evaluated eventDateToSimDay() while
-   SIM_START_MS was still undefined, silently producing NaN and disabling
-   the swing entirely since page load. */
+   the GEO/gridToWorld section) — historical note: this assignment once had
+   to sit down here because eventDateToSimDay() lived just above; with the
+   sim-clock constants hoisted to the module top (s56) the order is safe
+   everywhere, and this stays put only to avoid churn. */
 var OFARRELL_SWING_START = eventDateToSimDay("1847-02-01");
 var OFARRELL_SWING_END = eventDateToSimDay("1847-08-01");
 console.assert(ERA_MAP_SIMDAY["ofarrell-1847"]===OFARRELL_SWING_END, "ERA_MAP_SIMDAY's hardcoded ofarrell-1847 day has drifted from OFARRELL_SWING_END — update the literal near STREETS_RUNTIME to match");
@@ -4885,7 +4942,7 @@ var CHURCH_SPOT = null;
   }
   var y = terrainHeight(x,z);
   registerPlacement(x,z,footprintR);
-  var rot = GRID_ROT_BASE; // Nov 1848 construction — post-survey, aligned to the corrected grid
+  var rot = -GRID_ROT_BASE; // Nov 1848 construction — post-survey, aligned to the corrected grid (s56: bake yaw = -(world angle), see placeBuilding's YAW-FRAME FIX)
   var wall = new THREE.Color(0xe4dcc0), roof = new THREE.Color(0x5a4432), trim = new THREE.Color(0x3a3226);
   var w=8.5, d=5.6, h=3.4;
   var geoms = [];
@@ -4902,8 +4959,12 @@ var CHURCH_SPOT = null;
   mesh.visible = false; // gated on CHURCH_REVEAL_DAY, toggled each frame alongside the wharf-landing mesh
   scene.add(mesh);
   window._townChapelMesh = mesh;
-  CHURCH_SPOT = { x:x, z:z, y:y, rot:rot, w:w, d:d, h:h, name:"The Chapel" };
+  // s56: foundedDay added so the chapel is treated as era-gated everywhere
+  // spots are consumed (labels, yard adjuncts, its contact shadow below) —
+  // its own mesh visibility toggle in updateWharfGrowth() is unchanged.
+  CHURCH_SPOT = { x:x, z:z, y:y, rot:rot, w:w, d:d, h:h, name:"The Chapel", foundedDay:CHURCH_REVEAL_DAY };
   VILLAGE_BUILDING_SPOTS.push(CHURCH_SPOT); // no vStart/vEnd — the fire system already guards s.vStart==null; gets label/inspector/sign treatment like any named spot
+  window._chapelShadowIdx = VILLAGE_BUILDING_SPOTS.length-1; // its instance id in buildingShadowMesh (s56 shadow gating)
   console.log("[verify] Town chapel at ("+x.toFixed(0)+","+z.toFixed(0)+"), reveal day "+CHURCH_REVEAL_DAY.toFixed(0)+" (1848-11-02)");
 })();
 
@@ -6522,7 +6583,12 @@ var growthBuildingCandidates = (function(){
     // pre-survey stock keeps the as-built Vioget frame; post-survey new
     // construction aligns to the corrected O'Farrell base grid (GEOMETRY
     // TRUTH split, matching the street painter's post-swing angle).
-    c.rot = c.rotBase + (rngBuild()-0.5)*2*(jitterDeg*Math.PI/180) + (idx < preSurveyCount ? VIOGET_SKEW : GRID_ROT_BASE);
+    // s56 YAW-FRAME FIX (see placeBuilding): bake yaw = -(gridAngle+skew).
+    // This also fixes the diagonal-frontage outliers: a scatter candidate
+    // facing Market/the Mission road (rotBase = the line's UV angle from
+    // nearestStreetDirUV) was rotated 2×(angle+skew) off its street —
+    // up to ~90° for the diagonals, the "arbitrary 45° buildings".
+    c.rot = -(c.rotBase + (idx < preSurveyCount ? VIOGET_SKEW : GRID_ROT_BASE)) + (rngBuild()-0.5)*2*(jitterDeg*Math.PI/180);
   });
   return out;
 })();
@@ -8587,7 +8653,14 @@ function updateLaundryDay(day){
   fenceLines.forEach(function(ln){
     var dx=ln.p1.x-ln.p0.x, dz=ln.p1.z-ln.p0.z, len=Math.hypot(dx,dz);
     var segN = Math.max(1, Math.floor(len/2.9));
-    var yaw = Math.atan2(dx,dz);
+    // s56 FENCE-YAW FIX (the map-wide "ladder/jack" 90° defect): this
+    // prefab's posts+rails run along local X, but atan2(dx,dz) is the
+    // local-Z convention (people, corral rails) — it aligned the rail's
+    // SHORT axis with the lot line, so every segment stood broadside,
+    // reading as rungs perpendicular to the fence run. For an X-aligned
+    // prefab the bake yaw is -(world line angle) = atan2(-dz,dx). The
+    // ranch corrals build Z-aligned rails and were always correct.
+    var yaw = Math.atan2(-dz,dx);
     for(var i=0;i<segN;i++){
       var t=(i+0.5)/segN, fx=ln.p0.x+dx*t, fz=ln.p0.z+dz*t, fh=terrainHeight(fx,fz);
       if(fh<=1) continue;
@@ -8871,6 +8944,21 @@ function updateLaundryDay(day){
   window.updateWharfGrowth = function(){
     window._wharfLandingMesh.visible = simDay >= WHARF_LANDING_START_DAY;
     if(window._townChapelMesh) window._townChapelMesh.visible = simDay >= CHURCH_REVEAL_DAY;
+    // s56: the chapel's contact-shadow decal gates WITH the chapel (same
+    // orphan-blob fix as updateEraGating's, but the chapel has no vertex
+    // slice so it's handled here beside its own visibility toggle).
+    if(typeof buildingShadowMesh !== "undefined" && buildingShadowMesh && window._chapelShadowIdx != null && CHURCH_SPOT){
+      var chapelOn = simDay >= CHURCH_REVEAL_DAY;
+      if(chapelOn !== window._chapelShadowOn){
+        window._chapelShadowOn = chapelOn;
+        var q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), CHURCH_SPOT.rot||0);
+        var m4 = new THREE.Matrix4().compose(
+          new THREE.Vector3(CHURCH_SPOT.x, chapelOn ? CHURCH_SPOT.y+0.04 : CHURCH_SPOT.y-9999, CHURCH_SPOT.z),
+          q, new THREE.Vector3((CHURCH_SPOT.w||4)*1.3, 1, (CHURCH_SPOT.d||4)*1.3));
+        buildingShadowMesh.setMatrixAt(window._chapelShadowIdx, m4);
+        buildingShadowMesh.instanceMatrix.needsUpdate = true;
+      }
+    }
     var t = clamp((simDay-CENTRAL_WHARF_START_DAY)/(SIM_END_DAY-CENTRAL_WHARF_START_DAY), 0, 1);
     var lenM = t>0 ? Math.max(6, CENTRAL_WHARF_FULL_LEN*t) : 0;
     var rounded = Math.round(lenM/2)*2;
@@ -9045,7 +9133,15 @@ var SIGN_BUILDING_SPOTS = []; // {x,z,y,rot,w,d,word} — reused by Phase 4's ho
     var p = behindSpot(spot, 4+rngBuild()*3, (rngBuild()-0.5)*spot.w*1.4);
     var h = terrainHeight(p.x,p.z);
     if(h<=1) return;
-    outhouseMatrices.push({ x:p.x, z:p.z, h:h, rot: spot.rot+(rngBuild()-0.5)*0.5 });
+    var oRot = spot.rot+(rngBuild()-0.5)*0.5;
+    // s56: era-gated landmarks (fire block, hotels, chapel) get NO baked
+    // yard adjuncts — an outhouse standing alone years before its building
+    // exists is the same orphan defect as the ungated shadows; and the
+    // 1849 dense commercial row wouldn't keep cottage-yard furniture
+    // anyway. rngBuild() draws above are consumed either way, so the
+    // seeded stream for every ungated spot is byte-identical.
+    if(spot.foundedDay!=null) return;
+    outhouseMatrices.push({ x:p.x, z:p.z, h:h, rot: oRot });
   });
   if(outhouseMatrices.length>0){
     var outhouseMesh = new THREE.InstancedMesh(makeOuthouseGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, side:THREE.DoubleSide, specular:0x000000, shininess:0}), outhouseMatrices.length);
@@ -9074,10 +9170,17 @@ var SIGN_BUILDING_SPOTS = []; // {x,z,y,rot,w,d,word} — reused by Phase 4's ho
     var p = behindSpot(spot, 6+rngBuild()*4, (rngBuild()-0.5)*spot.w*1.6);
     var h = terrainHeight(p.x,p.z);
     if(h<=1) return;
-    // ORGANIC LAYOUT (2026-07-10): outbuildings sat at whatever angle was
-    // convenient for the yard, not squared up with the house — independent
-    // of spot.rot rather than a small jitter off it.
-    shedMatrices.push({ x:p.x, z:p.z, h:h, rot: rngBuild()*Math.PI*2 });
+    // s56 BUILDING-YAW AUDIT: these 3×2.3m gabled sheds read as small
+    // BUILDINGS at 150m, and the old fully-random rot (rngBuild()*2π) was
+    // the main source of "structures at arbitrary ~45° unrelated to any
+    // street". road-master-spec §5 lets outbuildings be loose, but loose
+    // means "strung up by eye off the house" (the yard-fence rule), not
+    // uniformly random — so they now square roughly to their own house
+    // (±~17°), same jitter language as the outhouses. One rngBuild()
+    // draw either way: the seeded stream is unchanged.
+    var sRot = spot.rot + (rngBuild()-0.5)*0.6;
+    if(spot.foundedDay!=null) return; // s56: no yard adjuncts on era-gated landmarks (see outhouses)
+    shedMatrices.push({ x:p.x, z:p.z, h:h, rot: sRot });
   });
   if(shedMatrices.length>0){
     var shedMesh = new THREE.InstancedMesh(makeYardShedGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, side:THREE.DoubleSide, specular:0x000000, shininess:0}), shedMatrices.length);
@@ -9103,6 +9206,7 @@ var SIGN_BUILDING_SPOTS = []; // {x,z,y,rot,w,d,word} — reused by Phase 4's ho
     var lx = (rngBuild()<0.5?-1:1)*(spot.w*0.5+0.6), lz = (rngBuild()-0.5)*spot.d*0.6;
     var x = spot.x + lx*c + lz*s, z = spot.z - lx*s + lz*c;
     var h = terrainHeight(x,z);
+    if(spot.foundedDay!=null) return; // s56: no yard adjuncts on era-gated landmarks (draws consumed above)
     if(h>1) yardBarrelSamples.push({x:x,z:z,h:h});
   });
   if(yardBarrelSamples.length>0){
@@ -9121,7 +9225,10 @@ var SIGN_BUILDING_SPOTS = []; // {x,z,y,rot,w,d,word} — reused by Phase 4's ho
   // trade — no "1846-49 price" label, just the figure a real sign would carry.
   var SIGN_PRICE_ITEM = { "GROCER":/^eggs$/i, "DRY GOODS":/^cloth$/i, "PROVISIONS":/^flour$/i,
     "BOARDING":/^house rent$/i, "TIN SHOP":/^tin, plate$/i, "SHIP CHANDLERY":/^cordage, hemp$/i };
-  var plazaSorted = VILLAGE_BUILDING_SPOTS.slice().sort(function(a,b){
+  // s56: era-gated landmarks excluded — a GROCER board floating over an
+  // empty lot (its building buried until 1847/1849) was one of the orphan
+  // artifacts; the named landmarks get their own gated signage anyway.
+  var plazaSorted = VILLAGE_BUILDING_SPOTS.filter(function(s){ return s.foundedDay==null; }).sort(function(a,b){
     return Math.hypot(a.x-PLAZA_CENTER.x,a.z-PLAZA_CENTER.z) - Math.hypot(b.x-PLAZA_CENTER.x,b.z-PLAZA_CENTER.z);
   }).slice(0, SIGN_WORDS.length);
   plazaSorted.forEach(function(spot, i){
@@ -9180,11 +9287,15 @@ var SIGN_BUILDING_SPOTS = []; // {x,z,y,rot,w,d,word} — reused by Phase 4's ho
       var a = toWorld(side.a[0],side.a[1]), b = toWorld(side.b[0],side.b[1]);
       var dx=b.x-a.x, dz=b.z-a.z, len=Math.hypot(dx,dz);
       var segN = Math.max(1, Math.round(len/2.9));
-      var yaw = Math.atan2(dx,dz);
+      // s56 FENCE-YAW FIX — same X-aligned-prefab/Z-convention mismatch as
+      // buildVillageClutter's fence lines above: rails must run ALONG the
+      // lot side, so the bake yaw is atan2(-dz,dx), not atan2(dx,dz).
+      var yaw = Math.atan2(-dz,dx);
       for(var i=0;i<segN;i++){
         if(rngBuild()<0.18) continue; // a missing rail -- gate, gap, wear
         var t=(i+0.5)/segN, fx=a.x+dx*t, fz=a.z+dz*t, fh=terrainHeight(fx,fz);
         if(fh<=1) continue;
+        if(spot.foundedDay!=null) continue; // s56: no yard fence around an era-gated landmark (rng draws consumed above so the stream holds)
         fenceMatrices.push({x:fx,z:fz,h:fh,rotY:yaw});
       }
     });
@@ -9227,6 +9338,7 @@ var SIGN_BUILDING_SPOTS = []; // {x,z,y,rot,w,d,word} — reused by Phase 4's ho
     var sp = nearestStreetPoint(doorX,doorZ);
     if(!sp || bestDistCheck(sp,doorX,doorZ)>26) return;
     var jog = (rngBuild()-0.5)*10; // meters along the street's own direction -- avoids a square approach
+    if(spot.foundedDay!=null) return; // s56: no worn door-path to a door that doesn't exist yet (draws consumed above)
     var tx = sp.x+sp.dirx*jog, tz = sp.z+sp.dirz*jog;
     SPLAT_DOOR_PATHS.push({ doorX:doorX, doorZ:doorZ, tx:tx, tz:tz });
   });
@@ -11711,7 +11823,18 @@ var ALL_PEOPLE_SLOTS = (function(){
       work:work, workPos:workPos, workLabel:work.label, workActivity:work.activity,
       commutePoly:commutePoly, errandPoly:errandPoly, sundayPoly:sundayPoly,
       _midday:null, _doEvening:false, _evening:null, _scheduleDay:-1,
-      notBeforeDay: Math.max(rosterFirstDay!=null?rosterFirstDay:0, origin.earliestDay, home.revealDay||0),
+      /* s56 P0 (empty 1846 town): the roster-name first-mention floor is
+         GONE from arrival, the exact mirror of the notAfterDay fix below.
+         Not one of the 600 roster entries is first-mentioned before
+         1846-08-15 (the Californian's own first issue) — so flooring every
+         named slot to its name's newsprint debut guaranteed the founding
+         village (documented pop ~200) had ZERO street life for the sim's
+         first six weeks and a starved trickle until 1847. Same ruling as
+         the expiry fix: the roster name is cosmetic flavor for the
+         inspector card; the LIFE persists — and it arrives — independent
+         of when a newspaper first printed the name. Cohort arrival
+         (origin.earliestDay) and the home's reveal still gate honestly. */
+      notBeforeDay: Math.max(origin.earliestDay, home.revealDay||0),
       /* BUGFIX completion (2026-07-10, §6 pose-library verification): the
          close-range legibility pass's own comment (see the extras loop
          below) diagnosed that BOTH populations hard-expired at their
@@ -11783,7 +11906,9 @@ var ALL_PEOPLE_SLOTS = (function(){
       // (which only the Mission community has, per the record).
       notBeforeDay: origin2.key==="indigenous"
         ? Math.round(rngBuild()*eventDateToSimDay("1847-06-01"))
-        : Math.max(rosterFirstDay2!=null?rosterFirstDay2:0, origin2.earliestDay),
+        // s56 P0: roster first-mention floor dropped from extras too (see
+        // the routine loop's comment) — cohort arrival gates alone.
+        : origin2.earliestDay,
       // BUGFIX (close-range legibility pass, 2026-07-10): extras are
       // anonymous ambient density-fill (see comment at their loop's top) —
       // a roster name is cosmetic flavor for the inspector card, not their
@@ -12267,7 +12392,11 @@ function generateBio(slot){
       origin: slot.origin ? slot.origin.label : "unrecorded",
       // s50: the Indigenous population did not "arrive" — they are the
       // original population (native-presence-1846-49.md §1).
-      arrivedYear: (slot.origin && slot.origin.key==="indigenous") ? "native-born" : dateFromSimDay(rp.first ? eventDateToSimDay(rp.first) : Math.max(slot.notBeforeDay,0)).getUTCFullYear(),
+      // s56: capped at the CURRENT sim day — with the roster arrival floor
+      // gone (see notBeforeDay), a named person can be on the street before
+      // the name's first newsprint mention; the card must never claim they
+      // "arrived" in a year later than the one you're watching them in.
+      arrivedYear: (slot.origin && slot.origin.key==="indigenous") ? "native-born" : dateFromSimDay(Math.min(rp.first ? eventDateToSimDay(rp.first) : Math.max(slot.notBeforeDay,0), simDay)).getUTCFullYear(),
       trade: rpOcc ? rpOcc.label : (rp.role || "—"),
       role: rp.role || null, mentions: rp.mentions || null,
       agenda: null, family: familyLineFor(slot),
