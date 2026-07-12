@@ -6,7 +6,7 @@
    after @P1850-CHUNK) — original module statement order, byte-stable. Edit code freely inside a
    chunk; never reorder or renumber chunk markers without rebuilding + re-verifying.
    ===================================================================== */
-/* @P1850-CHUNK 17 — ships phase-1 retirement note */
+/* @P1850-CHUNK 19 — ships phase-1 retirement note */
 /* =====================================================================
    SHIPS — the Phase-1 draft here was 3 hardcoded, never-updated, always-
    visible boxy hulls at fixed spots. Removed (2026-07: QA-GATE ships debt):
@@ -17,7 +17,7 @@
    the QA-GATE rebuild (sheer hull, bowsprit, 3 vessel types).
    ===================================================================== */
 
-/* @P1850-CHUNK 22 — documented visits, vessel types, navigation, anchorage, hull/sail prefabs, fill traffic */
+/* @P1850-CHUNK 29 — documented visits, vessel types, navigation, anchorage, hull/sail prefabs, fill traffic */
 /* =========================================================================
    3. SHIPS ON THEIR TRUE DATES
    The data is noisy newsprint (the same ship's arrival gets re-mentioned
@@ -407,8 +407,6 @@ function shipSailPos(v, t, arriving){
   var lat = ((v.pathJitter-0.5)*2*SHIP_LATERAL_MAX + tack) * taper;
   return { x: b.x - b.tz*lat, z: b.z + b.tx*lat };
 }
-function shipPathPoint(v, t, arriving){ return shipSailPos(v, t, arriving); } // legacy name, 3 call sites
-
 /* ANCHORAGE ASSIGNMENT SWEEP — deterministic, build-time (rewind-exact:
    runs once over the arrival-sorted visit list; runtime frame order can
    never change who moors where). Also fixes a latent rewind bug in the
@@ -1124,7 +1122,7 @@ function updateShips(dt){
   }
 }
 
-/* @P1850-CHUNK 30 — wharf growth (landing stages + Central Wharf deck) */
+/* @P1850-CHUNK 39 — wharf growth (landing stages + Central Wharf deck) */
   /* ---- WHARF GROWTH (WORLD-P0 fix 2026-07-09, AUDIT H1 / GAPS item 5) ----
      Previously one static mesh, visible unchanged from July 1846 — 18
      months before any wharf existed (clm:shore:4: Clark's Point wharf,
@@ -1332,7 +1330,7 @@ function updateShips(dt){
   STREET_REPAINT_THRESHOLDS.push(WHARF_LANDING_START_DAY, CENTRAL_WHARF_START_DAY);
 })();
 
-/* @P1850-CHUNK 32 — storeship dress */
+/* @P1850-CHUNK 41 — storeship dress */
 /* =====================================================================
    STORESHIP DRESS (s48) — the four documented conversions (Niantic,
    General Harrison, Apollo storeships; Euphemia the town jail) were not
@@ -1407,7 +1405,7 @@ function updateShips(dt){
   console.log("[verify] s48 storeship dress built for "+Object.keys(STORESHIP_INFO).length+" hulks (shed+gangway+sign, state-gated)");
 })();
 
-/* @P1850-CHUNK 38 — wharf boats + lighters */
+/* @P1850-CHUNK 49 — wharf boats + lighters */
 /* TECHNIQUES §4.3 — moored-boat variety at the Central Wharf head: 2-3
    small craft clustered off the working end, believability from parameter
    noise (per-instance yaw jitter, a slight permanent heel, independent

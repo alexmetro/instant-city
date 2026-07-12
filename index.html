@@ -303,7 +303,6 @@
   }
   .pp-suspended .pp-s-line{ display:block; letter-spacing:1px; }
   .pp-suspended .pp-s-sub{ display:block; font-size:0.6rem; letter-spacing:2px; opacity:0.65; margin-top:14px; font-style:normal; }
-  .pp-nopaper-since{ text-align:center; font-size:0.65rem; letter-spacing:1.5px; opacity:0.65; margin-bottom:12px; }
 
   .bs-columns{ column-count:2; column-gap:1.4em; column-rule:1px solid rgba(43,29,14,0.25); }
   .bs-item{ break-inside:avoid; margin-bottom:1em; position:relative; }
@@ -826,7 +825,6 @@
 <script src="roster-1846-49.js"></script>
 <script src="catalog-occupations.js"></script>
 <script src="catalog-activities.js"></script>
-<script src="catalog-reactions.js"></script>
 <script src="streets-geometry.js"></script>
 <script>
 (function(){
@@ -988,6 +986,13 @@ var __P1850_AUDITS = {};
 function registerAudit(layer, name, fn){
   (__P1850_AUDITS[layer] = __P1850_AUDITS[layer] || {})[name] = fn;
 }
+
+/* Generic string helpers (relocated from ui-chrome.js in the 2026-07-12
+   cleanup — labels-inspect is escapeHTML's heaviest consumer and core
+   routing uses cap(); cross-layer helper calls belong in core). Function
+   declarations hoist module-wide, so the earlier position is behavior-safe. */
+function escapeHTML(s){ return (s||"").replace(/[&<>]/g, function(c){ return c==="&"?"&amp;":(c==="<"?"&lt;":"&gt;"); }); }
+function cap(s){ return s.charAt(0).toUpperCase()+s.slice(1); }
 /* =====================================================================
    GEOGRAPHY TRUTH (research/geography-shoreline.md §2, research/peninsula-1846.md)
    World coords: +X = east (toward the bay), +Z = south, Y = up.
@@ -1039,16 +1044,15 @@ function registerAudit(layer, name, fn){
    spacing) — see tools/reproject-streets-2026-07-11.js and the dataset's
    meta.reprojection_2026_07_11.
    ===================================================================== */
-var VARA_M = 0.838;                    // 1 vara (geography-shoreline.md §2)
-var LOT_M = 50*VARA_M;                  // ~41.9 m, one 50-vara lot
-var BLOCK_W = 3*LOT_M + 20.49;           // ~146.2 m — CENTERLINE spacing between adjacent N-S main
-                                          // streets (curb-to-curb 150-vara block + mean documented
-                                          // street width; measured Montgomery↔Kearny 145.8-146.4m).
-                                          // Only coarse consumers (plaza fallback math) read this —
-                                          // exact per-street positions come from STREETS_RUNTIME.
-var BLOCK_D = 2*LOT_M + 14.97;           // ~98.8 m — CENTERLINE spacing between adjacent E-W cross
-                                          // streets (100-vara block + documented 14.97m cross width;
-                                          // measured Washington↔Clay 96.7-97.7m).
+/* Metrology note (geography-shoreline.md §2), kept for the record — the
+   former VARA_M/LOT_M/BLOCK_W/BLOCK_D constant chain was dead code (nothing
+   read it; exact per-street positions come from STREETS_RUNTIME) and was
+   deleted in the 2026-07-12 cleanup. The research figures it carried:
+   1 vara = 0.838 m; a 50-vara lot ≈ 41.9 m; N-S main-street CENTERLINE
+   spacing ≈ 146.2 m (150-vara block + mean documented street width;
+   measured Montgomery↔Kearny 145.8-146.4 m); E-W cross-street CENTERLINE
+   spacing ≈ 98.8 m (100-vara block + documented 14.97 m cross width;
+   measured Washington↔Clay 96.7-97.7 m). */
 var GRID_ROT_BASE_DEG = -9.0;            // fitted base grid rotation (measured, permanent — the
                                           // O'Farrell/modern grid; VALIDATION-2026-07-11 §4.1)
 var VIOGET_ERROR_DEG = 2.5;              // "Vioget's error" — the 1847 swing DELTA within the
@@ -1641,6 +1645,18 @@ function terrainColor(x,z,h){
   return col;
 }
 
+
+/* Outpost geography truth (research/peninsula-1846.md §1/§2, converted to
+   world meters via the heightmap's lat/lon convention; verified against the
+   baked grid with tools/debug-region.js). Relocated verbatim from
+   layers/terrain.js in the 2026-07-12 cleanup — core's shared placement
+   engine (PLACEMENT_MISSION_SEGS) and the street graph read it, so it is
+   geography truth, not a layer's. Initialized here (earlier than its old
+   slot at the end of the terrain chunk) — a pure literal with no deps. */
+var OUTPOSTS = {
+  mission:  { x:-1997, z:3462, n:7 },
+  presidio: { x:-4776, z:-234, n:6 }
+};
 /* =====================================================================
    RENDERER / SCENE / CAMERA
    ===================================================================== */
@@ -2462,6 +2478,11 @@ function patchGroundDetailMaterial(mat, kind, prevHook){
       .replace("#include <normal_fragment_begin>", "#include <normal_fragment_begin>\n" + DETAIL_FRAG_NORMAL);
   };
 }
+/* (terrainMat/terrainMesh — terrain OWNS its mesh + material — relocated to
+   layers/terrain.js in the 2026-07-12 cleanup, keeping this exact global
+   position. patchGroundDetailMaterial() above stays here: the detail-shader
+   patch is ground-paint's legal shared piece.) */
+
 var terrainMat = new THREE.MeshPhongMaterial({ vertexColors:true, flatShading:true, specular:0x000000, shininess:0,
   polygonOffset:true, polygonOffsetFactor:1, polygonOffsetUnits:1 });
 patchGroundDetailMaterial(terrainMat, "terrain", null);
@@ -3216,12 +3237,6 @@ var SPLAT_MISSION_PTS = [], SPLAT_ELCAMINO_PTS = [], SPLAT_PRESIDIO_PTS = [], SP
 var SPLAT_CLUTTER_PATHS = [], SPLAT_LEVELING_CART_PTS = [];
 var SPLAT_PLANK_APRONS = []; // {x0,z0,x1,z1,widthM,from} — pushed by the wharf builder
 
-// STREET-CHECKPOINT RESET (2026-07-10): every street paints at its own
-// documented width_m straight from STREETS_RUNTIME (grounding.md §9's
-// metrological-baseline rule).
-var STREET_DIRT_COL = ROAD_COLS.r4;
-var SURVEY_GHOST_COL = ROAD_COLS.ghost;
-
 /* THE master (re)draw. `skewAngle` is the grid's CURRENT skew — the full
    as-built Vioget frame (-6.5°) before Feb 1847, eased to the permanent
    GRID_ROT_BASE (-9.0°) by Aug 1847, per updateGridSwing() above. */
@@ -3971,14 +3986,9 @@ var foamMesh = null;
    tools/debug-region.js's scan around x=-560,z=-560 — so it's dropped
    rather than floating a disc of water on a slope. */
 
-/* Hoisted early (was previously declared alongside buildOutposts() much
-   further down) so the shared placement engine below — and every spawner
-   that follows it in file order — can consult real outpost coordinates
-   (e.g. the Mission Road corridor approximation) before it's built. */
-var OUTPOSTS = {
-  mission:  { x:-1997, z:3462, n:7 },
-  presidio: { x:-4776, z:-234, n:6 }
-};
+/* (OUTPOSTS — the Mission Dolores / Presidio geography truth — relocated to
+   core/01-geography.js in the 2026-07-12 cleanup: core's placement engine
+   reads it, so a layer could not own it.) */
 
 /* =========================================================================
    SHARED PLACEMENT ENGINE — canPlace(x,z,footprintR,opts)  (WORLD-P0 fix
@@ -4122,17 +4132,14 @@ function canPlace(x,z,footprintR,opts){
 }
 
 /* =====================================================================
-   STREETS  (Vioget grid: as-built at the -6.5° pre-1847 frame — the
-   measured -9.0° base rotation plus Vioget's 2.5° error, see
-   gridToWorld() — fading to narrower, paler sandy-track stubs at the
-   surveyed grid's edge rather than ending abruptly. geography-
-   shoreline.md §2 + GEOMETRY TRUTH block above.)
-   Rendering moved to the GROUND SPLAT-MAP (see renderGroundSplat(),
-   paintStub() up near the terrain build) — the old per-segment
-   draped-box mesh this IIFE used to build is gone; the street-GRAPH
-   constants (GEO.streetsU/V, STREET_MAIN_W/CROSS_W, STREET_STUB_LEN)
-   are unchanged and still the single source of truth for both the
-   splat painter and the placement engine above.
+   STREETS — TOMBSTONE. The per-segment draped-box street-mesh IIFE that
+   once lived at this position is gone: every street pixel is painted by
+   the GROUND SPLAT-MAP engine above (renderGroundSplat(), s62 constant-
+   width painter — per-class widths from STREETS_RUNTIME/ROAD_COLS, grid
+   frames per updateGridSwing()). Street GEOMETRY truth is unchanged:
+   GEO.streetsU/V + STREETS_RUNTIME remain the single source for both the
+   splat painter and the placement engine above (STREET_STUB_LEN still
+   governs the sandy-track fade past the surveyed grid's edge).
    ===================================================================== */
 
 /* =====================================================================
@@ -5060,27 +5067,6 @@ function updateSmoke(dt){
    the QA-GATE rebuild (sheer hull, bowsprit, 3 vessel types).
    ===================================================================== */
 
-/* =====================================================================
-   OUTPOST HINTS — tiny building clusters at Mission Dolores + the Presidio
-   ===================================================================== */
-/* Real-world placements (research/peninsula-1846.md §1, §2, converted to
-   world meters via the same lat/lon convention as the baked heightmap):
-   Presidio quadrangle/Officers' Club ≈37.7976N,122.4588W (≈4.7km, bearing
-   274° from Portsmouth Square); Mission Dolores basilica ≈37.7644N,
-   122.4272W (≈3.85km). Verified against the baked grid (both land, 25-33m
-   elevation — see tools/debug-region.js) rather than the old procedural
-   ring's hand-picked, unverified coordinates. */
-/* WORLD-P0 fix (2026-07-09, AUDIT H3/H4 + GAPS item 7): both clusters
- * previously rendered as empty fields — the audit's hypothesis (a
- * height-gate rejecting most/all jittered attempts) turned out to be
- * only half the story: once the shoreline-truth terrain fix above ran,
- * both real-world-sourced centers sample comfortably above the old y<1
- * gate (Mission ~25m, Presidio ~32m). Rebuilt as two dedicated,
- * content-specific builders (not 7/6 identical generic boxes) routed
- * through the shared canPlace() engine, with the documented buildings
- * peninsula-1846.md actually names, plus a handful of catalog-
- * appropriate static figures so neither site reads as an empty stage set.
- */
 var _outpostSkin = new THREE.Color(0xc79a72);
 function makeOutpostPersonGeo(coatColor,hatColor,isFemale){
   var coat = new THREE.CylinderGeometry(0.20,0.27,1.15,6).toNonIndexed();
@@ -5106,6 +5092,32 @@ function placeOutpostPerson(geoms,x,z,rot,coatColor,hatColor,isFemale){
   bake(g, new THREE.Vector3(x,y,z), rot||0);
   geoms.push(g);
 }
+
+/* =====================================================================
+   OUTPOST HINTS — tiny building clusters at Mission Dolores + the Presidio
+   ===================================================================== */
+/* Real-world placements (research/peninsula-1846.md §1, §2, converted to
+   world meters via the same lat/lon convention as the baked heightmap):
+   Presidio quadrangle/Officers' Club ≈37.7976N,122.4588W (≈4.7km, bearing
+   274° from Portsmouth Square); Mission Dolores basilica ≈37.7644N,
+   122.4272W (≈3.85km). Verified against the baked grid (both land, 25-33m
+   elevation — see tools/debug-region.js) rather than the old procedural
+   ring's hand-picked, unverified coordinates. */
+/* WORLD-P0 fix (2026-07-09, AUDIT H3/H4 + GAPS item 7): both clusters
+ * previously rendered as empty fields — the audit's hypothesis (a
+ * height-gate rejecting most/all jittered attempts) turned out to be
+ * only half the story: once the shoreline-truth terrain fix above ran,
+ * both real-world-sourced centers sample comfortably above the old y<1
+ * gate (Mission ~25m, Presidio ~32m). Rebuilt as two dedicated,
+ * content-specific builders (not 7/6 identical generic boxes) routed
+ * through the shared canPlace() engine, with the documented buildings
+ * peninsula-1846.md actually names, plus a handful of catalog-
+ * appropriate static figures so neither site reads as an empty stage set.
+ */
+/* (makeOutpostPersonGeo()/placeOutpostPerson() — the static-figure person
+   prefab — relocated to layers/people.js in the 2026-07-12 cleanup: people
+   OWNS person geometry. Their chunk keeps this exact global position, so
+   the outpost/chapel/wharf builders below still find _outpostSkin ready.) */
 function makeOrchardTreeGeo(){
   var trunk = new THREE.CylinderGeometry(0.12,0.16,1.1,5).toNonIndexed();
   trunk.translate(0,0.55,0); colorizeUniform(trunk, new THREE.Color(0x5a4632));
@@ -5439,6 +5451,13 @@ var CHURCH_SPOT = null;
   console.log("[verify] Town chapel at ("+x.toFixed(0)+","+z.toFixed(0)+"), reveal day "+CHURCH_REVEAL_DAY.toFixed(0)+" (1848-11-02)");
 })();
 
+/* Named-spot subset of the founding village (moved from labels-inspect.js in
+   the 2026-07-12 cleanup — derived buildings data consumed by the landmark
+   signage below and people's City Hotel binding). Sits after the chapel push
+   above, so it captures the identical, final named set the old position saw
+   (VILLAGE_BUILDING_SPOTS receives no pushes after the chapel's). */
+var NAMED_BUILDING_SPOTS = VILLAGE_BUILDING_SPOTS.filter(function(s){ return !!s.name; });
+
 /* =========================================================================
    1. SIM CLOCK — fractional sim-days since 1846-07-01. Speeds read straight
    off dt each frame (no need for a sub-stepped accumulator: nothing here is
@@ -5469,6 +5488,7 @@ function followSpeedActive(){ return simSpeedKey==="live" || simSpeedKey==="x2";
   if(m) simDay = clamp(eventDateToSimDay(m[1])+0.5, 0, SIM_END_DAY);
 })();
 function simDateISO(d){ return d.toISOString().slice(0,10); }
+var DOW_NAMES = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"]; // shared calendar names (moved from people.js, cleanup 2026-07-12 — people schedules + doodads' wash day both read it)
 function updateHashDate(){
   var iso = simDateISO(dateFromSimDay(simDay));
   var h = location.hash.replace(/&?d=\d{4}-\d{2}-\d{2}/,"");
@@ -5478,6 +5498,13 @@ function updateHashDate(){
 var clockDateEl = document.getElementById("clock-date");
 var clockSpeedEl = document.getElementById("clock-speed");
 var SPEED_LABELS = { 0:"PAUSED", live:"LIVE — 1:1", x2:"FOLLOW — 2×", day:"1 DAY / 2s", week:"1 WEEK / s", month:"1 MONTH / s" };
+/* (The speed-pill DOM wiring + the Space/1/2/3/4 keyboard bindings were
+   relocated to layers/camera-input.js in the 2026-07-12 cleanup — spec:
+   core/sim does no rendering; camera-input OWNS keys + the speed pill.
+   Their chunks keep the exact original global positions, so setSimSpeed(0)
+   below still runs AFTER updateSpeedPill/speedPillEl exist, and listener
+   registration order is unchanged. setSimSpeed state stays core.) */
+
 /* s54 TOUCH CONTROL SURFACE — the segmented speed pill (coarse-pointer
    chrome, see CSS). Taps route through the same setSimSpeed() the keyboard
    uses; setSimSpeed() highlights the active segment, so the pill always
@@ -5501,6 +5528,7 @@ if(speedPillEl) speedPillEl.addEventListener("click", function(e){
   if(k==="day"||k==="week"||k==="month") lastActiveSpeed = k; // mirror the 2/3/4 key handlers
   setSimSpeed(k);
 });
+
 function setSimSpeed(key){
   var wasPaused = simSpeedKey===0;
   simSpeedKey = key;
@@ -5509,6 +5537,7 @@ function setSimSpeed(key){
   if(key===0 && !wasPaused) updateHashDate(); // "update on pause"
 }
 setSimSpeed(0); // starts paused; Space toggles pause/LIVE, 1 = 2x follow, 2/3/4 for timelapse
+
 window.addEventListener("keydown", function(e){
   if(e.code==="Space"){
     e.preventDefault();
@@ -5519,6 +5548,7 @@ window.addEventListener("keydown", function(e){
   if(e.key==="3"){ lastActiveSpeed="week";  setSimSpeed("week"); }
   if(e.key==="4"){ lastActiveSpeed="month"; setSimSpeed("month"); }
 });
+
 function updateSimClock(dt){
   if(simSpeedKey!==0){
     var step = SIM_SPEEDS[simSpeedKey]*dt;
@@ -5591,20 +5621,16 @@ function formatPrice(p){
 var ROSTER = window.ROSTER_1846_49 || [];
 if(!window.ROSTER_1846_49) console.warn("[verify] roster-1846-49.js failed to load — routine cast will use invented names only. Run: node tools/build-roster.js");
 var CATALOG_OCC_ALL = (window.CATALOG_OCCUPATIONS && window.CATALOG_OCCUPATIONS.occupations) || [];
-if(!window.CATALOG_OCCUPATIONS) console.warn("[verify] catalog-occupations.js failed to load — falling back to the legacy ad-hoc TRADES list. Run: node tools/build-catalog-js.js");
+if(!window.CATALOG_OCCUPATIONS) console.warn("[verify] catalog-occupations.js failed to load — routine slots will have no occupations (there is no fallback list). Run: node tools/build-catalog-js.js");
 var CATALOG_OCC = CATALOG_OCC_ALL.filter(function(o){ return o.worldSupport==="exists"; });
 var CATALOG_OCC_BY_ID = {}; CATALOG_OCC_ALL.forEach(function(o){ CATALOG_OCC_BY_ID[o.id]=o; });
-// PL-B item 1 (full dice engine): the two remaining behavior-spec.md §0
-// catalogs — activities (§2/§3, what the world offers + the dice's menu)
-// and event-type reaction affordances (§6, feeds the ticker/director, not
-// movement — loaded here so it's available, wired into the ticker/reaction
-// layer in a later pass).
+// PL-B item 1 (full dice engine): the remaining behavior-spec.md §0 catalog —
+// activities (§2/§3, what the world offers + the dice's menu). The reactions
+// catalog (app/catalog-reactions.js) was loaded-but-never-consumed for weeks;
+// its script tag + loader were removed in the 2026-07-12 cleanup (the sidecar
+// file stays on disk — re-add both if a ticker/reaction pass ever lands).
 var CATALOG_ACT = (window.CATALOG_ACTIVITIES && window.CATALOG_ACTIVITIES.activities) || [];
-var CATALOG_ACT_BY_ID = {}; CATALOG_ACT.forEach(function(a){ CATALOG_ACT_BY_ID[a.id]=a; });
 if(!window.CATALOG_ACTIVITIES) console.warn("[verify] catalog-activities.js failed to load — the dice engine has no activities to sample. Run: node tools/build-catalog-js.js");
-var CATALOG_REACT = (window.CATALOG_REACTIONS && window.CATALOG_REACTIONS.eventReactions) || [];
-var CATALOG_REACT_BY_TYPE = {}; CATALOG_REACT.forEach(function(r){ CATALOG_REACT_BY_TYPE[r.type]=r; });
-if(!window.CATALOG_REACTIONS) console.warn("[verify] catalog-reactions.js failed to load — event reaction affordances unavailable. Run: node tools/build-catalog-js.js");
 // roster people are consumed sequentially (best-attested first — see the
 // builder's sort) into routine slots first, then extras, so real names use
 // up the persistent cast before density-fill anonymous slots reach for one.
@@ -6039,8 +6065,6 @@ function shipSailPos(v, t, arriving){
   var lat = ((v.pathJitter-0.5)*2*SHIP_LATERAL_MAX + tack) * taper;
   return { x: b.x - b.tz*lat, z: b.z + b.tx*lat };
 }
-function shipPathPoint(v, t, arriving){ return shipSailPos(v, t, arriving); } // legacy name, 3 call sites
-
 /* ANCHORAGE ASSIGNMENT SWEEP — deterministic, build-time (rewind-exact:
    runs once over the arrival-sorted visit list; runtime frame order can
    never change who moors where). Also fixes a latent rewind bug in the
@@ -6827,6 +6851,21 @@ function densityAt(day){
   }
   return DENSITY_CURVE[DENSITY_CURVE.length-1].pop;
 }
+/* densityAt's inverse: first sim day the density curve reaches popTarget.
+   Consumed by buildings' deterministic reveal days (dayForTentIndex /
+   dayForBuildingIndex, the P0-1 time-jump fix) and people's tent-home
+   reveal days. (Relocated verbatim from fauna.js in the 2026-07-12
+   cleanup — this is core/sim's curve, so its inverter lives here.) */
+function dayForDensityAtLeast(popTarget){
+  for(var i=0;i<DENSITY_CURVE.length;i++){
+    if(DENSITY_CURVE[i].pop>=popTarget){
+      if(i===0) return DENSITY_CURVE[0].day;
+      var a=DENSITY_CURVE[i-1], b=DENSITY_CURVE[i];
+      return lerp(a.day, b.day, clamp((popTarget-a.pop)/(b.pop-a.pop),0,1));
+    }
+  }
+  return DENSITY_CURVE[DENSITY_CURVE.length-1].day;
+}
 // P0-4 DENSITY fix (2026-07-10, Director's screening): the pre-fix curve
 // froze buildings entirely at pop>2200 (~late 1848) — everany 1849 growth
 // read as tents ONLY, so the record's "hundreds of structures spilling past
@@ -7471,8 +7510,8 @@ function updateWetTint(){
 /* =========================================================================
    6. SEMANTIC ZOOM / DISTRICT TINTS (design addendum)
    Above ~zoomCartoFull altitude, individual buildings/tents crossfade out
-   and a cartographic layer of tinted district zones + name chips (the
-   existing .geo-label look) takes over, à la a period map legend; below
+   and a cartographic layer of tinted district zones + name labels (floating
+   haloed .wlbl-zone text, §11 grammar) takes over, à la a period map legend; below
    ~zoomTrueScaleFull the true-scale world reads on its own and the tints
    are gone. Happy Valley's tint only appears once its tents do (1849).
 
@@ -7734,7 +7773,8 @@ var SUSPENSION_ISSUE_DATE = "1848-05-24"; // the Californian's farewell-to-the-m
 
 function issueUrl(src){ return "https://cdnc.ucr.edu/?a=d&d=" + src; }
 function todayISOFromSimDay(day){ return simDateISO(dateFromSimDay(day)); }
-function escapeHTML(s){ return (s||"").replace(/[&<>]/g, function(c){ return c==="&"?"&amp;":(c==="<"?"&lt;":"&gt;"); }); }
+// (escapeHTML/cap — generic string helpers with heavy cross-layer consumers —
+// moved to core/00-boot.js in the 2026-07-12 cleanup.)
 function formatIssueDateLabel(dateKey){
   return new Date(dateKey+"T00:00:00Z").toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric",timeZone:"UTC"});
 }
@@ -7772,7 +7812,6 @@ var STREET_V_MIDU = (GEO.streetsU.montgomery + GEO.streetsU.stockton)/2;
 var PLAZA_RE = /\b(plaza|portsmouth square)\b/i;
 var MISSION_RE = /\bmission\b/i;
 var PRESIDIO_RE = /\bpresidio\b/i;
-function cap(s){ return s.charAt(0).toUpperCase()+s.slice(1); }
 function findNameHits(text, names){
   var hits = [];
   names.forEach(function(n){ if(new RegExp("\\b"+n+"\\b","i").test(text)) hits.push(n); });
@@ -7812,6 +7851,11 @@ function resolvePlace(headline, text){
   if(PRESIDIO_RE.test(full)) return { x:OUTPOSTS.presidio.x, z:OUTPOSTS.presidio.z, alt:280, label:"the Presidio" };
   return null;
 }
+
+/* (flyTo() — the camera-rig write — plus its pulse crosshair relocated to
+   layers/camera-input.js in the 2026-07-12 cleanup: the rig is camera-
+   input's. Same global chunk position; consumers everywhere still call
+   flyTo(x,z,alt) unchanged — it behaves as the de-facto shared interface.) */
 
 /* ---- brief crosshair pulse at a fly destination ---- */
 var pulseGeo = new THREE.RingGeometry(1,1.15,32); pulseGeo.rotateX(-Math.PI/2);
@@ -8314,7 +8358,9 @@ function openZoneInspector(z){
   setSelRing(z.cx, z.cz, Math.min(z.r*0.5, 120));
   followedSlot = null; followedDocumented = null;
 }
-var NAMED_BUILDING_SPOTS = VILLAGE_BUILDING_SPOTS.filter(function(s){ return !!s.name; });
+// (NAMED_BUILDING_SPOTS — derived buildings data — moved to buildings.js in
+// the 2026-07-12 cleanup; buildings' landmark signage and people's City Hotel
+// binding consume it, so labels-inspect could not own it.)
 var BUILDING_LABEL_POOL = Math.min(4, NAMED_BUILDING_SPOTS.length); // decluttered hard cap (was 14)
 var buildingLabelPool = [];
 (function buildBuildingLabelPool(){
@@ -8822,6 +8868,7 @@ var MICRO_CELL = 2.6;
 var MICRO_CHUNK_CAP = SCT(1600), MICRO_TUFT_CAP = SCT(1500);
 var MICRO_ALT_HIDE = 250;         // hard off — well under any map framing
 function _microHash(ix,iz,k){ return hash2(ix*12.9898+k*3.7, iz*78.233-k*7.1); }
+function pick(arr,h){ return arr[Math.floor(h*arr.length)%arr.length]; } // hash->array pick, shared by the micro-scatter + doodad rings (was declared twice, hoisted in the 2026-07-12 cleanup)
 function makeMicroChunkGeo(){     // one irregular flattened lump — reads as chip/stone/scrap by scale+tint
   var g = new THREE.BoxGeometry(0.20,0.045,0.12).toNonIndexed();
   var pos = g.attributes.position;
@@ -8950,7 +8997,6 @@ function rebuildMicroScatter(camX, camZ){
     microTuftMesh.setColorAt(nTuft, tint);
     nTuft++;
   }
-  function pick(arr,h){ return arr[Math.floor(h*arr.length)%arr.length]; }
   for(var iz=j0; iz<=j1; iz++){
     for(var ix=i0; ix<=i1; ix++){
       var hKeep = _microHash(ix,iz,0);
@@ -9211,7 +9257,6 @@ function rebuildDoodads(camX, camZ){
     if(tint) P.mesh.setColorAt(n[pool], tint);
     n[pool]++;
   }
-  function pick(arr,h){ return arr[Math.floor(h*arr.length)%arr.length]; }
   var i0 = Math.floor((camX-R)/DOODAD_CELL), i1 = Math.ceil((camX+R)/DOODAD_CELL);
   var j0 = Math.floor((camZ-R)/DOODAD_CELL), j1 = Math.ceil((camZ+R)/DOODAD_CELL);
   var nCells = 0;
@@ -10295,6 +10340,11 @@ var waterfrontBeachLines = (function(){
   return lines;
 })();
 
+/* (THE LUMBER DEALER — a signed structure + worksite — relocated to
+   layers/buildings.js in the 2026-07-12 cleanup: buildings OWNS structures
+   and signs. Its chunk keeps this exact global position, directly after the
+   waterfrontBeachLines assignment above that it reads.) */
+
 /* =====================================================================
    THE LUMBER DEALER (behavior-spec.md item 4 — a documented building-
    materials trade): closes catalog-occupations.json's
@@ -10778,15 +10828,10 @@ var NAME_BANKS = {
   chinese:    { first:["Ah Fong","Ah Sing","Ah Toy","Ah Chung","Ah Ming","Ah Wing"],
                 last:["Lai","Yee","Chan","Wong","Chun"] }
 };
-var TRADES = ["carpenter","teamster","sailor ashore","clerk","blacksmith","cook","washerwoman",
-  "lodging-house keeper","drayman","baker","tinsmith","stevedore","grocer's hand","outfitter",
-  "boarding-house cook","brickmaker"];
-// GAPS-2026-07-09 item 3 (SFPD founding, Aug 13 1849): "constable" only
-// enters the trade pool once Malachi Fallon's force actually existed — see
-// TRADE_EARLIEST_DAY below, folded into each routine slot's notBeforeDay.
-var TRADES_WITH_CONSTABLE = TRADES.concat(["constable"]);
-var SFPD_FOUNDING_DAY = eventDateToSimDay("1849-08-13");
-var TRADE_EARLIEST_DAY = { constable: SFPD_FOUNDING_DAY };
+// (The pre-catalog ad-hoc TRADES/TRADES_WITH_CONSTABLE pool and its
+// SFPD-founding gate were deleted in the 2026-07-12 cleanup — occupations
+// are fully catalog-driven via CATALOG_OCC/pickCatalogOccupation, and the
+// constable's Aug 13 1849 era gate rides the catalog's own eraWeight table.)
 var AGENDAS = [
   "saving passage money for the mines","minding a cousin's store on commission",
   "waiting on a ship that hasn't come in","just off the boat, still finding his feet",
@@ -10884,11 +10929,6 @@ function pointOnPolyline(poly, s){
   }
   var last = segs[segs.length-1];
   return { x:last.b.x, z:last.b.z, dx:last.b.x-last.a.x, dz:last.b.z-last.a.z };
-}
-function loopPoints(cx,cz,r,n){
-  var pts=[];
-  for(var i=0;i<n;i++){ var a=(i/n)*Math.PI*2; pts.push({x:cx+Math.cos(a)*r, z:cz+Math.sin(a)*r}); }
-  return pts;
 }
 var HAPPY_VALLEY_REVEAL_DAY = eventDateToSimDay("1849-01-05"); // tents/growth start reading as Happy Valley around here
 
@@ -10996,29 +11036,6 @@ function nearestGraphNode(x,z){
     if(d<bestD){ bestD=d; best=i; }
   }
   return best;
-}
-/* Dijkstra over the (tiny, well under 60-node) graph — a plain array scan
-   rather than a heap is plenty, since this only ever runs a few hundred
-   times total, all of it once at load while assigning homes/workplaces. */
-function graphPath(fromIdx, toIdx){
-  var n = STREET_GRAPH.nodes.length;
-  var dist = new Array(n).fill(Infinity), prev = new Array(n).fill(-1), visited = new Array(n).fill(false);
-  dist[fromIdx] = 0;
-  for(var iter=0; iter<n; iter++){
-    var u=-1, best=Infinity;
-    for(var i=0;i<n;i++) if(!visited[i] && dist[i]<best){ best=dist[i]; u=i; }
-    if(u===-1 || u===toIdx) break;
-    visited[u]=true;
-    STREET_GRAPH.edges[u].forEach(function(e){
-      var nd = dist[u]+e.d;
-      if(nd<dist[e.to]){ dist[e.to]=nd; prev[e.to]=u; }
-    });
-  }
-  if(dist[toIdx]===Infinity) return null;
-  var path=[toIdx];
-  while(prev[path[path.length-1]]!==-1) path.push(prev[path[path.length-1]]);
-  path.reverse();
-  return path;
 }
 /* =========================================================================
    s59 MOVEMENT NATURALISM — WALKABILITY MASK + WEIGHTED, DIVERSE ROUTING.
@@ -11570,25 +11587,6 @@ var CONSTRUCTION_SITES = growthBuildingCandidates.slice(0, Math.min(30, growthBu
 function pickConstructionSite(rng){
   return CONSTRUCTION_SITES.length ? CONSTRUCTION_SITES[Math.floor(rng()*CONSTRUCTION_SITES.length)] : WORKSITE_PLAZA_MARKET;
 }
-function worksiteForTrade(trade, rng){
-  switch(trade){
-    case "carpenter": case "brickmaker": case "blacksmith": return pickConstructionSite(rng);
-    case "teamster": case "drayman": case "stevedore": return rng()<0.75 ? WORKSITE_WHARF : WORKSITE_BEACH;
-    case "sailor ashore": return rng()<0.6 ? WORKSITE_BEACH : WORKSITE_WHARF;
-    case "grocer's hand": return pickShopSite("GROCER") || WORKSITE_PLAZA_MARKET;
-    case "outfitter": return pickShopSite("DRY GOODS") || WORKSITE_PLAZA_MARKET;
-    case "clerk": return rng()<0.5 ? (pickShopSite("DRY GOODS")||WORKSITE_PLAZA_MARKET) : WORKSITE_PLAZA_MARKET;
-    case "baker": return pickShopSite("PROVISIONS") || WORKSITE_PLAZA_MARKET;
-    case "cook": case "boarding-house cook": case "lodging-house keeper": case "washerwoman":
-      return pickShopSite("BOARDING") || WORKSITE_PLAZA_MARKET;
-    case "tinsmith": return pickShopSite("TIN SHOP") || WORKSITE_PLAZA_MARKET;
-    // GAPS-2026-07-09 item 3: the SFPD's first station was a one-room former
-    // schoolhouse on Portsmouth Square (clm:police:28) — same plaza worksite,
-    // distinct label.
-    case "constable": return { key:"stationhouse", label:"station house on the Plaza", x:PLAZA_CENTER.x, z:PLAZA_CENTER.z, activity:"stationary" };
-    default: return WORKSITE_PLAZA_MARKET;
-  }
-}
 /* ---- 2d. CATALOG-DRIVEN OCCUPATION -> VENUE binding (behavior-spec.md
    item 2): occ.venueNeeds carries catalog venue-key strings (wharf, shop,
    construction_site, leveling_site, saloon, mission, ...); this resolves
@@ -11603,6 +11601,39 @@ function pickAnyShopSite(rng){
   return { key:"shop_"+s.word+"_r", label:SIGN_WORD_LABEL[s.word]||s.word.toLowerCase(), x:s.x, z:s.z, activity:"stationary" };
 }
 var CITY_HOTEL_SPOT = NAMED_BUILDING_SPOTS.filter(function(s){ return s.name==="City Hotel"; })[0] || null;
+/* Venue-key -> worksite resolvers (relocated verbatim from buildings.js in
+   the 2026-07-12 cleanup — this is people's occupation->venue binding, and
+   every helper it calls lives in this chunk). Initializes here (position 44,
+   was 45): a pure object literal of closures, evaluated lazily — and fauna's
+   ranch/region/natural extensions (chunk 47) still land before any consumer
+   runs (first consumption is slot generation, chunk 50). */
+var VENUE_KEY_RESOLVERS = {
+  wharf: function(){ return WORKSITE_WHARF; },
+  shore: function(){ return WORKSITE_BEACH; },
+  construction_site: function(rng){ return pickConstructionSite(rng); },
+  leveling_site: function(){ return { key:"leveling", label:"the leveling ground", x:LEVELING_SITE.x, z:LEVELING_SITE.z, activity:"construction" }; },
+  shop: function(rng){ return pickAnyShopSite(rng) || WORKSITE_PLAZA_MARKET; },
+  store: function(rng){ return pickShopSite("DRY GOODS")||pickShopSite("GROCER")||pickAnyShopSite(rng)||WORKSITE_PLAZA_MARKET; },
+  market: function(){ return WORKSITE_PLAZA_MARKET; },
+  mission: function(){ return WORKSITE_MISSION; },
+  boarding_house: function(){ return pickShopSite("BOARDING")||WORKSITE_PLAZA_MARKET; },
+  hotel: function(){ return CITY_HOTEL_SPOT ? { key:"cityhotel", label:"City Hotel", x:CITY_HOTEL_SPOT.x, z:CITY_HOTEL_SPOT.z, activity:"stationary" } : (pickShopSite("BOARDING")||WORKSITE_PLAZA_MARKET); },
+  tavern: function(){ return pickGamblingSite()||pickShopSite("BOARDING")||WORKSITE_PLAZA_MARKET; },
+  saloon: function(){ return pickGamblingSite()||pickShopSite("BOARDING")||WORKSITE_PLAZA_MARKET; },
+  newspaper_office: function(){ return { key:"pressoffice", label:"the printing office", x:PLAZA_CENTER.x+8, z:PLAZA_CENTER.z-6, activity:"stationary" }; },
+  public_building: function(){ return { key:"publicoffice", label:"the public offices on the Plaza", x:PLAZA_CENTER.x, z:PLAZA_CENTER.z, activity:"stationary" }; },
+  warehouse: function(){ return pickShopSite("SHIP CHANDLERY")||WORKSITE_WHARF; },
+  street: function(){ return WORKSITE_PLAZA_MARKET; },
+  school: function(){ return { key:"school", label:"the schoolhouse on the Plaza", x:PLAZA_CENTER.x-10, z:PLAZA_CENTER.z+8, activity:"stationary" }; }
+};
+function worksiteForOccupation(occ, rng){
+  if(!occ || !occ.venueNeeds || !occ.venueNeeds.length) return WORKSITE_PLAZA_MARKET;
+  for(var i=0;i<occ.venueNeeds.length;i++){
+    var resolver = VENUE_KEY_RESOLVERS[occ.venueNeeds[i]];
+    if(resolver){ var w = resolver(rng); if(w) return w; }
+  }
+  return WORKSITE_PLAZA_MARKET;
+}
 
 /* =========================================================================
    PL-A LEFTOVER, COMPLETED — TYPE-DIFFERENTIATED BUILDINGS. placeBuilding()
@@ -11714,35 +11745,11 @@ var BIZ_GLYPH_SPOTS = []; // {x,z,y,h,glyph} — fed to the DOM glyph-label pool
   }
 })();
 
-var WORKSITE_CHURCH = { key:"chapel", label:(CHURCH_SPOT&&CHURCH_SPOT.name)||"the chapel", x:(CHURCH_SPOT?CHURCH_SPOT.x:PLAZA_CENTER.x), z:(CHURCH_SPOT?CHURCH_SPOT.z:PLAZA_CENTER.z), activity:"stationary" };
-var VENUE_KEY_RESOLVERS = {
-  wharf: function(){ return WORKSITE_WHARF; },
-  shore: function(){ return WORKSITE_BEACH; },
-  construction_site: function(rng){ return pickConstructionSite(rng); },
-  leveling_site: function(){ return { key:"leveling", label:"the leveling ground", x:LEVELING_SITE.x, z:LEVELING_SITE.z, activity:"construction" }; },
-  shop: function(rng){ return pickAnyShopSite(rng) || WORKSITE_PLAZA_MARKET; },
-  store: function(rng){ return pickShopSite("DRY GOODS")||pickShopSite("GROCER")||pickAnyShopSite(rng)||WORKSITE_PLAZA_MARKET; },
-  market: function(){ return WORKSITE_PLAZA_MARKET; },
-  mission: function(){ return WORKSITE_MISSION; },
-  boarding_house: function(){ return pickShopSite("BOARDING")||WORKSITE_PLAZA_MARKET; },
-  hotel: function(){ return CITY_HOTEL_SPOT ? { key:"cityhotel", label:"City Hotel", x:CITY_HOTEL_SPOT.x, z:CITY_HOTEL_SPOT.z, activity:"stationary" } : (pickShopSite("BOARDING")||WORKSITE_PLAZA_MARKET); },
-  tavern: function(){ return pickGamblingSite()||pickShopSite("BOARDING")||WORKSITE_PLAZA_MARKET; },
-  saloon: function(){ return pickGamblingSite()||pickShopSite("BOARDING")||WORKSITE_PLAZA_MARKET; },
-  newspaper_office: function(){ return { key:"pressoffice", label:"the printing office", x:PLAZA_CENTER.x+8, z:PLAZA_CENTER.z-6, activity:"stationary" }; },
-  public_building: function(){ return { key:"publicoffice", label:"the public offices on the Plaza", x:PLAZA_CENTER.x, z:PLAZA_CENTER.z, activity:"stationary" }; },
-  warehouse: function(){ return pickShopSite("SHIP CHANDLERY")||WORKSITE_WHARF; },
-  street: function(){ return WORKSITE_PLAZA_MARKET; },
-  school: function(){ return { key:"school", label:"the schoolhouse on the Plaza", x:PLAZA_CENTER.x-10, z:PLAZA_CENTER.z+8, activity:"stationary" }; }
-};
-function worksiteForOccupation(occ, rng){
-  if(!occ || !occ.venueNeeds || !occ.venueNeeds.length) return WORKSITE_PLAZA_MARKET;
-  for(var i=0;i<occ.venueNeeds.length;i++){
-    var resolver = VENUE_KEY_RESOLVERS[occ.venueNeeds[i]];
-    if(resolver){ var w = resolver(rng); if(w) return w; }
-  }
-  return WORKSITE_PLAZA_MARKET;
-}
-
+/* (VENUE_KEY_RESOLVERS + worksiteForOccupation() — people's schedule/venue
+   binding, implemented on people.js internals — relocated to people.js
+   (end of its homes-&-workplaces chunk) in the 2026-07-12 cleanup. People
+   OWNS schedules/routing consumption; fauna's ranch/region/natural resolver
+   extensions still register before any slot is built.) */
 
 /* ---- buildings audit (layers-spec.md rules block): a structure's footprint
    intersects NO right-of-way, any era — wraps the existing __P1850.roadAudit
@@ -11751,6 +11758,7 @@ registerAudit("buildings", "rightOfWay", function(){
   var r = window.__P1850.roadAudit();
   return { pass: r.violations===0, checked: r.checked, violations: r.violations, list: r.list };
 });
+
 /* =========================================================================
    PL-B item 1 — THE FULL DICE ENGINE (behavior-spec.md §3), replacing PL-A's
    flat per-slot coinflips (a fixed 40% doErrand, a fixed saloonWeight
@@ -11781,7 +11789,8 @@ function diceRoll(personId, day, slotKey){ return diceRng(personId,day,slotKey)(
 // catalog itself flags (timeWindow.spike==="steamer_day").
 var STEAMER_DAY0 = eventDateToSimDay("1849-02-28");
 function isSteamerDay(day){ return day>=STEAMER_DAY0 && dateFromSimDay(Math.floor(day)).getUTCDate()===28; }
-var DOW_NAMES = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+// (DOW_NAMES moved to core/03-sim.js in the 2026-07-12 cleanup — the calendar
+// is core's clock domain and doodads' wash-day gate reads it too.)
 
 // occupation-fit (fill:true, no direct citation — "your trade colors your
 // leisure taste" is an era-consistent design judgment, not a documented
@@ -12648,7 +12657,6 @@ var DOGS = (function(){
   }
   return out;
 })();
-var _faunaM4 = new THREE.Matrix4(); // scratch
 function updateFauna(dt){
   faunaClock += dt;
   faunaTimeUniform.value = faunaClock;
@@ -12891,22 +12899,22 @@ function updateFauna(dt){
   mudPlankMesh.visible = mudF>0.05;
 }
 
+// (The people-home-assignment block — HOME_BUILDING_SPOTS, nextHome(),
+// homeLabelFor() — and the DENSITY_CURVE inverter dayForDensityAtLeast()
+// were never fauna's: relocated to layers/people.js (chunk 50) and
+// core/03-sim.js (chunk 23) in the 2026-07-12 cleanup, per layers-spec OWNS.)
+
+/* ---- HOME ASSIGNMENT (relocated verbatim from fauna.js in the 2026-07-12
+   cleanup — people-layer machinery per layers-spec OWNS; it executes at the
+   same global position, so the rngBuild() stream is unchanged). A home is a
+   real VILLAGE_BUILDING_SPOTS building or, once the pool fills, a real
+   tentCandidates lot with a density-derived reveal day. ---- */
 var HOME_BUILDING_SPOTS = VILLAGE_BUILDING_SPOTS.map(function(spot){
   var boarding = rngBuild()<0.18;
   return { x:spot.x, z:spot.z, y:spot.y, rot:spot.rot, w:spot.w, d:spot.d,
     capacity: boarding ? (6+Math.floor(rngBuild()*5)) : (1+Math.floor(rngBuild()*3)),
     used:0, boarding:boarding, type:"building" };
 });
-function dayForDensityAtLeast(popTarget){
-  for(var i=0;i<DENSITY_CURVE.length;i++){
-    if(DENSITY_CURVE[i].pop>=popTarget){
-      if(i===0) return DENSITY_CURVE[0].day;
-      var a=DENSITY_CURVE[i-1], b=DENSITY_CURVE[i];
-      return lerp(a.day, b.day, clamp((popTarget-a.pop)/(b.pop-a.pop),0,1));
-    }
-  }
-  return DENSITY_CURVE[DENSITY_CURVE.length-1].day;
-}
 var homeBuildingPtr = 0, homeTentPtr = 0;
 function nextHome(){
   while(homeBuildingPtr<HOME_BUILDING_SPOTS.length){
@@ -13405,7 +13413,7 @@ var PART_COAT=0, PART_SKIN=1, PART_HAT=2, PART_FIXED=3, PART_TROUSER=4; // TROUS
    so poses need no shader work (rider 5: "poses are static part
    rotations"). PivotY rides the attribute so the child variant's shorter
    limbs pivot at ITS shoulder/hip heights, not the adult's. */
-var LIMB_STATIC=0, LIMB_HEAD=1, LIMB_ARM_L=2, LIMB_ARM_R=3, LIMB_LEG_L=4, LIMB_LEG_R=5, LIMB_SKIRT=6;
+var LIMB_HEAD=1, LIMB_ARM_L=2, LIMB_ARM_R=3, LIMB_LEG_L=4, LIMB_LEG_R=5, LIMB_SKIRT=6; // limb id 0 = static (builders default it via p.l||0)
 var _PART_WHITE = new THREE.Color(0xffffff);
 function mergeGeomsParts(parts){ // parts: [{g:geometry, p:partId, l:limbId, v:pivotY}] — colors pre-baked (white for tintable parts)
   var merged = mergeGeoms(parts.map(function(p){ return p.g; }));
@@ -14290,6 +14298,46 @@ registerAudit("people", "routeDiversity", function(){
   var routed = r.sigs.filter(function(s){ return s!=null; }).length;
   return { pass: routed>0, routed: routed, distinct: r.distinct, sampled: 10 };
 });
+
+/* ---- THE FIRE CROWD (relocated verbatim from effects.js in the 2026-07-12
+   cleanup — it writes slot._x/_z/_pose/_now, i.e. it moves people, which is
+   this layer's charter; effects keeps the glow/embers/structure visuals).
+   Flee the fire zone via the street graph, then watch from the Plaza (the
+   Alta: "Portsmouth square ... crowded with anxious spectators"). Called
+   per-slot from updatePeople(); at most a few new graph routes are computed
+   per frame so the exodus spreads naturally. ---- */
+var _fleeBudget = 0;
+function resetFleeBudget(){ _fleeBudget = 12; }
+function applyFireCrowd(slot, day){
+  if(day < FIRE.day0 || day > FIRE.day1 + 3/24){
+    if(slot._spect){ slot._fleePoly=null; slot._spect=null; }
+    return;
+  }
+  if(!slot._spect){
+    var inZone = FIRE.inFootprint(slot._x, slot._z, 26);
+    var near = Math.hypot(slot._x-FIRE.cx, slot._z-FIRE.cz) < 330;
+    if((inZone || near) && _fleeBudget>0){
+      _fleeBudget--;
+      var spot = FIRE.spectatorSpots[slot.id % FIRE.spectatorSpots.length];
+      slot._spect = spot;
+      slot._fleePoly = buildRoutePoly(slot._x, slot._z, spot.x, spot.z, {day:day, who:slot.id});
+      slot._fleeStart = peopleClock;
+      slot._spOffX = (hash2(slot.id*0.37,1.7)-0.5)*14;
+      slot._spOffZ = (hash2(slot.id*0.53,4.1)-0.5)*14;
+    }
+    if(!slot._spect) return;
+  }
+  var walked = (peopleClock - slot._fleeStart) * 7.0; // a run — people move in real time while the fire clock runs slow, so this is what reads as flight at the fire's 1h/3s pace
+  if(slot._fleePoly && walked < slot._fleePoly.total){
+    var p = pointOnPolyline(slot._fleePoly, walked);
+    slot._x = p.x; slot._z = p.z; slot._dx = p.dx; slot._dz = p.dz;
+    slot._pose = "walk"; slot._now = "fleeing the fire";
+  } else {
+    slot._x = slot._spect.x + slot._spOffX; slot._z = slot._spect.z + slot._spOffZ;
+    slot._dx = FIRE.cx - slot._x; slot._dz = FIRE.cz - slot._z;
+    slot._pose = "market"; slot._now = "watching the fire from the Plaza";
+  }
+}
 /* ---- 8. PERSON cards + Follow + provenance toggle (s42: rendered into
    the ONE inspect panel; the #person-inspector popup is deleted). ---- */
 var followedSlot = null, followedDocumented = null;
@@ -14618,6 +14666,7 @@ registerAudit("labels-inspect", "overlap", function(){
   }
   return { pass: overlaps.length===0, labels: labels.length, uiRects: ui.length, overlaps: overlaps };
 });
+
 /* =====================================================================
    A2b: TREES, ROCK OUTCROPS & CHAPARRAL BAND — visual-richness pass.
    Historical grounding (research/peninsula-1846.md, geography-shoreline.md):
@@ -14632,12 +14681,8 @@ registerAudit("labels-inspect", "overlap", function(){
 (function buildVegetationAndRockOutcrops(){
   var originX = PLAZA_CENTER.x, originZ = PLAZA_CENTER.z;
 
-  function distToSeg(x,z,x0,z0,x1,z1){
-    var dx=x1-x0, dz=z1-z0, len2=dx*dx+dz*dz;
-    var t = len2>0 ? ((x-x0)*dx+(z-z0)*dz)/len2 : 0;
-    t = clamp(t,0,1);
-    return Math.hypot(x-(x0+dx*t), z-(z0+dz*t));
-  }
+  // (a local byte-identical distToSeg() re-implementation was deleted in the
+  // 2026-07-12 cleanup — the masks below call core's distToSegXZ() directly)
   var STREET_SEGS = (function(){
     var uVals=[GEO.streetsU.stockton,GEO.streetsU.dupont,GEO.streetsU.kearny,GEO.streetsU.montgomery];
     var vVals=[GEO.streetsV.pacific,GEO.streetsV.jackson,GEO.streetsV.clay,GEO.streetsV.washington,GEO.streetsV.sacramento,GEO.streetsV.california];
@@ -14648,13 +14693,13 @@ registerAudit("labels-inspect", "overlap", function(){
     return segs;
   })();
   function nearStreet(x,z,buffer){
-    for(var i=0;i<STREET_SEGS.length;i++){ if(distToSeg(x,z,STREET_SEGS[i][0],STREET_SEGS[i][1],STREET_SEGS[i][2],STREET_SEGS[i][3])<buffer) return true; }
+    for(var i=0;i<STREET_SEGS.length;i++){ if(distToSegXZ(x,z,STREET_SEGS[i][0],STREET_SEGS[i][1],STREET_SEGS[i][2],STREET_SEGS[i][3])<buffer) return true; }
     return false;
   }
   function nearMissionRoad(x,z,buffer){
     for(var i=0;i<MISSION_ROAD_PTS.length-1;i++){
       var a=MISSION_ROAD_PTS[i], b=MISSION_ROAD_PTS[i+1];
-      if(distToSeg(x,z,a.x,a.z,b.x,b.z)<buffer) return true;
+      if(distToSegXZ(x,z,a.x,a.z,b.x,b.z)<buffer) return true;
     }
     return false;
   }
@@ -15040,68 +15085,13 @@ registerAudit("labels-inspect", "overlap", function(){
 
   window._westFauna = { seaLions:seaLionMesh.count, ducks:duckMesh.count, deer:deerMesh.count, tule:tuleSamples.length };
 
-  // ---- geographic labels for the west (§11 grammar; join the shared pool) ----
-  LABELS.push(
-    { name:"Pacific Ocean",        cat:"water",            x:-10400, z:3200, y:30 },
-    { name:"Mission Bay",          cat:"water", near:true, x:850,   z:2350, y:12 },
-    { name:"Lake Merced",          cat:"water", near:true, x:-7600, z:7900, y:8 },
-    { name:"Mountain Lake",        cat:"water", near:true, x:-5700, z:695,  y:null },
-    { name:"Lobos Creek",          cat:"water", near:true, x:-6100, z:190,  y:null },
-    { name:"Washerwoman's Lagoon", cat:"water", near:true, x:-2754, z:-816, y:null },
-    { name:"SEAL ROCKS",           cat:"region", x:-9880, z:1620, y:14 },
-    { name:"POINT LOBOS",          cat:"region", x:-9200, z:1150, y:null },
-    { name:"THE GREAT SAND BANK",  cat:"region", x:-7300, z:3600, y:null },
-    { name:"OCEAN BEACH",          cat:"region", x:-9380, z:4300, y:8 },
-    { name:"FORT POINT",           cat:"region", x:-6405, z:-1600, y:10 }
-  );
 })();
 
-(function buildLabels(){
-  var hudEl = document.getElementById("hud");
-  // §11 waterway set: Mission Creek joins here (its marsh-edge site is
-  // found at runtime by the heron placement search — reuse it rather than
-  // invent a second coordinate for the same feature).
-  if(typeof HERON_SPOTS!=="undefined" && HERON_SPOTS.length){
-    LABELS.push({ name:"Mission Creek", cat:"water", near:true, x:HERON_SPOTS[0].x, z:HERON_SPOTS[0].z, y:null });
-  }
-  LABELS.forEach(function(L){
-    var el = document.createElement("div");
-    el.className = "wlbl " + (L.cat==="water" ? "wlbl-water" : L.cat==="route" ? "wlbl-route" : "wlbl-region");
-    el.textContent = L.name;
-    hudEl.appendChild(el);
-    L.el = el;
-    geoLabelEls.push(el); // shared declutter engine pool
-    var gy = (L.y!==null && L.y!==undefined) ? L.y : groundHeight(L.x,L.z)+45;
-    L.pos = new THREE.Vector3(L.x, gy, L.z);
-  });
-})();
-var _labelV = new THREE.Vector3();
-/* §11 zoom choreography: regions OWN the high band (fade in ascending
-   ~1050-1600m and stay); big waterways ride a slightly lower shoulder;
-   near waterways (the cove, Mission Creek) live in the street/zone band
-   and bow out again at altitude. All cross-fades — no popping. */
-function _geoLabelBandOpacity(L, alt){
-  if(L.cat==="water"){
-    if(L.near) return smoothstep(260, 430, alt) * (1 - smoothstep(2600, 4200, alt));
-    return smoothstep(750, 1200, alt);
-  }
-  return smoothstep(1050, 1600, alt);
-}
-function updateLabels(alt){
-  for(var i=0;i<LABELS.length;i++){
-    var L = LABELS[i];
-    var fade = _geoLabelBandOpacity(L, alt);
-    if(fade<0.02){ L.el.style.opacity = 0; continue; }
-    // in front of the camera?
-    _labelV.copy(L.pos).applyMatrix4(camera.matrixWorldInverse);
-    if(_labelV.z > -1){ L.el.style.opacity = 0; continue; }
-    _labelV.copy(L.pos).project(camera);
-    if(_labelV.x<-1.05||_labelV.x>1.05||_labelV.y<-1.05||_labelV.y>1.05){ L.el.style.opacity = 0; continue; }
-    L.el.style.opacity = fade*0.95;
-    L.el.style.left = ((_labelV.x*0.5+0.5)*window.innerWidth)+"px";
-    L.el.style.top  = ((-_labelV.y*0.5+0.5)*window.innerHeight)+"px";
-  }
-}
+/* (buildLabels()/_geoLabelBandOpacity()/updateLabels() — the geographic
+   label DOM + per-frame updater — and the west-peninsula LABELS entries
+   relocated to layers/labels-inspect.js in the 2026-07-12 cleanup:
+   labels-inspect OWNS all floating labels. Their chunk runs right after
+   this one, before the first animate() frame reads any label.) */
 
 
 /* ---- terrain audit (layers-spec.md rules block; Earth Palette Law): midday
@@ -15162,6 +15152,69 @@ registerAudit("terrain", "luminance", function(){
   return { pass: med>=0.50 && med<=0.75, median:+med.toFixed(3), band:"0.55-0.70 (tol 0.05)",
            n:lums.length, min:+lums[0].toFixed(3), max:+lums[lums.length-1].toFixed(3) };
 });
+// ---- geographic labels for the west (§11 grammar; join the shared pool;
+// pushed from here since the 2026-07-12 cleanup — the entries carry the
+// same coordinates buildWestGeography verified against the baked terrain) ----
+LABELS.push(
+  { name:"Pacific Ocean",        cat:"water",            x:-10400, z:3200, y:30 },
+  { name:"Mission Bay",          cat:"water", near:true, x:850,   z:2350, y:12 },
+  { name:"Lake Merced",          cat:"water", near:true, x:-7600, z:7900, y:8 },
+  { name:"Mountain Lake",        cat:"water", near:true, x:-5700, z:695,  y:null },
+  { name:"Lobos Creek",          cat:"water", near:true, x:-6100, z:190,  y:null },
+  { name:"Washerwoman's Lagoon", cat:"water", near:true, x:-2754, z:-816, y:null },
+  { name:"SEAL ROCKS",           cat:"region", x:-9880, z:1620, y:14 },
+  { name:"POINT LOBOS",          cat:"region", x:-9200, z:1150, y:null },
+  { name:"THE GREAT SAND BANK",  cat:"region", x:-7300, z:3600, y:null },
+  { name:"OCEAN BEACH",          cat:"region", x:-9380, z:4300, y:8 },
+  { name:"FORT POINT",           cat:"region", x:-6405, z:-1600, y:10 }
+);
+
+(function buildLabels(){
+  var hudEl = document.getElementById("hud");
+  // §11 waterway set: Mission Creek joins here (its marsh-edge site is
+  // found at runtime by the heron placement search — reuse it rather than
+  // invent a second coordinate for the same feature).
+  if(typeof HERON_SPOTS!=="undefined" && HERON_SPOTS.length){
+    LABELS.push({ name:"Mission Creek", cat:"water", near:true, x:HERON_SPOTS[0].x, z:HERON_SPOTS[0].z, y:null });
+  }
+  LABELS.forEach(function(L){
+    var el = document.createElement("div");
+    el.className = "wlbl " + (L.cat==="water" ? "wlbl-water" : L.cat==="route" ? "wlbl-route" : "wlbl-region");
+    el.textContent = L.name;
+    hudEl.appendChild(el);
+    L.el = el;
+    geoLabelEls.push(el); // shared declutter engine pool
+    var gy = (L.y!==null && L.y!==undefined) ? L.y : groundHeight(L.x,L.z)+45;
+    L.pos = new THREE.Vector3(L.x, gy, L.z);
+  });
+})();
+var _labelV = new THREE.Vector3();
+/* §11 zoom choreography: regions OWN the high band (fade in ascending
+   ~1050-1600m and stay); big waterways ride a slightly lower shoulder;
+   near waterways (the cove, Mission Creek) live in the street/zone band
+   and bow out again at altitude. All cross-fades — no popping. */
+function _geoLabelBandOpacity(L, alt){
+  if(L.cat==="water"){
+    if(L.near) return smoothstep(260, 430, alt) * (1 - smoothstep(2600, 4200, alt));
+    return smoothstep(750, 1200, alt);
+  }
+  return smoothstep(1050, 1600, alt);
+}
+function updateLabels(alt){
+  for(var i=0;i<LABELS.length;i++){
+    var L = LABELS[i];
+    var fade = _geoLabelBandOpacity(L, alt);
+    if(fade<0.02){ L.el.style.opacity = 0; continue; }
+    // in front of the camera?
+    _labelV.copy(L.pos).applyMatrix4(camera.matrixWorldInverse);
+    if(_labelV.z > -1){ L.el.style.opacity = 0; continue; }
+    _labelV.copy(L.pos).project(camera);
+    if(_labelV.x<-1.05||_labelV.x>1.05||_labelV.y<-1.05||_labelV.y>1.05){ L.el.style.opacity = 0; continue; }
+    L.el.style.opacity = fade*0.95;
+    L.el.style.left = ((_labelV.x*0.5+0.5)*window.innerWidth)+"px";
+    L.el.style.top  = ((-_labelV.y*0.5+0.5)*window.innerHeight)+"px";
+  }
+}
 /* =====================================================================
    THEN/NOW GHOST OVERLAY  ('G' toggles; fades in above ~500m)
    ===================================================================== */
@@ -15594,48 +15647,17 @@ function updateFire(dt){
   charPatch.material.opacity = 0.5*charT * (rebuildT>0 ? lerp(1,0.7,clamp01(rebuildT/FIRE.rebuildDur)) : 1);
 }
 
-/* ---- the crowd: flee the fire zone via the street graph, then watch from
-   the Plaza (the Alta: "Portsmouth square ... crowded with anxious
-   spectators"). Called per-slot from updatePeople(); at most a few new
-   graph routes are computed per frame so the exodus spreads naturally. ---- */
-var _fleeBudget = 0;
-function resetFleeBudget(){ _fleeBudget = 12; }
-function applyFireCrowd(slot, day){
-  if(day < FIRE.day0 || day > FIRE.day1 + 3/24){
-    if(slot._spect){ slot._fleePoly=null; slot._spect=null; }
-    return;
-  }
-  if(!slot._spect){
-    var inZone = FIRE.inFootprint(slot._x, slot._z, 26);
-    var near = Math.hypot(slot._x-FIRE.cx, slot._z-FIRE.cz) < 330;
-    if((inZone || near) && _fleeBudget>0){
-      _fleeBudget--;
-      var spot = FIRE.spectatorSpots[slot.id % FIRE.spectatorSpots.length];
-      slot._spect = spot;
-      slot._fleePoly = buildRoutePoly(slot._x, slot._z, spot.x, spot.z, {day:day, who:slot.id});
-      slot._fleeStart = peopleClock;
-      slot._spOffX = (hash2(slot.id*0.37,1.7)-0.5)*14;
-      slot._spOffZ = (hash2(slot.id*0.53,4.1)-0.5)*14;
-    }
-    if(!slot._spect) return;
-  }
-  var walked = (peopleClock - slot._fleeStart) * 7.0; // a run — people move in real time while the fire clock runs slow, so this is what reads as flight at the fire's 1h/3s pace
-  if(slot._fleePoly && walked < slot._fleePoly.total){
-    var p = pointOnPolyline(slot._fleePoly, walked);
-    slot._x = p.x; slot._z = p.z; slot._dx = p.dx; slot._dz = p.dz;
-    slot._pose = "walk"; slot._now = "fleeing the fire";
-  } else {
-    slot._x = slot._spect.x + slot._spOffX; slot._z = slot._spect.z + slot._spOffZ;
-    slot._dx = FIRE.cx - slot._x; slot._dz = FIRE.cz - slot._z;
-    slot._pose = "market"; slot._now = "watching the fire from the Plaza";
-  }
-}
+/* (The fire-crowd flee/spectate machinery — resetFleeBudget()/
+   applyFireCrowd() — MOVES PEOPLE, so it was never effects': relocated to
+   layers/people.js in the 2026-07-12 cleanup. The documented effects↔
+   buildings fire seam covers only the structure-damage vertex work.) */
 
 /* =========================================================================
    PHASE 5 — AUTO-DIRECTOR + WATCH MODE (V)
    Event bus with spine priorities (fire 10, Brannan 9, a paper's first
    issue 7, ship arrival 4 first-of-month-only, month-change idle 2);
-   shot grammar = eased fly-to (the existing spring rig), wide establishing
+   shot grammar = eased fly-to (the Annals chase rig's single-pole
+   smoothing — see camera-input), wide establishing
    then push-in, hold 8-18s; per-class cooldowns; parchment lower-third
    quoting the actual headline with date + receipt. Manual input suspends
    the director for 30s. Watch mode hides all HUD but date/beat-card/ticker.
@@ -16427,10 +16449,11 @@ window.__P1850 = {
   invalidatePaint: function(){ invalidateGroundPaint(); return "redraped + repaint queued"; },
   _scene: function(){ return scene; },
   _renderer: function(){ return renderer; },
-  // s44 QA — Director V2 hooks: the logged beat sequence, watch-mode toggle,
-  // and speed control (all route through the real user-facing functions).
+  // s44 QA — Director V2 hooks: the logged beat sequence and speed control
+  // (both route through the real user-facing functions; the watch toggle is
+  // the single `watch: setWatchMode` member further down — a duplicate
+  // `watch:` key here was deleted in the 2026-07-12 cleanup).
   get beatLog(){ return INTEREST.log.slice(); },
-  watch: function(on){ setWatchMode(!!on); },
   setSpeed: function(k){ setSimSpeed(k); },
   get director(){ // s44 QA introspection
     var b = DIRECTOR.beat;
@@ -16448,9 +16471,10 @@ window.__P1850 = {
   },
   get date(){ return simDateISO(dateFromSimDay(simDay)); },
   get simDay(){ return simDay; },
-  // s54 QA — touch-control-surface hooks: current speed tier, mode states,
-  // and yaw (twist-orbit verification reads yawT against the gesture angle).
-  get speedKey(){ return simSpeedKey; },
+  // s54 QA — touch-control-surface hooks: mode states and yaw (twist-orbit
+  // verification reads yawT against the gesture angle). The speed tier is
+  // the single `get speedKey()` further down — a duplicate getter here was
+  // deleted in the 2026-07-12 cleanup.
   get modes(){ return { watch:WATCH.on, paper:paperOpen, ghost:ghostVisible,
     documentedOnly:provenanceOnly, tilt:cinematicTilt, pitchOff:+CAM.pitchOffT.toFixed(3) }; },
   get yawState(){ return { yaw:+CAM.yaw.toFixed(4), yawT:+CAM.yawT.toFixed(4) }; },
@@ -17214,8 +17238,8 @@ canvas.addEventListener("contextmenu", function(e){ e.preventDefault(); });
 
 /* s41 MOBILE-PAN FIX — the nav pointer/wheel/gesture handlers now live on
    WINDOW, not the canvas. Root cause of the iPad "one-finger pan is
-   unreliable" bug: label chips (.ship-label/.building-label, enlarged to
-   finger size on touch), the 78vw-wide scrubber ribbon, and the beat card
+   unreliable" bug: label chips (today's haloed .wlbl / .street-label /
+   .biz-glyph labels), the 78vw-wide scrubber ribbon, and the beat card
    all sit OVER the canvas with pointer-events:auto — any drag that STARTED
    on one of them never reached the canvas listeners at all, so whether a
    pan worked depended on exactly which pixel the finger landed on. Now the
@@ -17796,7 +17820,7 @@ function animate(){
 
   // PHASE 4 — Follow mode: lock the rig's target onto the followed person
   // each frame (positions were refreshed by last frame's updatePeople());
-  // the existing spring-damper camera rig does the rest, same as flyTo().
+  // the Annals chase rig (applyCameraRig below) does the rest, same as flyTo().
   if(followedSlot){
     CAM.focusT = new THREE.Vector3(followedSlot._x, groundHeight(followedSlot._x,followedSlot._z)+1.4, followedSlot._z);
   } else if(followedDocumented){

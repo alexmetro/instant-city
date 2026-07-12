@@ -5,7 +5,7 @@
    after @P1850-CHUNK) — original module statement order, byte-stable. Edit code freely inside a
    chunk; never reorder or renumber chunk markers without rebuilding + re-verifying.
    ===================================================================== */
-/* @P1850-CHUNK 62 — render loop + IIFE close */
+/* @P1850-CHUNK 74 — render loop + IIFE close */
 /* =====================================================================
    RENDER LOOP
    ===================================================================== */
@@ -49,7 +49,7 @@ function animate(){
 
   // PHASE 4 — Follow mode: lock the rig's target onto the followed person
   // each frame (positions were refreshed by last frame's updatePeople());
-  // the existing spring-damper camera rig does the rest, same as flyTo().
+  // the Annals chase rig (applyCameraRig below) does the rest, same as flyTo().
   if(followedSlot){
     CAM.focusT = new THREE.Vector3(followedSlot._x, groundHeight(followedSlot._x,followedSlot._z)+1.4, followedSlot._z);
   } else if(followedDocumented){

@@ -6,7 +6,7 @@
    after @P1850-CHUNK) — original module statement order, byte-stable. Edit code freely inside a
    chunk; never reorder or renumber chunk markers without rebuilding + re-verifying.
    ===================================================================== */
-/* @P1850-CHUNK 47 — fauna tranche 1 + pastures/corrals/cattle */
+/* @P1850-CHUNK 58 — fauna tranche 1 + pastures/corrals/cattle */
 /* =========================================================================
    TECHNIQUES §10 — FAUNA (polish tranche 1). Gated on data/catalog-fauna.json
    presence verdicts (CANON rider 2): every species below is documented or
@@ -347,7 +347,7 @@ var CATTLE = (function(){
   return out;
 })();
 
-/* @P1850-CHUNK 49 — pelicans, herons, rats, cats, dogs */
+/* @P1850-CHUNK 60 — pelicans, herons, rats, cats, dogs */
 /* ---- 3a. pelicans — small formation gliding the cove shoreline (boid-lite:
    a leader on a fixed offshore polyline, followers in a phase-offset V; the
    full flock solver is not warranted for 6 birds). ---- */
@@ -565,7 +565,6 @@ var DOGS = (function(){
   }
   return out;
 })();
-var _faunaM4 = new THREE.Matrix4(); // scratch
 function updateFauna(dt){
   faunaClock += dt;
   faunaTimeUniform.value = faunaClock;
@@ -808,40 +807,8 @@ function updateFauna(dt){
   mudPlankMesh.visible = mudF>0.05;
 }
 
-var HOME_BUILDING_SPOTS = VILLAGE_BUILDING_SPOTS.map(function(spot){
-  var boarding = rngBuild()<0.18;
-  return { x:spot.x, z:spot.z, y:spot.y, rot:spot.rot, w:spot.w, d:spot.d,
-    capacity: boarding ? (6+Math.floor(rngBuild()*5)) : (1+Math.floor(rngBuild()*3)),
-    used:0, boarding:boarding, type:"building" };
-});
-function dayForDensityAtLeast(popTarget){
-  for(var i=0;i<DENSITY_CURVE.length;i++){
-    if(DENSITY_CURVE[i].pop>=popTarget){
-      if(i===0) return DENSITY_CURVE[0].day;
-      var a=DENSITY_CURVE[i-1], b=DENSITY_CURVE[i];
-      return lerp(a.day, b.day, clamp((popTarget-a.pop)/(b.pop-a.pop),0,1));
-    }
-  }
-  return DENSITY_CURVE[DENSITY_CURVE.length-1].day;
-}
-var homeBuildingPtr = 0, homeTentPtr = 0;
-function nextHome(){
-  while(homeBuildingPtr<HOME_BUILDING_SPOTS.length){
-    var b = HOME_BUILDING_SPOTS[homeBuildingPtr];
-    if(b.used<b.capacity){ b.used++; return { spot:b, revealDay:0, type:"building" }; }
-    homeBuildingPtr++;
-  }
-  if(homeTentPtr<tentCandidates.length){
-    var t = tentCandidates[homeTentPtr];
-    homeTentPtr++;
-    return { spot:t, revealDay: dayForDensityAtLeast(2200+7*homeTentPtr), type:"tent" };
-  }
-  return { spot:{x:PLAZA_CENTER.x,z:PLAZA_CENTER.z,w:3,d:3}, revealDay:0, type:"building" }; // pool exhausted (shouldn't happen at these counts)
-}
-function homeLabelFor(home){
-  if(home.type==="tent") return "a tent at "+(home.spot.label||"the camps");
-  if(home.spot.label) return home.spot.label; // s50: non-town homes (the Mission rancheria) carry their own label — never a street-pair guess 3.8km from any street
-  var pair = nearestStreetPair(home.spot.x, home.spot.z);
-  return (home.spot.boarding ? "a boarding house near " : "a cottage near ") + pair + " Streets";
-}
+// (The people-home-assignment block — HOME_BUILDING_SPOTS, nextHome(),
+// homeLabelFor() — and the DENSITY_CURVE inverter dayForDensityAtLeast()
+// were never fauna's: relocated to layers/people.js (chunk 50) and
+// core/03-sim.js (chunk 23) in the 2026-07-12 cleanup, per layers-spec OWNS.)
 

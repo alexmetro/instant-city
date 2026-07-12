@@ -1,12 +1,39 @@
 /* =====================================================================
    LAYER people (slot 6) — OWNS person geometry/pools/gait, poses, clusters, schedules/routing consumption.
    Routes come from core/05-routing. NEVER: draws ground wear directly. (layers-spec.md)
-   GREAT SPLIT (layers-spec.md): this file holds 5 chunk(s) of the one app module.
+   GREAT SPLIT (layers-spec.md): this file holds 6 chunk(s) of the one app module.
    tools/build-app.js reassembles every chunk from every file in global CHUNK order (the number
    after @P1850-CHUNK) — original module statement order, byte-stable. Edit code freely inside a
    chunk; never reorder or renumber chunk markers without rebuilding + re-verifying.
    ===================================================================== */
-/* @P1850-CHUNK 36 — dune-leveling crew worksite */
+/* @P1850-CHUNK 20 — static-figure person prefab (relocated from buildings.js, cleanup 2026-07-12 — people OWNS person geometry; keeps its original global position so the outpost/chapel/wharf builders that bake these figures run unchanged) */
+var _outpostSkin = new THREE.Color(0xc79a72);
+function makeOutpostPersonGeo(coatColor,hatColor,isFemale){
+  var coat = new THREE.CylinderGeometry(0.20,0.27,1.15,6).toNonIndexed();
+  coat.translate(0,0.575,0); colorizeUniform(coat, coatColor);
+  var head = new THREE.SphereGeometry(0.15,7,5).toNonIndexed();
+  head.translate(0,1.28,0); colorizeUniform(head, _outpostSkin);
+  var parts=[coat,head];
+  if(isFemale){
+    var bonnet = new THREE.SphereGeometry(0.19,7,5,0,Math.PI*2,0,Math.PI*0.62).toNonIndexed();
+    bonnet.translate(0,1.34,0); colorizeUniform(bonnet,hatColor); parts.push(bonnet);
+  } else {
+    var crown = new THREE.CylinderGeometry(0.13,0.13,0.14,7).toNonIndexed();
+    crown.translate(0,1.44,0); colorizeUniform(crown,hatColor);
+    var brim = new THREE.CylinderGeometry(0.24,0.24,0.03,9).toNonIndexed();
+    brim.translate(0,1.38,0); colorizeUniform(brim,hatColor);
+    parts.push(crown,brim);
+  }
+  return mergeGeoms(parts);
+}
+function placeOutpostPerson(geoms,x,z,rot,coatColor,hatColor,isFemale){
+  var y = terrainHeight(x,z);
+  var g = makeOutpostPersonGeo(new THREE.Color(coatColor), new THREE.Color(hatColor), !!isFemale);
+  bake(g, new THREE.Vector3(x,y,z), rot||0);
+  geoms.push(g);
+}
+
+/* @P1850-CHUNK 45 — dune-leveling crew worksite */
 /* =====================================================================
    DUNE-LEVELING CREW (behavior-spec.md item 4): a designated sand hill on
    the town's edge that visibly shrinks over months as it's carted away —
@@ -85,7 +112,7 @@ function updateLevelingSite(){
   LEVELING_SITE.fillMesh.scale.y = 0.05 + 2.1*smoothstep(0,1,t);
 }
 
-/* @P1850-CHUNK 42 — phase 4: name banks, walking routes */
+/* @P1850-CHUNK 53 — phase 4: name banks, walking routes */
 /* =========================================================================
    PHASE 4 — "THE PEOPLE"
    Ambient (bubble-tier) instanced walkers below peopleMaxAltitude (350m,
@@ -124,15 +151,10 @@ var NAME_BANKS = {
   chinese:    { first:["Ah Fong","Ah Sing","Ah Toy","Ah Chung","Ah Ming","Ah Wing"],
                 last:["Lai","Yee","Chan","Wong","Chun"] }
 };
-var TRADES = ["carpenter","teamster","sailor ashore","clerk","blacksmith","cook","washerwoman",
-  "lodging-house keeper","drayman","baker","tinsmith","stevedore","grocer's hand","outfitter",
-  "boarding-house cook","brickmaker"];
-// GAPS-2026-07-09 item 3 (SFPD founding, Aug 13 1849): "constable" only
-// enters the trade pool once Malachi Fallon's force actually existed — see
-// TRADE_EARLIEST_DAY below, folded into each routine slot's notBeforeDay.
-var TRADES_WITH_CONSTABLE = TRADES.concat(["constable"]);
-var SFPD_FOUNDING_DAY = eventDateToSimDay("1849-08-13");
-var TRADE_EARLIEST_DAY = { constable: SFPD_FOUNDING_DAY };
+// (The pre-catalog ad-hoc TRADES/TRADES_WITH_CONSTABLE pool and its
+// SFPD-founding gate were deleted in the 2026-07-12 cleanup — occupations
+// are fully catalog-driven via CATALOG_OCC/pickCatalogOccupation, and the
+// constable's Aug 13 1849 era gate rides the catalog's own eraWeight table.)
 var AGENDAS = [
   "saving passage money for the mines","minding a cousin's store on commission",
   "waiting on a ship that hasn't come in","just off the boat, still finding his feet",
@@ -231,14 +253,9 @@ function pointOnPolyline(poly, s){
   var last = segs[segs.length-1];
   return { x:last.b.x, z:last.b.z, dx:last.b.x-last.a.x, dz:last.b.z-last.a.z };
 }
-function loopPoints(cx,cz,r,n){
-  var pts=[];
-  for(var i=0;i<n;i++){ var a=(i/n)*Math.PI*2; pts.push({x:cx+Math.cos(a)*r, z:cz+Math.sin(a)*r}); }
-  return pts;
-}
 var HAPPY_VALLEY_REVEAL_DAY = eventDateToSimDay("1849-01-05"); // tents/growth start reading as Happy Valley around here
 
-/* @P1850-CHUNK 44 — homes & workplaces, social clusters, occupation->venue binding */
+/* @P1850-CHUNK 55 — homes & workplaces, social clusters, occupation->venue binding */
 /* ---- 2c. HOMES & WORKPLACES — a home is a real VILLAGE_BUILDING_SPOTS
    building (capacity-weighted; ~18% are boarding houses that hold many,
    reflecting the era) or, once tents exist, a real tentCandidates lot; a
@@ -375,25 +392,6 @@ var CONSTRUCTION_SITES = growthBuildingCandidates.slice(0, Math.min(30, growthBu
 function pickConstructionSite(rng){
   return CONSTRUCTION_SITES.length ? CONSTRUCTION_SITES[Math.floor(rng()*CONSTRUCTION_SITES.length)] : WORKSITE_PLAZA_MARKET;
 }
-function worksiteForTrade(trade, rng){
-  switch(trade){
-    case "carpenter": case "brickmaker": case "blacksmith": return pickConstructionSite(rng);
-    case "teamster": case "drayman": case "stevedore": return rng()<0.75 ? WORKSITE_WHARF : WORKSITE_BEACH;
-    case "sailor ashore": return rng()<0.6 ? WORKSITE_BEACH : WORKSITE_WHARF;
-    case "grocer's hand": return pickShopSite("GROCER") || WORKSITE_PLAZA_MARKET;
-    case "outfitter": return pickShopSite("DRY GOODS") || WORKSITE_PLAZA_MARKET;
-    case "clerk": return rng()<0.5 ? (pickShopSite("DRY GOODS")||WORKSITE_PLAZA_MARKET) : WORKSITE_PLAZA_MARKET;
-    case "baker": return pickShopSite("PROVISIONS") || WORKSITE_PLAZA_MARKET;
-    case "cook": case "boarding-house cook": case "lodging-house keeper": case "washerwoman":
-      return pickShopSite("BOARDING") || WORKSITE_PLAZA_MARKET;
-    case "tinsmith": return pickShopSite("TIN SHOP") || WORKSITE_PLAZA_MARKET;
-    // GAPS-2026-07-09 item 3: the SFPD's first station was a one-room former
-    // schoolhouse on Portsmouth Square (clm:police:28) — same plaza worksite,
-    // distinct label.
-    case "constable": return { key:"stationhouse", label:"station house on the Plaza", x:PLAZA_CENTER.x, z:PLAZA_CENTER.z, activity:"stationary" };
-    default: return WORKSITE_PLAZA_MARKET;
-  }
-}
 /* ---- 2d. CATALOG-DRIVEN OCCUPATION -> VENUE binding (behavior-spec.md
    item 2): occ.venueNeeds carries catalog venue-key strings (wharf, shop,
    construction_site, leveling_site, saloon, mission, ...); this resolves
@@ -408,8 +406,41 @@ function pickAnyShopSite(rng){
   return { key:"shop_"+s.word+"_r", label:SIGN_WORD_LABEL[s.word]||s.word.toLowerCase(), x:s.x, z:s.z, activity:"stationary" };
 }
 var CITY_HOTEL_SPOT = NAMED_BUILDING_SPOTS.filter(function(s){ return s.name==="City Hotel"; })[0] || null;
+/* Venue-key -> worksite resolvers (relocated verbatim from buildings.js in
+   the 2026-07-12 cleanup — this is people's occupation->venue binding, and
+   every helper it calls lives in this chunk). Initializes here (position 44,
+   was 45): a pure object literal of closures, evaluated lazily — and fauna's
+   ranch/region/natural extensions (chunk 47) still land before any consumer
+   runs (first consumption is slot generation, chunk 50). */
+var VENUE_KEY_RESOLVERS = {
+  wharf: function(){ return WORKSITE_WHARF; },
+  shore: function(){ return WORKSITE_BEACH; },
+  construction_site: function(rng){ return pickConstructionSite(rng); },
+  leveling_site: function(){ return { key:"leveling", label:"the leveling ground", x:LEVELING_SITE.x, z:LEVELING_SITE.z, activity:"construction" }; },
+  shop: function(rng){ return pickAnyShopSite(rng) || WORKSITE_PLAZA_MARKET; },
+  store: function(rng){ return pickShopSite("DRY GOODS")||pickShopSite("GROCER")||pickAnyShopSite(rng)||WORKSITE_PLAZA_MARKET; },
+  market: function(){ return WORKSITE_PLAZA_MARKET; },
+  mission: function(){ return WORKSITE_MISSION; },
+  boarding_house: function(){ return pickShopSite("BOARDING")||WORKSITE_PLAZA_MARKET; },
+  hotel: function(){ return CITY_HOTEL_SPOT ? { key:"cityhotel", label:"City Hotel", x:CITY_HOTEL_SPOT.x, z:CITY_HOTEL_SPOT.z, activity:"stationary" } : (pickShopSite("BOARDING")||WORKSITE_PLAZA_MARKET); },
+  tavern: function(){ return pickGamblingSite()||pickShopSite("BOARDING")||WORKSITE_PLAZA_MARKET; },
+  saloon: function(){ return pickGamblingSite()||pickShopSite("BOARDING")||WORKSITE_PLAZA_MARKET; },
+  newspaper_office: function(){ return { key:"pressoffice", label:"the printing office", x:PLAZA_CENTER.x+8, z:PLAZA_CENTER.z-6, activity:"stationary" }; },
+  public_building: function(){ return { key:"publicoffice", label:"the public offices on the Plaza", x:PLAZA_CENTER.x, z:PLAZA_CENTER.z, activity:"stationary" }; },
+  warehouse: function(){ return pickShopSite("SHIP CHANDLERY")||WORKSITE_WHARF; },
+  street: function(){ return WORKSITE_PLAZA_MARKET; },
+  school: function(){ return { key:"school", label:"the schoolhouse on the Plaza", x:PLAZA_CENTER.x-10, z:PLAZA_CENTER.z+8, activity:"stationary" }; }
+};
+function worksiteForOccupation(occ, rng){
+  if(!occ || !occ.venueNeeds || !occ.venueNeeds.length) return WORKSITE_PLAZA_MARKET;
+  for(var i=0;i<occ.venueNeeds.length;i++){
+    var resolver = VENUE_KEY_RESOLVERS[occ.venueNeeds[i]];
+    if(resolver){ var w = resolver(rng); if(w) return w; }
+  }
+  return WORKSITE_PLAZA_MARKET;
+}
 
-/* @P1850-CHUNK 46 — dice engine + arrivals flow */
+/* @P1850-CHUNK 57 — dice engine + arrivals flow */
 /* =========================================================================
    PL-B item 1 — THE FULL DICE ENGINE (behavior-spec.md §3), replacing PL-A's
    flat per-slot coinflips (a fixed 40% doErrand, a fixed saloonWeight
@@ -440,7 +471,8 @@ function diceRoll(personId, day, slotKey){ return diceRng(personId,day,slotKey)(
 // catalog itself flags (timeWindow.spike==="steamer_day").
 var STEAMER_DAY0 = eventDateToSimDay("1849-02-28");
 function isSteamerDay(day){ return day>=STEAMER_DAY0 && dateFromSimDay(Math.floor(day)).getUTCDate()===28; }
-var DOW_NAMES = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+// (DOW_NAMES moved to core/03-sim.js in the 2026-07-12 cleanup — the calendar
+// is core's clock domain and doodads' wash-day gate reads it too.)
 
 // occupation-fit (fill:true, no direct citation — "your trade colors your
 // leisure taste" is an era-consistent design judgment, not a documented
@@ -671,7 +703,39 @@ function updateArrivals(){
   arrivalBoatMesh.count = boatN; arrivalBoatMesh.instanceMatrix.needsUpdate = true;
   arrivalPassengerMesh.count = passN; arrivalPassengerMesh.instanceMatrix.needsUpdate = true;
 }
-/* @P1850-CHUNK 50 — people slots, native presence, figure prefab, variety, biography, schedule, documented moments */
+/* @P1850-CHUNK 61 — people slots, native presence, figure prefab, variety, biography, schedule, documented moments */
+/* ---- HOME ASSIGNMENT (relocated verbatim from fauna.js in the 2026-07-12
+   cleanup — people-layer machinery per layers-spec OWNS; it executes at the
+   same global position, so the rngBuild() stream is unchanged). A home is a
+   real VILLAGE_BUILDING_SPOTS building or, once the pool fills, a real
+   tentCandidates lot with a density-derived reveal day. ---- */
+var HOME_BUILDING_SPOTS = VILLAGE_BUILDING_SPOTS.map(function(spot){
+  var boarding = rngBuild()<0.18;
+  return { x:spot.x, z:spot.z, y:spot.y, rot:spot.rot, w:spot.w, d:spot.d,
+    capacity: boarding ? (6+Math.floor(rngBuild()*5)) : (1+Math.floor(rngBuild()*3)),
+    used:0, boarding:boarding, type:"building" };
+});
+var homeBuildingPtr = 0, homeTentPtr = 0;
+function nextHome(){
+  while(homeBuildingPtr<HOME_BUILDING_SPOTS.length){
+    var b = HOME_BUILDING_SPOTS[homeBuildingPtr];
+    if(b.used<b.capacity){ b.used++; return { spot:b, revealDay:0, type:"building" }; }
+    homeBuildingPtr++;
+  }
+  if(homeTentPtr<tentCandidates.length){
+    var t = tentCandidates[homeTentPtr];
+    homeTentPtr++;
+    return { spot:t, revealDay: dayForDensityAtLeast(2200+7*homeTentPtr), type:"tent" };
+  }
+  return { spot:{x:PLAZA_CENTER.x,z:PLAZA_CENTER.z,w:3,d:3}, revealDay:0, type:"building" }; // pool exhausted (shouldn't happen at these counts)
+}
+function homeLabelFor(home){
+  if(home.type==="tent") return "a tent at "+(home.spot.label||"the camps");
+  if(home.spot.label) return home.spot.label; // s50: non-town homes (the Mission rancheria) carry their own label — never a street-pair guess 3.8km from any street
+  var pair = nearestStreetPair(home.spot.x, home.spot.z);
+  return (home.spot.boarding ? "a boarding house near " : "a cottage near ") + pair + " Streets";
+}
+
 /* ---- 3. slot generation — built once at load so a given slot index is
    stable across the whole session. ROUTINE slots (spec §9's persistent
    population, ~60-120-strong) get a real HOME + WORK + daily schedule;
@@ -1149,7 +1213,7 @@ var PART_COAT=0, PART_SKIN=1, PART_HAT=2, PART_FIXED=3, PART_TROUSER=4; // TROUS
    so poses need no shader work (rider 5: "poses are static part
    rotations"). PivotY rides the attribute so the child variant's shorter
    limbs pivot at ITS shoulder/hip heights, not the adult's. */
-var LIMB_STATIC=0, LIMB_HEAD=1, LIMB_ARM_L=2, LIMB_ARM_R=3, LIMB_LEG_L=4, LIMB_LEG_R=5, LIMB_SKIRT=6;
+var LIMB_HEAD=1, LIMB_ARM_L=2, LIMB_ARM_R=3, LIMB_LEG_L=4, LIMB_LEG_R=5, LIMB_SKIRT=6; // limb id 0 = static (builders default it via p.l||0)
 var _PART_WHITE = new THREE.Color(0xffffff);
 function mergeGeomsParts(parts){ // parts: [{g:geometry, p:partId, l:limbId, v:pivotY}] — colors pre-baked (white for tintable parts)
   var merged = mergeGeoms(parts.map(function(p){ return p.g; }));
@@ -2034,3 +2098,43 @@ registerAudit("people", "routeDiversity", function(){
   var routed = r.sigs.filter(function(s){ return s!=null; }).length;
   return { pass: routed>0, routed: routed, distinct: r.distinct, sampled: 10 };
 });
+
+/* ---- THE FIRE CROWD (relocated verbatim from effects.js in the 2026-07-12
+   cleanup — it writes slot._x/_z/_pose/_now, i.e. it moves people, which is
+   this layer's charter; effects keeps the glow/embers/structure visuals).
+   Flee the fire zone via the street graph, then watch from the Plaza (the
+   Alta: "Portsmouth square ... crowded with anxious spectators"). Called
+   per-slot from updatePeople(); at most a few new graph routes are computed
+   per frame so the exodus spreads naturally. ---- */
+var _fleeBudget = 0;
+function resetFleeBudget(){ _fleeBudget = 12; }
+function applyFireCrowd(slot, day){
+  if(day < FIRE.day0 || day > FIRE.day1 + 3/24){
+    if(slot._spect){ slot._fleePoly=null; slot._spect=null; }
+    return;
+  }
+  if(!slot._spect){
+    var inZone = FIRE.inFootprint(slot._x, slot._z, 26);
+    var near = Math.hypot(slot._x-FIRE.cx, slot._z-FIRE.cz) < 330;
+    if((inZone || near) && _fleeBudget>0){
+      _fleeBudget--;
+      var spot = FIRE.spectatorSpots[slot.id % FIRE.spectatorSpots.length];
+      slot._spect = spot;
+      slot._fleePoly = buildRoutePoly(slot._x, slot._z, spot.x, spot.z, {day:day, who:slot.id});
+      slot._fleeStart = peopleClock;
+      slot._spOffX = (hash2(slot.id*0.37,1.7)-0.5)*14;
+      slot._spOffZ = (hash2(slot.id*0.53,4.1)-0.5)*14;
+    }
+    if(!slot._spect) return;
+  }
+  var walked = (peopleClock - slot._fleeStart) * 7.0; // a run — people move in real time while the fire clock runs slow, so this is what reads as flight at the fire's 1h/3s pace
+  if(slot._fleePoly && walked < slot._fleePoly.total){
+    var p = pointOnPolyline(slot._fleePoly, walked);
+    slot._x = p.x; slot._z = p.z; slot._dx = p.dx; slot._dz = p.dz;
+    slot._pose = "walk"; slot._now = "fleeing the fire";
+  } else {
+    slot._x = slot._spect.x + slot._spOffX; slot._z = slot._spect.z + slot._spOffZ;
+    slot._dx = FIRE.cx - slot._x; slot._dz = FIRE.cz - slot._z;
+    slot._pose = "market"; slot._now = "watching the fire from the Plaza";
+  }
+}

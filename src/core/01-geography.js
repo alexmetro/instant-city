@@ -58,16 +58,15 @@
    spacing) — see tools/reproject-streets-2026-07-11.js and the dataset's
    meta.reprojection_2026_07_11.
    ===================================================================== */
-var VARA_M = 0.838;                    // 1 vara (geography-shoreline.md §2)
-var LOT_M = 50*VARA_M;                  // ~41.9 m, one 50-vara lot
-var BLOCK_W = 3*LOT_M + 20.49;           // ~146.2 m — CENTERLINE spacing between adjacent N-S main
-                                          // streets (curb-to-curb 150-vara block + mean documented
-                                          // street width; measured Montgomery↔Kearny 145.8-146.4m).
-                                          // Only coarse consumers (plaza fallback math) read this —
-                                          // exact per-street positions come from STREETS_RUNTIME.
-var BLOCK_D = 2*LOT_M + 14.97;           // ~98.8 m — CENTERLINE spacing between adjacent E-W cross
-                                          // streets (100-vara block + documented 14.97m cross width;
-                                          // measured Washington↔Clay 96.7-97.7m).
+/* Metrology note (geography-shoreline.md §2), kept for the record — the
+   former VARA_M/LOT_M/BLOCK_W/BLOCK_D constant chain was dead code (nothing
+   read it; exact per-street positions come from STREETS_RUNTIME) and was
+   deleted in the 2026-07-12 cleanup. The research figures it carried:
+   1 vara = 0.838 m; a 50-vara lot ≈ 41.9 m; N-S main-street CENTERLINE
+   spacing ≈ 146.2 m (150-vara block + mean documented street width;
+   measured Montgomery↔Kearny 145.8-146.4 m); E-W cross-street CENTERLINE
+   spacing ≈ 98.8 m (100-vara block + documented 14.97 m cross width;
+   measured Washington↔Clay 96.7-97.7 m). */
 var GRID_ROT_BASE_DEG = -9.0;            // fitted base grid rotation (measured, permanent — the
                                           // O'Farrell/modern grid; VALIDATION-2026-07-11 §4.1)
 var VIOGET_ERROR_DEG = 2.5;              // "Vioget's error" — the 1847 swing DELTA within the
@@ -660,3 +659,15 @@ function terrainColor(x,z,h){
   return col;
 }
 
+
+/* Outpost geography truth (research/peninsula-1846.md §1/§2, converted to
+   world meters via the heightmap's lat/lon convention; verified against the
+   baked grid with tools/debug-region.js). Relocated verbatim from
+   layers/terrain.js in the 2026-07-12 cleanup — core's shared placement
+   engine (PLACEMENT_MISSION_SEGS) and the street graph read it, so it is
+   geography truth, not a layer's. Initialized here (earlier than its old
+   slot at the end of the terrain chunk) — a pure literal with no deps. */
+var OUTPOSTS = {
+  mission:  { x:-1997, z:3462, n:7 },
+  presidio: { x:-4776, z:-234, n:6 }
+};

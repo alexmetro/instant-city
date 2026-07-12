@@ -6,7 +6,7 @@
    after @P1850-CHUNK) — original module statement order, byte-stable. Edit code freely inside a
    chunk; never reorder or renumber chunk markers without rebuilding + re-verifying.
    ===================================================================== */
-/* @P1850-CHUNK 08 — road lifecycle engine (roadPieceState — shared interface) */
+/* @P1850-CHUNK 10 — road lifecycle engine (roadPieceState — shared interface) */
 /* =====================================================================
    ROAD LIFECYCLE ENGINE — grounding.md §9b (s27 sprint, 2026-07-11).
    Roads are not booleans; they EMERGE. Every street piece carries a

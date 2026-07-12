@@ -1,12 +1,12 @@
 /* =====================================================================
    LAYER buildings (slot 4) — OWNS building/tent/fence/yard geometry+materials, placement, frontage/setback,
    signs, fire visuals of structures. NEVER: paints ground, moves people. (layers-spec.md)
-   GREAT SPLIT (layers-spec.md): this file holds 9 chunk(s) of the one app module.
+   GREAT SPLIT (layers-spec.md): this file holds 10 chunk(s) of the one app module.
    tools/build-app.js reassembles every chunk from every file in global CHUNK order (the number
    after @P1850-CHUNK) — original module statement order, byte-stable. Edit code freely inside a
    chunk; never reorder or renumber chunk markers without rebuilding + re-verifying.
    ===================================================================== */
-/* @P1850-CHUNK 14 — village buildings, era-gate dates, era runtime, foundation skirts */
+/* @P1850-CHUNK 16 — village buildings, era-gate dates, era runtime, foundation skirts */
 /* =====================================================================
    VILLAGE BUILDINGS  (~30, seeded jitter for position/size/rotation/color)
    Density follows geography-shoreline.md §1/§2: densest at the Plaza's
@@ -536,7 +536,7 @@ function updateEraGating(){
   console.log("[verify] foundation skirts:", recs.length, "buildings on sloped ground got a plinth.");
 })();
 
-/* @P1850-CHUNK 16 — plaza flagpole + flag */
+/* @P1850-CHUNK 18 — plaza flagpole + flag */
 /* =====================================================================
    PLAZA: flagpole + flag
    ===================================================================== */
@@ -571,7 +571,7 @@ function updateEraGating(){
   scene.add(flag);
 })();
 
-/* @P1850-CHUNK 18 — outpost hints (Mission Dolores + Presidio) */
+/* @P1850-CHUNK 21 — outpost hints (Mission Dolores + Presidio) */
 /* =====================================================================
    OUTPOST HINTS — tiny building clusters at Mission Dolores + the Presidio
    ===================================================================== */
@@ -593,31 +593,10 @@ function updateEraGating(){
  * peninsula-1846.md actually names, plus a handful of catalog-
  * appropriate static figures so neither site reads as an empty stage set.
  */
-var _outpostSkin = new THREE.Color(0xc79a72);
-function makeOutpostPersonGeo(coatColor,hatColor,isFemale){
-  var coat = new THREE.CylinderGeometry(0.20,0.27,1.15,6).toNonIndexed();
-  coat.translate(0,0.575,0); colorizeUniform(coat, coatColor);
-  var head = new THREE.SphereGeometry(0.15,7,5).toNonIndexed();
-  head.translate(0,1.28,0); colorizeUniform(head, _outpostSkin);
-  var parts=[coat,head];
-  if(isFemale){
-    var bonnet = new THREE.SphereGeometry(0.19,7,5,0,Math.PI*2,0,Math.PI*0.62).toNonIndexed();
-    bonnet.translate(0,1.34,0); colorizeUniform(bonnet,hatColor); parts.push(bonnet);
-  } else {
-    var crown = new THREE.CylinderGeometry(0.13,0.13,0.14,7).toNonIndexed();
-    crown.translate(0,1.44,0); colorizeUniform(crown,hatColor);
-    var brim = new THREE.CylinderGeometry(0.24,0.24,0.03,9).toNonIndexed();
-    brim.translate(0,1.38,0); colorizeUniform(brim,hatColor);
-    parts.push(crown,brim);
-  }
-  return mergeGeoms(parts);
-}
-function placeOutpostPerson(geoms,x,z,rot,coatColor,hatColor,isFemale){
-  var y = terrainHeight(x,z);
-  var g = makeOutpostPersonGeo(new THREE.Color(coatColor), new THREE.Color(hatColor), !!isFemale);
-  bake(g, new THREE.Vector3(x,y,z), rot||0);
-  geoms.push(g);
-}
+/* (makeOutpostPersonGeo()/placeOutpostPerson() — the static-figure person
+   prefab — relocated to layers/people.js in the 2026-07-12 cleanup: people
+   OWNS person geometry. Their chunk keeps this exact global position, so
+   the outpost/chapel/wharf builders below still find _outpostSkin ready.) */
 function makeOrchardTreeGeo(){
   var trunk = new THREE.CylinderGeometry(0.12,0.16,1.1,5).toNonIndexed();
   trunk.translate(0,0.55,0); colorizeUniform(trunk, new THREE.Color(0x5a4632));
@@ -871,7 +850,7 @@ function makeOrchardTreeGeo(){
   console.log("[verify] Presidio: "+geoms.length+" parts merged, quadrangle center ("+cx.toFixed(0)+","+cz.toFixed(0)+") y="+cy.toFixed(1));
 })();
 
-/* @P1850-CHUNK 20 — town chapel */
+/* @P1850-CHUNK 23 — town chapel */
 /* =====================================================================
    TOWN CHAPEL — behavior-spec.md item 3 ("a modest church building...
    simple frame chapel"); closes catalog-occupations.json's
@@ -928,7 +907,14 @@ var CHURCH_SPOT = null;
   console.log("[verify] Town chapel at ("+x.toFixed(0)+","+z.toFixed(0)+"), reveal day "+CHURCH_REVEAL_DAY.toFixed(0)+" (1848-11-02)");
 })();
 
-/* @P1850-CHUNK 24 — growth targets, growth building/tent spawning, blocks->frontage */
+/* Named-spot subset of the founding village (moved from labels-inspect.js in
+   the 2026-07-12 cleanup — derived buildings data consumed by the landmark
+   signage below and people's City Hotel binding). Sits after the chapel push
+   above, so it captures the identical, final named set the old position saw
+   (VILLAGE_BUILDING_SPOTS receives no pushes after the chapel's). */
+var NAMED_BUILDING_SPOTS = VILLAGE_BUILDING_SPOTS.filter(function(s){ return !!s.name; });
+
+/* @P1850-CHUNK 31 — growth targets, growth building/tent spawning, blocks->frontage */
 // P0-4 DENSITY fix (2026-07-10, Director's screening): the pre-fix curve
 // froze buildings entirely at pop>2200 (~late 1848) — everany 1849 growth
 // read as tents ONLY, so the record's "hundreds of structures spilling past
@@ -1432,7 +1418,7 @@ function updateGrowth(){
   updateCampfires();
 }
 
-/* @P1850-CHUNK 31 — shared sign board texture helpers */
+/* @P1850-CHUNK 40 — shared sign board texture helpers */
 /* canvas-texture painted sign board — hoisted to global scope (was local to
    buildYardObjects) so both the shop-shingle system below AND the notable-
    landmark physical signage / lumber-yard sign further down can share one
@@ -1468,7 +1454,7 @@ function mountSignBoard(spot, word, priceLine, yOffset){
   return mesh;
 }
 
-/* @P1850-CHUNK 33 — yard objects, organic layout (yard fences + door-paths) */
+/* @P1850-CHUNK 42 — yard objects, organic layout (yard fences + door-paths) */
 /* =====================================================================
    YARD OBJECTS (QA-GATE town-density debt, 2026-07): period yard objects
    at true scale around the village's own real building placements
@@ -1716,7 +1702,7 @@ var SIGN_BUILDING_SPOTS = []; // {x,z,y,rot,w,d,word} — reused by Phase 4's ho
   });
 })();
 
-/* @P1850-CHUNK 35 — physical signage for named landmarks */
+/* @P1850-CHUNK 44 — physical signage for named landmarks */
 /* =====================================================================
    PHYSICAL SIGNAGE FOR NAMED LANDMARKS (coordinator directive): the plaza's
    documented establishments (El Dorado, Parker House, City Hotel, etc.)
@@ -1735,7 +1721,7 @@ var SIGN_BUILDING_SPOTS = []; // {x,z,y,rot,w,d,word} — reused by Phase 4's ho
   });
 })();
 
-/* @P1850-CHUNK 45 — type-differentiated buildings */
+/* @P1850-CHUNK 56 — type-differentiated buildings */
 /* =========================================================================
    PL-A LEFTOVER, COMPLETED — TYPE-DIFFERENTIATED BUILDINGS. placeBuilding()
    places every building identically (systems-inventory's own finding: "the
@@ -1846,35 +1832,11 @@ var BIZ_GLYPH_SPOTS = []; // {x,z,y,h,glyph} — fed to the DOM glyph-label pool
   }
 })();
 
-var WORKSITE_CHURCH = { key:"chapel", label:(CHURCH_SPOT&&CHURCH_SPOT.name)||"the chapel", x:(CHURCH_SPOT?CHURCH_SPOT.x:PLAZA_CENTER.x), z:(CHURCH_SPOT?CHURCH_SPOT.z:PLAZA_CENTER.z), activity:"stationary" };
-var VENUE_KEY_RESOLVERS = {
-  wharf: function(){ return WORKSITE_WHARF; },
-  shore: function(){ return WORKSITE_BEACH; },
-  construction_site: function(rng){ return pickConstructionSite(rng); },
-  leveling_site: function(){ return { key:"leveling", label:"the leveling ground", x:LEVELING_SITE.x, z:LEVELING_SITE.z, activity:"construction" }; },
-  shop: function(rng){ return pickAnyShopSite(rng) || WORKSITE_PLAZA_MARKET; },
-  store: function(rng){ return pickShopSite("DRY GOODS")||pickShopSite("GROCER")||pickAnyShopSite(rng)||WORKSITE_PLAZA_MARKET; },
-  market: function(){ return WORKSITE_PLAZA_MARKET; },
-  mission: function(){ return WORKSITE_MISSION; },
-  boarding_house: function(){ return pickShopSite("BOARDING")||WORKSITE_PLAZA_MARKET; },
-  hotel: function(){ return CITY_HOTEL_SPOT ? { key:"cityhotel", label:"City Hotel", x:CITY_HOTEL_SPOT.x, z:CITY_HOTEL_SPOT.z, activity:"stationary" } : (pickShopSite("BOARDING")||WORKSITE_PLAZA_MARKET); },
-  tavern: function(){ return pickGamblingSite()||pickShopSite("BOARDING")||WORKSITE_PLAZA_MARKET; },
-  saloon: function(){ return pickGamblingSite()||pickShopSite("BOARDING")||WORKSITE_PLAZA_MARKET; },
-  newspaper_office: function(){ return { key:"pressoffice", label:"the printing office", x:PLAZA_CENTER.x+8, z:PLAZA_CENTER.z-6, activity:"stationary" }; },
-  public_building: function(){ return { key:"publicoffice", label:"the public offices on the Plaza", x:PLAZA_CENTER.x, z:PLAZA_CENTER.z, activity:"stationary" }; },
-  warehouse: function(){ return pickShopSite("SHIP CHANDLERY")||WORKSITE_WHARF; },
-  street: function(){ return WORKSITE_PLAZA_MARKET; },
-  school: function(){ return { key:"school", label:"the schoolhouse on the Plaza", x:PLAZA_CENTER.x-10, z:PLAZA_CENTER.z+8, activity:"stationary" }; }
-};
-function worksiteForOccupation(occ, rng){
-  if(!occ || !occ.venueNeeds || !occ.venueNeeds.length) return WORKSITE_PLAZA_MARKET;
-  for(var i=0;i<occ.venueNeeds.length;i++){
-    var resolver = VENUE_KEY_RESOLVERS[occ.venueNeeds[i]];
-    if(resolver){ var w = resolver(rng); if(w) return w; }
-  }
-  return WORKSITE_PLAZA_MARKET;
-}
-
+/* (VENUE_KEY_RESOLVERS + worksiteForOccupation() — people's schedule/venue
+   binding, implemented on people.js internals — relocated to people.js
+   (end of its homes-&-workplaces chunk) in the 2026-07-12 cleanup. People
+   OWNS schedules/routing consumption; fauna's ranch/region/natural resolver
+   extensions still register before any slot is built.) */
 
 /* ---- buildings audit (layers-spec.md rules block): a structure's footprint
    intersects NO right-of-way, any era — wraps the existing __P1850.roadAudit
@@ -1883,3 +1845,39 @@ registerAudit("buildings", "rightOfWay", function(){
   var r = window.__P1850.roadAudit();
   return { pass: r.violations===0, checked: r.checked, violations: r.violations, list: r.list };
 });
+
+/* @P1850-CHUNK 47 — the lumber dealer (relocated from doodads.js, cleanup 2026-07-12 — buildings OWNS structures/signs; exact original global position, right after doodads assigns waterfrontBeachLines which it reads) */
+/* =====================================================================
+   THE LUMBER DEALER (behavior-spec.md item 4 — a documented building-
+   materials trade): closes catalog-occupations.json's
+   missing:lumber_yard_timber_stand gap for woodcutter_woodyard, and gives
+   staged construction (below) a real materials source that supply carts
+   travel from. Sited on the working beach — lumber arrived by ship, same
+   waterfront the timber-stack waterfront-life props already occupy.
+   (Placed here, after waterfrontBeachLines is actually assigned, rather
+   than up with the other yard objects — it reads that array directly.)
+   ===================================================================== */
+var LUMBER_YARD_SPOT = (function buildLumberYard(){
+  var ln = waterfrontBeachLines[Math.max(0, Math.floor(waterfrontBeachLines.length*0.78))] || null;
+  var p = ln ? { x:lerp(ln.landX,ln.waterX,0.4), z:ln.z } : { x:WORKSITE_WHARF ? WORKSITE_WHARF.x : PLAZA_CENTER.x, z:PLAZA_CENTER.z };
+  var y = terrainHeight(p.x,p.z);
+  registerPlacement(p.x,p.z,7);
+  var geoms = [];
+  for(var s=0;s<3;s++){
+    var stack = makeTimberStackGeo();
+    bake(stack, new THREE.Vector3((s-1)*2.6, 0, (s%2)*1.2), s*0.5);
+    geoms.push(stack);
+  }
+  // a simple open lean-to roof over the stacks — posts + gable, no walls
+  var postColor = new THREE.Color(0x5a4632), roofColor = new THREE.Color(0x6b5238);
+  [[-3.2,-2.2],[3.2,-2.2],[-3.2,2.2],[3.2,2.2]].forEach(function(o){
+    var post = makeBoxLocal(0.22,3.0,0.22,postColor); bake(post, new THREE.Vector3(o[0],0,o[1])); geoms.push(post);
+  });
+  var roof = makeGableRoof(7.2,5.0,0.5,1.0,roofColor); bake(roof, new THREE.Vector3(0,3.0,0)); geoms.push(roof);
+  var merged = mergeGeoms(geoms);
+  bake(merged, new THREE.Vector3(p.x,y,p.z), 0.15);
+  scene.add(new THREE.Mesh(merged, new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, side:THREE.DoubleSide, specular:0x000000, shininess:0})));
+  mountSignBoard({x:p.x,z:p.z,y:y,rot:0.15,d:5.0}, "LUMBER YARD", null, 3.3);
+  console.log("[verify] Lumber yard at ("+p.x.toFixed(0)+","+p.z.toFixed(0)+")");
+  return { key:"lumberyard", label:"the lumber yard", x:p.x, z:p.z, activity:"stationary" };
+})();

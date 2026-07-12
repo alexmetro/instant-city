@@ -2,12 +2,12 @@
    LAYER ground-paint (slot 2) — OWNS every road/plaza/path/trodden-ground pixel: splat canvases,
    their meshes, tile textures, era repaint. READS spine, roadPieceState, terrainHeight, zoneAt, clock.
    NEVER: moves a centerline, touches terrain vertices, places objects. (layers-spec.md)
-   GREAT SPLIT (layers-spec.md): this file holds 4 chunk(s) of the one app module.
+   GREAT SPLIT (layers-spec.md): this file holds 5 chunk(s) of the one app module.
    tools/build-app.js reassembles every chunk from every file in global CHUNK order (the number
    after @P1850-CHUNK) — original module statement order, byte-stable. Edit code freely inside a
    chunk; never reorder or renumber chunk markers without rebuilding + re-verifying.
    ===================================================================== */
-/* @P1850-CHUNK 07 — painterly tile kit + ground splat-map */
+/* @P1850-CHUNK 07 — painterly tile kit + ground detail shader patch */
 /* =====================================================================
    PAINTERLY TILE KIT (s60 PAINTERLY GROUND KIT) — THE ANSWER to "what is
    RuneScape / WoW / Civ / AoE2:DE remastered's trick to low-poly
@@ -383,12 +383,12 @@ function patchGroundDetailMaterial(mat, kind, prevHook){
       .replace("#include <normal_fragment_begin>", "#include <normal_fragment_begin>\n" + DETAIL_FRAG_NORMAL);
   };
 }
-var terrainMat = new THREE.MeshPhongMaterial({ vertexColors:true, flatShading:true, specular:0x000000, shininess:0,
-  polygonOffset:true, polygonOffsetFactor:1, polygonOffsetUnits:1 });
-patchGroundDetailMaterial(terrainMat, "terrain", null);
-var terrainMesh = new THREE.Mesh(terrainGeo, terrainMat);
-scene.add(terrainMesh);
+/* (terrainMat/terrainMesh — terrain OWNS its mesh + material — relocated to
+   layers/terrain.js in the 2026-07-12 cleanup, keeping this exact global
+   position. patchGroundDetailMaterial() above stays here: the detail-shader
+   patch is ground-paint's legal shared piece.) */
 
+/* @P1850-CHUNK 09 — ground splat-map (street/path/wear paint) */
 /* =====================================================================
    GROUND SPLAT-MAP — STREET RENDERING REBUILD (2026-07-10)
    Replaces the old chained ~30m draped box/plane street segments (their
@@ -566,7 +566,7 @@ function _mixCol(a, b, t){
   return "rgb("+Math.round(a.r+(b.r-a.r)*t)+","+Math.round(a.g+(b.g-a.g)*t)+","+Math.round(a.b+(b.b-a.b)*t)+")";
 }
 
-/* @P1850-CHUNK 09 — network-first stroking + constant-width + tier ownership */
+/* @P1850-CHUNK 11 — network-first stroking + constant-width + tier ownership */
 /* =====================================================================
    NETWORK-FIRST STROKING (s27) + CONSTANT-WIDTH AMENDMENT (s62 —
    road-master-spec header, user ruling 2026-07-12, BINDING).
@@ -936,12 +936,6 @@ function drawRoadLayer(t, runs, layerAlpha){
 var SPLAT_MISSION_PTS = [], SPLAT_ELCAMINO_PTS = [], SPLAT_PRESIDIO_PTS = [], SPLAT_DOOR_PATHS = [];
 var SPLAT_CLUTTER_PATHS = [], SPLAT_LEVELING_CART_PTS = [];
 var SPLAT_PLANK_APRONS = []; // {x0,z0,x1,z1,widthM,from} — pushed by the wharf builder
-
-// STREET-CHECKPOINT RESET (2026-07-10): every street paints at its own
-// documented width_m straight from STREETS_RUNTIME (grounding.md §9's
-// metrological-baseline rule).
-var STREET_DIRT_COL = ROAD_COLS.r4;
-var SURVEY_GHOST_COL = ROAD_COLS.ghost;
 
 /* THE master (re)draw. `skewAngle` is the grid's CURRENT skew — the full
    as-built Vioget frame (-6.5°) before Feb 1847, eased to the permanent
@@ -1529,22 +1523,19 @@ scene.add(splatWorldMesh);
 scene.add(splatTownMesh);
 scene.add(splatCloseMesh);
 
-/* @P1850-CHUNK 12 — streets note (paint lives in the splat engine) */
+/* @P1850-CHUNK 14 — streets note (paint lives in the splat engine) */
 /* =====================================================================
-   STREETS  (Vioget grid: as-built at the -6.5° pre-1847 frame — the
-   measured -9.0° base rotation plus Vioget's 2.5° error, see
-   gridToWorld() — fading to narrower, paler sandy-track stubs at the
-   surveyed grid's edge rather than ending abruptly. geography-
-   shoreline.md §2 + GEOMETRY TRUTH block above.)
-   Rendering moved to the GROUND SPLAT-MAP (see renderGroundSplat(),
-   paintStub() up near the terrain build) — the old per-segment
-   draped-box mesh this IIFE used to build is gone; the street-GRAPH
-   constants (GEO.streetsU/V, STREET_MAIN_W/CROSS_W, STREET_STUB_LEN)
-   are unchanged and still the single source of truth for both the
-   splat painter and the placement engine above.
+   STREETS — TOMBSTONE. The per-segment draped-box street-mesh IIFE that
+   once lived at this position is gone: every street pixel is painted by
+   the GROUND SPLAT-MAP engine above (renderGroundSplat(), s62 constant-
+   width painter — per-class widths from STREETS_RUNTIME/ROAD_COLS, grid
+   frames per updateGridSwing()). Street GEOMETRY truth is unchanged:
+   GEO.streetsU/V + STREETS_RUNTIME remain the single source for both the
+   splat painter and the placement engine above (STREET_STUB_LEN still
+   governs the sandy-track fade past the surveyed grid's edge).
    ===================================================================== */
 
-/* @P1850-CHUNK 41 — mission road paint */
+/* @P1850-CHUNK 52 — mission road paint */
 /* =====================================================================
    MISSION ROAD — a winding dirt track from the village's SW edge to
    Mission Dolores, continuing south past it as the old peninsula road

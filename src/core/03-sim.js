@@ -1,12 +1,12 @@
 /* =====================================================================
    core/03-sim — sim clock, events/prices/roster data plumbing, population + density curves.
    Shared interface owner: simDay, setSimSpeed, eventDateToSimDay, populationAt/densityAt.
-   GREAT SPLIT (layers-spec.md): this file holds 3 chunk(s) of the one app module.
+   GREAT SPLIT (layers-spec.md): this file holds 5 chunk(s) of the one app module.
    tools/build-app.js reassembles every chunk from every file in global CHUNK order (the number
    after @P1850-CHUNK) — original module statement order, byte-stable. Edit code freely inside a
    chunk; never reorder or renumber chunk markers without rebuilding + re-verifying.
    ===================================================================== */
-/* @P1850-CHUNK 19 — phase 2 banner */
+/* @P1850-CHUNK 22 — phase 2 banner */
 /* =========================================================================
    PHASE 2 — "THE CLOCK"
    Simulation time, ships arriving/departing on their true documented dates,
@@ -31,7 +31,7 @@ var OFARRELL_SWING_START = eventDateToSimDay("1847-02-01");
 var OFARRELL_SWING_END = eventDateToSimDay("1847-08-01");
 console.assert(ERA_MAP_SIMDAY["ofarrell-1847"]===OFARRELL_SWING_END, "ERA_MAP_SIMDAY's hardcoded ofarrell-1847 day has drifted from OFARRELL_SWING_END — update the literal near STREETS_RUNTIME to match");
 
-/* @P1850-CHUNK 21 — sim clock, events data, prices, roster + occupation catalog */
+/* @P1850-CHUNK 24 — sim clock: speeds, hash date, clock DOM readouts */
 /* =========================================================================
    1. SIM CLOCK — fractional sim-days since 1846-07-01. Speeds read straight
    off dt each frame (no need for a sub-stepped accumulator: nothing here is
@@ -62,6 +62,7 @@ function followSpeedActive(){ return simSpeedKey==="live" || simSpeedKey==="x2";
   if(m) simDay = clamp(eventDateToSimDay(m[1])+0.5, 0, SIM_END_DAY);
 })();
 function simDateISO(d){ return d.toISOString().slice(0,10); }
+var DOW_NAMES = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"]; // shared calendar names (moved from people.js, cleanup 2026-07-12 — people schedules + doodads' wash day both read it)
 function updateHashDate(){
   var iso = simDateISO(dateFromSimDay(simDay));
   var h = location.hash.replace(/&?d=\d{4}-\d{2}-\d{2}/,"");
@@ -71,29 +72,14 @@ function updateHashDate(){
 var clockDateEl = document.getElementById("clock-date");
 var clockSpeedEl = document.getElementById("clock-speed");
 var SPEED_LABELS = { 0:"PAUSED", live:"LIVE — 1:1", x2:"FOLLOW — 2×", day:"1 DAY / 2s", week:"1 WEEK / s", month:"1 MONTH / s" };
-/* s54 TOUCH CONTROL SURFACE — the segmented speed pill (coarse-pointer
-   chrome, see CSS). Taps route through the same setSimSpeed() the keyboard
-   uses; setSimSpeed() highlights the active segment, so the pill always
-   shows the current state. */
-var speedPillEl = document.getElementById("speed-pill");
-function updateSpeedPill(key){
-  if(!speedPillEl) return;
-  var segs = speedPillEl.children;
-  for(var i=0;i<segs.length;i++){
-    segs[i].classList.toggle("active", segs[i].getAttribute("data-speed")===String(key));
-  }
-  // first segment is a play/pause TOGGLE and shows the available action:
-  // ▶ while paused (tap = play), ❚❚ while running (tap = pause)
-  segs[0].innerHTML = key===0 ? "&#9654;" : "&#10074;&#10074;";
-}
-if(speedPillEl) speedPillEl.addEventListener("click", function(e){
-  var seg = e.target.closest ? e.target.closest(".sp-seg") : null;
-  if(!seg) return;
-  var k = seg.getAttribute("data-speed");
-  if(k==="0"){ setSimSpeed(simSpeedKey===0 ? "live" : 0); return; } // mirror the Space key: pause <-> LIVE
-  if(k==="day"||k==="week"||k==="month") lastActiveSpeed = k; // mirror the 2/3/4 key handlers
-  setSimSpeed(k);
-});
+/* (The speed-pill DOM wiring + the Space/1/2/3/4 keyboard bindings were
+   relocated to layers/camera-input.js in the 2026-07-12 cleanup — spec:
+   core/sim does no rendering; camera-input OWNS keys + the speed pill.
+   Their chunks keep the exact original global positions, so setSimSpeed(0)
+   below still runs AFTER updateSpeedPill/speedPillEl exist, and listener
+   registration order is unchanged. setSimSpeed state stays core.) */
+
+/* @P1850-CHUNK 26 — sim speed state (setSimSpeed) */
 function setSimSpeed(key){
   var wasPaused = simSpeedKey===0;
   simSpeedKey = key;
@@ -102,16 +88,8 @@ function setSimSpeed(key){
   if(key===0 && !wasPaused) updateHashDate(); // "update on pause"
 }
 setSimSpeed(0); // starts paused; Space toggles pause/LIVE, 1 = 2x follow, 2/3/4 for timelapse
-window.addEventListener("keydown", function(e){
-  if(e.code==="Space"){
-    e.preventDefault();
-    if(simSpeedKey===0) setSimSpeed("live"); else setSimSpeed(0);
-  }
-  if(e.key==="1"){ setSimSpeed("x2"); } // 2x follow — schedule-true, not a timelapse tier
-  if(e.key==="2"){ lastActiveSpeed="day";   setSimSpeed("day"); }
-  if(e.key==="3"){ lastActiveSpeed="week";  setSimSpeed("week"); }
-  if(e.key==="4"){ lastActiveSpeed="month"; setSimSpeed("month"); }
-});
+
+/* @P1850-CHUNK 28 — sim clock advance, events data, prices, roster + occupation catalog */
 function updateSimClock(dt){
   if(simSpeedKey!==0){
     var step = SIM_SPEEDS[simSpeedKey]*dt;
@@ -184,20 +162,16 @@ function formatPrice(p){
 var ROSTER = window.ROSTER_1846_49 || [];
 if(!window.ROSTER_1846_49) console.warn("[verify] roster-1846-49.js failed to load — routine cast will use invented names only. Run: node tools/build-roster.js");
 var CATALOG_OCC_ALL = (window.CATALOG_OCCUPATIONS && window.CATALOG_OCCUPATIONS.occupations) || [];
-if(!window.CATALOG_OCCUPATIONS) console.warn("[verify] catalog-occupations.js failed to load — falling back to the legacy ad-hoc TRADES list. Run: node tools/build-catalog-js.js");
+if(!window.CATALOG_OCCUPATIONS) console.warn("[verify] catalog-occupations.js failed to load — routine slots will have no occupations (there is no fallback list). Run: node tools/build-catalog-js.js");
 var CATALOG_OCC = CATALOG_OCC_ALL.filter(function(o){ return o.worldSupport==="exists"; });
 var CATALOG_OCC_BY_ID = {}; CATALOG_OCC_ALL.forEach(function(o){ CATALOG_OCC_BY_ID[o.id]=o; });
-// PL-B item 1 (full dice engine): the two remaining behavior-spec.md §0
-// catalogs — activities (§2/§3, what the world offers + the dice's menu)
-// and event-type reaction affordances (§6, feeds the ticker/director, not
-// movement — loaded here so it's available, wired into the ticker/reaction
-// layer in a later pass).
+// PL-B item 1 (full dice engine): the remaining behavior-spec.md §0 catalog —
+// activities (§2/§3, what the world offers + the dice's menu). The reactions
+// catalog (app/catalog-reactions.js) was loaded-but-never-consumed for weeks;
+// its script tag + loader were removed in the 2026-07-12 cleanup (the sidecar
+// file stays on disk — re-add both if a ticker/reaction pass ever lands).
 var CATALOG_ACT = (window.CATALOG_ACTIVITIES && window.CATALOG_ACTIVITIES.activities) || [];
-var CATALOG_ACT_BY_ID = {}; CATALOG_ACT.forEach(function(a){ CATALOG_ACT_BY_ID[a.id]=a; });
 if(!window.CATALOG_ACTIVITIES) console.warn("[verify] catalog-activities.js failed to load — the dice engine has no activities to sample. Run: node tools/build-catalog-js.js");
-var CATALOG_REACT = (window.CATALOG_REACTIONS && window.CATALOG_REACTIONS.eventReactions) || [];
-var CATALOG_REACT_BY_TYPE = {}; CATALOG_REACT.forEach(function(r){ CATALOG_REACT_BY_TYPE[r.type]=r; });
-if(!window.CATALOG_REACTIONS) console.warn("[verify] catalog-reactions.js failed to load — event reaction affordances unavailable. Run: node tools/build-catalog-js.js");
 // roster people are consumed sequentially (best-attested first — see the
 // builder's sort) into routine slots first, then extras, so real names use
 // up the persistent cast before density-fill anonymous slots reach for one.
@@ -243,7 +217,7 @@ function rollTraits(rng){
   return { drink: t["temperate:heavy-drinker"], work: t["industrious:idler"], faith: t["pious:indifferent"], social: t["gregarious:solitary"], temperament: t["restless:settled"] };
 }
 
-/* @P1850-CHUNK 23 — POP_CURVE/populationAt + DENSITY_CURVE/densityAt */
+/* @P1850-CHUNK 30 — POP_CURVE/populationAt + DENSITY_CURVE/densityAt */
 /* =========================================================================
    4. VILLAGE GROWTH — population curve (demographics-society.md) drives
    how many additional buildings (1846-48) and then tents (1849's explosion,
@@ -314,4 +288,19 @@ function densityAt(day){
     }
   }
   return DENSITY_CURVE[DENSITY_CURVE.length-1].pop;
+}
+/* densityAt's inverse: first sim day the density curve reaches popTarget.
+   Consumed by buildings' deterministic reveal days (dayForTentIndex /
+   dayForBuildingIndex, the P0-1 time-jump fix) and people's tent-home
+   reveal days. (Relocated verbatim from fauna.js in the 2026-07-12
+   cleanup — this is core/sim's curve, so its inverter lives here.) */
+function dayForDensityAtLeast(popTarget){
+  for(var i=0;i<DENSITY_CURVE.length;i++){
+    if(DENSITY_CURVE[i].pop>=popTarget){
+      if(i===0) return DENSITY_CURVE[0].day;
+      var a=DENSITY_CURVE[i-1], b=DENSITY_CURVE[i];
+      return lerp(a.day, b.day, clamp((popTarget-a.pop)/(b.pop-a.pop),0,1));
+    }
+  }
+  return DENSITY_CURVE[DENSITY_CURVE.length-1].day;
 }

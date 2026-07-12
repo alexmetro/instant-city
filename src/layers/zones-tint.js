@@ -5,12 +5,12 @@
    after @P1850-CHUNK) — original module statement order, byte-stable. Edit code freely inside a
    chunk; never reorder or renumber chunk markers without rebuilding + re-verifying.
    ===================================================================== */
-/* @P1850-CHUNK 26 — district/activity tint overlays */
+/* @P1850-CHUNK 33 — district/activity tint overlays */
 /* =========================================================================
    6. SEMANTIC ZOOM / DISTRICT TINTS (design addendum)
    Above ~zoomCartoFull altitude, individual buildings/tents crossfade out
-   and a cartographic layer of tinted district zones + name chips (the
-   existing .geo-label look) takes over, à la a period map legend; below
+   and a cartographic layer of tinted district zones + name labels (floating
+   haloed .wlbl-zone text, §11 grammar) takes over, à la a period map legend; below
    ~zoomTrueScaleFull the true-scale world reads on its own and the tints
    are gone. Happy Valley's tint only appears once its tents do (1849).
 

@@ -6,7 +6,7 @@
    after @P1850-CHUNK) — original module statement order, byte-stable. Edit code freely inside a
    chunk; never reorder or renumber chunk markers without rebuilding + re-verifying.
    ===================================================================== */
-/* @P1850-CHUNK 58 — __P1850 debug registry */
+/* @P1850-CHUNK 70 — __P1850 debug registry */
 window.__P1850 = {
   jump: function(iso){ jumpToDate(eventDateToSimDay(iso)); }, // P0-3: routes through jumpToDate's noon-default fix
   jumpDay: function(day){ jumpToDate(day); }, // s59 QA: fractional-day jumps (sample specific hours)
@@ -19,10 +19,11 @@ window.__P1850 = {
   invalidatePaint: function(){ invalidateGroundPaint(); return "redraped + repaint queued"; },
   _scene: function(){ return scene; },
   _renderer: function(){ return renderer; },
-  // s44 QA — Director V2 hooks: the logged beat sequence, watch-mode toggle,
-  // and speed control (all route through the real user-facing functions).
+  // s44 QA — Director V2 hooks: the logged beat sequence and speed control
+  // (both route through the real user-facing functions; the watch toggle is
+  // the single `watch: setWatchMode` member further down — a duplicate
+  // `watch:` key here was deleted in the 2026-07-12 cleanup).
   get beatLog(){ return INTEREST.log.slice(); },
-  watch: function(on){ setWatchMode(!!on); },
   setSpeed: function(k){ setSimSpeed(k); },
   get director(){ // s44 QA introspection
     var b = DIRECTOR.beat;
@@ -40,9 +41,10 @@ window.__P1850 = {
   },
   get date(){ return simDateISO(dateFromSimDay(simDay)); },
   get simDay(){ return simDay; },
-  // s54 QA — touch-control-surface hooks: current speed tier, mode states,
-  // and yaw (twist-orbit verification reads yawT against the gesture angle).
-  get speedKey(){ return simSpeedKey; },
+  // s54 QA — touch-control-surface hooks: mode states and yaw (twist-orbit
+  // verification reads yawT against the gesture angle). The speed tier is
+  // the single `get speedKey()` further down — a duplicate getter here was
+  // deleted in the 2026-07-12 cleanup.
   get modes(){ return { watch:WATCH.on, paper:paperOpen, ghost:ghostVisible,
     documentedOnly:provenanceOnly, tilt:cinematicTilt, pitchOff:+CAM.pitchOffT.toFixed(3) }; },
   get yawState(){ return { yaw:+CAM.yaw.toFixed(4), yawT:+CAM.yawT.toFixed(4) }; },

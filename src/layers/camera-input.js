@@ -1,11 +1,71 @@
 /* =====================================================================
    LAYER camera-input (slot 11) — OWNS camera rig, pointer/touch/keys, speed pill + menu chrome bindings. (layers-spec.md)
-   GREAT SPLIT (layers-spec.md): this file holds 1 chunk(s) of the one app module.
+   GREAT SPLIT (layers-spec.md): this file holds 4 chunk(s) of the one app module.
    tools/build-app.js reassembles every chunk from every file in global CHUNK order (the number
    after @P1850-CHUNK) — original module statement order, byte-stable. Edit code freely inside a
    chunk; never reorder or renumber chunk markers without rebuilding + re-verifying.
    ===================================================================== */
-/* @P1850-CHUNK 60 — camera rig, pointer/touch/keys, speed pill + menu chrome, WASD */
+/* @P1850-CHUNK 25 — speed pill DOM wiring (relocated from core/03-sim, cleanup 2026-07-12 — camera-input OWNS the speed pill; exact original global position, so the setSimSpeed(0) boot call still paints the pill) */
+/* s54 TOUCH CONTROL SURFACE — the segmented speed pill (coarse-pointer
+   chrome, see CSS). Taps route through the same setSimSpeed() the keyboard
+   uses; setSimSpeed() highlights the active segment, so the pill always
+   shows the current state. */
+var speedPillEl = document.getElementById("speed-pill");
+function updateSpeedPill(key){
+  if(!speedPillEl) return;
+  var segs = speedPillEl.children;
+  for(var i=0;i<segs.length;i++){
+    segs[i].classList.toggle("active", segs[i].getAttribute("data-speed")===String(key));
+  }
+  // first segment is a play/pause TOGGLE and shows the available action:
+  // ▶ while paused (tap = play), ❚❚ while running (tap = pause)
+  segs[0].innerHTML = key===0 ? "&#9654;" : "&#10074;&#10074;";
+}
+if(speedPillEl) speedPillEl.addEventListener("click", function(e){
+  var seg = e.target.closest ? e.target.closest(".sp-seg") : null;
+  if(!seg) return;
+  var k = seg.getAttribute("data-speed");
+  if(k==="0"){ setSimSpeed(simSpeedKey===0 ? "live" : 0); return; } // mirror the Space key: pause <-> LIVE
+  if(k==="day"||k==="week"||k==="month") lastActiveSpeed = k; // mirror the 2/3/4 key handlers
+  setSimSpeed(k);
+});
+
+/* @P1850-CHUNK 27 — sim-speed keyboard bindings (relocated from core/03-sim, cleanup 2026-07-12 — camera-input OWNS keys; exact original global position keeps keydown-listener registration order) */
+window.addEventListener("keydown", function(e){
+  if(e.code==="Space"){
+    e.preventDefault();
+    if(simSpeedKey===0) setSimSpeed("live"); else setSimSpeed(0);
+  }
+  if(e.key==="1"){ setSimSpeed("x2"); } // 2x follow — schedule-true, not a timelapse tier
+  if(e.key==="2"){ lastActiveSpeed="day";   setSimSpeed("day"); }
+  if(e.key==="3"){ lastActiveSpeed="week";  setSimSpeed("week"); }
+  if(e.key==="4"){ lastActiveSpeed="month"; setSimSpeed("month"); }
+});
+
+/* @P1850-CHUNK 35 — flyTo (camera-rig write) + pulse crosshair (relocated from ui-chrome, cleanup 2026-07-12 — the rig is camera-input's; exact original global position preserves mesh/scene.add order) */
+/* ---- brief crosshair pulse at a fly destination ---- */
+var pulseGeo = new THREE.RingGeometry(1,1.15,32); pulseGeo.rotateX(-Math.PI/2);
+var pulseMat = new THREE.MeshBasicMaterial({ color:0xf1e6c9, transparent:true, opacity:0, depthWrite:false, side:THREE.DoubleSide, fog:false });
+var pulseMesh = new THREE.Mesh(pulseGeo, pulseMat); scene.add(pulseMesh);
+var pulseT = -1;
+function pulseAt(x,z){ pulseMesh.position.set(x, groundHeight(x,z)+1.5, z); pulseT = 0; }
+function updatePulse(dt){
+  if(pulseT<0) return;
+  pulseT += dt;
+  var dur = 1.15;
+  if(pulseT>dur){ pulseT=-1; pulseMat.opacity=0; return; }
+  var t = pulseT/dur;
+  var s = lerp(4,70,t);
+  pulseMesh.scale.set(s,s,s);
+  pulseMat.opacity = (1-t)*0.85;
+}
+function flyTo(x,z,alt){
+  CAM.focusT = new THREE.Vector3(x, groundHeight(x,z), z);
+  setZoomMeters(alt||260);
+  pulseAt(x,z);
+}
+
+/* @P1850-CHUNK 72 — camera rig, pointer/touch/keys, speed pill + menu chrome, WASD */
 /* =====================================================================
    CAMERA RIG + INPUT — Annals-kingdom architecture (ported verbatim from
    research/annals-nav-reference.md, 2026-07-10; see field notes there).
@@ -150,8 +210,8 @@ canvas.addEventListener("contextmenu", function(e){ e.preventDefault(); });
 
 /* s41 MOBILE-PAN FIX — the nav pointer/wheel/gesture handlers now live on
    WINDOW, not the canvas. Root cause of the iPad "one-finger pan is
-   unreliable" bug: label chips (.ship-label/.building-label, enlarged to
-   finger size on touch), the 78vw-wide scrubber ribbon, and the beat card
+   unreliable" bug: label chips (today's haloed .wlbl / .street-label /
+   .biz-glyph labels), the 78vw-wide scrubber ribbon, and the beat card
    all sit OVER the canvas with pointer-events:auto — any drag that STARTED
    on one of them never reached the canvas listeners at all, so whether a
    pan worked depended on exactly which pixel the finger landed on. Now the

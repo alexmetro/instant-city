@@ -5,12 +5,13 @@
    after @P1850-CHUNK) — original module statement order, byte-stable. Edit code freely inside a
    chunk; never reorder or renumber chunk markers without rebuilding + re-verifying.
    ===================================================================== */
-/* @P1850-CHUNK 55 — auto-director + watch mode */
+/* @P1850-CHUNK 67 — auto-director + watch mode */
 /* =========================================================================
    PHASE 5 — AUTO-DIRECTOR + WATCH MODE (V)
    Event bus with spine priorities (fire 10, Brannan 9, a paper's first
    issue 7, ship arrival 4 first-of-month-only, month-change idle 2);
-   shot grammar = eased fly-to (the existing spring rig), wide establishing
+   shot grammar = eased fly-to (the Annals chase rig's single-pole
+   smoothing — see camera-input), wide establishing
    then push-in, hold 8-18s; per-class cooldowns; parchment lower-third
    quoting the actual headline with date + receipt. Manual input suspends
    the director for 30s. Watch mode hides all HUD but date/beat-card/ticker.
@@ -127,7 +128,7 @@ var DIRECTOR_BEATS = (function(){
   return beats;
 })();
 
-/* @P1850-CHUNK 57 — interest system (Director V2) */
+/* @P1850-CHUNK 69 — interest system (Director V2) */
 /* =========================================================================
    s44 — THE INTEREST SYSTEM (Director V2). A scored pool of candidate
    beats, refreshed as the sim runs:

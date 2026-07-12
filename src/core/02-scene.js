@@ -149,7 +149,7 @@ function scatterRect(count, xMin, xMax, zMin, zMax, biomeTest, maxAttempts){
    grounding.md §9: one street/ground-marking system only, competing logic
    is deleted, not reconciled. */
 
-/* @P1850-CHUNK 11 — shared placement engine canPlace() */
+/* @P1850-CHUNK 13 — shared placement engine canPlace() */
 /* =========================================================================
    SHARED PLACEMENT ENGINE — canPlace(x,z,footprintR,opts)  (WORLD-P0 fix
    2026-07-09, AUDIT-2026-07-09.md §7 "Placement Collision Sweep")

@@ -1,12 +1,12 @@
 /* =====================================================================
    LAYER doodads (slot 5) — OWNS scatter/litter/vegetation instancing (trees, scrub, doodad ring,
    village clutter, waterfront props). READS zoneAt, walkBlockedAt, terrainHeight. (layers-spec.md)
-   GREAT SPLIT (layers-spec.md): this file holds 4 chunk(s) of the one app module.
+   GREAT SPLIT (layers-spec.md): this file holds 5 chunk(s) of the one app module.
    tools/build-app.js reassembles every chunk from every file in global CHUNK order (the number
    after @P1850-CHUNK) — original module statement order, byte-stable. Edit code freely inside a
    chunk; never reorder or renumber chunk markers without rebuilding + re-verifying.
    ===================================================================== */
-/* @P1850-CHUNK 29 — ground scatter, micro-scatter ring, doodad ring, village-life clutter */
+/* @P1850-CHUNK 38 — ground scatter, micro-scatter ring, doodad ring, village-life clutter */
 /* =====================================================================
    A1: DETAIL DISPLACEMENT PATCH — RETIRED (s52 GROUND MATERIALITY).
    The old 600m camera-following translucent ripple film (one uniform
@@ -166,6 +166,7 @@ var MICRO_CELL = 2.6;
 var MICRO_CHUNK_CAP = SCT(1600), MICRO_TUFT_CAP = SCT(1500);
 var MICRO_ALT_HIDE = 250;         // hard off — well under any map framing
 function _microHash(ix,iz,k){ return hash2(ix*12.9898+k*3.7, iz*78.233-k*7.1); }
+function pick(arr,h){ return arr[Math.floor(h*arr.length)%arr.length]; } // hash->array pick, shared by the micro-scatter + doodad rings (was declared twice, hoisted in the 2026-07-12 cleanup)
 function makeMicroChunkGeo(){     // one irregular flattened lump — reads as chip/stone/scrap by scale+tint
   var g = new THREE.BoxGeometry(0.20,0.045,0.12).toNonIndexed();
   var pos = g.attributes.position;
@@ -294,7 +295,6 @@ function rebuildMicroScatter(camX, camZ){
     microTuftMesh.setColorAt(nTuft, tint);
     nTuft++;
   }
-  function pick(arr,h){ return arr[Math.floor(h*arr.length)%arr.length]; }
   for(var iz=j0; iz<=j1; iz++){
     for(var ix=i0; ix<=i1; ix++){
       var hKeep = _microHash(ix,iz,0);
@@ -555,7 +555,6 @@ function rebuildDoodads(camX, camZ){
     if(tint) P.mesh.setColorAt(n[pool], tint);
     n[pool]++;
   }
-  function pick(arr,h){ return arr[Math.floor(h*arr.length)%arr.length]; }
   var i0 = Math.floor((camX-R)/DOODAD_CELL), i1 = Math.ceil((camX+R)/DOODAD_CELL);
   var j0 = Math.floor((camZ-R)/DOODAD_CELL), j1 = Math.ceil((camZ+R)/DOODAD_CELL);
   var nCells = 0;
@@ -910,7 +909,7 @@ function updateLaundryDay(day){
    structures) — it now runs as buildWharfGrowth() in layers/ships.js, chunk 30, at the
    exact same point in module order. */
 
-/* @P1850-CHUNK 37 — waterfront life props + the lumber dealer */
+/* @P1850-CHUNK 46 — waterfront life props + the lumber dealer */
 /* =====================================================================
    WATERFRONT LIFE — the working beach between the village's Montgomery
    St edge and the true (heightmap) waterline: beached rowboats, cargo
@@ -942,40 +941,12 @@ var waterfrontBeachLines = (function(){
   return lines;
 })();
 
-/* =====================================================================
-   THE LUMBER DEALER (behavior-spec.md item 4 — a documented building-
-   materials trade): closes catalog-occupations.json's
-   missing:lumber_yard_timber_stand gap for woodcutter_woodyard, and gives
-   staged construction (below) a real materials source that supply carts
-   travel from. Sited on the working beach — lumber arrived by ship, same
-   waterfront the timber-stack waterfront-life props already occupy.
-   (Placed here, after waterfrontBeachLines is actually assigned, rather
-   than up with the other yard objects — it reads that array directly.)
-   ===================================================================== */
-var LUMBER_YARD_SPOT = (function buildLumberYard(){
-  var ln = waterfrontBeachLines[Math.max(0, Math.floor(waterfrontBeachLines.length*0.78))] || null;
-  var p = ln ? { x:lerp(ln.landX,ln.waterX,0.4), z:ln.z } : { x:WORKSITE_WHARF ? WORKSITE_WHARF.x : PLAZA_CENTER.x, z:PLAZA_CENTER.z };
-  var y = terrainHeight(p.x,p.z);
-  registerPlacement(p.x,p.z,7);
-  var geoms = [];
-  for(var s=0;s<3;s++){
-    var stack = makeTimberStackGeo();
-    bake(stack, new THREE.Vector3((s-1)*2.6, 0, (s%2)*1.2), s*0.5);
-    geoms.push(stack);
-  }
-  // a simple open lean-to roof over the stacks — posts + gable, no walls
-  var postColor = new THREE.Color(0x5a4632), roofColor = new THREE.Color(0x6b5238);
-  [[-3.2,-2.2],[3.2,-2.2],[-3.2,2.2],[3.2,2.2]].forEach(function(o){
-    var post = makeBoxLocal(0.22,3.0,0.22,postColor); bake(post, new THREE.Vector3(o[0],0,o[1])); geoms.push(post);
-  });
-  var roof = makeGableRoof(7.2,5.0,0.5,1.0,roofColor); bake(roof, new THREE.Vector3(0,3.0,0)); geoms.push(roof);
-  var merged = mergeGeoms(geoms);
-  bake(merged, new THREE.Vector3(p.x,y,p.z), 0.15);
-  scene.add(new THREE.Mesh(merged, new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, side:THREE.DoubleSide, specular:0x000000, shininess:0})));
-  mountSignBoard({x:p.x,z:p.z,y:y,rot:0.15,d:5.0}, "LUMBER YARD", null, 3.3);
-  console.log("[verify] Lumber yard at ("+p.x.toFixed(0)+","+p.z.toFixed(0)+")");
-  return { key:"lumberyard", label:"the lumber yard", x:p.x, z:p.z, activity:"stationary" };
-})();
+/* (THE LUMBER DEALER — a signed structure + worksite — relocated to
+   layers/buildings.js in the 2026-07-12 cleanup: buildings OWNS structures
+   and signs. Its chunk keeps this exact global position, directly after the
+   waterfrontBeachLines assignment above that it reads.) */
+
+/* @P1850-CHUNK 48 — beach candidate pools + waterfront prop builders */
 
 function beachCandidatePool(count, salt, tNear, tFar){
   var out = [], tries = 0, attempts = count*4;
@@ -1060,7 +1031,7 @@ cargoPileMesh.count = 0; scene.add(cargoPileMesh);
 var timberStackMesh = new THREE.InstancedMesh(makeTimberStackGeo(), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, specular:0x000000, shininess:0}), Math.max(timberCandidates.length,1));
 timberStackMesh.count = 0; scene.add(timberStackMesh);
 
-/* @P1850-CHUNK 39 — waterfront prop reveal (updateWaterfrontLife) */
+/* @P1850-CHUNK 50 — waterfront prop reveal (updateWaterfrontLife) */
 var spawnedBoats = [], spawnedCargo = [], spawnedTimber = [];
 function waterfrontTargets(pop){
   return {
@@ -1077,7 +1048,7 @@ function updateWaterfrontLife(){
   growReveal(timberCandidates, spawnedTimber, t.timber, timberStackMesh);
 }
 
-/* @P1850-CHUNK 52 — trees, rock outcrops, chaparral band */
+/* @P1850-CHUNK 63 — trees, rock outcrops, chaparral band */
 /* =====================================================================
    A2b: TREES, ROCK OUTCROPS & CHAPARRAL BAND — visual-richness pass.
    Historical grounding (research/peninsula-1846.md, geography-shoreline.md):
@@ -1092,12 +1063,8 @@ function updateWaterfrontLife(){
 (function buildVegetationAndRockOutcrops(){
   var originX = PLAZA_CENTER.x, originZ = PLAZA_CENTER.z;
 
-  function distToSeg(x,z,x0,z0,x1,z1){
-    var dx=x1-x0, dz=z1-z0, len2=dx*dx+dz*dz;
-    var t = len2>0 ? ((x-x0)*dx+(z-z0)*dz)/len2 : 0;
-    t = clamp(t,0,1);
-    return Math.hypot(x-(x0+dx*t), z-(z0+dz*t));
-  }
+  // (a local byte-identical distToSeg() re-implementation was deleted in the
+  // 2026-07-12 cleanup — the masks below call core's distToSegXZ() directly)
   var STREET_SEGS = (function(){
     var uVals=[GEO.streetsU.stockton,GEO.streetsU.dupont,GEO.streetsU.kearny,GEO.streetsU.montgomery];
     var vVals=[GEO.streetsV.pacific,GEO.streetsV.jackson,GEO.streetsV.clay,GEO.streetsV.washington,GEO.streetsV.sacramento,GEO.streetsV.california];
@@ -1108,13 +1075,13 @@ function updateWaterfrontLife(){
     return segs;
   })();
   function nearStreet(x,z,buffer){
-    for(var i=0;i<STREET_SEGS.length;i++){ if(distToSeg(x,z,STREET_SEGS[i][0],STREET_SEGS[i][1],STREET_SEGS[i][2],STREET_SEGS[i][3])<buffer) return true; }
+    for(var i=0;i<STREET_SEGS.length;i++){ if(distToSegXZ(x,z,STREET_SEGS[i][0],STREET_SEGS[i][1],STREET_SEGS[i][2],STREET_SEGS[i][3])<buffer) return true; }
     return false;
   }
   function nearMissionRoad(x,z,buffer){
     for(var i=0;i<MISSION_ROAD_PTS.length-1;i++){
       var a=MISSION_ROAD_PTS[i], b=MISSION_ROAD_PTS[i+1];
-      if(distToSeg(x,z,a.x,a.z,b.x,b.z)<buffer) return true;
+      if(distToSegXZ(x,z,a.x,a.z,b.x,b.z)<buffer) return true;
     }
     return false;
   }

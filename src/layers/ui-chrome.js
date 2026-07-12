@@ -1,12 +1,12 @@
 /* =====================================================================
    LAYER ui-chrome (slot 13) — OWNS HUD panels, timeline scrubber, paper pane, tickers. Parchment lives
    here and only here (Earth Palette Law). (layers-spec.md)
-   GREAT SPLIT (layers-spec.md): this file holds 3 chunk(s) of the one app module.
+   GREAT SPLIT (layers-spec.md): this file holds 4 chunk(s) of the one app module.
    tools/build-app.js reassembles every chunk from every file in global CHUNK order (the number
    after @P1850-CHUNK) — original module statement order, byte-stable. Edit code freely inside a
    chunk; never reorder or renumber chunk markers without rebuilding + re-verifying.
    ===================================================================== */
-/* @P1850-CHUNK 27 — event ticker, the paper, click-to-fly, pulse, horizon ring */
+/* @P1850-CHUNK 34 — event ticker, the paper, click-to-fly, pulse, horizon ring */
 /* =========================================================================
    7. EVENT TICKER — a parchment strip narrating the most recent qualifying
    spine event as sim-time passes it (fires/proclamations/arrivals get
@@ -91,7 +91,8 @@ var SUSPENSION_ISSUE_DATE = "1848-05-24"; // the Californian's farewell-to-the-m
 
 function issueUrl(src){ return "https://cdnc.ucr.edu/?a=d&d=" + src; }
 function todayISOFromSimDay(day){ return simDateISO(dateFromSimDay(day)); }
-function escapeHTML(s){ return (s||"").replace(/[&<>]/g, function(c){ return c==="&"?"&amp;":(c==="<"?"&lt;":"&gt;"); }); }
+// (escapeHTML/cap — generic string helpers with heavy cross-layer consumers —
+// moved to core/00-boot.js in the 2026-07-12 cleanup.)
 function formatIssueDateLabel(dateKey){
   return new Date(dateKey+"T00:00:00Z").toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric",timeZone:"UTC"});
 }
@@ -129,7 +130,6 @@ var STREET_V_MIDU = (GEO.streetsU.montgomery + GEO.streetsU.stockton)/2;
 var PLAZA_RE = /\b(plaza|portsmouth square)\b/i;
 var MISSION_RE = /\bmission\b/i;
 var PRESIDIO_RE = /\bpresidio\b/i;
-function cap(s){ return s.charAt(0).toUpperCase()+s.slice(1); }
 function findNameHits(text, names){
   var hits = [];
   names.forEach(function(n){ if(new RegExp("\\b"+n+"\\b","i").test(text)) hits.push(n); });
@@ -170,28 +170,12 @@ function resolvePlace(headline, text){
   return null;
 }
 
-/* ---- brief crosshair pulse at a fly destination ---- */
-var pulseGeo = new THREE.RingGeometry(1,1.15,32); pulseGeo.rotateX(-Math.PI/2);
-var pulseMat = new THREE.MeshBasicMaterial({ color:0xf1e6c9, transparent:true, opacity:0, depthWrite:false, side:THREE.DoubleSide, fog:false });
-var pulseMesh = new THREE.Mesh(pulseGeo, pulseMat); scene.add(pulseMesh);
-var pulseT = -1;
-function pulseAt(x,z){ pulseMesh.position.set(x, groundHeight(x,z)+1.5, z); pulseT = 0; }
-function updatePulse(dt){
-  if(pulseT<0) return;
-  pulseT += dt;
-  var dur = 1.15;
-  if(pulseT>dur){ pulseT=-1; pulseMat.opacity=0; return; }
-  var t = pulseT/dur;
-  var s = lerp(4,70,t);
-  pulseMesh.scale.set(s,s,s);
-  pulseMat.opacity = (1-t)*0.85;
-}
-function flyTo(x,z,alt){
-  CAM.focusT = new THREE.Vector3(x, groundHeight(x,z), z);
-  setZoomMeters(alt||260);
-  pulseAt(x,z);
-}
+/* (flyTo() — the camera-rig write — plus its pulse crosshair relocated to
+   layers/camera-input.js in the 2026-07-12 cleanup: the rig is camera-
+   input's. Same global chunk position; consumers everywhere still call
+   flyTo(x,z,alt) unchanged — it behaves as the de-facto shared interface.) */
 
+/* @P1850-CHUNK 36 — byline chips, ticker, the paper pane, horizon ring */
 /* -------------------------------------------------------------------------
    TYPE -> BYLINE CHIP (feed view). The extracted data carries no byline
    field (checked: data/feed/*.json items are {type,headline,text,prov}
@@ -373,7 +357,7 @@ function updateHorizonRing(alt){
   horizonRingEl.innerHTML = html;
 }
 
-/* @P1850-CHUNK 56 — timeline scrubber */
+/* @P1850-CHUNK 68 — timeline scrubber */
 /* =========================================================================
    THE SCRUBBER — bottom timeline ribbon, full span 1846-07 -> 1849-12.
    jumpToDate() is the single entry point for every explicit jump (drag
@@ -615,7 +599,7 @@ function lowerBoundBeats(day){
   return lo;
 }
 
-/* @P1850-CHUNK 61 — HUD update */
+/* @P1850-CHUNK 73 — HUD update */
 /* =====================================================================
    HUD UPDATE
    ===================================================================== */

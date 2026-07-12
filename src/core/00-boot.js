@@ -166,3 +166,10 @@ var __P1850_AUDITS = {};
 function registerAudit(layer, name, fn){
   (__P1850_AUDITS[layer] = __P1850_AUDITS[layer] || {})[name] = fn;
 }
+
+/* Generic string helpers (relocated from ui-chrome.js in the 2026-07-12
+   cleanup — labels-inspect is escapeHTML's heaviest consumer and core
+   routing uses cap(); cross-layer helper calls belong in core). Function
+   declarations hoist module-wide, so the earlier position is behavior-safe. */
+function escapeHTML(s){ return (s||"").replace(/[&<>]/g, function(c){ return c==="&"?"&amp;":(c==="<"?"&lt;":"&gt;"); }); }
+function cap(s){ return s.charAt(0).toUpperCase()+s.slice(1); }

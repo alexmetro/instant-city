@@ -2,7 +2,7 @@
    LAYER terrain (slot 1) — OWNS terrain meshes/materials, heightmap consumption, relief/hillshade,
    village-pad feather, coast/intertidal band, water surface, west-peninsula geography.
    NEVER: paints roads/paths, tints for districts, draws props. (layers-spec.md)
-   GREAT SPLIT (layers-spec.md): this file holds 3 chunk(s) of the one app module.
+   GREAT SPLIT (layers-spec.md): this file holds 4 chunk(s) of the one app module.
    tools/build-app.js reassembles every chunk from every file in global CHUNK order (the number
    after @P1850-CHUNK) — original module statement order, byte-stable. Edit code freely inside a
    chunk; never reorder or renumber chunk markers without rebuilding + re-verifying.
@@ -273,7 +273,14 @@ var DETAIL_GLSL_PARS = [
   "  return vec3(n.x, g);",
   "}"
 ].join("\n");
-/* @P1850-CHUNK 10 — horizon skirt, water, shoreline foam */
+/* @P1850-CHUNK 08 — terrain material + mesh (relocated from ground-paint.js, cleanup 2026-07-12 — terrain OWNS terrain meshes/materials; exact original global position, right after ground-paint's detail-shader patch function it calls) */
+var terrainMat = new THREE.MeshPhongMaterial({ vertexColors:true, flatShading:true, specular:0x000000, shininess:0,
+  polygonOffset:true, polygonOffsetFactor:1, polygonOffsetUnits:1 });
+patchGroundDetailMaterial(terrainMat, "terrain", null);
+var terrainMesh = new THREE.Mesh(terrainGeo, terrainMat);
+scene.add(terrainMesh);
+
+/* @P1850-CHUNK 12 — horizon skirt, water, shoreline foam */
 /* =====================================================================
    HORIZON SKIRT — a big, cheap, low-poly disc well below the terrain,
    colored to melt into the fog/sea tone, so panning past the baked box's
@@ -437,16 +444,11 @@ var foamMesh = null;
    tools/debug-region.js's scan around x=-560,z=-560 — so it's dropped
    rather than floating a disc of water on a slope. */
 
-/* Hoisted early (was previously declared alongside buildOutposts() much
-   further down) so the shared placement engine below — and every spawner
-   that follows it in file order — can consult real outpost coordinates
-   (e.g. the Mission Road corridor approximation) before it's built. */
-var OUTPOSTS = {
-  mission:  { x:-1997, z:3462, n:7 },
-  presidio: { x:-4776, z:-234, n:6 }
-};
+/* (OUTPOSTS — the Mission Dolores / Presidio geography truth — relocated to
+   core/01-geography.js in the 2026-07-12 cleanup: core's placement engine
+   reads it, so a layer could not own it.) */
 
-/* @P1850-CHUNK 53 — west peninsula geography (perched lake, creeks, tule, west fauna anchors) */
+/* @P1850-CHUNK 64 — west peninsula geography (perched lake, creeks, tule, west fauna anchors) */
 /* =====================================================================
    s46 — WEST PENINSULA GEOGRAPHY (data/peninsula-geography-1849.json):
    perched lake water, the Lobos Creek ribbon, tule marsh texture, and
@@ -669,68 +671,13 @@ var OUTPOSTS = {
 
   window._westFauna = { seaLions:seaLionMesh.count, ducks:duckMesh.count, deer:deerMesh.count, tule:tuleSamples.length };
 
-  // ---- geographic labels for the west (§11 grammar; join the shared pool) ----
-  LABELS.push(
-    { name:"Pacific Ocean",        cat:"water",            x:-10400, z:3200, y:30 },
-    { name:"Mission Bay",          cat:"water", near:true, x:850,   z:2350, y:12 },
-    { name:"Lake Merced",          cat:"water", near:true, x:-7600, z:7900, y:8 },
-    { name:"Mountain Lake",        cat:"water", near:true, x:-5700, z:695,  y:null },
-    { name:"Lobos Creek",          cat:"water", near:true, x:-6100, z:190,  y:null },
-    { name:"Washerwoman's Lagoon", cat:"water", near:true, x:-2754, z:-816, y:null },
-    { name:"SEAL ROCKS",           cat:"region", x:-9880, z:1620, y:14 },
-    { name:"POINT LOBOS",          cat:"region", x:-9200, z:1150, y:null },
-    { name:"THE GREAT SAND BANK",  cat:"region", x:-7300, z:3600, y:null },
-    { name:"OCEAN BEACH",          cat:"region", x:-9380, z:4300, y:8 },
-    { name:"FORT POINT",           cat:"region", x:-6405, z:-1600, y:10 }
-  );
 })();
 
-(function buildLabels(){
-  var hudEl = document.getElementById("hud");
-  // §11 waterway set: Mission Creek joins here (its marsh-edge site is
-  // found at runtime by the heron placement search — reuse it rather than
-  // invent a second coordinate for the same feature).
-  if(typeof HERON_SPOTS!=="undefined" && HERON_SPOTS.length){
-    LABELS.push({ name:"Mission Creek", cat:"water", near:true, x:HERON_SPOTS[0].x, z:HERON_SPOTS[0].z, y:null });
-  }
-  LABELS.forEach(function(L){
-    var el = document.createElement("div");
-    el.className = "wlbl " + (L.cat==="water" ? "wlbl-water" : L.cat==="route" ? "wlbl-route" : "wlbl-region");
-    el.textContent = L.name;
-    hudEl.appendChild(el);
-    L.el = el;
-    geoLabelEls.push(el); // shared declutter engine pool
-    var gy = (L.y!==null && L.y!==undefined) ? L.y : groundHeight(L.x,L.z)+45;
-    L.pos = new THREE.Vector3(L.x, gy, L.z);
-  });
-})();
-var _labelV = new THREE.Vector3();
-/* §11 zoom choreography: regions OWN the high band (fade in ascending
-   ~1050-1600m and stay); big waterways ride a slightly lower shoulder;
-   near waterways (the cove, Mission Creek) live in the street/zone band
-   and bow out again at altitude. All cross-fades — no popping. */
-function _geoLabelBandOpacity(L, alt){
-  if(L.cat==="water"){
-    if(L.near) return smoothstep(260, 430, alt) * (1 - smoothstep(2600, 4200, alt));
-    return smoothstep(750, 1200, alt);
-  }
-  return smoothstep(1050, 1600, alt);
-}
-function updateLabels(alt){
-  for(var i=0;i<LABELS.length;i++){
-    var L = LABELS[i];
-    var fade = _geoLabelBandOpacity(L, alt);
-    if(fade<0.02){ L.el.style.opacity = 0; continue; }
-    // in front of the camera?
-    _labelV.copy(L.pos).applyMatrix4(camera.matrixWorldInverse);
-    if(_labelV.z > -1){ L.el.style.opacity = 0; continue; }
-    _labelV.copy(L.pos).project(camera);
-    if(_labelV.x<-1.05||_labelV.x>1.05||_labelV.y<-1.05||_labelV.y>1.05){ L.el.style.opacity = 0; continue; }
-    L.el.style.opacity = fade*0.95;
-    L.el.style.left = ((_labelV.x*0.5+0.5)*window.innerWidth)+"px";
-    L.el.style.top  = ((-_labelV.y*0.5+0.5)*window.innerHeight)+"px";
-  }
-}
+/* (buildLabels()/_geoLabelBandOpacity()/updateLabels() — the geographic
+   label DOM + per-frame updater — and the west-peninsula LABELS entries
+   relocated to layers/labels-inspect.js in the 2026-07-12 cleanup:
+   labels-inspect OWNS all floating labels. Their chunk runs right after
+   this one, before the first animate() frame reads any label.) */
 
 
 /* ---- terrain audit (layers-spec.md rules block; Earth Palette Law): midday

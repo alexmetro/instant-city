@@ -6,7 +6,7 @@
    after @P1850-CHUNK) — original module statement order, byte-stable. Edit code freely inside a
    chunk; never reorder or renumber chunk markers without rebuilding + re-verifying.
    ===================================================================== */
-/* @P1850-CHUNK 43 — street graph, walkability mask, weighted diverse routing (s59) */
+/* @P1850-CHUNK 54 — street graph, walkability mask, weighted diverse routing (s59) */
 /* ---- 2b. STREET GRAPH — a waypoint graph over the real surveyed street
    grid (every streetsU x streetsV intersection), plus the Plaza (wired to
    its four bounding corners), the Clay St wharf/landing, the Mission-road
@@ -111,29 +111,6 @@ function nearestGraphNode(x,z){
     if(d<bestD){ bestD=d; best=i; }
   }
   return best;
-}
-/* Dijkstra over the (tiny, well under 60-node) graph — a plain array scan
-   rather than a heap is plenty, since this only ever runs a few hundred
-   times total, all of it once at load while assigning homes/workplaces. */
-function graphPath(fromIdx, toIdx){
-  var n = STREET_GRAPH.nodes.length;
-  var dist = new Array(n).fill(Infinity), prev = new Array(n).fill(-1), visited = new Array(n).fill(false);
-  dist[fromIdx] = 0;
-  for(var iter=0; iter<n; iter++){
-    var u=-1, best=Infinity;
-    for(var i=0;i<n;i++) if(!visited[i] && dist[i]<best){ best=dist[i]; u=i; }
-    if(u===-1 || u===toIdx) break;
-    visited[u]=true;
-    STREET_GRAPH.edges[u].forEach(function(e){
-      var nd = dist[u]+e.d;
-      if(nd<dist[e.to]){ dist[e.to]=nd; prev[e.to]=u; }
-    });
-  }
-  if(dist[toIdx]===Infinity) return null;
-  var path=[toIdx];
-  while(prev[path[path.length-1]]!==-1) path.push(prev[path[path.length-1]]);
-  path.reverse();
-  return path;
 }
 /* =========================================================================
    s59 MOVEMENT NATURALISM — WALKABILITY MASK + WEIGHTED, DIVERSE ROUTING.

@@ -49,7 +49,7 @@ scene.add(hemi);
 var ambient = new THREE.AmbientLight(0xffffff, 0.09);
 scene.add(ambient);
 
-/* @P1850-CHUNK 15 — chimney smoke */
+/* @P1850-CHUNK 17 — chimney smoke */
 /* =====================================================================
    CHIMNEY SMOKE (A6) — a handful of soft, drifting puffs per chimney
    (procedural canvas sprite, no external asset), animated by rewriting
@@ -103,7 +103,7 @@ function updateSmoke(dt){
   pos.needsUpdate = true;
 }
 
-/* @P1850-CHUNK 25 — weather + seasons, rain, fog banks, wet tint */
+/* @P1850-CHUNK 32 — weather + seasons, rain, fog banks, wet tint */
 /* =========================================================================
    5. WEATHER + SEASONS — Tennent's real rain-year series starts Aug 14,
    1849 (weather-climate.md §4); the one rain-year that overlaps this
@@ -242,7 +242,7 @@ function updateWetTint(){
   for(var di=0; di<DETAIL_UNIFORM_SETS.length; di++) DETAIL_UNIFORM_SETS[di].uDetailWet.value = _dWet;
 }
 
-/* @P1850-CHUNK 34 — grounding contact shadows */
+/* @P1850-CHUNK 43 — grounding contact shadows */
 /* =====================================================================
    GROUNDING CONTACT SHADOWS (close-range legibility fix, 2026-07-10):
    buildings and (later) people previously sat on the ground with no
@@ -282,7 +282,7 @@ var buildingShadowMesh = (function(){
   return mesh;
 })();
 
-/* @P1850-CHUNK 48 — mud-winter street props (puddles + planks) */
+/* @P1850-CHUNK 59 — mud-winter street props (puddles + planks) */
 /* ---- 2. mud-winter street props (strictly gated on weatherState.mud) ---- */
 function makePuddleTexture(){
   var cv=document.createElement("canvas"); cv.width=cv.height=64;
@@ -362,7 +362,7 @@ var mudPlankMesh = (function(){
   return m;
 })();
 
-/* @P1850-CHUNK 54 — then/now ghost overlay + the Dec 24 1849 Great Fire */
+/* @P1850-CHUNK 66 — then/now ghost overlay + the Dec 24 1849 Great Fire */
 /* =====================================================================
    THEN/NOW GHOST OVERLAY  ('G' toggles; fades in above ~500m)
    ===================================================================== */
@@ -795,44 +795,12 @@ function updateFire(dt){
   charPatch.material.opacity = 0.5*charT * (rebuildT>0 ? lerp(1,0.7,clamp01(rebuildT/FIRE.rebuildDur)) : 1);
 }
 
-/* ---- the crowd: flee the fire zone via the street graph, then watch from
-   the Plaza (the Alta: "Portsmouth square ... crowded with anxious
-   spectators"). Called per-slot from updatePeople(); at most a few new
-   graph routes are computed per frame so the exodus spreads naturally. ---- */
-var _fleeBudget = 0;
-function resetFleeBudget(){ _fleeBudget = 12; }
-function applyFireCrowd(slot, day){
-  if(day < FIRE.day0 || day > FIRE.day1 + 3/24){
-    if(slot._spect){ slot._fleePoly=null; slot._spect=null; }
-    return;
-  }
-  if(!slot._spect){
-    var inZone = FIRE.inFootprint(slot._x, slot._z, 26);
-    var near = Math.hypot(slot._x-FIRE.cx, slot._z-FIRE.cz) < 330;
-    if((inZone || near) && _fleeBudget>0){
-      _fleeBudget--;
-      var spot = FIRE.spectatorSpots[slot.id % FIRE.spectatorSpots.length];
-      slot._spect = spot;
-      slot._fleePoly = buildRoutePoly(slot._x, slot._z, spot.x, spot.z, {day:day, who:slot.id});
-      slot._fleeStart = peopleClock;
-      slot._spOffX = (hash2(slot.id*0.37,1.7)-0.5)*14;
-      slot._spOffZ = (hash2(slot.id*0.53,4.1)-0.5)*14;
-    }
-    if(!slot._spect) return;
-  }
-  var walked = (peopleClock - slot._fleeStart) * 7.0; // a run — people move in real time while the fire clock runs slow, so this is what reads as flight at the fire's 1h/3s pace
-  if(slot._fleePoly && walked < slot._fleePoly.total){
-    var p = pointOnPolyline(slot._fleePoly, walked);
-    slot._x = p.x; slot._z = p.z; slot._dx = p.dx; slot._dz = p.dz;
-    slot._pose = "walk"; slot._now = "fleeing the fire";
-  } else {
-    slot._x = slot._spect.x + slot._spOffX; slot._z = slot._spect.z + slot._spOffZ;
-    slot._dx = FIRE.cx - slot._x; slot._dz = FIRE.cz - slot._z;
-    slot._pose = "market"; slot._now = "watching the fire from the Plaza";
-  }
-}
+/* (The fire-crowd flee/spectate machinery — resetFleeBudget()/
+   applyFireCrowd() — MOVES PEOPLE, so it was never effects': relocated to
+   layers/people.js in the 2026-07-12 cleanup. The documented effects↔
+   buildings fire seam covers only the structure-damage vertex work.) */
 
-/* @P1850-CHUNK 59 — day/night cycle (sun from the sim clock) */
+/* @P1850-CHUNK 71 — day/night cycle (sun from the sim clock) */
 /* =====================================================================
    DAY / NIGHT CYCLE — SUN FROM THE SIM CLOCK (fix sprint 2026-07-11, P0)
    The old system ran its own wall-clock cycle (DAY_CYCLE_SECONDS=420, a
