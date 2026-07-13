@@ -33,6 +33,52 @@ var windowVertCursor = 0;   // same, for the separate merged window-glow mesh.
 function pushBuildingGeo(list, geo){ list.push(geo); buildingVertCursor += geo.attributes.position.count; return geo; }
 
 /* =====================================================================
+   s72 (#51) UNIFICATION KIT — ONE PALETTE FAMILY (architecture-1846-50.md,
+   the Building Bible). Every structure class draws its base from the SAME
+   documented weathered-wood/adobe/canvas family so the town reads as one
+   material world (kills the f02 "colorful landmark row vs featureless
+   near-black growth cubes" split). Hex values are the bible's own:
+     • weathered fir/redwood — the DEFAULT surface carrying ~85% of every
+       block: #8a7c6a fresh-cut → #a8a196 silvered (age lerps between them).
+     • white lead trim #f2ede0 (chalky) + dull sage-green shutters #4a5c3a —
+       the ONLY corpus-attested accent colours.
+     • LIBERTY MENU (grounding 15% rule, ~1-in-6-7 buildings): Venetian red
+       #8f4432, yellow ochre #b8863f, Prussian blue-grey #3d5266 — real
+       period pigments, never bright/modern hues.
+     • adobe brick #9c8060 → weathered #6e5a45; whitewash #e8e2d0.
+     • galvanized iron #b8bcc0 → weathered #8a8580, rust bleed #a85a3a.
+     • undyed canvas #d8cba8.
+   ===================================================================== */
+var KIT = {
+  woodFresh:  0x8a7c6a, woodSilver: 0xa8a196,          // weathered fir/redwood span
+  woodMid:    0x998b78,                                 // a middle weathered tone
+  whiteTrim:  0xf2ede0, greenShutter: 0x4a5c3a,         // attested accents
+  liberty:    [0x8f4432, 0xb8863f, 0x3d5266],           // Venetian red / ochre / Prussian blue-grey
+  adobe:      0x9c8060, adobeWet: 0x6e5a45, whitewash: 0xe8e2d0,
+  ironNew:    0xb8bcc0, ironWeathered: 0x8a8580, rust: 0xa85a3a,
+  canvas:     0xd8cba8,
+  signCream:  0xe8dfc0, signInk: 0x2b1d0e,              // painted eave signboard
+  doorDark:   0x33291d, roofWood: 0x5a4a38, roofWorn: 0x6b5a44
+};
+/* Weathered-wood body tone chosen deterministically from a hash key: most of
+   the block sits mid-to-silvered; a small share reads fresher (new build).
+   ageT 0..1 pushes toward silver (era lens / building age). */
+function kitWoodColor(hkey, ageT){
+  var t = (hash1(hkey)*0.6) + (ageT!=null?ageT*0.4:0.2);       // blend hash + age
+  return new THREE.Color(KIT.woodFresh).lerp(new THREE.Color(KIT.woodSilver), clamp(t,0,1));
+}
+/* One deterministic hash → [0,1), keyed by an integer, for palette/kit
+   choices that must NOT perturb the global rngBuild() draw stream (so a
+   liberty-accent roll never shifts downstream seeded placement). */
+function hash1(k){ var x = Math.sin((k+1)*12.9898)*43758.5453; return x-Math.floor(x); }
+/* Liberty accent: ~1-in-6-7 of buildings carry ONE period pigment on a door
+   or trim board. Returns a THREE.Color or null (the 85% documented base). */
+function kitLibertyAccent(hkey){
+  if(hash1(hkey*7.13+3.1) >= 0.15) return null;                 // ~15% budget, per-scene
+  return new THREE.Color(KIT.liberty[Math.floor(hash1(hkey*3.7+1.9)*KIT.liberty.length)]);
+}
+
+/* =====================================================================
    ERA-GATE dates for named landmarks (fix, 2026-07-10): the Dec 1849 fire
    block's ~48 buildings (El Dorado, Parker House, Washington Arcade,
    Merchants' Exchange, etc.) were being placed and rendered unconditionally
@@ -75,10 +121,14 @@ function landmarkFoundedDay(name){
   var PLAZA_BX = 1, PLAZA_BZ = 2; // block between Dupont/Kearny x Washington/Clay
   window._VILLAGE_GRID = { uVals:uVals, vVals:vVals, PLAZA_BX:PLAZA_BX, PLAZA_BZ:PLAZA_BZ }; // Phase 5 fire-footprint lookup
 
-  var adobeColors = [0xcda86e, 0xd8bc84, 0xc39a5f];
-  var frameColors = [0xe8e0c8, 0xc9a876, 0xa88a68, 0xdcd2ae];
-  var roofColorsAdobe = [0x8a5a3c, 0x74472e];
-  var roofColorsFrame = [0x5a4432, 0x7a3f34, 0x4c4238];
+  // s72 unification: village bodies now draw from the SAME documented family
+  // as growth (KIT). Adobe = warm mud brick span; frame = weathered fir/redwood
+  // (the ~85% base). Fresh/light tones dropped — they were the "2005 scrapbook"
+  // read the bible flags. Roofs are weathered wood-shingle / tiled adobe browns.
+  var adobeColors = [KIT.adobe, 0x8f7452, KIT.adobeWet];
+  var frameColors = [KIT.woodMid, KIT.woodSilver, KIT.woodFresh, 0x8f8578];
+  var roofColorsAdobe = [0x7a4a34, 0x6e5a45];
+  var roofColorsFrame = [KIT.roofWood, KIT.roofWorn, 0x4c4238];
 
   function blockDensity(bx,bz){
     // true-scale pass: buildings shrank (below), so counts are raised a bit
@@ -189,11 +239,32 @@ function landmarkFoundedDay(name){
       attachToBuilding(inset, new THREE.Vector3(offsetX, h*0.5, side*(d/2+0.005)), rot, new THREE.Vector3(x,y,z));
       pushBuildingGeo(buildingGeoms, inset);
     }
-    // A6: a dark door inset, centered on the front (south-ish) face
+    // A6: a dark door inset, centered on the front (south-ish) face.
+    // s72 unification: the door reads as a dark recess by default; ~1-in-7
+    // buildings carry a LIBERTY accent (Venetian red / ochre / Prussian blue-
+    // grey) painted door — hash-keyed off position so no rngBuild() draw is
+    // consumed (the seeded stream is byte-stable).
+    var hkey = Math.round(x*3.1)+Math.round(z*7.7);
     var doorFace = rngBuild()<0.5? -1:1;
-    var door = makeBoxLocal(1.1, 1.9, 0.08, darkInset);
-    attachToBuilding(door, new THREE.Vector3((rngBuild()-0.5)*w*0.3, 0.95, doorFace*(d/2+0.01)), rot, new THREE.Vector3(x,y,z));
+    var libAccent = kitLibertyAccent(hkey);
+    var door = makeBoxLocal(1.1, 1.9, 0.08, libAccent || darkInset);
+    var doorXoff = (rngBuild()-0.5)*w*0.3;
+    attachToBuilding(door, new THREE.Vector3(doorXoff, 0.95, doorFace*(d/2+0.01)), rot, new THREE.Vector3(x,y,z));
     pushBuildingGeo(buildingGeoms, door);
+    // s72: attested WHITE-LEAD trim + DULL SAGE-GREEN shutters on a minority
+    // (~1-in-6, hash-keyed, no rng). Thin trim board over the door + a shutter
+    // pair flanking it — the only corpus-attested painted accents on frame
+    // cottages, applied at the bible's slightly-generous liberty frequency.
+    if(hash1(hkey*1.7+0.3) < 0.17){
+      var trim = makeBoxLocal(1.5, 0.16, 0.05, new THREE.Color(KIT.whiteTrim));
+      attachToBuilding(trim, new THREE.Vector3(doorXoff, 1.98, doorFace*(d/2+0.02)), rot, new THREE.Vector3(x,y,z));
+      pushBuildingGeo(buildingGeoms, trim);
+      [-1,1].forEach(function(sh){
+        var shut = makeBoxLocal(0.24, 1.5, 0.04, new THREE.Color(KIT.greenShutter));
+        attachToBuilding(shut, new THREE.Vector3(doorXoff+sh*0.85, 0.9, doorFace*(d/2+0.02)), rot, new THREE.Vector3(x,y,z));
+        pushBuildingGeo(buildingGeoms, shut);
+      });
+    }
 
     // A6: ~1 in 6 buildings gets a lean-to shed addition against one side
     if(rngBuild()<0.16){
@@ -227,31 +298,66 @@ function landmarkFoundedDay(name){
       foundedDay: opts.forceFrame ? landmarkFoundedDay(opts.name) : null });
   }
 
+  /* s72 (#51) FRONTAGE for the founding village: grounding §9 — "fill buildings
+     front streets like real ones (facing, setback, street-wall density) rather
+     than scattering inside blocks". The pre-s72 loop scattered UNIFORMLY inside
+     the block interior, stranding frame houses 26-36m from any street (the P4
+     setback offenses this sprint must fix). frontify() keeps a building near its
+     nearest block edge (a street centerline) at a constant-width setback, and
+     faces it. Pure geometry — no rngBuild() draw — applied to the ALREADY-drawn
+     (u,v), so the seeded stream length is byte-identical to pre-s72 (draw order:
+     branch-test, 3 position draws | 2 jog draws, coin — unchanged); only the
+     resulting positions/orientations move. */
+  function frontify(u,v,uLo,uHi,vLo,vHi){
+    var dW=u-uLo, dE=uHi-u, dN=v-vLo, dS=vHi-v;
+    var m=Math.min(dW,dE,dN,dS);
+    // face the nearest edge (u-edges → π/2, v-edges → 0), same convention as
+    // the growth lot system so the front (+z) turns toward the fronted street.
+    var rot = (m===dW||m===dE) ? Math.PI/2 : 0;
+    if(m<=30) return { u:u, v:v, rot:rot };   // already fronting an edge (canPlace keeps it ≥ROW-clear)
+    // MID-BLOCK ORPHAN (setback offense): pull to the nearest edge at a 26m
+    // constant-width setback (clears the ROW; door lands ≤25m from the street).
+    if(dW<=dE && dW<=dN && dW<=dS) return { u:uLo+26, v:clamp(v,vLo+26,vHi-26), rot:Math.PI/2 };
+    if(dE<=dN && dE<=dS)          return { u:uHi-26, v:clamp(v,vLo+26,vHi-26), rot:Math.PI/2 };
+    if(dN<=dS)                    return { u:clamp(u,uLo+26,uHi-26), v:vLo+26, rot:0 };
+    return                               { u:clamp(u,uLo+26,uHi-26), v:vHi-26, rot:0 };
+  }
   for(var bx=0; bx<uVals.length-1; bx++){
     for(var bz=0; bz<vVals.length-1; bz++){
       if(bx===PLAZA_BX && bz===PLAZA_BZ) continue; // Portsmouth Square — kept open
+      // s72 (#51): the Kearny-Montgomery × Washington-Clay block (bx=2,bz=2) is
+      // the DOCUMENTED Dec-1849 fire block, filled to ~50 buildings by
+      // buildFireBlock() below (skipOverlap party-wall density). The village
+      // loop must NOT also drop scatter buildings into it — that produced the
+      // authored P1 overlaps (village stock colliding with the fire row, neither
+      // aware of the other). buildFireBlock owns this block.
+      if(bx===2 && bz===PLAZA_BZ) continue;
+      var uLo=uVals[bx], uHi=uVals[bx+1], vLo=vVals[bz], vHi=vVals[bz+1];
 
       var n = Math.max(0, Math.round(blockDensity(bx,bz) + (rngBuild()-0.5)*1.3));
-      // ORGANIC LAYOUT (2026-07-10): uneven occupancy, not a filled-in grid —
-      // some lots go doubled-up (a second structure crowded near the last),
-      // others stay empty, rather than every lot getting one evenly-spaced
-      // building. Setback also varies per building (2-10m equivalent inset
-      // from the block edge, "margin" below) instead of one fixed depth, so
-      // some buildings sit near the street and others sit mid-lot.
-      var lastP = null;
+      // Uneven occupancy (organic): some lots doubled-up (a second structure
+      // crowded near the last along the same frontage), others empty. Every
+      // building fronts its nearest block edge at a period setback (frontify).
+      var lastG = null;
       for(var k=0;k<n;k++){
-        var p;
-        if(lastP && rngBuild()<0.28){
-          var jog = 8+rngBuild()*10, jang = rngBuild()*Math.PI*2;
-          p = { x: lastP.x+Math.cos(jang)*jog, z: lastP.z+Math.sin(jang)*jog };
+        var gu, gv;
+        if(lastG && rngBuild()<0.28){
+          var jog = 6+rngBuild()*8, jang = rngBuild()*Math.PI*2; // crowd along the frontage near the last building
+          gu = lastG.u+Math.cos(jang)*jog; gv = lastG.v+Math.sin(jang)*jog;
         } else {
-          var margin = 2+rngBuild()*8; // varied setback: 2-10m from the block/street edge, some mid-lot
-          var u = lerp(uVals[bx]+margin, uVals[bx+1]-margin, rngBuild());
-          var v = lerp(vVals[bz]+margin, vVals[bz+1]-margin, rngBuild());
-          p = gridToWorld(u,v);
+          var edgePick = rngBuild();
+          var setb = 24+rngBuild()*5;            // 24-29m constant-width setback in from the fronted edge
+          var alongT = rngBuild();
+          if(edgePick<0.28){       gu=uLo+setb; gv=lerp(vLo+26,vHi-26,alongT); }   // west frontage
+          else if(edgePick<0.56){  gu=uHi-setb; gv=lerp(vLo+26,vHi-26,alongT); }   // east frontage
+          else if(edgePick<0.78){  gv=vLo+setb; gu=lerp(uLo+26,uHi-26,alongT); }   // north frontage
+          else {                   gv=vHi-setb; gu=lerp(uLo+26,uHi-26,alongT); }   // south frontage
         }
-        placeBuilding(p.x, p.z, rngBuild()<0.5?0:Math.PI/2);
-        lastP = p;
+        var fr = frontify(gu, gv, uLo,uHi,vLo,vHi);
+        var coin = rngBuild()<0.5?0:Math.PI/2; // consumed (stream); the frontage rot is used instead
+        var p = gridToWorld(fr.u, fr.v);
+        placeBuilding(p.x, p.z, fr.rot);
+        lastG = fr;
       }
     }
   }
@@ -330,9 +436,30 @@ function landmarkFoundedDay(name){
       if(v>lo && v<hi) return (v<P_V) ? lo : hi;
       return v;
     }
+    // s72 (#51): the fire block places its documented buildings via denseRow
+    // (skipOverlap) — the Alta's continuous frontage row is the intended dense
+    // arrangement, not a collision to avoid. But the 30-building INTERIOR FILL
+    // was landing ON TOP of the named frontage buildings (the 11 authored P1
+    // overlaps the s67 audit surfaced for #51). placedFB records every fire-
+    // block footprint (grid-space centre + conservative radius) so the fill can
+    // be de-overlapped deterministically — no rngBuild() draw, so the seeded
+    // stream is byte-stable.
+    var placedFB = [];
+    function deoverlapFB(u,v,r){
+      for(var pass=0; pass<16; pass++){
+        var hit=false;
+        for(var q=0;q<placedFB.length;q++){ var f=placedFB[q];
+          var du=u-f.u, dv=v-f.v, md=r+f.r, d2=du*du+dv*dv;
+          if(d2 < md*md){ var d=Math.sqrt(d2)||0.001; var push=(md-d)+0.4; u+=(du/d)*push; v+=(dv/d)*push; hit=true; }
+        }
+        if(!hit) break;
+      }
+      return { u:u, v:v };
+    }
     function put(u,v,rot,opts){
       opts = opts||{};
       opts.denseRow = true; // documented continuous frontage row (Alta account) — see placeBuilding()
+      placedFB.push({ u:u, v:v, r: 5.6*(opts.sizeMul||1) });
       var p = gridToWorldAt(u,v,GRID_ROT_BASE); placeBuilding(p.x,p.z,rot,opts);
     }
 
@@ -351,7 +478,7 @@ function landmarkFoundedDay(name){
     // Washington St frontage, running toward Montgomery — incl. the
     // Merchants' Exchange the authorities blew up, and the unfinished
     // Burgoyne & Co. brick store that finally stayed the fire.
-    put(kU+20, nV+fOff(W_HALF,1), 0, { name:"B. Ayres store", forceFrame:true });            // "in rear of the El Dorado" — 1st demolition
+    put(kU+28, nV+fOff(W_HALF,1)+13, 0, { name:"B. Ayres store", forceFrame:true });          // "in rear of the El Dorado" — set clear behind El Dorado's big corner footprint (s72 P1 fix, minimal move, still on this block)
     put(kU+32, nV+fOff(W_HALF,1), 0, { name:"Rosenbaum & Schaeffer", forceFrame:true });
     put(kU+46, nV+fOff(W_HALF,1.3), 0, { name:"Merchants' Exchange",   sizeMul:1.3, forceFrame:true }); // Dunbar & Gibbs — 2nd demolition
     put(kU+60, nV+fOff(W_HALF,1), 0, { name:"Washington Arcade", forceFrame:true });
@@ -363,10 +490,26 @@ function landmarkFoundedDay(name){
     // interior + Clay-side fill to the documented ~50-building count
     // (s62: fill kept clear of every right-of-way at constant class width,
     // including the Portsmouth St mid-block lane)
+    // s72 (#51): the ~50-building block is a DENSE PARTY-WALL interior. The old
+    // fill scattered at random orientations (0/π/2 coin), so perpendicular
+    // neighbours read as intersecting footprints (the authored P1 overlaps). It
+    // now lays on a jittered GRID with a CONSISTENT π/2 orientation — dense
+    // packing between same-yaw neighbours is P1's permitted party-wall mechanism
+    // (angle diff ≤15° → not an intersection) — kept in the interior/Clay band
+    // clear of the rot-0 Washington frontage row, and de-overlapped as a safety
+    // net. SAME three rngBuild() draws/iteration (two jitters + a consumed coin),
+    // so the seeded stream length is unchanged.
+    var FILL_COLS=6, FILL_ROWS=5;
     for(var i=0;i<30;i++){
-      var u = lerp(kU+K_HALF+6.5, mU-M_HALF-6.5, rngBuild());
-      var v = dodgeMidLane(lerp(sV-C_HALF-6.5, nV+W_HALF+11, rngBuild()), 5.2);
-      put(u, v, rngBuild()<0.5?0:Math.PI/2, { forceFrame:true });
+      var col=i%FILL_COLS, row=Math.floor(i/FILL_COLS);
+      var gu = lerp(kU+K_HALF+9, mU-M_HALF-9, (col+0.5)/FILL_COLS) + (rngBuild()-0.5)*7;
+      var gv = lerp(nV+W_HALF+22, sV-C_HALF-8, (row+0.5)/FILL_ROWS) + (rngBuild()-0.5)*6;
+      var _coin = rngBuild()<0.5?0:Math.PI/2; // consumed (stream); fill uses a consistent party-wall yaw
+      gv = dodgeMidLane(gv, 5.6);
+      var dz = deoverlapFB(gu, gv, 5.6);
+      gu = clamp(dz.u, kU+K_HALF+9, mU-M_HALF-9);
+      gv = dodgeMidLane(clamp(dz.v, nV+W_HALF+22, sV-C_HALF-8), 5.6);
+      put(gu, gv, Math.PI/2, { forceFrame:true });
     }
 
     // scorched survivors just OUTSIDE the footprint (blanket crews kept
@@ -875,11 +1018,27 @@ var CHURCH_REVEAL_DAY = eventDateToSimDay("1848-11-02");
 var CHURCH_SPOT = null;
 (function buildTownChapel(){
   var base = gridToWorld(GEO.streetsU.stockton-55, GEO.streetsV.jackson-30);
-  var x=base.x, z=base.z, footprintR=8, found=false;
+  var x=base.x, z=base.z, footprintR=8, found=false, fallback=null;
+  // s72 (#51): the chapel FRONTS a street too (P4 full strength — it was the
+  // last authored mid-block setback offense at 30.7m). Among the seeded search
+  // tries, accept the first canPlace-valid spot whose door lands ≤22m from the
+  // street edge; keep the first valid spot as a fallback. rot is fixed below
+  // (-GRID_ROT_BASE); its +z door is what the addressed audit measures.
+  var _chRot = -GRID_ROT_BASE, _chFd = 5.6*0.5+0.3;
+  function chapelDoorStreetDist(tx,tz){
+    var dx=tx+Math.sin(_chRot)*_chFd, dz=tz+Math.cos(_chRot)*_chFd, best=1e9;
+    for(var s=0;s<PLACEMENT_STREET_SEGS.length;s++){ var g=PLACEMENT_STREET_SEGS[s];
+      var d=distToSegXZ(dx,dz,g.x0,g.z0,g.x1,g.z1)-g.halfW; if(d<best) best=d; }
+    return best;
+  }
   for(var tries=0; tries<50 && !found; tries++){
     var tx = base.x + (rngBuild()-0.5)*110, tz = base.z + (rngBuild()-0.5)*110;
-    if(canPlace(tx,tz,footprintR,{streetMargin:4})){ x=tx; z=tz; found=true; }
+    if(canPlace(tx,tz,footprintR,{streetMargin:4})){
+      if(fallback==null) fallback={x:tx,z:tz};
+      if(chapelDoorStreetDist(tx,tz)<=22){ x=tx; z=tz; found=true; }
+    }
   }
+  if(!found && fallback){ x=fallback.x; z=fallback.z; }
   var y = terrainHeight(x,z);
   registerPlacement(x,z,footprintR);
   var rot = -GRID_ROT_BASE; // Nov 1848 construction — post-survey, aligned to the corrected grid (s56: bake yaw = -(world angle), see placeBuilding's YAW-FRAME FIX)
@@ -1076,79 +1235,108 @@ function nearestStreetDirUV(u,v){
   }
   return { dist:Math.sqrt(best.d2), rot:Math.atan2(best.dv, best.du) };
 }
+/* s72 (#51) FRONTAGE-ROW LOT SYSTEM — the flagship. Growth stock no longer
+   rejection-scatters across a padded box (which produced the pool-limited,
+   never-assembling ~398 candidates and the mid-block orphan read). Instead we
+   DERIVE LOTS deterministically from the master street network: every block
+   EDGE (a street centerline in the ofarrell-1847 cardinal grid) is subdivided
+   into lots of a class-dependent frontage width — narrow commercial lots on the
+   plaza ring + main-street frontages, wider residential lots elsewhere — and
+   one building drops into each lot, fronting its street at a CONSTANT-WIDTH
+   setback (P4 full strength: no addressed structure spawns mid-block). In the
+   1849 commercial core, adjacent commercial lots run PARTY-WALL (buildings fill
+   their lot, abut at shared edges, same yaw) so the downtown assembles into
+   CONTINUOUS street-fronted rows — the classic-RS town read the campaign audit
+   (D4: "the town does not assemble") calls for.
+   DETERMINISM: the whole layout is a pure function of seed+street data (hash1
+   per lot, no rngBuild() draw), so reload→identical and no downstream stream
+   perturbation from WITHIN this generator. Candidate objects keep {x,z,rot}
+   (consumed by routing/roads/audits/people) and add {buildW,kind,ironEligible}. */
 var growthBuildingCandidates = (function(){
-  var uVals=[GEO.streetsU.stockton,GEO.streetsU.montgomery], vVals=[GEO.streetsV.pacific,GEO.streetsV.california];
-  var fireBlockNV = Math.min(GEO.streetsV.clay, GEO.streetsV.washington), fireBlockSV = Math.max(GEO.streetsV.clay, GEO.streetsV.washington);
-  var pad=200, out=[];
-  for(var i=0;i<1500;i++){
-    var useFrontage = rngBuild()<0.8;
-    var u,v,frontRot=null;
-    if(useFrontage){
-      var spot = pickFrontageSpot();
-      u=spot.u; v=spot.v; frontRot=spot.rot;
-    } else {
-      u = lerp(uVals[0]-pad, uVals[1]+pad, rngBuild());
-      v = lerp(vVals[0]-pad, vVals[1]+pad, rngBuild());
-    }
-    var p = gridToWorld(u,v);
-    var h = terrainHeight(p.x,p.z);
-    if(h<=1.2) continue;
-    var dPlaza = Math.hypot(p.x-PLAZA_CENTER.x, p.z-PLAZA_CENTER.z);
-    if(dPlaza<30) continue; // keep the plaza itself open
-    // PHASE 5: keep growth stock out of the Dec 24 1849 fire block — that
-    // block is explicitly built (buildFireBlock) and must burn as a unit;
-    // an instanced growth cottage standing unburned in the ruins would
-    // contradict the documented footprint.
-    // CLAY/WASHINGTON SWAP FIX (2026-07-10): this range used to read
-    // "v>clay-8 && v<washington+8", which only worked because the OLD
-    // (buggy) values happened to have clay<washington; read literally by
-    // NAME with the corrected values (clay>washington now) that range is
-    // never true, silently disabling this exclusion. min/max makes it
-    // correct regardless of which street ends up on which side.
-    if(u>GEO.streetsU.kearny-8 && u<GEO.streetsU.montgomery+8 &&
-       v>fireBlockNV-8 && v<fireBlockSV+8) continue;
-    // WORLD-P0 fix (canPlace engine): growth cottages previously only
-    // checked height — now also avoid streets/Mission Road and overlap
-    // with every already-accepted footprint (village buildings, other
-    // growth lots, tents, outposts).
-    if(!canPlace(p.x,p.z,4,{streetMargin:2})) continue;
-    registerPlacement(p.x,p.z,4);
-    // rotBase: frontage spots use their block EDGE's facing; scatter spots
-    // now FACE THE NEAREST MASTER LINE when one is within ~60m (road-
-    // master-spec §5 — "building orientation faces nearest master line"),
-    // falling back to the old grid-axis coin flip only in genuinely
-    // unplatted open ground. The coin flip is still CONSUMED either way so
-    // the rngBuild() stream (and thus the whole seeded layout) is
-    // unchanged for candidates that don't take the new branch.
-    var coinRot = rngBuild()<0.5?0:Math.PI/2;
-    var scatterRot = null;
-    if(frontRot==null){
-      var nl = nearestStreetDirUV(u,v);
-      if(nl.dist<60) scatterRot = nl.rot;
-    }
-    out.push({ x:p.x, z:p.z, rotBase: frontRot!=null?frontRot:(scatterRot!=null?scatterRot:coinRot), priority: dPlaza+rngBuild()*70 });
+  var era = SG.meta.blocks.cardinal.filter(function(b){ return b.era==="ofarrell-1847"; })[0];
+  var uLines=era.uLines, vLines=era.vLines;
+  function findLine(lines,val){ for(var i=0;i<lines.length;i++) if(Math.abs(lines[i]-val)<0.5) return i; return -1; }
+  var plazaBX = findLine(uLines, Math.min(GEO.streetsU.dupont, GEO.streetsU.kearny));
+  var plazaBZ = findLine(vLines, Math.min(GEO.streetsV.washington, GEO.streetsV.clay));
+  var fireNV=Math.min(GEO.streetsV.clay,GEO.streetsV.washington), fireSV=Math.max(GEO.streetsV.clay,GEO.streetsV.washington);
+  var kearnyU=GEO.streetsU.kearny, montU=GEO.streetsU.montgomery;
+  // constant class half-width of the documented street on a given grid line
+  function edgeHalfWidth(isU, coord){
+    for(var s=0;s<STREETS_RUNTIME.length;s++){ var st=STREETS_RUNTIME[s], poly=st.polyline;
+      for(var i=0;i<poly.length;i++){ var c = isU?poly[i].u:poly[i].v;
+        if(Math.abs(c-coord)<1.2) return st.widthM/2; } }
+    return isU ? 10.48 : 7.49; // main / cross class default (68.75ft / 49.125ft)
   }
+  var out=[], lotKey=0;
+  for(var bxi=0; bxi<uLines.length-1; bxi++){
+    for(var bzi=0; bzi<vLines.length-1; bzi++){
+      if(bxi===plazaBX && bzi===plazaBZ) continue; // Portsmouth Square — kept open
+      var u0=uLines[bxi], u1=uLines[bxi+1], v0=vLines[bzi], v1=vLines[bzi+1];
+      var dRing = Math.abs(bxi-plazaBX)+Math.abs(bzi-plazaBZ);
+      var isCoreBlock = dRing<=2;
+      var edges=[
+        {isU:true,  coord:u0, sign:+1, rot:Math.PI/2, main:true },  // west edge (N-S street), builds east
+        {isU:true,  coord:u1, sign:-1, rot:Math.PI/2, main:true },  // east edge, builds west
+        {isU:false, coord:v0, sign:+1, rot:0,         main:false }, // north edge (E-W street), builds south
+        {isU:false, coord:v1, sign:-1, rot:0,         main:false }  // south edge, builds north
+      ];
+      edges.forEach(function(e){
+        var halfW = edgeHalfWidth(e.isU, e.coord);
+        // commercial party-wall on the plaza ring & main-street frontages of the core
+        var commercial = isCoreBlock && (e.main || dRing<=1);
+        var frontW = commercial ? 6.4 : 15.5;      // lot frontage width
+        var depth  = commercial ? 5.2 : 4.4;       // building depth
+        var setback = commercial ? (halfW + depth*0.5 + 3.0) : (halfW + 9.0); // constant-width, door clears ROW
+        var lo = e.isU ? v0 : u0, hi = e.isU ? v1 : u1;
+        var cornerHalf = edgeHalfWidth(!e.isU, e.isU ? v0 : u0);
+        var cm = cornerHalf + 3;                    // keep lots off the cross-street corner ROW
+        var spanLo = lo+cm, spanHi = hi-cm, span = spanHi-spanLo;
+        if(span < frontW*0.8) return;
+        var nLots = Math.max(1, Math.floor(span/frontW));
+        var step = span/nLots;
+        for(var li=0; li<nLots; li++){
+          lotKey++;
+          var along = spanLo + (li+0.5)*step;
+          var perp  = e.coord + e.sign*setback;
+          var jperp = (hash1(lotKey*2.13)-0.5)*(commercial?0.5:3.0);
+          var jalong= (hash1(lotKey*5.71)-0.5)*(commercial?0.24:2.0);
+          var u,v;
+          if(e.isU){ u=perp+jperp; v=along+jalong; } else { v=perp+jperp; u=along+jalong; }
+          var p = gridToWorldAt(u,v,GRID_ROT_BASE);
+          var h = terrainHeight(p.x,p.z);
+          if(h<=1.2) continue;
+          var dPlaza = Math.hypot(p.x-PLAZA_CENTER.x, p.z-PLAZA_CENTER.z);
+          if(dPlaza<28) continue;                    // keep the plaza open
+          if(u>kearnyU-10 && u<montU+10 && v>fireNV-10 && v<fireSV+10) continue; // authored fire block
+          var buildW = commercial ? (step-0.5) : (6+hash1(lotKey*1.31)*2.5);
+          var footR  = commercial ? depth*0.5 : Math.hypot(buildW,depth)/2;
+          // commercial party-wall rows skip the overlap test (abutting is the
+          // intended P1 party-wall mechanism, exact shared edge/same yaw) but
+          // still clear the ROW; residentials take the full overlap check.
+          var ok = commercial ? canPlace(p.x,p.z,footR,{streetMargin:2, skipOverlap:true})
+                              : canPlace(p.x,p.z,footR,{streetMargin:2});
+          if(!ok) continue;
+          registerPlacement(p.x, p.z, commercial? depth*0.5 : footR, "growth");
+          out.push({ x:p.x, z:p.z, u:u, v:v, rotBase:e.rot, buildW:buildW, depth:depth,
+                     commercial:commercial, kind: commercial?"commercial":"house",
+                     priority: dPlaza + hash1(lotKey*9.37)*45 });
+        }
+      });
+    }
+  }
+  // reveal plaza-outward: the commercial core assembles first, residential edge
+  // fills after — matches the growthTargets reveal cadence (dayForBuildingIndex
+  // indexes into this sorted pool).
   out.sort(function(a,b){ return a.priority-b.priority; });
-  // ORGANIC LAYOUT (2026-07-10): candidates are revealed strictly in sorted
-  // order as the population curve grows the town (see growRevealStaged()),
-  // so index-in-array is a good proxy for "built before/after the survey."
-  // preSurveyCount approximates how many growth buildings would already be
-  // standing by the time O'Farrell's Feb-Aug 1847 survey lands (reuses the
-  // same swing-window dates as the street-grid rotation above); buildings
-  // revealed before that trend match the founding village's scattered
-  // off-grid character, buildings after trend toward the surveyed grid.
-  var preSurveyCount = growthTargets(densityAt(OFARRELL_SWING_END)).buildings;
   out.forEach(function(c, idx){
-    var jitterDeg = idx < preSurveyCount ? 12 : 3;
-    // pre-survey stock keeps the as-built Vioget frame; post-survey new
-    // construction aligns to the corrected O'Farrell base grid (GEOMETRY
-    // TRUTH split, matching the street painter's post-swing angle).
-    // s56 YAW-FRAME FIX (see placeBuilding): bake yaw = -(gridAngle+skew).
-    // This also fixes the diagonal-frontage outliers: a scatter candidate
-    // facing Market/the Mission road (rotBase = the line's UV angle from
-    // nearestStreetDirUV) was rotated 2×(angle+skew) off its street —
-    // up to ~90° for the diagonals, the "arbitrary 45° buildings".
-    c.rot = -(c.rotBase + (idx < preSurveyCount ? VIOGET_SKEW : GRID_ROT_BASE)) + (rngBuild()-0.5)*2*(jitterDeg*Math.PI/180);
+    // bake yaw = -(rotBase + GRID_ROT_BASE): post-survey O'Farrell frame (s56
+    // YAW-FRAME FIX). Commercial rows keep a tiny jitter so the party wall
+    // stays continuous; residential a looser hand-built wobble.
+    var jitterDeg = c.commercial ? 1.2 : 6;
+    c.rot = -(c.rotBase + GRID_ROT_BASE) + (hash1(idx*4.73)-0.5)*2*(jitterDeg*Math.PI/180);
+    // IRON HOUSES — the 1849-51 material outlier: ~7% of RESIDENTIAL lots,
+    // rendered as iron only inside the date window (reveal loop gates the date).
+    c.ironEligible = (!c.commercial) && hash1(idx*11.91+2.3) < 0.07;
   });
   return out;
 })();
@@ -1215,16 +1403,101 @@ var tentCandidates = (function(){
 // Two alternating body/roof colorways (weathered grey-brown timber, deliberately
 // darker/cooler than sand — same fix direction as the tent canvas color)
 // give both contrast AND a break from single-color repetition.
+// s72 UNIFICATION: growth stock now draws from the SAME documented KIT family
+// as the village (weathered fir/redwood base), killing the f02 near-black-cube
+// read. Three colorways span the fresh→silvered weathering range; per-instance
+// silvering is layered on top via instanceColor (age lens) in the reveal loop.
 var GROWTH_BUILDING_COLORWAYS = [
-  { body:0x8c7350, roof:0x4c3a2a },
-  { body:0x796449, roof:0x5c4436 }
+  { body:KIT.woodMid,    roof:KIT.roofWood },
+  { body:KIT.woodSilver, roof:KIT.roofWorn },
+  { body:KIT.woodFresh,  roof:0x4c4238 }
 ];
+// Shared door + multi-pane sash window hints on the front (+z) face — the
+// "doors/windows on ALL classes at close zoom" mandate. RuneScape-simple:
+// a dark door recess + dark sash quads with a paler muntin cross. Baked into
+// the instanced base geometry so every instance carries them at zero draw cost.
+function pushSashWindow(parts, cx, cy, cz, w, h, faceN){
+  var recess = new THREE.BoxGeometry(w, h, 0.06).toNonIndexed(); recess.translate(cx, cy, cz);
+  colorizeUniform(recess, new THREE.Color(KIT.doorDark));
+  parts.push(recess);
+  // muntins: a thin vertical + horizontal bar in a pale weathered-sash tone
+  var vb = new THREE.BoxGeometry(0.05, h*0.92, 0.04).toNonIndexed(); vb.translate(cx, cy, cz+0.02*faceN);
+  var hb = new THREE.BoxGeometry(w*0.92, 0.05, 0.04).toNonIndexed(); hb.translate(cx, cy, cz+0.02*faceN);
+  colorizeUniform(vb, new THREE.Color(0xb9ad93)); colorizeUniform(hb, new THREE.Color(0xb9ad93));
+  parts.push(vb, hb);
+}
 function makeGrowthBuildingGeo(variant){
   var cw = GROWTH_BUILDING_COLORWAYS[variant||0];
-  var body = makeBoxLocal(5,2.8,4, new THREE.Color(cw.body));
-  var roof = makeGableRoof(5,4,0.45,1.3, new THREE.Color(cw.roof));
-  bake(roof, new THREE.Vector3(0,2.8,0));
-  return mergeGeoms([body,roof]);
+  var W=5, H=2.8, D=4;
+  var body = makeBoxLocal(W,H,D, new THREE.Color(cw.body));
+  var roof = makeGableRoof(W,D,0.45, 1.0+0.35*((variant||0)%3), new THREE.Color(cw.roof)); // roofline variety by variant
+  bake(roof, new THREE.Vector3(0,H,0));
+  var parts=[body,roof];
+  var door = new THREE.BoxGeometry(1.05,1.85,0.08).toNonIndexed(); door.translate((variant||0)%2?0.7:-0.7,0.93,D/2+0.02);
+  colorizeUniform(door, new THREE.Color(KIT.doorDark)); parts.push(door);
+  pushSashWindow(parts, (variant||0)%2?-0.9:0.95, 1.55, D/2+0.02, 0.72, 0.72, 1);   // front sash
+  pushSashWindow(parts, W/2+0.02, 1.5, 0.6, 0.6, 0.6, 1);                            // side sash (drawn on +x face-ish)
+  return mergeGeoms(parts);
+}
+/* COMMERCIAL gable-front + painted eave signboard — the bible's dominant
+   commercial signature (§3a, iconic signature #2). The gable end faces the
+   street (+z); a cream signboard band rides the eave (block-lettering is
+   implied at distance — per-instance text isn't possible on an InstancedMesh,
+   so the painted board reads as the wayfinding at town range, the named
+   authored signs carry the words up close). Taller than a house, wide door,
+   shopfront sash. */
+function makeGrowthCommercialGeo(variant){
+  var cw = GROWTH_BUILDING_COLORWAYS[(variant||0)%GROWTH_BUILDING_COLORWAYS.length];
+  var W=5, H=3.3, D=4.2;
+  var body = makeBoxLocal(W,H,D, new THREE.Color(cw.body));
+  // gable-front: ridge runs along X so the triangular gable faces the street (+z)
+  var roof = makeGableRoof(D,W,0.4, 1.5, new THREE.Color(cw.roof));
+  roof.rotateY(Math.PI/2); bake(roof, new THREE.Vector3(0,H,0));
+  var parts=[body,roof];
+  // painted eave signboard across the front
+  var board = new THREE.BoxGeometry(W*0.92, 0.62, 0.12).toNonIndexed(); board.translate(0, H-0.05, D/2+0.05);
+  colorizeUniform(board, new THREE.Color(KIT.signCream)); parts.push(board);
+  var boardEdge = new THREE.BoxGeometry(W*0.94, 0.08, 0.13).toNonIndexed(); boardEdge.translate(0, H-0.36, D/2+0.055);
+  colorizeUniform(boardEdge, new THREE.Color(KIT.signInk)); parts.push(boardEdge);
+  // wide shop door + shopfront sash
+  var door = new THREE.BoxGeometry(1.55,2.0,0.08).toNonIndexed(); door.translate(0,1.0,D/2+0.02);
+  colorizeUniform(door, new THREE.Color(KIT.doorDark)); parts.push(door);
+  pushSashWindow(parts, -1.55, 1.6, D/2+0.02, 1.0, 0.85, 1);
+  pushSashWindow(parts,  1.55, 1.6, D/2+0.02, 1.0, 0.85, 1);
+  return mergeGeoms(parts);
+}
+/* IRON / ZINC HOUSE — the deliberate 1849-51 material outlier (bible §4,
+   iconic signature #3): 15×20 ft (4.57×6.1 m) galvanized box, corrugated
+   ribbing, rust bleed at seams, gable in matching sheet. Nothing else in the
+   townscape shares this metallic, rigidly-ribbed read. */
+function makeIronHouseGeo(){
+  var W=4.57, H=2.5, D=6.1;
+  var body = makeBoxLocal(W,H,D, new THREE.Color(KIT.ironWeathered));
+  var roof = makeGableRoof(W,D,0.25, 0.85, new THREE.Color(KIT.ironNew));
+  bake(roof, new THREE.Vector3(0,H,0));
+  var parts=[body,roof];
+  // corrugation ribbing: alternating light/dark vertical ribs on the two long
+  // (±x) faces — tighter pitch than clapboard, the distinct metallic read
+  var ribN=9;
+  for(var s=-1;s<=1;s+=2){
+    for(var i=0;i<ribN;i++){
+      var rz=(-D/2)+ (i+0.5)*(D/ribN);
+      var rib=new THREE.BoxGeometry(0.05,H*0.98,D/ribN*0.5).toNonIndexed();
+      rib.translate(s*(W/2+0.01), H*0.5, rz);
+      colorizeUniform(rib, new THREE.Color(i%2? KIT.ironNew : 0x76726c));
+      parts.push(rib);
+    }
+  }
+  // rust bleed streaks near the base seams
+  for(var rr=0; rr<4; rr++){
+    var streak=new THREE.BoxGeometry(0.09,H*0.5,0.05).toNonIndexed();
+    streak.translate((rr%2?1:-1)*(W/2+0.02), H*0.28, (-D/2)+(rr+1)*(D/5));
+    colorizeUniform(streak, new THREE.Color(KIT.rust)); parts.push(streak);
+  }
+  var door=new THREE.BoxGeometry(1.0,1.8,0.08).toNonIndexed(); door.translate(0,0.9,D/2+0.02);
+  colorizeUniform(door, new THREE.Color(0x2a2622)); parts.push(door);
+  pushSashWindow(parts, 0, 1.6, D/2+0.02, 0.6, 0.55, 1);
+  return mergeGeoms(parts);
 }
 /* behavior-spec.md item 4 ("CONSTRUCTION AS PROCESS"): three earlier-stage
    geometries for a growth building's site, same footprint/rotation as the
@@ -1232,7 +1505,7 @@ function makeGrowthBuildingGeo(variant){
    walls (no roof) -> the finished body+roof already defined above. */
 function makeConstructionMaterialsGeo(){ return makeTimberStackGeo(); } // a lumber/materials delivery, before framing starts
 function makeConstructionFrameGeo(){
-  var postColor = new THREE.Color(0x6b5238);
+  var postColor = new THREE.Color(0x6b5a44); // fresh-cut framing timber (KIT roofWorn tone)
   var parts = [];
   [[-2.3,-1.85],[2.3,-1.85],[-2.3,1.85],[2.3,1.85]].forEach(function(c){
     var post = makeBoxLocal(0.18,2.8,0.18,postColor); bake(post, new THREE.Vector3(c[0],0,c[1])); parts.push(post);
@@ -1247,7 +1520,7 @@ function makeConstructionWallsGeo(){
   // P0-4 fix: was the same near-sand tan (0xceb182) as the old finished body;
   // raw unweathered plank walls (pre-roof) read a shade greyer/paler than
   // the finished colorways above, still clearly darker than sand/duneGold.
-  return makeBoxLocal(5,2.8,4, new THREE.Color(0xa8977a));
+  return makeBoxLocal(5,2.8,4, new THREE.Color(KIT.woodFresh)); // raw unweathered plank walls, pre-roof
 }
 /* QA-GATE tents debt: the old tent was a single warm-tan cone (0xd8cba0)
    almost indistinguishable from the sand palette (sand 0xd8c48c, duneGold
@@ -1291,12 +1564,31 @@ function makeCampfireGeo(){
   var g = new THREE.ConeGeometry(0.32,0.5,6); g.translate(0,0.25,0);
   return colorizeUniform(g, new THREE.Color(0xffb060));
 }
-var growthBuildingMesh = new THREE.InstancedMesh(makeGrowthBuildingGeo(0), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, transparent:true, side:THREE.DoubleSide, specular:0x000000, shininess:0}), growthBuildingCandidates.length);
+// s72: all FINISHED growth meshes share ONE material instance so the
+// zones-tint altitude cartoon-crossfade (which sets growthBuildingMesh.material
+// .opacity) governs every finished-building geometry uniformly — houses,
+// commercial rows AND iron houses — without editing another layer (the
+// material object is the shared surface). Also fixes the pre-s72 latent bug
+// where growthBuildingMesh2's own material never received the crossfade.
+var growthFinMat = new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, transparent:true, side:THREE.DoubleSide, specular:0x000000, shininess:0});
+var growthBuildingMesh = new THREE.InstancedMesh(makeGrowthBuildingGeo(0), growthFinMat, growthBuildingCandidates.length);
 growthBuildingMesh.count = 0; scene.add(growthBuildingMesh);
-// P0-4 fix: second colorway, alternated by candidate index in growRevealStaged()
-// below, purely for visual variety (breaks up the "stamped-out" single-tone read).
-var growthBuildingMesh2 = new THREE.InstancedMesh(makeGrowthBuildingGeo(1), new THREE.MeshPhongMaterial({vertexColors:true, flatShading:true, transparent:true, side:THREE.DoubleSide, specular:0x000000, shininess:0}), growthBuildingCandidates.length);
+// second house colorway, routed by candidate hash in growRevealStaged() for variety.
+var growthBuildingMesh2 = new THREE.InstancedMesh(makeGrowthBuildingGeo(1), growthFinMat, growthBuildingCandidates.length);
 growthBuildingMesh2.count = 0; scene.add(growthBuildingMesh2);
+// s72: commercial gable-front + eave-signboard rows (the party-wall core) and
+// the 1849-51 iron-house outliers — their own geometries, shared material.
+var growthCommercialMesh = new THREE.InstancedMesh(makeGrowthCommercialGeo(0), growthFinMat, growthBuildingCandidates.length);
+growthCommercialMesh.count = 0; scene.add(growthCommercialMesh);
+var ironHouseMesh = new THREE.InstancedMesh(makeIronHouseGeo(), growthFinMat, Math.max(1, Math.ceil(growthBuildingCandidates.length*0.1)));
+ironHouseMesh.count = 0; scene.add(ironHouseMesh);
+// s72: growth instance setter with NON-UNIFORM width scale (party-wall lots
+// stretch the 5m base body to their frontage width so a row reads continuous).
+var _gbM4=new THREE.Matrix4(), _gbQ=new THREE.Quaternion(), _gbUP=new THREE.Vector3(0,1,0), _gbV=new THREE.Vector3(), _gbS=new THREE.Vector3();
+function setGrowthInstance(mesh, idx, x,y,z, yaw, sx, sz){
+  _gbQ.setFromAxisAngle(_gbUP, yaw); _gbV.set(x,y,z); _gbS.set(sx==null?1:sx, 1, sz==null?1:sz);
+  _gbM4.compose(_gbV,_gbQ,_gbS); mesh.setMatrixAt(idx, _gbM4);
+}
 // staged-construction meshes (item 4): a candidate occupies exactly one of
 // these four meshes at a time, keyed by age-since-spawn (see
 // updateGrowth()'s staged-reveal loop) — never a scale-in blob.
@@ -1359,6 +1651,9 @@ function growReveal(pool, spawned, targetCount, mesh, revealDayFn){
    itself is still paced by the population-curve growthTargets() above —
    only WHAT renders during that window changes, not WHEN a site starts). */
 var CONSTRUCTION_DAYS = 14;
+// iron/zinc houses appear ONLY 1849-51 (bible §4: the fad busted by 1852)
+var IRON_WIN_START = eventDateToSimDay("1849-01-01"), IRON_WIN_END = eventDateToSimDay("1852-01-01");
+var GROWTH_BASE_W = 5; // makeGrowthBuildingGeo/Commercial base body width (for the party-wall width scale)
 function growRevealStaged(pool, spawned, targetCount, revealDayFn){
   while(spawned.length<targetCount && spawned.length<pool.length){
     var idx = spawned.length;
@@ -1366,21 +1661,27 @@ function growRevealStaged(pool, spawned, targetCount, revealDayFn){
     var rDay = revealDayFn ? Math.min(simDay, revealDayFn(idx)) : simDay; // P0-1: backdate to when this site should truly have broken ground
     spawned.push({ x:c.x, z:c.z, h:terrainHeight(c.x,c.z), rot:c.rot, spawnDay:rDay, settled:false });
   }
-  var matN=0, frameN=0, wallN=0, doneN=0, doneN2=0, workerN=0;
+  var matN=0, frameN=0, wallN=0, doneN=0, doneN2=0, commN=0, ironN=0, workerN=0;
+  var ironWindow = (simDay>=IRON_WIN_START && simDay<IRON_WIN_END);
   var dayHour = (simDay-Math.floor(simDay))*24;
   var isDaylight = dayHour>=6.5 && dayHour<18;
   for(var i=0;i<spawned.length;i++){
-    var b = spawned[i];
+    var b = spawned[i], c = pool[i];
+    var sx = (c && c.buildW) ? c.buildW/GROWTH_BASE_W : 1;   // party-wall lots stretch to their frontage width
     var age = simDay-b.spawnDay;
     var frac = clamp(age/CONSTRUCTION_DAYS, 0, 1);
     var activeStage = (frac>=0.18 && frac<0.8); // frame or walls — the stages with workers/carts present
-    if(frac<0.18){ setShipInstance(growthMaterialsMesh, matN++, b.x,b.h,b.z,b.rot,1); }
-    else if(frac<0.45){ setShipInstance(growthFrameMesh, frameN++, b.x,b.h,b.z,b.rot,1); }
-    else if(frac<0.8){ setShipInstance(growthWallsMesh, wallN++, b.x,b.h,b.z,b.rot,1); }
+    if(frac<0.18){ setGrowthInstance(growthMaterialsMesh, matN++, b.x,b.h,b.z,b.rot,1); }
+    else if(frac<0.45){ setGrowthInstance(growthFrameMesh, frameN++, b.x,b.h,b.z,b.rot,sx); }
+    else if(frac<0.8){ setGrowthInstance(growthWallsMesh, wallN++, b.x,b.h,b.z,b.rot,sx); }
     else {
-      // P0-4 fix: alternate the two colorways by candidate index for variety.
-      if(i%2===0) setShipInstance(growthBuildingMesh, doneN++, b.x,b.h,b.z,b.rot,1);
-      else setShipInstance(growthBuildingMesh2, doneN2++, b.x,b.h,b.z,b.rot,1);
+      // s72 KIT routing: iron outlier (1849-51 only) → commercial gable-front
+      // row → domestic house (two colorways for variety, hash-routed so it's
+      // stable per building, not index-parity flicker across reveals).
+      if(c && c.ironEligible && ironWindow){ setGrowthInstance(ironHouseMesh, ironN++, b.x,b.h,b.z,b.rot,1); }
+      else if(c && c.commercial){ setGrowthInstance(growthCommercialMesh, commN++, b.x,b.h,b.z,b.rot,sx); }
+      else if(hash1(i*1.73)<0.5){ setGrowthInstance(growthBuildingMesh, doneN++, b.x,b.h,b.z,b.rot,sx); }
+      else { setGrowthInstance(growthBuildingMesh2, doneN2++, b.x,b.h,b.z,b.rot,sx); }
       b.settled = frac>=1;
     }
     if(isDaylight && activeStage){
@@ -1396,6 +1697,8 @@ function growRevealStaged(pool, spawned, targetCount, revealDayFn){
   growthWallsMesh.count = wallN; growthWallsMesh.instanceMatrix.needsUpdate = true;
   growthBuildingMesh2.count = doneN2; growthBuildingMesh2.instanceMatrix.needsUpdate = true;
   growthBuildingMesh.count = doneN; growthBuildingMesh.instanceMatrix.needsUpdate = true;
+  growthCommercialMesh.count = commN; growthCommercialMesh.instanceMatrix.needsUpdate = true;
+  ironHouseMesh.count = ironN; ironHouseMesh.instanceMatrix.needsUpdate = true;
   constructionWorkerMesh.count = workerN; constructionWorkerMesh.instanceMatrix.needsUpdate = true;
 
   // supply carts: a small pool shuttling between the lumber yard and
@@ -2004,4 +2307,4 @@ var LUMBER_YARD_SPOT = (function buildLumberYard(){
 })();
 
 /* dev-tooling visibility interface (layers-spec.md §15): this layer's visibility toggle */
-registerLayerVisibility("buildings", function(v){ [buildingsMesh, windowsMesh, growthBuildingMesh, growthBuildingMesh2, growthMaterialsMesh, growthFrameMesh, growthWallsMesh, constructionWorkerMesh, supplyCartMesh, tentMesh, campfireMesh, window.buildingTypeAccentMesh, window.buildingGlowAccentMesh].forEach(function(m){ if(m) m.visible = v; }); });
+registerLayerVisibility("buildings", function(v){ [buildingsMesh, windowsMesh, growthBuildingMesh, growthBuildingMesh2, growthCommercialMesh, ironHouseMesh, growthMaterialsMesh, growthFrameMesh, growthWallsMesh, constructionWorkerMesh, supplyCartMesh, tentMesh, campfireMesh, window.buildingTypeAccentMesh, window.buildingGlowAccentMesh].forEach(function(m){ if(m) m.visible = v; }); });

@@ -320,7 +320,9 @@ window.__P1850 = {
   get buildings(){
     return { villageSpots:VILLAGE_BUILDING_SPOTS.length, candidates:growthBuildingCandidates.length,
       spawned:spawnedBuildings.length, target:growthTargets(densityAt(simDay)).buildings,
-      stages:{ materials:growthMaterialsMesh.count, frame:growthFrameMesh.count, walls:growthWallsMesh.count, done:growthBuildingMesh.count+growthBuildingMesh2.count } };
+      stages:{ materials:growthMaterialsMesh.count, frame:growthFrameMesh.count, walls:growthWallsMesh.count,
+        done:growthBuildingMesh.count+growthBuildingMesh2.count+growthCommercialMesh.count+ironHouseMesh.count,
+        houses:growthBuildingMesh.count+growthBuildingMesh2.count, commercial:growthCommercialMesh.count, iron:ironHouseMesh.count } };
   },
   get people(){
     return { cap:PEOPLE_CAP, target:peopleTargetCount(simDay,lastKnownAlt), alive:ALL_PEOPLE_SLOTS.length,
@@ -607,8 +609,15 @@ window.__P1850.audits = (function(){
         if(lx < (b2.w||4)/2 + p.r*0.5 && lz < (b2.d||4)/2 + p.r*0.5){ viol.push({ px:Math.round(p.x), pz:Math.round(p.z), bldg:j }); break; }
       }
     }
-    return { pass: viol.length===0, law:"P1", engineChecked:proc.length, engineViolations:viol.length,
-             authoredOverlaps:authored.length, note:"authored plaza density (pre-existing) → #51 frontage scope",
+    // s72 (#51) FULL GATING: P4's frontage assembly reaches full strength here,
+    // so this audit now gates EVERYTHING — engine-governed placements AND the
+    // hand-authored village (the 11 pre-existing authored overlaps were the
+    // fire-block interior fill landing on the named row; s72 de-overlaps it).
+    // A documented party wall (exact shared edge / same yaw, angle diff ≤15°)
+    // is NOT an overlap here (rectPenetration's angle guard) — it is P1's
+    // permitted mechanism, which the commercial rows use by design.
+    return { pass: viol.length===0 && authored.length===0, law:"P1", engineChecked:proc.length, engineViolations:viol.length,
+             authoredOverlaps:authored.length, gated:"engine+authored",
              engineList:viol.slice(0,10), authoredList:authored.slice(0,20) };
   });
 
@@ -648,27 +657,32 @@ window.__P1850.audits = (function(){
       return best;
     }
     function doorDist(o){ var fd=(o.d||4)*0.5+0.3; return distToNearestStreet(o.x+Math.sin(o.rot||0)*fd, o.z+Math.cos(o.rot||0)*fd); }
-    // GATE (this engine sprint): the PHYSICAL-COHERENCE floor — no addressed
-    // structure in the platted core is MAROONED (>40m from the road network with
-    // no plausible door-path). The spec's strict ≤25m door-path is #51's full
-    // frontage assembly ("P4 is the invariant floor it builds on"); the [25,40]m
-    // band — block-interior growth cottages (period-true §5 looseness) and the
-    // hand-placed village's set-backs (chapel forecourt, deep lots) — is surfaced
-    // as frontageTargets for #51, never hidden.
-    var MAROONED=40, targets=[], viol=[], B=VILLAGE_BUILDING_SPOTS, i;
+    // s72 (#51) FULL STRENGTH: P4's frontage clause now gates at the strict
+    // ≤25m door-path for EVERY addressed structure — the lot system fronts all
+    // growth stock (commercial party-wall rows + residential frontage lots) and
+    // the village/chapel were re-fronted (frontify). Mid-block orphan spawning
+    // for addressed classes has ended. Period-loose exempt classes (road-master
+    // §5): outlying squatters (growth >260m from the plaza) and the deliberately
+    // unaddressed founding-village huts past the surveyed edge.
+    var FRONT=25, viol=[], B=VILLAGE_BUILDING_SPOTS, i;
     function consider(kind, x, z, dist, name){
-      if(dist>MAROONED) viol.push({ kind:kind, x:Math.round(x), z:Math.round(z), d:+dist.toFixed(1), name:name||null });
-      else if(dist>25) targets.push({ kind:kind, x:Math.round(x), z:Math.round(z), d:+dist.toFixed(1), name:name||null });
+      if(dist>FRONT) viol.push({ kind:kind, x:Math.round(x), z:Math.round(z), d:+dist.toFixed(1), name:name||null });
     }
-    for(i=0;i<B.length;i++){ var a=B[i]; if(a.w==null) continue; consider("authored", a.x, a.z, doorDist(a), a.name); }
+    var authoredChecked=0;
+    for(i=0;i<B.length;i++){ var a=B[i]; if(a.w==null) continue;
+      // deliberately-unaddressed founding-village squatter huts past the
+      // surveyed edge stay period-loose (§5) — only the platted core is gated.
+      if(Math.hypot(a.x-PLAZA_CENTER.x, a.z-PLAZA_CENTER.z) > 300 && !a.name) continue;
+      authoredChecked++; consider("authored", a.x, a.z, doorDist(a), a.name);
+    }
     var engineChecked=0;
     growthBuildingCandidates.forEach(function(c){
       if(Math.hypot(c.x-PLAZA_CENTER.x, c.z-PLAZA_CENTER.z) > 260) return; // outlying squatter cottages exempt (§5)
       engineChecked++; consider("growth", c.x, c.z, distToNearestStreet(c.x,c.z));
     });
-    return { pass: viol.length===0, law:"P4", floor:"not-marooned(≤"+MAROONED+"m)", engineChecked:engineChecked,
-             marooned:viol.length, frontageTargets:targets.length, note:"strict ≤25m door-path → #51 frontage scope",
-             maroonedList:viol.slice(0,10), targetList:targets.slice(0,20) };
+    return { pass: viol.length===0, law:"P4", gate:"front(≤"+FRONT+"m door-path)",
+             authoredChecked:authoredChecked, engineChecked:engineChecked,
+             violations:viol.length, gated:"authored+engine", list:viol.slice(0,20) };
   });
 
   /* ---- P5: signs live on walls (vertical plane, normal ⊥ any roof, below
