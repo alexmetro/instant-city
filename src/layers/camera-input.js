@@ -113,8 +113,8 @@ var cinematicTilt = false;
 function setCinematicTilt(on){
   cinematicTilt = on;
   CAM.pitchOffT = on ? CINEMATIC_TILT_OFFSET : 0;
-  var btn = document.getElementById("hud-tilt-toggle");
-  if(btn) btn.classList.toggle("on", on);
+  // s69: the standalone desktop tilt button is gone — the ☰ menu row is the
+  // one tilt control on every viewport.
   var row = document.getElementById("hm-tilt");
   if(row) row.classList.toggle("active", on);
 }
@@ -220,7 +220,7 @@ canvas.addEventListener("contextmenu", function(e){ e.preventDefault(); });
    surface (drag pans, tap still opens them via their own click handlers). */
 var UI_STEAL_SELECTOR = "#paper-pane,#hud-menu-sheet,#hud-menu-toggle,#beat-card,"+
   "#inspect-panel,#paper-toggle,#speed-pill,"+ /* s54: pill + (inside inspect-panel) release chip are genuine chrome */
-  "#hud-hint-toggle,#hud-tilt-toggle,#hud-ticker,#hud-hint,#hud-seed,#hud-title,"+
+  "#hud-ticker,#hud-seed,#hud-title,"+ /* s69: help panel / "?" chip / tilt button removed — everything lives in the ☰ menu */
   "#hud-clock,#hud-altitude,#horizon-ring,#touch-debug,.scr-tab,.scr-track,"+
   "a,button,input,textarea,select";
 function isUIEvent(e){
@@ -577,46 +577,72 @@ window.addEventListener("resize", function(){
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-/* touch/mobile HUD affordances: no hover on touch, so the control hint
-   lives behind a tap-to-toggle "?" chip instead of always-on text. */
-(function(){
-  var toggle = document.getElementById("hud-hint-toggle");
-  var hint = document.getElementById("hud-hint");
-  toggle.addEventListener("click", function(){ hint.classList.toggle("show"); });
-})();
-
-/* cinematic tilt toggle (⟀): standalone button on desktop, a menu row on
-   narrow screens (see the ☰ menu wiring below — same setCinematicTilt()). */
-document.getElementById("hud-tilt-toggle").addEventListener("click", function(){
-  setCinematicTilt(!cinematicTilt);
-});
-
-/* ---- ☰ mobile chrome menu: opens a small sheet listing every panel that's
-   hidden by default on narrow screens (title/seed/paper/altitude/
-   provenance/hint) plus the cinematic tilt toggle, each as a tap-to-show/
-   hide row. Purely additive — on wider viewports the underlying #hud-*
-   elements are unaffected by .menu-forced (no matching CSS rule there). ---- */
+/* ---- ☰ menu (s69 CONTROL CENTRALIZATION, user directive): THE one control
+   surface on every viewport — the "?" hint chip, the always-on bottom-right
+   help panel, and the standalone desktop tilt button are all GONE. The sheet
+   holds: mode rows · tilt slider · the Controls & shortcuts reference
+   (expanded on the first-ever visit via a localStorage flag, collapsed
+   behind its row thereafter) · display-element rows · the Atelier link. ---- */
 (function(){
   var menuBtn = document.getElementById("hud-menu-toggle");
   var sheet = document.getElementById("hud-menu-sheet");
   var closeBtn = document.getElementById("hm-close");
+  var ctlRow = document.getElementById("hm-controls");
+  var ctlBody = document.getElementById("hm-controls-body");
+  var CTL_SEEN_KEY = "p1850-controls-seen";
+  var ctlSeen = false;
+  try{ ctlSeen = !!localStorage.getItem(CTL_SEEN_KEY); }catch(err){} // private-mode Safari can throw
+  function setCtlOpen(open){
+    ctlBody.classList.toggle("open", open);
+    ctlRow.classList.toggle("open", open);
+  }
+  setCtlOpen(!ctlSeen); // first-ever visit: the reference greets you expanded
+  ctlRow.addEventListener("click", function(){ setCtlOpen(!ctlBody.classList.contains("open")); });
   menuBtn.addEventListener("click", function(e){
     e.stopPropagation();
     var open = sheet.classList.toggle("open");
     // s54 single-top-layer policy (see showInspect): on phone chrome the
     // inspect bottom-sheet would draw over the opening menu — close it.
     if(open && phoneChromeActive()) closeInspect();
+    if(open && !ctlSeen){ // the expanded first-visit reference has now been seen
+      ctlSeen = true;
+      try{ localStorage.setItem(CTL_SEEN_KEY, "1"); }catch(err){}
+    }
+    if(open) syncDisplayRows();
   });
   closeBtn.addEventListener("click", function(e){ e.stopPropagation(); sheet.classList.remove("open"); });
+  /* DISPLAY rows — meaningful on every viewport now: on phone they show a
+     default-hidden panel via .menu-forced (the narrow-viewport CSS), on
+     desktop they hide a default-shown one via .menu-hidden. State is re-read
+     from computed style whenever the sheet opens, so the show/hide caption
+     always reports the truth for the current viewport. */
+  function elVisible(el){
+    var cs = window.getComputedStyle(el);
+    return cs.display!=="none" && cs.visibility!=="hidden";
+  }
+  var displayRows = [];
   document.querySelectorAll(".hm-row[data-target]").forEach(function(row){
     var target = document.getElementById(row.dataset.target);
+    displayRows.push({ row:row, target:target });
     row.addEventListener("click", function(){
-      var on = target.classList.toggle("menu-forced");
-      row.classList.toggle("active", on);
+      if(elVisible(target)){ target.classList.remove("menu-forced"); target.classList.add("menu-hidden"); }
+      else { target.classList.remove("menu-hidden"); target.classList.add("menu-forced"); }
+      row.classList.toggle("active", elVisible(target));
     });
   });
+  function syncDisplayRows(){
+    displayRows.forEach(function(d){ d.row.classList.toggle("active", elVisible(d.target)); });
+  }
   document.getElementById("hm-tilt").addEventListener("click", function(){
     setCinematicTilt(!cinematicTilt);
+  });
+  /* the Atelier link (dev workbench, layers-spec slot 15): a side-by-side
+     artifact — commit the live sim moment into the hash first, then carry
+     the WHOLE #hash (seed + date) across so the workbench opens on this
+     exact moment. */
+  document.getElementById("hm-atelier").addEventListener("click", function(){
+    updateHashDate();
+    location.href = "atelier.html" + location.hash;
   });
 })();
 
@@ -650,8 +676,7 @@ document.getElementById("hud-tilt-toggle").addEventListener("click", function(){
   tiltRange.addEventListener("pointerdown", function(){ tiltDragging = true; });
   window.addEventListener("pointerup", function(){ tiltDragging = false; });
   tiltRange.addEventListener("input", function(){
-    cinematicTilt = false;
-    document.getElementById("hud-tilt-toggle").classList.remove("on");
+    cinematicTilt = false; // manual slider position ≠ the cinematic preset (s69: standalone button gone; the row's active state clears via syncMenuModes)
     CAM.pitchOffT = clamp(parseFloat(tiltRange.value), PITCH_OFF_MIN, PITCH_OFF_MAX);
     syncMenuModes();
   });

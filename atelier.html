@@ -108,7 +108,8 @@
     font-style:italic;
   }
   #hud-altitude{
-    bottom:16px; left:16px; font-size:0.85rem; letter-spacing:0.5px; min-width:150px;
+    /* s69: left 16->72px — clears the 44px ☰ button now at bottom-left 16px */
+    bottom:16px; left:72px; font-size:0.85rem; letter-spacing:0.5px; min-width:150px;
   }
   #hud-altitude .label{ font-size:0.6rem; letter-spacing:2px; opacity:0.65; display:block; }
   #btn-fullscreen{
@@ -118,15 +119,10 @@
   #btn-fullscreen:hover{ opacity:1; }
   /* hide the button when already chromeless: standalone PWA launch, or no fullscreen API (iPhone Safari) */
   @media (display-mode: standalone), (display-mode: fullscreen){ #btn-fullscreen{ display:none; } }
-  #hud-hint{
-    bottom:16px; right:16px; font-size:0.68rem; line-height:1.55; text-align:right;
-    max-width:250px;
-    /* s64 help-panel choice: KEPT in place on desktop (hover users glance at
-       it constantly; hiding it behind a "?" would cost more than it saves)
-       but de-boxed — translucent scrim with soft-faded edges, haloed text */
-    background:radial-gradient(115% 115% at 50% 50%, rgba(241,230,201,0.34) 55%, rgba(241,230,201,0) 100%);
-    padding:1.2em 1.6em;
-  }
+  /* s69 CONTROL CENTRALIZATION: the bottom-right help panel (#hud-hint) and
+     its "?" chip are GONE on every viewport — the keyboard/gesture reference
+     lives in the ☰ menu's Controls & shortcuts section, and the bottom-right
+     corner stays EMPTY (the world breathes; labels may use it). */
   #hud-ghost{
     top:78px; left:50%; transform:translateX(-50%);
     font-size:0.7rem; letter-spacing:2.5px; padding:0.3em 1em;
@@ -551,7 +547,7 @@
      auto-populated with whoever is being followed (director person-beats
      open it themselves; manual selections keep it too). */
   body.watch-mode #hud-title, body.watch-mode #hud-seed, body.watch-mode #hud-altitude,
-  body.watch-mode #hud-hint, body.watch-mode #hud-hint-toggle, body.watch-mode #paper-toggle,
+  body.watch-mode #paper-toggle,
   body.watch-mode #hud-ghost, body.watch-mode #hud-provenance,
   body.watch-mode #horizon-ring{ display:none !important; }
   /* s44: quick-cut fade between director beats */
@@ -562,16 +558,6 @@
   #director-fade.on{ opacity:1; }
 
   /* ---- touch/mobile ---- */
-  #hud-hint-toggle{
-    display:none; bottom:16px; right:16px; pointer-events:auto; cursor:pointer;
-    width:40px; height:40px; border-radius:50%; align-items:center; justify-content:center;
-    font-size:0.95rem; padding:0;
-    background:radial-gradient(circle at 50% 50%, rgba(241,230,201,0.5) 48%, rgba(241,230,201,0) 72%); /* s64 soft round tint */
-  }
-  body.touch-device #hud-hint{ display:none; }
-  body.touch-device #hud-hint.show{ display:block; bottom:62px; max-width:210px; }
-  body.touch-device #hud-hint-toggle{ display:flex; }
-
   /* Enlarge tiny glyph tap targets to >=40px on touch without shifting their
      visual position: equal padding + negative margin grows the hit box
      outward while the glyph itself stays put (absolute-positioned parents
@@ -585,29 +571,18 @@
     padding:9px 12px;
   }
 
-  /* ---- cinematic tilt toggle (desktop-visible standalone button; on
-     narrow screens it moves into the ☰ menu sheet instead — see below) ---- */
-  #hud-tilt-toggle{
-    bottom:80px; left:16px; pointer-events:auto; cursor:pointer;
-    width:40px; height:40px; border-radius:50%; display:flex;
-    align-items:center; justify-content:center; font-size:1.05rem; padding:0;
-    user-select:none; transition:box-shadow .2s ease;
-    background:radial-gradient(circle at 50% 50%, rgba(241,230,201,0.5) 48%, rgba(241,230,201,0) 72%); /* s64 soft round tint */
-  }
-  /* s64: active state is ink WEIGHT (a hairline ink ring + heavy glyph), not a solid fill */
-  #hud-tilt-toggle.on{ box-shadow:inset 0 0 0 1.5px rgba(43,29,14,0.8); font-weight:900; }
-
-  /* ---- ☰ mobile chrome menu: everything that isn't one of the four
-     always-on mobile elements (clock chip / collapsed timeline tab / ticker
-     / this button) lives behind here instead of tiling the viewport ---- */
+  /* ---- ☰ menu (s69 CONTROL CENTRALIZATION): THE one control surface on
+     EVERY viewport — visible on desktop too, bottom-left. Home of the mode
+     toggles, tilt slider, keyboard/gesture reference, display rows, and the
+     Atelier link. The standalone tilt button and "?" hint chip are gone. ---- */
   #hud-menu-toggle{
-    display:none; bottom:16px; left:16px; pointer-events:auto; cursor:pointer;
+    display:flex; bottom:16px; left:16px; pointer-events:auto; cursor:pointer;
     width:44px; height:44px; border-radius:50%; align-items:center; justify-content:center;
     font-size:1.15rem; padding:0; z-index:13; /* s54: >=44px thumb target */
     background:radial-gradient(circle at 50% 50%, rgba(241,230,201,0.5) 48%, rgba(241,230,201,0) 72%); /* s64 soft round tint */
   }
   #hud-menu-sheet{
-    display:none; position:fixed; bottom:64px; left:16px; width:210px; z-index:13;
+    display:none; position:fixed; bottom:64px; left:16px; width:248px; z-index:13; /* s69: 210->248px — the two-column controls reference needs the room */
     /* s64: translucent, soft-faded top/bottom edges, hairline row rules kept */
     background:linear-gradient(180deg, rgba(241,230,201,0.2) 0, rgba(241,230,201,0.82) 9px,
       rgba(236,223,190,0.82) calc(100% - 9px), rgba(236,223,190,0.2) 100%);
@@ -642,6 +617,30 @@
     width:128px; margin-left:10px; accent-color:var(--ink);
     touch-action:none; /* thumb drags must scrub the slider, never pan the map */
   }
+  /* ---- s69 CONTROL CENTRALIZATION: menu section grammar ---- */
+  .hm-divider{ margin:3px 12px; border-top:1px solid rgba(43,29,14,0.4); }
+  .hm-divider + .hm-row{ border-top:none; } /* no double rule under a divider */
+  /* elements hidden via a display row (any viewport) — mirror of .menu-forced */
+  .menu-hidden{ display:none !important; }
+  /* the Controls & shortcuts expandable row + its two-column reference */
+  .hm-row.hm-expand::after{ content:"\25BE"; font-size:0.7rem; opacity:0.55; }
+  .hm-row.hm-expand.open::after{ content:"\25B4"; opacity:0.85; }
+  .hm-controls-body{ display:none; padding:0 12px 10px; cursor:default; }
+  .hm-controls-body.open{ display:block; }
+  .hm-ctl-group{ margin-top:8px; }
+  .hm-ctl-group h4{
+    margin:0 0 3px; font-size:0.56rem; letter-spacing:2.5px; font-variant:small-caps;
+    font-weight:600; opacity:0.65; border-bottom:1px solid rgba(43,29,14,0.2); padding-bottom:2px;
+  }
+  .hm-ctl{ display:grid; grid-template-columns:92px 1fr; column-gap:8px; row-gap:2px;
+    font-size:0.62rem; line-height:1.45; letter-spacing:0.3px; }
+  .hm-ctl b{ font-weight:600; }
+  .hm-ctl span{ opacity:0.85; }
+  /* the Atelier link row's small subtitle */
+  .hm-row .hm-sub{
+    display:block; font-size:0.54rem; letter-spacing:1px; opacity:0.6;
+    margin-top:2px; font-variant:small-caps;
+  }
 
   /* ---- s54 TOUCH CONTROL SURFACE ---- */
   /* Speed pill — THE speed indicator+control on touch devices (grounding.md
@@ -675,7 +674,6 @@
     #hud-clock .speed{ display:none; } /* the pill replaces the HUD speed text on touch */
     #hud-ticker{ bottom:72px; }        /* clear the pill's bottom band */
     #hud-scrubber{ bottom:112px; }
-    #hud-menu-toggle{ display:flex; }  /* the modes menu is reachable on every touch device */
   }
   /* follow-release chip (s54): shown inside the inspect panel while a
      person/documented figure is followed — the touch path for Esc. */
@@ -707,9 +705,10 @@
        (opacity animation below) before folding away like the rest.
        s54: the block now ALSO applies to phones in LANDSCAPE (pointer:
        coarse + short viewport) — previously landscape got the full
-       desktop chrome and the masthead/date/hint panels collided. */
-    #hud-title, #hud-seed, #paper-toggle, #hud-altitude, #hud-provenance,
-    #hud-hint, #hud-hint-toggle, #hud-tilt-toggle{ display:none; }
+       desktop chrome and the masthead/date/hint panels collided.
+       s69: the help panel / "?" chip / standalone tilt button no longer
+       exist on any viewport — dropped from this hidden set. */
+    #hud-title, #hud-seed, #paper-toggle, #hud-altitude, #hud-provenance{ display:none; }
     #hud-title{
       display:block; padding:0.28em 0.8em; max-width:70vw; top:8px;
       animation: hudTitleAutoHide 0.6s ease 4.4s forwards;
@@ -730,7 +729,6 @@
     #paper-toggle.menu-forced{ display:block; top:100px; right:16px; }
     #hud-provenance.menu-forced{ display:block; top:56px; left:16px; max-width:60vw; font-size:0.55rem; letter-spacing:1px; white-space:normal; }
     #hud-altitude.menu-forced{ display:block; min-width:0; font-size:0.7rem; bottom:150px; left:auto; right:16px; } /* s54: above the pill/ticker/scrubber stack */
-    #hud-hint.menu-forced{ display:block; bottom:150px; right:16px; max-width:min(240px,64vw); }
     #paper-pane{ width:100vw; }
     /* §11 inspect law: on narrow viewports the panel docks as a bottom
        sheet instead of a right rail (thumb reach + map stays visible). */
@@ -745,11 +743,6 @@
        40vh band instead of z-fighting under/over it. The sheet keeps the
        bottom edge; the card yields upward — one owner per screen band. */
     body.ip-open #beat-card{ bottom:calc(40vh + 14px); }
-    /* s54: on phone layouts the "?" chip folds away too — the help panel
-       lives behind the ☰ menu's Controls row instead (these selectors must
-       out-rank the body.touch-device rules above, hence the body prefix). */
-    body.touch-device #hud-hint-toggle{ display:none; }
-    body.touch-device #hud-hint.menu-forced{ display:block; bottom:150px; right:16px; max-width:min(240px,64vw); }
     /* s54 bottom stack, thumb-first: ☰ + speed pill on the bottom edge,
        ticker full-width above them, timeline scrubber full-width above
        the ticker. safe-area padding keeps the pill off the iOS home bar. */
@@ -785,15 +778,8 @@
   <div class="panel" id="hud-ticker">
     <span class="tdate" id="ticker-date"></span><span id="ticker-text"></span>
   </div>
-  <div class="panel" id="hud-hint">
-    drag &mdash; pan the ground &nbsp;&middot;&nbsp; right-drag &mdash; orbit<br>
-    <b>WASD</b> / arrows &mdash; fly (hold <b>Shift</b> to sprint) &nbsp;&middot;&nbsp; <b>Q</b> / <b>E</b> &mdash; rotate &nbsp;&middot;&nbsp; <b>R</b> / <b>F</b> &mdash; altitude<br>
-    scroll / pinch &mdash; zoom &nbsp;&middot;&nbsp; tap/click &mdash; inspect &nbsp;&middot;&nbsp; double-tap/dblclick &mdash; fly to &nbsp;&middot;&nbsp; <b>Esc</b> &mdash; release follow<br>
-    <b>G</b> &mdash; then/now ghost &nbsp;&middot;&nbsp; <b>T</b> &mdash; skip to next sunrise / sunset &nbsp;&middot;&nbsp; <b>P</b> &mdash; documented-only<br>
-    <b>Space</b> &mdash; pause / live (1:1) &nbsp;&middot;&nbsp; <b>1</b> &mdash; 2&times; follow &nbsp;&middot;&nbsp; <b>2 3 4</b> &mdash; day / week / month per second &nbsp;&middot;&nbsp; <b>N</b> &mdash; the paper<br>
-    <b>V</b> &mdash; watch mode (the auto-director takes the camera)
-  </div>
-
+  <!-- s69: the bottom-right help panel is gone — the keyboard/gesture
+       reference lives in the ☰ menu's Controls & shortcuts section -->
   <div class="panel" id="paper-toggle" title="open today's paper (N)">
     <span class="pt-masthead" id="pt-masthead-name">THE CALIFORNIAN</span>
     <span class="pt-hint" id="pt-issue-date">no paper yet</span>
@@ -805,8 +791,6 @@
   </div>
 
   <div class="panel" id="hud-provenance">RECORD ONLY &nbsp;&middot;&nbsp; P</div>
-  <div class="panel" id="hud-hint-toggle" title="controls">?</div>
-  <div class="panel" id="hud-tilt-toggle" title="cinematic low-angle tilt (toggle)">&#10192;</div>
   <div class="panel" id="hud-menu-toggle" title="menu">&#9776;</div>
   <!-- s54 speed pill: segmented time control, coarse-pointer chrome.
        data-speed values are the SIM_SPEEDS keys; setSimSpeed() keeps the
@@ -836,12 +820,51 @@
     <div class="hm-row hm-mode" id="hm-tilt" data-mode="tilt">Cinematic tilt</div>
     <div class="hm-row hm-slider" id="hm-tilt-slider">Camera tilt
       <input type="range" id="tilt-range" min="-0.62" max="0.35" step="0.01" value="0"></div>
+    <div class="hm-divider"></div>
+    <!-- s69 CONTROLS & SHORTCUTS: the keyboard/gesture reference (the old
+         bottom-right help panel's content, regrouped). Expanded on the
+         first-ever visit (localStorage flag), collapsed behind this row after. -->
+    <div class="hm-row hm-expand" id="hm-controls">Controls &amp; shortcuts</div>
+    <div class="hm-controls-body" id="hm-controls-body">
+      <div class="hm-ctl-group"><h4>Navigate</h4>
+        <div class="hm-ctl">
+          <b>drag</b><span>pan the ground</span>
+          <b>right-drag</b><span>orbit</span>
+          <b>scroll / pinch</b><span>zoom</span>
+          <b>WASD / arrows</b><span>fly &mdash; <b>Shift</b> sprints</span>
+          <b>Q / E</b><span>rotate</span>
+          <b>R / F</b><span>altitude</span>
+          <b>tap / click</b><span>inspect</span>
+          <b>double-tap</b><span>fly to</span>
+          <b>Esc</b><span>release follow</span>
+        </div></div>
+      <div class="hm-ctl-group"><h4>Time</h4>
+        <div class="hm-ctl">
+          <b>Space</b><span>pause / live (1:1)</span>
+          <b>1</b><span>2&times; follow</span>
+          <b>2 3 4</b><span>day / week / month per second</span>
+          <b>T</b><span>skip to sunrise / sunset</span>
+          <b>[ ]</b><span>step a month</span>
+        </div></div>
+      <div class="hm-ctl-group"><h4>Modes</h4>
+        <div class="hm-ctl">
+          <b>V</b><span>watch mode (auto-director)</span>
+          <b>N</b><span>the paper</span>
+          <b>G</b><span>then / now ghost</span>
+          <b>P</b><span>documented-only</span>
+        </div></div>
+    </div>
+    <div class="hm-divider"></div>
     <div class="hm-row" data-target="hud-title">Title</div>
     <div class="hm-row" data-target="hud-seed">Seed</div>
-    <div class="hm-row" data-target="paper-toggle">Today's paper</div>
     <div class="hm-row" data-target="hud-altitude">Altitude</div>
     <div class="hm-row" data-target="hud-provenance">Record-only flag</div>
-    <div class="hm-row" data-target="hud-hint">Controls</div>
+    <div class="hm-divider"></div>
+    <!-- s69: dev-workbench link (layers-spec slot 15) — carries the live
+         #hash (seed + date) so the Atelier opens on this same moment -->
+    <div class="hm-row hm-action" id="hm-atelier" title="dev workbench — opens on this same moment">
+      <span>&#128295;&nbsp; Open the Atelier<span class="hm-sub">layer inspector &amp; tuning</span></span>
+    </div>
 </div>
 
 <!-- §11 INSPECT LAW (s42): the ONE persistent inspect surface — replaces the
@@ -17918,8 +17941,8 @@ var cinematicTilt = false;
 function setCinematicTilt(on){
   cinematicTilt = on;
   CAM.pitchOffT = on ? CINEMATIC_TILT_OFFSET : 0;
-  var btn = document.getElementById("hud-tilt-toggle");
-  if(btn) btn.classList.toggle("on", on);
+  // s69: the standalone desktop tilt button is gone — the ☰ menu row is the
+  // one tilt control on every viewport.
   var row = document.getElementById("hm-tilt");
   if(row) row.classList.toggle("active", on);
 }
@@ -18025,7 +18048,7 @@ canvas.addEventListener("contextmenu", function(e){ e.preventDefault(); });
    surface (drag pans, tap still opens them via their own click handlers). */
 var UI_STEAL_SELECTOR = "#paper-pane,#hud-menu-sheet,#hud-menu-toggle,#beat-card,"+
   "#inspect-panel,#paper-toggle,#speed-pill,"+ /* s54: pill + (inside inspect-panel) release chip are genuine chrome */
-  "#hud-hint-toggle,#hud-tilt-toggle,#hud-ticker,#hud-hint,#hud-seed,#hud-title,"+
+  "#hud-ticker,#hud-seed,#hud-title,"+ /* s69: help panel / "?" chip / tilt button removed — everything lives in the ☰ menu */
   "#hud-clock,#hud-altitude,#horizon-ring,#touch-debug,.scr-tab,.scr-track,"+
   "a,button,input,textarea,select";
 function isUIEvent(e){
@@ -18382,46 +18405,72 @@ window.addEventListener("resize", function(){
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-/* touch/mobile HUD affordances: no hover on touch, so the control hint
-   lives behind a tap-to-toggle "?" chip instead of always-on text. */
-(function(){
-  var toggle = document.getElementById("hud-hint-toggle");
-  var hint = document.getElementById("hud-hint");
-  toggle.addEventListener("click", function(){ hint.classList.toggle("show"); });
-})();
-
-/* cinematic tilt toggle (⟀): standalone button on desktop, a menu row on
-   narrow screens (see the ☰ menu wiring below — same setCinematicTilt()). */
-document.getElementById("hud-tilt-toggle").addEventListener("click", function(){
-  setCinematicTilt(!cinematicTilt);
-});
-
-/* ---- ☰ mobile chrome menu: opens a small sheet listing every panel that's
-   hidden by default on narrow screens (title/seed/paper/altitude/
-   provenance/hint) plus the cinematic tilt toggle, each as a tap-to-show/
-   hide row. Purely additive — on wider viewports the underlying #hud-*
-   elements are unaffected by .menu-forced (no matching CSS rule there). ---- */
+/* ---- ☰ menu (s69 CONTROL CENTRALIZATION, user directive): THE one control
+   surface on every viewport — the "?" hint chip, the always-on bottom-right
+   help panel, and the standalone desktop tilt button are all GONE. The sheet
+   holds: mode rows · tilt slider · the Controls & shortcuts reference
+   (expanded on the first-ever visit via a localStorage flag, collapsed
+   behind its row thereafter) · display-element rows · the Atelier link. ---- */
 (function(){
   var menuBtn = document.getElementById("hud-menu-toggle");
   var sheet = document.getElementById("hud-menu-sheet");
   var closeBtn = document.getElementById("hm-close");
+  var ctlRow = document.getElementById("hm-controls");
+  var ctlBody = document.getElementById("hm-controls-body");
+  var CTL_SEEN_KEY = "p1850-controls-seen";
+  var ctlSeen = false;
+  try{ ctlSeen = !!localStorage.getItem(CTL_SEEN_KEY); }catch(err){} // private-mode Safari can throw
+  function setCtlOpen(open){
+    ctlBody.classList.toggle("open", open);
+    ctlRow.classList.toggle("open", open);
+  }
+  setCtlOpen(!ctlSeen); // first-ever visit: the reference greets you expanded
+  ctlRow.addEventListener("click", function(){ setCtlOpen(!ctlBody.classList.contains("open")); });
   menuBtn.addEventListener("click", function(e){
     e.stopPropagation();
     var open = sheet.classList.toggle("open");
     // s54 single-top-layer policy (see showInspect): on phone chrome the
     // inspect bottom-sheet would draw over the opening menu — close it.
     if(open && phoneChromeActive()) closeInspect();
+    if(open && !ctlSeen){ // the expanded first-visit reference has now been seen
+      ctlSeen = true;
+      try{ localStorage.setItem(CTL_SEEN_KEY, "1"); }catch(err){}
+    }
+    if(open) syncDisplayRows();
   });
   closeBtn.addEventListener("click", function(e){ e.stopPropagation(); sheet.classList.remove("open"); });
+  /* DISPLAY rows — meaningful on every viewport now: on phone they show a
+     default-hidden panel via .menu-forced (the narrow-viewport CSS), on
+     desktop they hide a default-shown one via .menu-hidden. State is re-read
+     from computed style whenever the sheet opens, so the show/hide caption
+     always reports the truth for the current viewport. */
+  function elVisible(el){
+    var cs = window.getComputedStyle(el);
+    return cs.display!=="none" && cs.visibility!=="hidden";
+  }
+  var displayRows = [];
   document.querySelectorAll(".hm-row[data-target]").forEach(function(row){
     var target = document.getElementById(row.dataset.target);
+    displayRows.push({ row:row, target:target });
     row.addEventListener("click", function(){
-      var on = target.classList.toggle("menu-forced");
-      row.classList.toggle("active", on);
+      if(elVisible(target)){ target.classList.remove("menu-forced"); target.classList.add("menu-hidden"); }
+      else { target.classList.remove("menu-hidden"); target.classList.add("menu-forced"); }
+      row.classList.toggle("active", elVisible(target));
     });
   });
+  function syncDisplayRows(){
+    displayRows.forEach(function(d){ d.row.classList.toggle("active", elVisible(d.target)); });
+  }
   document.getElementById("hm-tilt").addEventListener("click", function(){
     setCinematicTilt(!cinematicTilt);
+  });
+  /* the Atelier link (dev workbench, layers-spec slot 15): a side-by-side
+     artifact — commit the live sim moment into the hash first, then carry
+     the WHOLE #hash (seed + date) across so the workbench opens on this
+     exact moment. */
+  document.getElementById("hm-atelier").addEventListener("click", function(){
+    updateHashDate();
+    location.href = "atelier.html" + location.hash;
   });
 })();
 
@@ -18455,8 +18504,7 @@ document.getElementById("hud-tilt-toggle").addEventListener("click", function(){
   tiltRange.addEventListener("pointerdown", function(){ tiltDragging = true; });
   window.addEventListener("pointerup", function(){ tiltDragging = false; });
   tiltRange.addEventListener("input", function(){
-    cinematicTilt = false;
-    document.getElementById("hud-tilt-toggle").classList.remove("on");
+    cinematicTilt = false; // manual slider position ≠ the cinematic preset (s69: standalone button gone; the row's active state clears via syncMenuModes)
     CAM.pitchOffT = clamp(parseFloat(tiltRange.value), PITCH_OFF_MIN, PITCH_OFF_MAX);
     syncMenuModes();
   });
