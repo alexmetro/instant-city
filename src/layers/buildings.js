@@ -19,6 +19,7 @@ var windowGeoms = [];
 var buildingGeoms = [];
 var buildingsMesh; // hoisted for semantic-zoom crossfade (see SEMANTIC ZOOM below)
 var chimneySpots = []; // {x,y,z} — smoke-puff emitters (A6), capped at a few buildings
+var PLACEMENT_SIGNS = []; // s67 (#49) P5 sign registry — every mountSignBoard() sign, for placement.signs
 var VILLAGE_BUILDING_SPOTS = []; // {x,z,y,rot,w,d,vStart,vEnd,name?} per placed building — reused by
                                   // Phase 4's yard-object pass (sheds/outhouses/signage), the
                                   // ambient-people street-life system, AND Phase 5's fire system
@@ -1161,9 +1162,26 @@ var tentCandidates = (function(){
   // canPlace() so tents avoid streets/Mission Road, overlap with village
   // buildings/outposts, and overlap each other (footprint radius ~2.2m,
   // matching makeTentGeo()'s ~1.7m cone radius + guy-rope margin).
+  // s67 (#49) P7: intra-cluster tent spacing. The positional canPlace overlap
+  // only sees tents already in PLACEMENT_INDEX, but tents register AFTER each
+  // cluster's scatterSample returns — so two tents in the SAME cluster could
+  // pitch <2.5m apart (the spacing offense placement.tents caught). This running
+  // list makes the ≥2.5m floor hold WITHIN a cluster too; scatterSample's retry
+  // loop simply resamples a rejected candidate, so the camp isn't thinned.
+  var _tentAccepted = [];
   function tentBiome(x,z,h){
     if(!(h>2 && h<78 && farFromVillage(x,z,35))) return false;
-    return canPlace(x,z,2.2,{streetMargin:2});
+    // shared positional engine: street/Mission-road clearance + cross-cluster overlap.
+    if(!canPlace(x,z,2.2,{streetMargin:2})) return false;
+    // universal law table — slope ≤12% and never in the intertidal band
+    // (kills the tideline tent). Data-driven, on top of the positional checks.
+    if(!canPlace("tent", {x:x, z:z}).ok) return false;
+    for(var i=0;i<_tentAccepted.length;i++){
+      var dx=x-_tentAccepted[i].x, dz=z-_tentAccepted[i].z;
+      if(dx*dx+dz*dz < 2.6*2.6) return false; // ≥2.5m from any other tent (P7)
+    }
+    _tentAccepted.push({x:x, z:z});
+    return true;
   }
   var clusters = [
     { cx:900, cz:950, r:650, label:"Happy Valley" },                                  // Happy Valley, south of the cove
@@ -1451,6 +1469,12 @@ function mountSignBoard(spot, word, priceLine, yOffset){
   mesh.position.set(spot.x + Math.sin(spot.rot)*faceDist, spot.y+(yOffset!=null?yOffset:1.55), spot.z + Math.cos(spot.rot)*faceDist);
   mesh.rotation.y = spot.rot;
   scene.add(mesh);
+  // s67 (#49) P5: every sign is registered so placement.signs can prove it
+  // lives on a WALL plane — vertical (no roll/pitch, normal ⊥ any roof) and
+  // below the fronted building's roofline, never lying on a roof plane.
+  PLACEMENT_SIGNS.push({ x:mesh.position.x, y:mesh.position.y, z:mesh.position.z,
+                         rotX:mesh.rotation.x, rotZ:mesh.rotation.z,
+                         roofY:(spot.y||0)+((spot.h!=null?spot.h:3))+0.6 });
   return mesh;
 }
 

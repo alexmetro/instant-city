@@ -170,8 +170,12 @@ function scatterRect(count, xMin, xMax, zMin, zMax, biomeTest, maxAttempts){
    collision gap the audit flagged (buildings not aware of tents, tents
    not aware of outposts, etc).
    ========================================================================= */
-var PLACEMENT_INDEX = []; // {x,z,r} — every accepted footprint, any class, any spawner
-function registerPlacement(x,z,r){ PLACEMENT_INDEX.push({x:x,z:z,r:r||3}); }
+var PLACEMENT_INDEX = []; // {x,z,r,cls} — every accepted footprint, any class, any spawner
+/* s67 (#49): generalized to carry an optional class tag so the universal
+   engine (canPlaceClass) and the placement audits can attribute a footprint
+   to its owner. Backward compatible — every existing registerPlacement(x,z,r)
+   caller keeps working (cls just defaults to null). */
+function registerPlacement(x,z,r,cls){ PLACEMENT_INDEX.push({x:x,z:z,r:r||3,cls:cls||null}); }
 
 /* s59 MOVEMENT NATURALISM — walkability obstacle registries. Unlike
    PLACEMENT_INDEX (bounding circles, half-diagonal radii — fine for
@@ -270,8 +274,14 @@ function terrainSlopeDeg(x,z){
 }
 /* footprintR: the candidate's own bounding-circle radius (half its
    longest footprint dimension is a safe estimate). opts: {minY, streetMargin,
-   skipSlope, skipOverlap} for spawners with looser/tighter needs. */
-function canPlace(x,z,footprintR,opts){
+   skipSlope, skipOverlap} for spawners with looser/tighter needs.
+   s67 (#49): the ORIGINAL positional engine, preserved verbatim as
+   canPlaceXZ — 20+ spawners (village/growth buildings, tents, outposts,
+   people spawn checks) depend on its boolean contract, and its exact
+   rejection set is load-bearing for determinism (identical seed ⇒ identical
+   world). The universal law-table engine (canPlaceClass, below) sits ON TOP;
+   canPlace() dispatches to whichever the caller asked for. */
+function canPlaceXZ(x,z,footprintR,opts){
   opts = opts||{};
   var minY = opts.minY!=null ? opts.minY : 1;
   var y = terrainHeight(x,z);
@@ -289,5 +299,95 @@ function canPlace(x,z,footprintR,opts){
     }
   }
   return true;
+}
+
+/* =========================================================================
+   s67 (#49) THE UNIVERSAL PLACEMENT ENGINE (placement-spec.md v1, Fable
+   2026-07-13). One core service, one law table. canPlace() is polymorphic:
+     canPlace("tent", {x,z,yaw,footprint}, {day,parentId,anchorId}) -> {ok,reason}
+        — the class-keyed law-table path (P1–P14 invariants).
+     canPlace(x, z, footprintR, opts)   -> bool
+        — the legacy positional path (canPlaceXZ), unchanged for every
+          existing caller.
+   Reads ONLY core interfaces: terrainHeight, shorelineX, zoneAt, the street
+   spine via nearAnyRoad (constant class widths), PLACEMENT_INDEX. Pure in
+   (seed, simDay): no camera, no frame state — so a law rejection resamples
+   deterministically and worlds stay in sync across identical seeds.
+   ========================================================================= */
+
+/* Surface / band predicates (core geography interfaces only). +x is bayward
+   (east) in this world, so "east of the traced shoreline" = x > shorelineX(z).
+   The 1846–51 cove waterline is shorelineX(z); the intertidal band is east of
+   it and at/below the +0.5m high-water line (matches terrain.js's baked tidal
+   profile and __P1850.shipAudit's mud classification). */
+function terrainSlopePct(x,z){ return Math.tan(terrainSlopeDeg(x,z)*Math.PI/180)*100; }
+function inIntertidalBand(x,z){ return x >= shorelineX(z) - 4 && terrainHeight(x,z) <= 0.5; }
+function inBeachBand(x,z){ // dry-ish working beach just landward of the waterline (flotsam belongs here)
+  var h = terrainHeight(x,z);
+  return x >= shorelineX(z) - 30 && h > -0.6 && h <= 1.8;
+}
+
+/* LAW_TABLES — per-class placement law, DATA-DRIVEN so a new asset class is a
+   table row, not new code (placement-spec §1). Every numeric threshold here is
+   a TUNABLE (fill:true — the Atelier knob pass reads this table). Keys map to
+   the placement-spec P-laws enforced by canPlaceClass() below and proven by
+   __P1850.audits.placement.*.
+     surface: "land" | "water" | null   minY: land height floor (m)
+     slopeMaxPct: slope cap (%)         intertidalAllowed: may stand in the surf?
+     row:false  never in a right-of-way (constant class width)
+     rowCenter:false  never in the road CENTER band (looser than row)
+     footprint:false / footprintClearM  overlap prohibition vs PLACEMENT_INDEX */
+var LAW_TABLES = {
+  /* Structures (addressed) — P1 overlap, P2 grounding/slope, P3 intertidal, P4 addressed. */
+  structure: { surface:"land", minY:1,   slopeMaxPct:15, groundTolM:0.3, footprintClearM:1.5, intertidalAllowed:false, addressed:true, doorPathMaxM:25 },
+  /* Tents — P7: slope ≤12%, never ROW/intertidal/footprint, spacing ≥2.5m
+     (spacing is enforced by the caller's canPlaceXZ overlap at r=2.2 ⇒ ≥4.4m
+     centre-to-centre; this row adds the slope + intertidal law). */
+  tent:      { surface:"land", minY:2,   slopeMaxPct:12, intertidalAllowed:false, row:false, rowMargin:2 },
+  /* Water trades — P3 exempt (they BELONG in the band). */
+  storeship: { surface:null, intertidalAllowed:true, mudBand:true },
+  ship:      { surface:"water", spacingHullMul:1.5, headingSpreadDeg:30 },   // P13
+  wharf:     { surface:null, intertidalAllowed:true, continuous:true },      // P11
+  mooring:   { surface:"water", hullAlignDeg:5 },                            // P12
+  /* Doodads / props / trees — P8 scatter, P9 props, P10 trees. */
+  scatter:   { surface:"land", minY:0.05, water:true, rowCenter:false },
+  flotsam:   { intertidalAllowed:true, beachOnly:true },
+  prop:      { surface:"land", minY:0.05, volumeClear:true },
+  tree:      { surface:"land", minY:1, crownClearM:1.0, riparianOnlyCreek:true },
+  sign:      { plane:"wall" },
+  /* Fauna — P14. */
+  fauna:     { row:false, footprint:false, pastureFloor:0.7 }
+};
+
+/* canPlaceClass(cls, pose, ctx) — the law-table path. Returns {ok, reason}.
+   Applies only the laws present in the class row (data-driven), reading core
+   interfaces exclusively. Determinism: no frame/camera state consulted. */
+function canPlaceClass(cls, pose, ctx){
+  ctx = ctx||{}; pose = pose||{};
+  var law = LAW_TABLES[cls];
+  if(!law) return { ok:true, reason:"no-law:"+cls };   // unknown class: engine imposes nothing
+  var x = pose.x, z = pose.z, h = terrainHeight(x,z);
+  if(law.surface==="land" && h <= (law.minY!=null?law.minY:0.5)) return { ok:false, reason:"not-on-land" };
+  if(law.surface==="water" && h > -0.5) return { ok:false, reason:"not-in-water" };
+  if(law.intertidalAllowed===false && inIntertidalBand(x,z)) return { ok:false, reason:"intertidal" };
+  if(law.beachOnly && !inBeachBand(x,z)) return { ok:false, reason:"off-beach" };
+  if(law.water===true && h <= 0) return { ok:false, reason:"on-water" };
+  if(law.slopeMaxPct!=null && terrainSlopePct(x,z) > law.slopeMaxPct) return { ok:false, reason:"slope" };
+  if(law.row===false && nearAnyRoad(x,z, law.rowMargin||0)) return { ok:false, reason:"row" };
+  if(law.rowCenter===false && nearAnyRoad(x,z, 0)) return { ok:false, reason:"row-center" };
+  if(law.footprint===false || law.footprintClearM!=null){
+    var r = (pose.footprint!=null?pose.footprint:(pose.radius!=null?pose.radius:(law.footprintClearM||0)));
+    for(var i=0;i<PLACEMENT_INDEX.length;i++){
+      var p = PLACEMENT_INDEX[i], dx=x-p.x, dz=z-p.z, md=r+p.r;
+      if(md>0 && dx*dx+dz*dz < md*md) return { ok:false, reason:"overlap" };
+    }
+  }
+  return { ok:true, reason:"ok" };
+}
+
+/* Polymorphic front door (placement-spec §1 named signature). */
+function canPlace(a,b,c,d){
+  if(typeof a === "string") return canPlaceClass(a,b,c);
+  return canPlaceXZ(a,b,c,d);
 }
 

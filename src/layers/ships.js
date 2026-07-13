@@ -49,7 +49,7 @@ var STORESHIP_INFO = (function(){
   // chips — the four hulks sit within a block of each other, so their
   // labels stacked/overlapped at most view angles (screening #5 item c).
   return {
-    "Niantic":          { pos: pos(90,  clay-4),        list: 0.16, chipRank:0, groundedNote:"grounded at Clay & Sansome" }, // u 70->90 (cove-arc correction 2026-07-12): the traced natural line has a small spit at the foot of Clay whose raw-fill bleed dried her old spot; u=90 sits her in wet mud (h=-0.06) and CLOSER to the documented Sansome corner (u=145.7)
+    "Niantic":          { pos: pos(90,  clay-16),       list: 0.16, chipRank:0, groundedNote:"grounded at Clay & Sansome" }, // u 70->90 (cove-arc correction 2026-07-12): wet mud, closer to the documented Sansome corner (u=145.7). v clay-4->clay-16 (s67 #49 P12, fill:true): the Central Wharf grows along the foot of Clay (deck centreline z~93); at clay-4 the Niantic's 35m hull swung its bow to z~96, so the deck planking drove straight THROUGH her bow (the "ship-through-the-wharf" offense). clay-16 keeps her in the same wet-mud band (h~-0.06) but drops her bow to z~84, clear of the deck shore edge (z~88.7) — a storeship berthed BESIDE the wharf, not skewered by it.
     "General Harrison": { pos: pos(112, clay-2),        list: 0.11, chipRank:1, groundedNote:"grounded near Battery St, by the Niantic" },
     "Euphemia":         { pos: pos(103, sacramento+4),  list: 0.09, chipRank:2, groundedNote:"berthed near Central Wharf, converted to the town jail" }, // u 85->97 (s22) ->103 (s25 re-projection): keeps her in the wet mud at the tideline — the 31m heightmap's bilinear shore ridge shifted under her when the grid was re-registered (+110/+44) and re-spaced; verified h≈+0.1 (wet mud, not dry) against the re-baked terrain
     "Apollo":           { pos: pos(128, sacramento+6),  list: 0.14, chipRank:3, groundedNote:"beached between Central Wharf and Howison's Pier" }
@@ -326,12 +326,22 @@ var ANCHOR_SLOTS = (function(){
       var x = wx + 55 + c*PITCH + (rowI%2)*PITCH*0.5 + (hash2(rowI*3.1, c*7.7)-0.5)*8;
       var zz = z + (hash2(rowI*1.7, c*2.3)-0.5)*8;
       if(terrainHeight(x,zz) >= -2) continue;              // depth: below sea level + margin, real heightmap
-      if(Math.abs(zz-cw.z) < 26 && x < cwTipX) continue;   // keep the Central Wharf's water clear
+      // s67 (#49) P12: keep the Central Wharf's water clear at HULL clearance,
+      // not slot-centre — a slot centre just outside the deck edge could still
+      // swing a 35m hull through the planking (the "ship-through-the-wharf"
+      // offense). Reserve half the corridor + a full hull half-length (17.5m)
+      // so no accepted hull segment can ever reach the deck.
+      if(Math.abs(zz-cw.z) < 44 && x < cwTipX) continue;   // 26m deck corridor + ~18m hull half-length
       var nearHulk = false;
       for(var hk=0; hk<hulks.length; hk++){ var hdx=hulks[hk].x-x, hdz=hulks[hk].z-zz; if(hdx*hdx+hdz*hdz < 55*55){ nearHulk = true; break; } }
       if(nearHulk) continue;
+      // s67 (#49) P13: the anchorage rides ONE shared wind/tide vector ±15°
+      // (the whole fleet swings together). Base heading is bow-NW into the
+      // ebb; the per-slot scatter was ±0.45 rad (±25.8°, ~52° total spread)
+      // — over the ±15° law. Tightened to ±0.26 rad so heading spread ≤30°
+      // total (audited by placement.anchorageHeading). fill:true tunable.
       slots.push({ x:x, z:zz, d:Math.hypot(x-ANCHOR_SEED.x, zz-ANCHOR_SEED.z),
-                   yaw: Math.atan2(-1,-1) + (hash2(c*1.3+rowI*5.5, 13.7)-0.5)*0.9 }); // bow NW-ish into wind/ebb, wind/tide scatter
+                   yaw: Math.atan2(-1,-1) + (hash2(c*1.3+rowI*5.5, 13.7)-0.5)*0.52 }); // bow NW-ish into wind/ebb, ±15° wind/tide scatter
     }
   }
   slots.sort(function(a,b){ return a.d-b.d; });

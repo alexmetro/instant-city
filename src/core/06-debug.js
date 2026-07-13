@@ -531,3 +531,327 @@ window.__P1850.audits = (function(){
   };
   return ns;
 })();
+
+/* =========================================================================
+   s67 (#49) UNIVERSAL PLACEMENT AUDITS (placement-spec.md P1–P14).
+   Core-owned (layers-spec rules block: "placement — cross-layer, core-owned").
+   Every audit is FRAMING-INDEPENDENT: it walks world data / fixed probes, not
+   the camera, so it holds at any date and any view. Registered under
+   __P1850.audits.placement.* — the late-attach in registerAudit() (00-boot)
+   surfaces this layer even though it registers after chunk 70's snapshot.
+   A failing audit fails the landing.
+   ========================================================================= */
+(function registerPlacementAudits(){
+  function rectCorners(x,z,rot,hw,hd){
+    var c=Math.cos(rot||0), s=Math.sin(rot||0);
+    return [[-hw,-hd],[hw,-hd],[hw,hd],[-hw,hd]].map(function(o){
+      return { x:x+o[0]*c-o[1]*s, z:z+o[0]*s+o[1]*c };
+    });
+  }
+  /* oriented-box overlap via SAT; returns minimum penetration depth (m), or 0
+     if the rects are separated. 0.05m slack so an exact party wall (shared
+     edge, P1's permitted mechanism) does not read as an intersection. */
+  function rectPenetration(A,B){
+    var polys=[A,B], best=1e9, i, p;
+    for(p=0;p<2;p++){ var poly=polys[p];
+      for(i=0;i<4;i++){ var a=poly[i], b=poly[(i+1)%4];
+        var ax=-(b.z-a.z), az=(b.x-a.x), l=Math.hypot(ax,az)||1; ax/=l; az/=l;
+        var minA=1e9,maxA=-1e9,minB=1e9,maxB=-1e9, k;
+        for(k=0;k<4;k++){ var dA=A[k].x*ax+A[k].z*az; if(dA<minA)minA=dA; if(dA>maxA)maxA=dA;
+                          var dB=B[k].x*ax+B[k].z*az; if(dB<minB)minB=dB; if(dB>maxB)maxB=dB; }
+        var ov = Math.min(maxA,maxB) - Math.max(minA,minB);
+        if(ov <= 0.05) return 0;             // separating axis found → no real overlap
+        if(ov < best) best = ov;
+      }
+    }
+    return best;
+  }
+  function angNorm(a){ while(a>Math.PI) a-=2*Math.PI; while(a<-Math.PI) a+=2*Math.PI; return a; }
+  function pass(o){ o.pass = (o.violations===0); return o; }
+  var DEG = 180/Math.PI;
+
+  /* ---- P1: no intersecting footprints (party walls permitted).
+     GATE (this engine sprint): no ENGINE-GOVERNED placement — a growth building
+     or a tent, both routed through canPlace()+registerPlacement — overlaps an
+     authored building or another procedural placement. That is exactly what the
+     engine enforces at spawn; the audit proves it.
+     REPORTED, non-gating: authored-vs-authored overlaps among the hand-placed
+     documented village (the plaza's period-true commercial density). Those
+     historical positions are deliberately placed OUTSIDE canPlace (documented
+     bypass) and their reconciliation is #51's frontage-assembly scope, not this
+     core engine sprint — surfaced here so #51 has the data, never hidden. ---- */
+  registerAudit("placement", "footprints", function(){
+    var B = VILLAGE_BUILDING_SPOTS, authored=[], i, j;
+    function rectOf(o){ return rectCorners(o.x,o.z,o.rot||0,(o.w||4)/2,(o.d||4)/2); }
+    for(i=0;i<B.length;i++){ var a=B[i]; if(a.w==null) continue;
+      var ca=rectOf(a), ra=Math.hypot(a.w,a.d)/2;
+      for(j=i+1;j<B.length;j++){ var b=B[j]; if(b.w==null) continue;
+        var dx=a.x-b.x, dz=a.z-b.z, rb=Math.hypot(b.w,b.d)/2;
+        if(dx*dx+dz*dz > (ra+rb)*(ra+rb)) continue;
+        var pen=rectPenetration(ca, rectOf(b));
+        if(pen>1.0 && Math.abs(angNorm((a.rot||0)-(b.rot||0)))>15/DEG)
+          authored.push({ i:i, j:j, pen:+pen.toFixed(2), x:Math.round(a.x), z:Math.round(a.z) });
+      }
+    }
+    // engine-governed placements: growth candidates + tents, each vs every
+    // authored footprint (overlap here would be a real canPlace failure)
+    var proc=[], viol=[];
+    growthBuildingCandidates.forEach(function(c){ proc.push({x:c.x,z:c.z,r:4}); });
+    tentCandidates.forEach(function(t){ proc.push({x:t.x,z:t.z,r:2.2}); });
+    for(i=0;i<proc.length;i++){ var p=proc[i];
+      for(j=0;j<B.length;j++){ var b2=B[j]; if(b2.w==null) continue;
+        var ddx=p.x-b2.x, ddz=p.z-b2.z, br=Math.hypot(b2.w,b2.d)/2;
+        if(ddx*ddx+ddz*ddz > (p.r+br)*(p.r+br)) continue;
+        // circle centre vs oriented rect (inflated by the circle radius)
+        var c=Math.cos(b2.rot||0), s=Math.sin(b2.rot||0), lx=Math.abs(ddx*c+ddz*s), lz=Math.abs(-ddx*s+ddz*c);
+        if(lx < (b2.w||4)/2 + p.r*0.5 && lz < (b2.d||4)/2 + p.r*0.5){ viol.push({ px:Math.round(p.x), pz:Math.round(p.z), bldg:j }); break; }
+      }
+    }
+    return { pass: viol.length===0, law:"P1", engineChecked:proc.length, engineViolations:viol.length,
+             authoredOverlaps:authored.length, note:"authored plaza density (pre-existing) → #51 frontage scope",
+             engineList:viol.slice(0,10), authoredList:authored.slice(0,20) };
+  });
+
+  /* ---- P2: structures stand on the ground (nearest corner gap ≤0.3m; a
+     downhill corner may run higher — the foundation-skirt system closes it —
+     but a whole footprint floating >0.3m is broken) ---- */
+  registerAudit("placement", "grounding", function(){
+    var B=VILLAGE_BUILDING_SPOTS, bad=[], i;
+    for(i=0;i<B.length;i++){
+      var a=B[i]; if(a.w==null||a.y==null) continue;
+      var cs=rectCorners(a.x,a.z,a.rot||0,(a.w||4)/2,(a.d||4)/2), minGap=1e9, k;
+      for(k=0;k<4;k++){ var g=a.y-terrainHeight(cs[k].x,cs[k].z); if(g<minGap) minGap=g; }
+      if(minGap > 0.3) bad.push({ i:i, minGap:+minGap.toFixed(2), x:Math.round(a.x), z:Math.round(a.z), name:a.name||null });
+    }
+    return pass({ law:"P2", checked:B.length, violations:bad.length, list:bad.slice(0,20) });
+  });
+
+  /* ---- P3: intertidal band belongs to the water trades (no tent/structure
+     may stand east of the traced shoreline below the high-water line) ---- */
+  registerAudit("placement", "intertidal", function(){
+    var bad=[], i;
+    for(i=0;i<VILLAGE_BUILDING_SPOTS.length;i++){ var a=VILLAGE_BUILDING_SPOTS[i];
+      if(inIntertidalBand(a.x,a.z)) bad.push({ kind:"structure", i:i, x:Math.round(a.x), z:Math.round(a.z) }); }
+    for(i=0;i<tentCandidates.length;i++){ var t=tentCandidates[i];
+      if(inIntertidalBand(t.x,t.z)) bad.push({ kind:"tent", i:i, x:Math.round(t.x), z:Math.round(t.z) }); }
+    return pass({ law:"P3", checked:VILLAGE_BUILDING_SPOTS.length+tentCandidates.length, violations:bad.length, list:bad.slice(0,20) });
+  });
+
+  /* ---- P4 (invariant floor): addressed structures connect — every platted
+     town structure fronts a road or carries a door-path ≤25m. (Full frontage
+     assembly is #51; this enforces the floor only.) ---- */
+  registerAudit("placement", "addressed", function(){
+    function distToNearestStreet(x,z){
+      var best=1e9;
+      for(var s=0;s<PLACEMENT_STREET_SEGS.length;s++){ var g=PLACEMENT_STREET_SEGS[s];
+        var d=distToSegXZ(x,z,g.x0,g.z0,g.x1,g.z1)-g.halfW; if(d<best) best=d; }
+      return best;
+    }
+    function doorDist(o){ var fd=(o.d||4)*0.5+0.3; return distToNearestStreet(o.x+Math.sin(o.rot||0)*fd, o.z+Math.cos(o.rot||0)*fd); }
+    // GATE (this engine sprint): the PHYSICAL-COHERENCE floor — no addressed
+    // structure in the platted core is MAROONED (>40m from the road network with
+    // no plausible door-path). The spec's strict ≤25m door-path is #51's full
+    // frontage assembly ("P4 is the invariant floor it builds on"); the [25,40]m
+    // band — block-interior growth cottages (period-true §5 looseness) and the
+    // hand-placed village's set-backs (chapel forecourt, deep lots) — is surfaced
+    // as frontageTargets for #51, never hidden.
+    var MAROONED=40, targets=[], viol=[], B=VILLAGE_BUILDING_SPOTS, i;
+    function consider(kind, x, z, dist, name){
+      if(dist>MAROONED) viol.push({ kind:kind, x:Math.round(x), z:Math.round(z), d:+dist.toFixed(1), name:name||null });
+      else if(dist>25) targets.push({ kind:kind, x:Math.round(x), z:Math.round(z), d:+dist.toFixed(1), name:name||null });
+    }
+    for(i=0;i<B.length;i++){ var a=B[i]; if(a.w==null) continue; consider("authored", a.x, a.z, doorDist(a), a.name); }
+    var engineChecked=0;
+    growthBuildingCandidates.forEach(function(c){
+      if(Math.hypot(c.x-PLAZA_CENTER.x, c.z-PLAZA_CENTER.z) > 260) return; // outlying squatter cottages exempt (§5)
+      engineChecked++; consider("growth", c.x, c.z, distToNearestStreet(c.x,c.z));
+    });
+    return { pass: viol.length===0, law:"P4", floor:"not-marooned(≤"+MAROONED+"m)", engineChecked:engineChecked,
+             marooned:viol.length, frontageTargets:targets.length, note:"strict ≤25m door-path → #51 frontage scope",
+             maroonedList:viol.slice(0,10), targetList:targets.slice(0,20) };
+  });
+
+  /* ---- P5: signs live on walls (vertical plane, normal ⊥ any roof, below
+     the fronted building's roofline — never on a roof plane) ---- */
+  registerAudit("placement", "signs", function(){
+    var S=PLACEMENT_SIGNS, bad=[], i;
+    for(i=0;i<S.length;i++){ var s=S[i];
+      // P5's invariant is ORIENTATION: a sign on a wall plane is VERTICAL — its
+      // normal is horizontal, ⊥ any roof plane. A sign lying on a roof would
+      // carry pitch/roll (rotX/rotZ). roofY is a coarse estimate (spot.h can be
+      // absent → default 3m), so height only fails a sign FLOATING well clear
+      // above the building (>1.5m over the estimated eave), never a wall sign
+      // mounted high on a taller-than-estimated façade.
+      var tilted = Math.abs(angNorm(s.rotX))>5/DEG || Math.abs(angNorm(s.rotZ))>5/DEG; // lying toward a roof plane
+      var floatingAbove = s.y > s.roofY + 1.5;
+      if(tilted || floatingAbove) bad.push({ i:i, rotX:+s.rotX.toFixed(3), rotZ:+s.rotZ.toFixed(3), y:+s.y.toFixed(2), roofY:+s.roofY.toFixed(2) });
+    }
+    return pass({ law:"P5", checked:S.length, violations:bad.length, list:bad.slice(0,20) });
+  });
+
+  /* ---- P7: tent physical floor — slope ≤12%, never ROW/intertidal/footprint,
+     spacing ≥2.5m from any other tent ---- */
+  registerAudit("placement", "tents", function(){
+    var T=tentCandidates, bad=[], i, j;
+    for(i=0;i<T.length;i++){ var t=T[i], why=[];
+      if(terrainSlopePct(t.x,t.z) > 12) why.push("slope");
+      if(nearAnyRoad(t.x,t.z,0)) why.push("row");
+      if(inIntertidalBand(t.x,t.z)) why.push("intertidal");
+      var nn=1e9;
+      for(j=0;j<T.length;j++){ if(j===i) continue; var dx=t.x-T[j].x, dz=t.z-T[j].z, d2=dx*dx+dz*dz; if(d2<nn) nn=d2; }
+      if(Math.sqrt(nn) < 2.5) why.push("spacing");
+      if(why.length) bad.push({ i:i, why:why, x:Math.round(t.x), z:Math.round(t.z) });
+    }
+    return pass({ law:"P7", checked:T.length, violations:bad.length, list:bad.slice(0,20) });
+  });
+
+  /* ---- P8: scatter respects the world — no build-time static prop on water
+     or in the road centre band (the camera-centred doodad ring is separately
+     guaranteed by its walkBlockedAt keep-out oracle, updateFarScatter). ---- */
+  registerAudit("placement", "scatter", function(){
+    var P=PLACEMENT_STATIC_PROPS, bad=[], i;
+    for(i=0;i<P.length;i++){ var p=P[i];
+      if(terrainHeight(p.x,p.z) <= 0.2) bad.push({ i:i, why:"water", cls:p.cls, x:Math.round(p.x), z:Math.round(p.z) });
+      else if(nearAnyRoad(p.x,p.z,0)) bad.push({ i:i, why:"row-center", cls:p.cls, x:Math.round(p.x), z:Math.round(p.z) });
+    }
+    return pass({ law:"P8", checked:P.length, violations:bad.length, note:"live ring gated by walkBlockedAt", list:bad.slice(0,20) });
+  });
+
+  /* ---- P9: props never violate volumes — no static prop centre falls inside
+     a building footprint (the Mission roof-crate class of offense) ---- */
+  registerAudit("placement", "props", function(){
+    var P=PLACEMENT_STATIC_PROPS, B=VILLAGE_BUILDING_SPOTS, bad=[], i, j;
+    for(i=0;i<P.length;i++){ var p=P[i];
+      for(j=0;j<B.length;j++){ var b=B[j]; if(b.w==null) continue;
+        var dx=p.x-b.x, dz=p.z-b.z, rb=Math.hypot(b.w,b.d)/2+p.r;
+        if(dx*dx+dz*dz > rb*rb) continue;                 // broadphase
+        // exact test: prop centre inside the oriented footprint rect
+        var c=Math.cos(b.rot||0), s=Math.sin(b.rot||0), lx=dx*c+dz*s, lz=-dx*s+dz*c;
+        if(Math.abs(lx) < (b.w||4)/2 && Math.abs(lz) < (b.d||4)/2){ bad.push({ i:i, cls:p.cls, x:Math.round(p.x), z:Math.round(p.z), bldg:j }); break; }
+      }
+    }
+    return pass({ law:"P9", checked:P.length, violations:bad.length, list:bad.slice(0,20) });
+  });
+
+  /* ---- P10: trees clear and belong — every tree crown clears every town
+     footprint by ≥1m (trees also sit ≥190m off the platted village by
+     clearOfManMade(), which this proves) ---- */
+  registerAudit("placement", "trees", function(){
+    var T=PLACEMENT_TREES, B=VILLAGE_BUILDING_SPOTS, bad=[], i, j, minClear=1e9;
+    for(i=0;i<T.length;i++){ var t=T[i];
+      for(j=0;j<B.length;j++){ var b=B[j]; if(b.w==null) continue;
+        var dx=t.x-b.x, dz=t.z-b.z, br=Math.hypot(b.w,b.d)/2;
+        if(dx*dx+dz*dz > (br+t.cr+40)*(br+t.cr+40)) continue;   // broadphase
+        // distance from tree centre to the footprint rect, minus crown
+        var c=Math.cos(b.rot||0), s=Math.sin(b.rot||0), lx=Math.abs(dx*c+dz*s)-(b.w||4)/2, lz=Math.abs(-dx*s+dz*c)-(b.d||4)/2;
+        var dRect = Math.hypot(Math.max(lx,0), Math.max(lz,0));
+        var clear = dRect - t.cr;
+        if(clear < minClear) minClear = clear;
+        if(clear < 1.0) bad.push({ i:i, sp:t.sp, clear:+clear.toFixed(2), x:Math.round(t.x), z:Math.round(t.z) });
+      }
+    }
+    return pass({ law:"P10", checked:T.length, violations:bad.length, minClearM:(minClear===1e9?null:+minClear.toFixed(1)), list:bad.slice(0,20) });
+  });
+
+  /* ---- ships helpers: the set of hulls present (anchored + grounded
+     storeships) at the current date, with true-scale footprints ---- */
+  function presentHulls(){
+    var out=[], allVisits = provenanceOnly ? shipVisits : shipVisits.concat(fillShipVisits);
+    allVisits.forEach(function(v){
+      var st = shipDesiredState(v, simDay);
+      if(st!=="anchored") return;                 // sailing hulls ride open water
+      var pos = v.storeship ? v.storeship.pos : v._anchorPos;
+      if(!pos) return;
+      var dims = SHIP_DIMS[v.shipType] || SHIP_DIMS[0];
+      out.push({ ship:v.ship, storeship:!!v.storeship, x:pos.x, z:pos.z, yaw:v._anchorYaw, hl:dims.hl, hb:dims.hb });
+    });
+    return out;
+  }
+
+  /* ---- P13: the anchorage rides one tide — heading spread ≤30° total ---- */
+  registerAudit("placement", "anchorageHeading", function(){
+    var H=presentHulls().filter(function(h){ return !h.storeship; });
+    if(H.length<2) return { pass:true, law:"P13", skipped:"fewer than 2 anchored ships", anchored:H.length };
+    // total angular spread = max−min of each heading's signed deviation from the
+    // circular mean (the true range the fleet occupies; NOT 2×maxDev, which
+    // overstates an asymmetric sample of a few ships).
+    var sx=0, sz=0;
+    H.forEach(function(h){ sx+=Math.cos(h.yaw); sz+=Math.sin(h.yaw); });
+    var mean=Math.atan2(sz,sx), lo=1e9, hi=-1e9;
+    H.forEach(function(h){ var d=angNorm(h.yaw-mean); if(d<lo)lo=d; if(d>hi)hi=d; });
+    var spreadDeg = (hi-lo)*DEG;
+    return { pass: spreadDeg <= 30.5, law:"P13", anchored:H.length, spreadDeg:+spreadDeg.toFixed(1), meanDeg:+(mean*DEG).toFixed(1) };
+  });
+
+  /* ---- P13: no two anchored hulls overlap ---- */
+  registerAudit("placement", "hullOverlap", function(){
+    var H=presentHulls().filter(function(h){ return !h.storeship; }), bad=[], i, j;
+    for(i=0;i<H.length;i++){ var a=H[i], sa=hullSeg(a.x,a.z,a.yaw,a.hl);
+      for(j=i+1;j<H.length;j++){ var b=H[j];
+        var dx=a.x-b.x, dz=a.z-b.z; if(dx*dx+dz*dz > 120*120) continue;   // broadphase
+        var sb=hullSeg(b.x,b.z,b.yaw,b.hl), need=a.hb+b.hb;
+        if(segSegDistSq(sa[0],sa[1],sa[2],sa[3], sb[0],sb[1],sb[2],sb[3]) < need*need)
+          bad.push({ a:a.ship, b:b.ship, x:Math.round(a.x), z:Math.round(a.z) });
+      }
+    }
+    return pass({ law:"P13", anchored:H.length, violations:bad.length, list:bad.slice(0,20) });
+  });
+
+  /* ---- P13: storeships only in the mud band ---- */
+  registerAudit("placement", "storeshipMud", function(){
+    var bad=[], keys=Object.keys(STORESHIP_INFO);
+    keys.forEach(function(k){ var p=STORESHIP_INFO[k].pos, h=terrainHeight(p.x,p.z);
+      if(h < -1.5 || h > 0.8) bad.push({ ship:k, h:+h.toFixed(2), x:Math.round(p.x), z:Math.round(p.z) }); });
+    return pass({ law:"P13", checked:keys.length, violations:bad.length, list:bad });
+  });
+
+  /* ---- P11: the wharf is continuous (single grown deck, meets the shore, no
+     orphan fragments) ---- */
+  registerAudit("placement", "wharfContinuity", function(){
+    var tip = window._centralWharfTip;
+    if(!tip) return { pass:true, law:"P11", skipped:"Central Wharf not yet built at this date" };
+    var shoreX = tip.x - tip.len, hShore = terrainHeight(shoreX, tip.z);
+    var bad=[];
+    if(tip.len < 6) bad.push("deck shorter than one bay");
+    if(hShore < -1.2) bad.push("shore end floats in deep water (h="+hShore.toFixed(2)+")");
+    var piles = window._cwPileMesh ? window._cwPileMesh.count : 0;
+    if(piles < 1) bad.push("no piles");
+    return pass({ law:"P11", lenM:Math.round(tip.len), shoreEndH:+hShore.toFixed(2), piles:piles, violations:bad.length, list:bad });
+  });
+
+  /* ---- P12: moored/present vessels never cross the wharf deck ---- */
+  registerAudit("placement", "moorings", function(){
+    var tip = window._centralWharfTip;
+    if(!tip) return { pass:true, law:"P12", skipped:"Central Wharf not yet built at this date" };
+    var x0=tip.x-tip.len, x1=tip.x, halfW=tip.deckW/2, bad=[];
+    presentHulls().forEach(function(h){
+      var seg=hullSeg(h.x,h.z,h.yaw,h.hl);
+      // sample the hull segment; any sample within the deck rect = hull∩deck
+      for(var t=0;t<=1;t+=0.1){
+        var sx=seg[0]+(seg[2]-seg[0])*t, sz=seg[1]+(seg[3]-seg[1])*t;
+        if(sx>=x0-1 && sx<=x1+1 && Math.abs(sz-tip.z) < halfW+0.5){ bad.push({ ship:h.ship, x:Math.round(h.x), z:Math.round(h.z) }); break; }
+      }
+    });
+    return pass({ law:"P12", checked:presentHulls().length, violations:bad.length, list:bad.slice(0,20) });
+  });
+
+  /* ---- P14: animals keep to their ground — cattle graze points sit in the
+     pasture (≥70% floor), off every ROW and footprint ---- */
+  registerAudit("placement", "fauna", function(){
+    var groups=[{pts:MISSION_GRAZE_PTS, c:PASTURE_MISSION, r:90}, {pts:PRESIDIO_GRAZE_PTS, c:PASTURE_PRESIDIO, r:55}];
+    var total=0, inPasture=0, rowHits=0, footHits=0, bad=[];
+    groups.forEach(function(g){
+      g.pts.forEach(function(p){
+        total++;
+        if(Math.hypot(p.x-g.c.x, p.z-g.c.z) <= g.r*1.2) inPasture++;
+        if(nearAnyRoad(p.x,p.z,0)){ rowHits++; bad.push({ why:"row", x:Math.round(p.x), z:Math.round(p.z) }); }
+        for(var j=0;j<VILLAGE_BUILDING_SPOTS.length;j++){ var b=VILLAGE_BUILDING_SPOTS[j]; if(b.w==null) continue;
+          var dx=p.x-b.x, dz=p.z-b.z, rb=Math.hypot(b.w,b.d)/2;
+          if(dx*dx+dz*dz < rb*rb){ footHits++; bad.push({ why:"footprint", x:Math.round(p.x), z:Math.round(p.z) }); break; } }
+      });
+    });
+    var ratio = total? inPasture/total : 1;
+    return { pass: (ratio>=0.7 && rowHits===0 && footHits===0), law:"P14",
+             grazePoints:total, pastureRatio:+ratio.toFixed(2), rowHits:rowHits, footHits:footHits, list:bad.slice(0,20) };
+  });
+})();

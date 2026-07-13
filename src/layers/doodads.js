@@ -7,6 +7,10 @@
    chunk; never reorder or renumber chunk markers without rebuilding + re-verifying.
    ===================================================================== */
 /* @P1850-CHUNK 38 — ground scatter, micro-scatter ring, doodad ring, village-life clutter */
+/* s67 (#49) placement registries — populated during this layer's build so the
+   core placement audits (__P1850.audits.placement.trees / .props) can walk them. */
+var PLACEMENT_TREES = [];        // {x,z,cr,sp} — every tree with its max crown radius (P10)
+var PLACEMENT_STATIC_PROPS = []; // {x,z,r,cls} — build-time yard props (P9)
 /* =====================================================================
    A1: DETAIL DISPLACEMENT PATCH — RETIRED (s52 GROUND MATERIALITY).
    The old 600m camera-following translucent ripple film (one uniform
@@ -707,17 +711,25 @@ function updateLaundryDay(day){
     var nB = 2+Math.floor(rngBuild()*3), nC = 1+Math.floor(rngBuild()*3);
     for(var i=0;i<nB;i++){
       var x=a.x+(rngBuild()-0.5)*9, z=a.z+(rngBuild()-0.5)*9, h=terrainHeight(x,z);
-      if(h>1) barrelSamples.push({x:x,z:z,h:h});
+      // s67 (#49) P8: yard goods never litter the road right-of-way (nearAnyRoad
+      // reserves the constant class width); keeps barrels off the travel lane.
+      if(h>1 && !nearAnyRoad(x,z,0)) barrelSamples.push({x:x,z:z,h:h});
     }
     for(i=0;i<nC;i++){
       var x2=a.x+(rngBuild()-0.5)*9, z2=a.z+(rngBuild()-0.5)*9, h2=terrainHeight(x2,z2);
-      if(h2>1) crateSamples.push({x:x2,z:z2,h:h2});
+      if(h2>1 && !nearAnyRoad(x2,z2,0)) crateSamples.push({x:x2,z:z2,h:h2}); // P8: off the ROW
     }
   });
   var barrelMesh = buildScatterMesh(barrelGeo, barrelMat, barrelSamples, { minScale:0.85, maxScale:1.15 });
   scene.add(barrelMesh);
   var crateMesh = buildScatterMesh(crateGeo, crateMat, crateSamples, { minScale:0.85, maxScale:1.2 });
   scene.add(crateMesh);
+  // s67 (#49) P9: register the static yard props (build-time crates/barrels)
+  // so placement.props can prove no prop intersects a building volume (the
+  // Mission roof-crate class of offense). The camera-centred doodad RING is
+  // separately guaranteed by its walkBlockedAt keep-out oracle (updateFarScatter).
+  barrelSamples.forEach(function(s){ PLACEMENT_STATIC_PROPS.push({ x:s.x, z:s.z, r:0.45, cls:"barrel" }); });
+  crateSamples.forEach(function(s){ PLACEMENT_STATIC_PROPS.push({ x:s.x, z:s.z, r:0.4, cls:"crate" }); });
 
   /* ---- woodpiles (merged log prefab, InstancedMesh) ---- */
   function makeWoodpileGeo(){
@@ -1211,6 +1223,14 @@ function updateWaterfrontLife(){
   var laurelMesh = buildScatterMesh(makeLaurelGeo(), propMat(), laurelSamples, { minScale:1.3, maxScale:2.2 });
   tagInspect(laurelMesh, "tree", "California laurel / buckeye", "Scattered singles through the scrub band (peninsula-1846.md).");
   scene.add(laurelMesh); farScatterMeshes.push(laurelMesh);
+
+  // s67 (#49) P10: register every tree with a conservative max crown radius
+  // (blob-cluster base × the mesh's maxScale) so placement.trees can prove
+  // crowns clear building footprints by ≥1m. clearOfManMade() already holds
+  // trees ≥190m off the platted village; this makes the invariant auditable.
+  oakSamples.forEach(function(s){ PLACEMENT_TREES.push({ x:s.x, z:s.z, cr:1.55*2.7, sp:"oak" }); });
+  willowSamples.forEach(function(s){ PLACEMENT_TREES.push({ x:s.x, z:s.z, cr:1.5*2.3, sp:"willow" }); });
+  laurelSamples.forEach(function(s){ PLACEMENT_TREES.push({ x:s.x, z:s.z, cr:0.95*2.2, sp:"laurel" }); });
 
   // ---- rock outcrops: clustered groups on Telegraph/Rincon/Fort Point flanks + scattered singles on steep slopes ----
   var boulderClusters = [
