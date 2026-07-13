@@ -2501,9 +2501,19 @@ var DETAIL_FRAG_ROAD = [
   "  dtFade = (1.0 - smoothstep(45.0, 180.0, dCam)) * uDetailAmp;",
   "  float tileF = (1.0 - smoothstep(100.0, 250.0, dCam)) * uDetailAmp;",
   "  vec2 p = vDetailWorld.xz;",
+  /* s65: plaza membership computed up front — it gates the wheel-polish
+     bands below (a directional street texture wallpapers as pinstripes
+     across a big open square) and drives the wet-mud coupling further on. */
+  "  float plz = 0.0;",
+  "  if(uPlazaHalf.x > 0.5){",
+  "    vec2 prel = p - uPlazaC;",
+  "    float plu = abs(dot(prel, uPlazaU));",
+  "    float plv = abs(dot(prel, vec2(-uPlazaU.y, uPlazaU.x)));",
+  "    plz = (1.0-smoothstep(uPlazaHalf.x-8.0, uPlazaHalf.x, plu)) * (1.0-smoothstep(uPlazaHalf.y-8.0, uPlazaHalf.y, plv));",
+  "  }",
   "  if(tileF > 0.003){",                                       // PAINTED ROAD TILE (s60): compacted grain + wheel-polish bands
   "    vec2 q = vec2(dot(p,uGridDir), dot(p,vec2(-uGridDir.y,uGridDir.x)));", // travel-aligned domain — the bands ride the traffic axis
-  "    diffuseColor.rgb *= mix(vec3(1.0), texture2D(uTileRoad, q*0.24).rgb*2.0, tileF);", // zero-mean: streets never lighten above ground (§9)
+  "    diffuseColor.rgb *= mix(vec3(1.0), texture2D(uTileRoad, q*0.24).rgb*2.0, tileF*(1.0-plz*0.65));", // zero-mean: streets never lighten above ground (§9); the plaza mutes the banded street tile — trample, not traffic lanes
   "  }",
   "  if(dtFade > 0.003){",                                      // s52 detail normals, kept — gradient only
   "    vec3 gr = dfbm2(p*3.6);",                                // compacted fine grain bump
@@ -2525,16 +2535,10 @@ var DETAIL_FRAG_ROAD = [
      mid framing too, not just inside the detail bubble. Darken-only (§9:
      paint never lighter than ground); pools kill the detail-normal
      gradient so standing water reads flat. */
-  "  if(uPlazaHalf.x > 0.5 && uDetailWet > 0.01){",
-  "    vec2 prel = p - uPlazaC;",
-  "    float plu = abs(dot(prel, uPlazaU));",
-  "    float plv = abs(dot(prel, vec2(-uPlazaU.y, uPlazaU.x)));",
-  "    float plz = (1.0-smoothstep(uPlazaHalf.x-8.0, uPlazaHalf.x, plu)) * (1.0-smoothstep(uPlazaHalf.y-8.0, uPlazaHalf.y, plv));",
-  "    if(plz > 0.01){",
-  "      float ppool = smoothstep(0.04, 0.40, -dfbm2(p*0.85).x);",
-  "      diffuseColor.rgb *= 1.0 - plz*uDetailWet*(0.07 + ppool*0.17);",
-  "      dtGrad *= 1.0 - plz*uDetailWet*ppool*0.85;",
-  "    }",
+  "  if(plz > 0.01 && uDetailWet > 0.01){",
+  "    float ppool = smoothstep(0.04, 0.40, -dfbm2(p*0.85).x);",
+  "    diffuseColor.rgb *= 1.0 - plz*uDetailWet*(0.07 + ppool*0.17);",
+  "    dtGrad *= 1.0 - plz*uDetailWet*ppool*0.85;",
   "  }",
   // (s60 260-470m palette grade deleted s62 — superseded by the global earth palette, §9)
   "}"
