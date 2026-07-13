@@ -342,19 +342,24 @@ function updateHorizonRing(alt){
   var known = WORLD_KNOWN.filter(function(w){ return w.knownInSF<=todayISO; });
   known.sort(function(a,b){ return a.knownInSF!==b.knownInSF ? (a.knownInSF<b.knownInSF?1:-1) : (b.priority-a.priority); });
   var picks = known.slice(0,6);
-  var html = '<span class="hr-title">THE WORLD AS KNOWN IN SAN FRANCISCO</span>';
+  // s73: items live in their own .hr-items row so the title can sit on its
+  // own line while the row stays a single flex track — desktop distributes
+  // items evenly (flex:1 1 0, no wrap/overlap at any count); mobile turns the
+  // row into a compact horizontally-scrollable strip (see shell chrome CSS).
+  var items = '';
   if(picks.length===0){
-    html += '<span class="hr-item"><span class="hr-headline">no word yet from beyond the Golden Gate</span></span>';
+    items = '<span class="hr-item"><span class="hr-headline">no word yet from beyond the Golden Gate</span></span>';
   } else {
     picks.forEach(function(w){
       var days = Math.round(simDay - eventDateToSimDay(w.happened));
       var stale = days<=0 ? "JUST HAPPENED" : (days+" DAY"+(days===1?"":"S")+" AGO");
-      html += '<span class="hr-item"><span class="hr-pos">'+escapeHTML((w.pos||"elsewhere").toUpperCase())+'</span>'
+      items += '<span class="hr-item"><span class="hr-pos">'+escapeHTML((w.pos||"elsewhere").toUpperCase())+'</span>'
         + '<span class="hr-stale">'+stale+'</span>'
         + '<span class="hr-headline">'+escapeHTML(w.headline)+'</span></span>';
     });
   }
-  horizonRingEl.innerHTML = html;
+  horizonRingEl.innerHTML = '<span class="hr-title">THE WORLD AS KNOWN IN SAN FRANCISCO</span>'
+    + '<div class="hr-items">'+items+'</div>';
 }
 
 /* @P1850-CHUNK 68 — timeline scrubber */

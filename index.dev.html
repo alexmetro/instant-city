@@ -382,7 +382,9 @@
        declutter re-reads this element's live rect every tick, so moving it
        keeps world labels clear of the new position automatically. */
     position:fixed; top:126px; left:0; right:0; z-index:6; pointer-events:none;
-    display:flex; justify-content:center; align-items:stretch; flex-wrap:wrap;
+    /* s73: column layout — title owns its own line, the items live in a single
+       .hr-items flex track below it (never a wrapped grid that grows tall). */
+    display:flex; flex-direction:column; align-items:center;
     padding:10px 14px 8px; text-align:center;
     background:linear-gradient(180deg, rgba(20,16,10,0.92), rgba(20,16,10,0.0));
     color:#e9dcb4; font-family:'Fraunces', Georgia, serif;
@@ -392,13 +394,21 @@
   }
   #horizon-ring.on{ opacity:0.97; }
   #horizon-ring .hr-title{
-    flex:1 0 100%; font-size:0.62rem; letter-spacing:4px; opacity:0.75; margin-bottom:8px;
+    font-size:0.62rem; letter-spacing:4px; opacity:0.75; margin-bottom:8px;
+  }
+  /* s73: the items row. Desktop shares the track evenly (flex:1 1 0 per item,
+     min-width:0) so 6+ items neither wrap nor overlap — they just narrow and
+     their headlines wrap within their own column. */
+  #horizon-ring .hr-items{
+    display:flex; flex-wrap:nowrap; justify-content:center; align-items:stretch;
+    width:100%; max-width:1180px;
   }
   #horizon-ring .hr-item{
-    padding:0 16px; max-width:220px; font-size:0.66rem; line-height:1.35;
+    flex:1 1 0; min-width:0; padding:0 16px; max-width:220px; font-size:0.66rem; line-height:1.35;
     border-left:1px solid rgba(233,220,180,0.3);
   }
   #horizon-ring .hr-item:first-of-type{ border-left:none; }
+  #horizon-ring .hr-headline{ overflow-wrap:anywhere; }
   #horizon-ring .hr-pos{ display:block; font-weight:600; letter-spacing:1.5px; }
   #horizon-ring .hr-stale{ display:block; font-size:0.56rem; opacity:0.65; letter-spacing:1px; margin:1px 0 3px; }
   #horizon-ring .hr-headline{ opacity:0.9; }
@@ -737,7 +747,29 @@
     /* s66 R3: the mobile top chrome is just the compact clock (top-left) +
        the briefly-shown title — a shallower reserve clears them without
        wasting the small screen. */
-    #horizon-ring{ top:48px; }
+    #horizon-ring{ top:48px; padding:6px 0 6px; }
+    /* s73: on a phone the wrapped grid grew to ~40% of the viewport and its
+       lower items collided with the world labels (ALCATRAZ / TELEGRAPH HILL).
+       Collapse the items into a SINGLE horizontally-scrollable strip: one row,
+       swipeable, compact (well under 15% of the viewport), so the label
+       declutter — which reads this element's live rect — frees the map below.
+       The strip is the only interactive part (pointer-events:auto, ≥44px
+       tall); the title stays inert. */
+    #horizon-ring .hr-title{ margin-bottom:5px; font-size:0.54rem; letter-spacing:3px; }
+    #horizon-ring .hr-items{
+      max-width:none; flex-wrap:nowrap; justify-content:flex-start;
+      overflow-x:auto; overflow-y:hidden; -webkit-overflow-scrolling:touch;
+      scrollbar-width:none; width:100%; pointer-events:auto;
+      /* fade the right edge to signal more items lie off-screen */
+      -webkit-mask-image:linear-gradient(90deg, #000 88%, transparent);
+              mask-image:linear-gradient(90deg, #000 88%, transparent);
+    }
+    #horizon-ring .hr-items::-webkit-scrollbar{ display:none; }
+    #horizon-ring .hr-item{
+      flex:0 0 auto; min-width:150px; max-width:200px; min-height:44px;
+      padding:2px 14px; text-align:left; font-size:0.62rem;
+      display:flex; flex-direction:column; justify-content:center;
+    }
     #paper-toggle.menu-forced{ display:block; top:100px; right:16px; }
     #hud-provenance.menu-forced{ display:block; top:56px; left:16px; max-width:60vw; font-size:0.55rem; letter-spacing:1px; white-space:normal; }
     #hud-altitude.menu-forced{ display:block; min-width:0; font-size:0.7rem; bottom:186px; left:auto; right:16px; } /* s66: above the taller ticker + scrubber(now carrying the transport row) stack */
@@ -801,7 +833,7 @@
 
   <div id="horizon-ring">
     <span class="hr-title">THE WORLD AS KNOWN IN SAN FRANCISCO</span>
-    <!-- .hr-item nodes injected by updateHorizonRing() -->
+    <div class="hr-items"><!-- .hr-item nodes injected by updateHorizonRing() --></div>
   </div>
 
   <div class="panel" id="hud-provenance">RECORD ONLY &nbsp;&middot;&nbsp; P</div>
