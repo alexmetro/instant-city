@@ -705,6 +705,65 @@ window.__P1850.audits = (function(){
     return pass({ law:"P7", checked:T.length, violations:bad.length, list:bad.slice(0,20) });
   });
 
+  /* ---- P6 (#55): fences follow ground and lot logic. Walks the yard-fence
+     runs recorded by the buildings-layer builder (FENCE_SEGS / FENCE_POSTS):
+       • post grounding — every post base within 0.15m of terrain (the headline
+         fix: no floating rails, no buried panels on slopes);
+       • fence-ROW = 0 — no run crosses a right-of-way (the f13-90m offense);
+       • fence-fence = 0 — no run crosses another building's run;
+       • fence-footprint = 0 — no run crosses a building footprint (parent
+         excluded — a fence rings its own yard by design);
+       • parallelism — every segment runs parallel to its lot's own axes.
+     Framing-independent: the runs are static (built once at load), so this
+     holds at every sim date. ---- */
+  registerAudit("placement", "fences", function(){
+    var SEG = (typeof FENCE_SEGS!=="undefined") ? FENCE_SEGS : [];
+    var POST = (typeof FENCE_POSTS!=="undefined") ? FENCE_POSTS : [];
+    if(!SEG.length && !POST.length) return { pass:true, law:"P6", skipped:"no yard fences built" };
+    function ccw(ax,az,bx,bz,cx,cz){ return (cz-az)*(bx-ax) > (bz-az)*(cx-ax); }
+    function segsCross(ax,az,bx,bz,cx,cz,dx,dz){
+      return (ccw(ax,az,cx,cz,dx,dz)!==ccw(bx,bz,cx,cz,dx,dz)) && (ccw(ax,az,bx,bz,cx,cz)!==ccw(ax,az,bx,bz,dx,dz));
+    }
+    function ptInRect(px,pz,b){ var s=Math.sin(b.rot||0), c=Math.cos(b.rot||0), dx=px-b.x, dz=pz-b.z;
+      return Math.abs(dx*c+dz*s) <= (b.w||4)/2 && Math.abs(-dx*s+dz*c) <= (b.d||4)/2; }
+    function segHitsRect(x0,z0,x1,z1,b){
+      if(ptInRect(x0,z0,b)||ptInRect(x1,z1,b)) return true;
+      var s=Math.sin(b.rot||0), c=Math.cos(b.rot||0), hw=(b.w||4)/2, hd=(b.d||4)/2;
+      function cr(lx,lz){ return { x:b.x+lx*c-lz*s, z:b.z+lx*s+lz*c }; }
+      var C=[cr(-hw,-hd),cr(hw,-hd),cr(hw,hd),cr(-hw,hd)];
+      for(var e=0;e<4;e++){ var p=C[e], q=C[(e+1)%4]; if(segsCross(x0,z0,x1,z1,p.x,p.z,q.x,q.z)) return true; }
+      return false;
+    }
+    function angMod90(a){ a=((a%(Math.PI/2))+Math.PI/2)%(Math.PI/2); if(a>Math.PI/4) a-=Math.PI/2; return a; }
+    // post grounding
+    var maxGap=0, groundBad=0, i, j;
+    for(i=0;i<POST.length;i++){ var p=POST[i], g=Math.abs(p.y - terrainHeight(p.x,p.z));
+      if(g>maxGap) maxGap=g; if(g>0.15) groundBad++; }
+    // fence-ROW, parallelism (per segment); fence-footprint (per segment vs other bldgs)
+    var rowHits=0, footHits=0, paraBad=0, bad=[];
+    for(i=0;i<SEG.length;i++){ var s2=SEG[i];
+      var mx=(s2.x0+s2.x1)/2, mz=(s2.z0+s2.z1)/2;
+      if(nearAnyRoad(s2.x0,s2.z0,0)||nearAnyRoad(s2.x1,s2.z1,0)||nearAnyRoad(mx,mz,0)){ rowHits++; bad.push({why:"row",x:Math.round(mx),z:Math.round(mz)}); }
+      var segAng=Math.atan2(s2.z1-s2.z0, s2.x1-s2.x0);
+      if(Math.abs(angMod90(segAng+s2.yaw))*DEG > 3){ paraBad++; bad.push({why:"parallel",x:Math.round(mx),z:Math.round(mz)}); }
+      for(j=0;j<VILLAGE_BUILDING_SPOTS.length;j++){ if(j===s2.spot) continue; var bb=VILLAGE_BUILDING_SPOTS[j]; if(bb.w==null) continue;
+        var dx=mx-bb.x, dz=mz-bb.z, br=Math.hypot(bb.w,bb.d)/2+4; if(dx*dx+dz*dz>br*br) continue;
+        if(segHitsRect(s2.x0,s2.z0,s2.x1,s2.z1,bb)){ footHits++; bad.push({why:"footprint",x:Math.round(mx),z:Math.round(mz)}); break; } }
+    }
+    // fence-fence (pairs from different lots)
+    var fenceHits=0;
+    for(i=0;i<SEG.length;i++){ var A=SEG[i];
+      for(j=i+1;j<SEG.length;j++){ var B=SEG[j]; if(A.spot===B.spot) continue;
+        var dxc=(A.x0-B.x0), dzc=(A.z0-B.z0); if(dxc*dxc+dzc*dzc>900) continue; // broadphase ~30m
+        if(segsCross(A.x0,A.z0,A.x1,A.z1, B.x0,B.z0,B.x1,B.z1)){ fenceHits++; bad.push({why:"fence-fence",x:Math.round((A.x0+A.x1)/2),z:Math.round((A.z0+A.z1)/2)}); } }
+    }
+    var violations = groundBad+rowHits+footHits+fenceHits+paraBad;
+    return { pass: violations===0, law:"P6", posts:POST.length, segments:SEG.length,
+             postMaxGapM:+maxGap.toFixed(3), groundViolations:groundBad, rowHits:rowHits,
+             fenceFenceHits:fenceHits, footprintHits:footHits, parallelViolations:paraBad,
+             list:bad.slice(0,20) };
+  });
+
   /* ---- P8: scatter respects the world — no build-time static prop on water
      or in the road centre band (the camera-centred doodad ring is separately
      guaranteed by its walkBlockedAt keep-out oracle, updateFarScatter). ---- */

@@ -344,6 +344,21 @@ var LAW_TABLES = {
      (spacing is enforced by the caller's canPlaceXZ overlap at r=2.2 ⇒ ≥4.4m
      centre-to-centre; this row adds the slope + intertidal law). */
   tent:      { surface:"land", minY:2,   slopeMaxPct:12, intertidalAllowed:false, row:false, rowMargin:2 },
+  /* Fences — P6 (#55, first dedicated consumer). This row supplies the
+     POINT-LEVEL laws canPlaceClass checks at each post along a run: on land,
+     never in a right-of-way (the f13-90m street-crossing offense), never in
+     the intertidal band. The SEGMENT-LEVEL clauses of P6 — endpoints anchor to
+     lot corners, segments parallel to lot/street lines, no crossing of another
+     fence or a footprint, gate gap at door-paths, and per-post grounding — are
+     topological (a point predicate can't express a line crossing) and are
+     enforced by the buildings-layer builder's rectangle geometry + exact
+     seg/rect crossing tests, then PROVEN by __P1850.audits.placement.fences.
+     NOTE: footprintClearM is deliberately ABSENT — a fence rings its own
+     parent building's yard (posts sit just outside the footprint), and the
+     PLACEMENT_INDEX bounding-circle radius (half-diagonal) would false-reject a
+     building's own fence; parent-excluded footprint crossing lives in the
+     builder/audit instead. */
+  fence:     { surface:"land", minY:1, intertidalAllowed:false, row:false, rowMargin:0 },
   /* Water trades — P3 exempt (they BELONG in the band). */
   storeship: { surface:null, intertidalAllowed:true, mudBand:true },
   ship:      { surface:"water", spacingHullMul:1.5, headingSpreadDeg:30 },   // P13

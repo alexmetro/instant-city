@@ -1630,27 +1630,70 @@ var SIGN_BUILDING_SPOTS = []; // {x,z,y,rot,w,d,word} — reused by Phase 4's ho
    door-to-street paths that approach at an angled jog rather than square
    perpendicular. Anchored to VILLAGE_BUILDING_SPOTS, same as the yard
    objects above.
+
+   s70 (#55) P6 FENCE GROUND-LOGIC — placement-spec.md P6, first dedicated
+   consumer of the s67 universal placement engine. The pre-s70 fence was built
+   LONG-SEGMENT-FLAT: one rigid 2-post + 2-rail prefab was stamped per ~2.9m
+   panel at ONE terrain height (the panel midpoint), so on a slope one post
+   floated and the other buried, and the rails knifed into / hung off the grade
+   (the user offense). It is now POST-INTERVAL GROUNDED: a run is a sequence of
+   posts, EACH seated to terrain at its own x,z (base gap 0 by construction),
+   with rails spanning consecutive post-tops so each rail follows that interval's
+   slope (stepped/sloped per interval, never one long floating span). Every panel
+   is validated through the engine (canPlace('fence',…) at each post — on land,
+   never in a right-of-way [the f13-90m street-crossing offense], never in the
+   intertidal band) plus exact seg-vs-seg / seg-vs-footprint crossing tests, and
+   a gate gap is left where the door-path exits. FENCE_SEGS / FENCE_POSTS record
+   the result for __P1850.audits.placement.fences. DETERMINISM: the rngBuild()
+   draw sequence is byte-identical to pre-s70 (same 0.40 gate, yawSkew, hx, hz,
+   nSides, side-shuffle, and per-panel 0.18 draw, same segN=round(len/2.9)); the
+   new law rejections happen AFTER the panel's rng draw, exactly where the old
+   fh<=1 / foundedDay skips already sat, so no rng is added or reordered and the
+   world-wide seeded stream is unchanged.
    ===================================================================== */
+/* s70: recorded per accepted panel for the P6 audit (framing-independent) and
+   for the fence-fence crossing test during construction. IIFE-scoped globals so
+   the core placement audit (06-debug) can walk them, same pattern as
+   PLACEMENT_TREES / tentCandidates. */
+var FENCE_SEGS = [];  // {x0,z0,x1,z1,spot,yaw} — accepted rail runs, world coords
+var FENCE_POSTS = []; // {x,z,y} — every seated post base (y == terrainHeight there)
 (function buildYardFencesAndPaths(){
-  function makeYardFenceSegGeo(){
-    // FENCE-LINE fix, 2026-07-10 (same bug as buildVillageClutter's fence
-    // prefab above): rail no longer gets an extra -1.45 x-shift, so it
-    // spans the full gap between the two posts instead of bridging neither.
-    var parts = [], postColor = new THREE.Color(0x5c4a35), railColor = new THREE.Color(0x6b5640);
-    [-1.4,1.4].forEach(function(px){
-      var post = makeBoxLocal(0.12,0.85,0.12, postColor); post.translate(px,0,0); parts.push(post);
-    });
-    [0.28,0.55].forEach(function(py){
-      var rail = makeBoxLocal(2.9,0.07,0.07, railColor); rail.translate(0,py,0); parts.push(rail);
-    });
-    return mergeGeoms(parts);
+  var postColor = new THREE.Color(0x5c4a35), railColor = new THREE.Color(0x6b5640);
+  // POST: vertical box, base at y=0 (makeBoxLocal pivots at base center) so an
+  // instance placed at (x, terrainHeight(x,z), z) seats its base exactly on the
+  // grade — posts are ALWAYS vertical regardless of slope (a real fence post is).
+  var postGeo = makeBoxLocal(0.12,0.85,0.12, postColor);
+  // RAIL: unit box along +X, centred at origin, so a per-instance matrix that
+  // maps +X onto the 3D post-to-post vector (scale X = interval length) draws a
+  // rail that follows the interval's slope. Two rails per interval (RAIL_YS up
+  // each post's own seat) keeps the split-rail read.
+  var railUnitGeo = colorizeUniform(new THREE.BoxGeometry(1,0.07,0.07).toNonIndexed(), railColor);
+  var RAIL_YS = [0.30, 0.58];
+
+  // ---- crossing-test helpers (no rng; P6 topology the point-engine can't express) ----
+  function ccw(ax,az,bx,bz,cx,cz){ return (cz-az)*(bx-ax) > (bz-az)*(cx-ax); }
+  function segsCross(ax,az,bx,bz,cx,cz,dx,dz){ // STRICT straddle — shared endpoints (own corners) don't count
+    return (ccw(ax,az,cx,cz,dx,dz)!==ccw(bx,bz,cx,cz,dx,dz)) && (ccw(ax,az,bx,bz,cx,cz)!==ccw(ax,az,bx,bz,dx,dz));
+  }
+  function ptInRect(px,pz,b){ // building's own local frame (matches placeBuilding bake + placement audits)
+    var s=Math.sin(b.rot||0), c=Math.cos(b.rot||0), dx=px-b.x, dz=pz-b.z;
+    return Math.abs(dx*c+dz*s) <= (b.w||4)/2 && Math.abs(-dx*s+dz*c) <= (b.d||4)/2;
+  }
+  function segHitsRect(x0,z0,x1,z1,b){
+    if(ptInRect(x0,z0,b) || ptInRect(x1,z1,b)) return true;
+    var s=Math.sin(b.rot||0), c=Math.cos(b.rot||0), hw=(b.w||4)/2, hd=(b.d||4)/2;
+    function cr(lx,lz){ return { x:b.x+lx*c-lz*s, z:b.z+lx*s+lz*c }; }
+    var C=[cr(-hw,-hd),cr(hw,-hd),cr(hw,hd),cr(-hw,hd)];
+    for(var e=0;e<4;e++){ var p=C[e], q=C[(e+1)%4];
+      if(segsCross(x0,z0,x1,z1, p.x,p.z,q.x,q.z)) return true; }
+    return false;
   }
 
   // ---- split-rail yard fences: ~40% of houses, 2-3 of 4 sides chosen at
   // random with dropped rails for gaps/gates — an irregular partial
   // enclosure, never a neat closed box. ----
-  var fenceMatrices = [];
-  VILLAGE_BUILDING_SPOTS.forEach(function(spot){
+  var postMatrices = [], railMatrices = [];
+  VILLAGE_BUILDING_SPOTS.forEach(function(spot, spotIdx){
     if(rngBuild()>=0.40) return;
     var yawSkew = spot.rot + (rngBuild()-0.5)*0.5; // strung up by eye, not surveyed
     var hx = spot.w*0.5+2+rngBuild()*2, hz = spot.d*0.5+2+rngBuild()*2;
@@ -1664,36 +1707,90 @@ var SIGN_BUILDING_SPOTS = []; // {x,z,y,rot,w,d,word} — reused by Phase 4's ho
     ];
     var nSides = 2+Math.floor(rngBuild()*2); // 2-3 of 4 sides -- always partial
     var chosen = sides.slice().sort(function(){ return rngBuild()-0.5; }).slice(0, nSides);
+    // GATE GAP (P6): where the front door's path exits toward the street, leave
+    // an opening. Derived from the door FACING only (spot.rot) — no rng — so the
+    // door-path loop below keeps its own seeded stream; the door line runs from
+    // the door out past the yard edge, and any panel it crosses becomes the gate.
+    var faceDist = spot.d*0.5+0.3, reach = Math.max(hx,hz)+3;
+    var doorX = spot.x+Math.sin(spot.rot)*faceDist, doorZ = spot.z+Math.cos(spot.rot)*faceDist;
+    var gateX = spot.x+Math.sin(spot.rot)*reach,    gateZ = spot.z+Math.cos(spot.rot)*reach;
+    var postKey = {}; // dedup shared/corner posts within this building
+    function addPost(px,pz){
+      var k = Math.round(px*10)+"_"+Math.round(pz*10);
+      if(postKey[k]) return; postKey[k]=1;
+      var ph = terrainHeight(px,pz);            // seat THIS post to ITS ground
+      postMatrices.push({x:px,z:pz,h:ph});
+      FENCE_POSTS.push({x:px,z:pz,y:ph});
+    }
     chosen.forEach(function(side){
       var a = toWorld(side.a[0],side.a[1]), b = toWorld(side.b[0],side.b[1]);
       var dx=b.x-a.x, dz=b.z-a.z, len=Math.hypot(dx,dz);
-      var segN = Math.max(1, Math.round(len/2.9));
-      // s56 FENCE-YAW FIX — same X-aligned-prefab/Z-convention mismatch as
-      // buildVillageClutter's fence lines above: rails must run ALONG the
-      // lot side, so the bake yaw is atan2(-dz,dx), not atan2(dx,dz).
-      var yaw = Math.atan2(-dz,dx);
+      var segN = Math.max(1, Math.round(len/2.9)); // ~2.9m post spacing (unchanged → same rng draw count)
       for(var i=0;i<segN;i++){
-        if(rngBuild()<0.18) continue; // a missing rail -- gate, gap, wear
+        if(rngBuild()<0.18) continue; // a missing panel -- gate, gap, wear (SAME draw as pre-s70)
+        // ----- post-draw skips (NO rng — the s70 law checks slot in exactly
+        //       where the old fh<=1 / foundedDay skips sat, so the stream holds) -----
         var t=(i+0.5)/segN, fx=a.x+dx*t, fz=a.z+dz*t, fh=terrainHeight(fx,fz);
         if(fh<=1) continue;
-        if(spot.foundedDay!=null) continue; // s56: no yard fence around an era-gated landmark (rng draws consumed above so the stream holds)
-        fenceMatrices.push({x:fx,z:fz,h:fh,rotY:yaw});
-        registerWalkSeg(a.x+dx*(i/segN), a.z+dz*(i/segN), a.x+dx*((i+1)/segN), a.z+dz*((i+1)/segN)); // s59: only PLACED rails block — gates/gaps stay passable
+        if(spot.foundedDay!=null) continue; // s56: no yard fence around an era-gated landmark
+        var t0=i/segN, t1=(i+1)/segN;
+        var p0x=a.x+dx*t0, p0z=a.z+dz*t0, p1x=a.x+dx*t1, p1z=a.z+dz*t1;
+        // P6 point-law via the engine, at BOTH posts of this panel
+        if(!canPlace("fence", {x:p0x, z:p0z}).ok) continue;
+        if(!canPlace("fence", {x:p1x, z:p1z}).ok) continue;
+        // P6 gate gap: skip the panel the door-path crosses
+        if(segsCross(p0x,p0z,p1x,p1z, doorX,doorZ,gateX,gateZ)) continue;
+        // P6 no fence-fence crossing: vs every OTHER building's accepted runs
+        var crossFence=false, f;
+        for(f=0;f<FENCE_SEGS.length;f++){ var fs=FENCE_SEGS[f]; if(fs.spot===spotIdx) continue;
+          if(segsCross(p0x,p0z,p1x,p1z, fs.x0,fs.z0,fs.x1,fs.z1)){ crossFence=true; break; } }
+        if(crossFence) continue;
+        // P6 no footprint crossing: vs every OTHER building (parent excluded)
+        var crossFoot=false, j;
+        for(j=0;j<VILLAGE_BUILDING_SPOTS.length;j++){ if(j===spotIdx) continue;
+          var bb=VILLAGE_BUILDING_SPOTS[j]; if(bb.w==null) continue;
+          var mdx=fx-bb.x, mdz=fz-bb.z, br=Math.hypot(bb.w,bb.d)/2+3;
+          if(mdx*mdx+mdz*mdz > br*br) continue; // broadphase
+          if(segHitsRect(p0x,p0z,p1x,p1z, bb)){ crossFoot=true; break; } }
+        if(crossFoot) continue;
+        // ----- accept: seat posts, span rails over the terrain interval -----
+        addPost(p0x,p0z); addPost(p1x,p1z);
+        var h0=terrainHeight(p0x,p0z), h1=terrainHeight(p1x,p1z);
+        RAIL_YS.forEach(function(ry){
+          railMatrices.push({ ax:p0x, ay:h0+ry, az:p0z, bx:p1x, by:h1+ry, bz:p1z });
+        });
+        FENCE_SEGS.push({ x0:p0x, z0:p0z, x1:p1x, z1:p1z, spot:spotIdx, yaw:yawSkew });
+        registerWalkSeg(p0x,p0z,p1x,p1z); // s59: only PLACED panels block — gates/gaps stay passable
       }
     });
   });
-  if(fenceMatrices.length>0){
-    var fenceMesh2 = new THREE.InstancedMesh(makeYardFenceSegGeo(), new THREE.MeshPhongMaterial({ color:0xffffff, vertexColors:true, flatShading:true, specular:0x000000, shininess:0 }), fenceMatrices.length);
-    (function(){
-      var m4=new THREE.Matrix4();
-      fenceMatrices.forEach(function(f,i){
-        var q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), f.rotY);
-        m4.compose(new THREE.Vector3(f.x,f.h,f.z), q, new THREE.Vector3(1,1,1));
-        fenceMesh2.setMatrixAt(i,m4);
-      });
-      fenceMesh2.instanceMatrix.needsUpdate = true;
-    })();
-    scene.add(fenceMesh2);
+  // ---- meshes: instanced posts (translation only) + instanced rails (each
+  //      matrix maps +X onto its post-to-post vector). 2 draw calls total. ----
+  var fenceMat = new THREE.MeshPhongMaterial({ color:0xffffff, vertexColors:true, flatShading:true, specular:0x000000, shininess:0 });
+  if(postMatrices.length>0){
+    var postMesh = new THREE.InstancedMesh(postGeo, fenceMat, postMatrices.length);
+    var pm4=new THREE.Matrix4(), pq=new THREE.Quaternion(), pone=new THREE.Vector3(1,1,1);
+    postMatrices.forEach(function(p,i){
+      pm4.compose(new THREE.Vector3(p.x,p.h,p.z), pq, pone);
+      postMesh.setMatrixAt(i,pm4);
+    });
+    postMesh.instanceMatrix.needsUpdate = true;
+    scene.add(postMesh);
+  }
+  if(railMatrices.length>0){
+    var railMesh = new THREE.InstancedMesh(railUnitGeo, fenceMat, railMatrices.length);
+    var rm4=new THREE.Matrix4(), xAxis=new THREE.Vector3(1,0,0), dir=new THREE.Vector3(), rq=new THREE.Quaternion(), mid=new THREE.Vector3(), rs=new THREE.Vector3();
+    railMatrices.forEach(function(r,i){
+      dir.set(r.bx-r.ax, r.by-r.ay, r.bz-r.az);
+      var L=dir.length()||0.001; dir.multiplyScalar(1/L);
+      rq.setFromUnitVectors(xAxis, dir);
+      mid.set((r.ax+r.bx)*0.5, (r.ay+r.by)*0.5, (r.az+r.bz)*0.5);
+      rs.set(L,1,1);
+      rm4.compose(mid,rq,rs);
+      railMesh.setMatrixAt(i,rm4);
+    });
+    railMesh.instanceMatrix.needsUpdate = true;
+    scene.add(railMesh);
   }
 
   // ---- worn door-paths: a strip from each door toward the nearest street,
