@@ -299,6 +299,20 @@ function updateStreetLabels(alt){
       if(angle>90) angle-=180; else if(angle<-90) angle+=180;
       a.lastAngle = angle;
     }
+    /* s68 HARD UI CLIP (same law as applyLabelDeclutter's): a street name
+       drifting onto fixed UI chrome between placement ticks — or riding
+       out its hysteresis grace there — hides NOW. Conservative rotated
+       AABB, same construction as the placement pass; half-width cached
+       per element (street label text never changes). */
+    if(_uiRectsCache.length){
+      if(!el._swHW) el._swHW = (el.offsetWidth ? el.offsetWidth/2+2 : el.textContent.length*4.2+8);
+      var radC = angle*Math.PI/180, cAc = Math.abs(Math.cos(radC)), sAc = Math.abs(Math.sin(radC));
+      var bw = cAc*el._swHW + sAc*9, bh = sAc*el._swHW + cAc*9;
+      var sBox = { left:sx-bw, right:sx+bw, top:sy-bh, bottom:sy+bh };
+      var uiHit = false;
+      for(var ub=0; ub<_uiRectsCache.length && !uiHit; ub++) uiHit = rectsOverlap(sBox, _uiRectsCache[ub], LABEL_PAD);
+      if(uiHit){ el.style.opacity = 0; slot.state = "off"; continue; }
+    }
     el.style.opacity = 0.92;
     el.style.left = sx+"px";
     el.style.top = sy+"px";
@@ -834,6 +848,10 @@ var LABEL_DECLUTTER_HYST_MS = 280;  // s42: street-engine-style hysteresis — a
 var _declutterAcceptedRects = []; // this tick's accepted label boxes — consumed by the street-label
                                   // engine (recomputeStreetLabelPlacements) as blockers, so street
                                   // names always yield to point labels without a second collision system
+var _uiRectsCache = []; // s68: fixed-UI blocker rects, refreshed each declutter tick (~5Hz) —
+                        // consumed by the per-frame hard UI clip (applyLabelDeclutter +
+                        // updateStreetLabels) so labels yield to chrome EVERY frame, not just
+                        // at tick boundaries. getBoundingClientRect stays off the frame path.
 var _lastDeclutterRun = 0;
 var _dcState = new WeakMap(); // el -> {st:"off"|"pending"|"on"|"leaving", since}
 // shared screen-rect overlap test — used by this engine AND the street-label engine above
@@ -886,15 +904,16 @@ function recomputeLabelDeclutter(now){
   });
   var accepted = [], buildingCount = 0;
   var uiRects = collectUIBlockerRects();
+  _uiRectsCache = uiRects; // s68: consumed by the per-frame hard UI clip below (and updateStreetLabels)
   for(var u=0; u<uiRects.length; u++) accepted.push(uiRects[u]); // chrome wins, always
   var acceptedWorld = [];
   items.forEach(function(it){
-    it._won = true;
+    it._won = true; it._uiHit = false;
     if(!it.exempt){
       if(it.buildingRelated && buildingCount>=LABEL_DECLUTTER_CAP){ it._won=false; }
       else {
         for(var i=0;i<accepted.length;i++){
-          if(rectsOverlap(it, accepted[i], LABEL_PAD)){ it._won=false; break; }
+          if(rectsOverlap(it, accepted[i], LABEL_PAD)){ it._won=false; it._uiHit = i<uiRects.length; break; }
         }
       }
     }
@@ -905,6 +924,9 @@ function recomputeLabelDeclutter(now){
   // HYSTERESIS state machine (reused from the street-label engine): won
   // items persist ~280ms before appearing; losers keep rendering that long
   // before the CSS fade-out — no popping while pinch-zooming through bands.
+  // s68: EXCEPT losers that hit fixed UI chrome — those hide immediately
+  // (the "leaving" grace let a label sit on a HUD panel ~300-600ms after
+  // any camera move; the labels-vs-chrome law has no grace period).
   items.forEach(function(it){
     var s = _dcState.get(it.el);
     if(!s){ s = { st:"off", since:now }; _dcState.set(it.el, s); }
@@ -912,6 +934,8 @@ function recomputeLabelDeclutter(now){
       if(s.st==="off"){ s.st="pending"; s.since=now; }
       else if(s.st==="pending" && now-s.since>=LABEL_DECLUTTER_HYST_MS){ s.st="on"; }
       else if(s.st==="leaving"){ s.st="on"; }
+    } else if(it._uiHit){
+      s.st="off"; s.since=now; // chrome overlap: no leaving grace, hide now
     } else {
       if(s.st==="pending"){ s.st="off"; }
       else if(s.st==="on"){ s.st="leaving"; s.since=now; }
@@ -933,6 +957,38 @@ function applyLabelDeclutter(now){
       if(s && (s.st==="off"||s.st==="pending") && parseFloat(el.style.opacity)>0.05) el.style.opacity = 0;
     });
   });
+  /* s68 HARD UI CLIP — labels yield to fixed UI chrome at EVERY frame, at
+     every viewport size. The ~5Hz decision plus the 280ms hysteresis grace
+     left windows where a label sat over a HUD panel (per-frame updaters
+     reposition chips between ticks; "leaving" losers keep rendering; pool
+     slots get reassigned on candidate reorder — field-reported at
+     1520x1280: ship labels over the paper-toggle). Chrome overlap is law
+     (layers-spec rules block), not politeness, so it is enforced here
+     per frame against the tick-cached rects. Cost: a few dozen visible
+     chips x ~10 rects of arithmetic; half-sizes cached per text. */
+  if(_uiRectsCache.length){
+    _DECLUTTER_POOLS_ALL.forEach(function(pool){
+      pool.forEach(function(el){
+        if(!(parseFloat(el.style.opacity)>0.05)) return;
+        var txt = el.textContent;
+        if(el._dcClipTxt!==txt || !el._dcClipHS){
+          el._dcClipTxt = txt;
+          el._dcClipHS = _labelHalfSize(el, el.classList.contains("biz-glyph") ? "glyph" : "text");
+        }
+        var hs = el._dcClipHS;
+        var x = parseFloat(el.style.left)||0, y = parseFloat(el.style.top)||0;
+        var box = { left:x-hs.hw, right:x+hs.hw, top:y-hs.hh, bottom:y+hs.hh };
+        for(var u=0; u<_uiRectsCache.length; u++){
+          if(rectsOverlap(box, _uiRectsCache[u], LABEL_PAD)){
+            el.style.opacity = 0;
+            var s2 = _dcState.get(el);
+            if(s2){ s2.st = "off"; s2.since = now; }
+            break;
+          }
+        }
+      });
+    });
+  }
 }
 var geoLabelEls = []; // regions + waterways — filled by buildLabels() far below
 

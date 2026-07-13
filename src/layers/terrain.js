@@ -681,62 +681,120 @@ var foamMesh = null;
 
 
 /* ---- terrain audit (layers-spec.md rules block; Earth Palette Law): midday
-   sunlit ground luminance 0.55-0.70, audited by framebuffer readback. Skips
-   (pass, with the reason stated) when the current frame can't host the probe —
-   night, or camera outside the 100-1500m band the law was calibrated in. ---- */
+   sunlit ground luminance 0.55-0.70, audited by framebuffer readback.
+   s68 FRAMING-INDEPENDENCE FIX: the audit used to sample rings around
+   whatever the user's camera framed — bare town sand reads ~0.64 (pass)
+   but grass hills read ~0.41 (fail), so the verdict was a coin flip on
+   camera position. Grass/vegetated zones are legitimately darker and are
+   NOT governed by the Earth Palette band (it rules bare ground albedo
+   only), so they must never be probed. The audit now reads a FIXED set
+   of world-anchored bare sand/dirt probes through ONE internal readback
+   frame rendered from a fixed canonical town framing (fog disabled for
+   determinism), then restores the user's camera and re-renders their
+   frame. Same verdict from any camera position, any altitude. Runtime
+   filters still drop any probe the growing town has since covered
+   (street ROW / structure / painted worn earth). Skips (pass, reason
+   stated) only on sim state, never on framing: night, or fewer than 6
+   probes still bare/visible. ---- */
+/* Fixed probes (world x,z) — verified bare sand/dirt at the canonical
+   framing (s68 probe mining, luminance 0.54-0.64 at noon):
+   - west dune slope at the town edge (x -400)
+   - NW town blocks, bare sand between the platted streets (x -350..-100)
+   - plaza edge, Portsmouth Square surrounds (last three)
+   Wide-spread entries fall off-screen at narrow viewports; the central
+   block keeps the required 6+ probes alive at every aspect ratio. */
+var LUM_PROBES = [
+  [-400,-100],[-400,-50],
+  [-350,-100],[-300,-150],[-300,-100],[-300,-50],[-250,-200],[-250,0],
+  [-200,-250],[-200,-150],[-150,-250],[-150,-100],[-100,-200],[-100,-100],
+  [-200,100],[-150,150],[0,100]
+];
+// canonical internal readback framing: over the probe centroid, town scale
+var LUM_CAM = { fx:-250, fz:-120, radius:420, yaw:0.65, elev:62*Math.PI/180 };
 registerAudit("terrain", "luminance", function(){
   if(typeof nightFactor==="number" && nightFactor>0.05)
     return { pass:true, skipped:"not midday (nightFactor="+nightFactor.toFixed(2)+")" };
-  var alt = lastKnownAlt||0;
-  if(!(alt>=100 && alt<=1500))
-    return { pass:true, skipped:"camera altitude "+Math.round(alt)+"m outside the 100-1500m calibration band" };
-  // candidate bare-ground points: rings around the camera focus, dry land,
-  // clear of every street ROW (roads are ground-paint's, not terrain's)
-  var pts=[], cx=CAM.focus.x, cz=CAM.focus.z;
-  for(var r=18; r<=alt*0.45 && pts.length<28; r+=15){
-    for(var a=0; a<6.28; a+=0.79){
-      var x=cx+Math.cos(a+r*0.7)*r, z=cz+Math.sin(a+r*0.7)*r;
-      if(terrainHeight(x,z)<=1.0) continue;
-      var clear=true;
-      for(var i=0;i<PLACEMENT_STREET_SEGS.length;i++){
-        var sg=PLACEMENT_STREET_SEGS[i];
-        if(distToSegXZ(x,z,sg.x0,sg.z0,sg.x1,sg.z1)<sg.halfW+4){ clear=false; break; }
-      }
-      // BARE ground only: the law is about terrain albedo, not structures or
-      // worn paint. canPlace() rejects points at buildings/props; the splat
-      // debug hooks (public QA surface) reject painted worn-earth pixels.
-      if(clear && !canPlace(x, z, 1.5, {})) clear = false;
-      if(clear){
-        try {
-          var D = window.__P1850._splatDebug;
-          if(x>CLOSE_BOX.xMin+6 && x<CLOSE_BOX.xMax-6 && z>CLOSE_BOX.zMin+6 && z<CLOSE_BOX.zMax-6){
-            if(D.closeAlphaAt(x,z)[3] > 8) clear = false;
-          } else if(x>TOWN_BOX.xMin+6 && x<TOWN_BOX.xMax-6 && z>TOWN_BOX.zMin+6 && z<TOWN_BOX.zMax-6){
-            if(D.townAlphaAt(x,z)[3] > 8) clear = false;
-          }
-        } catch(e) { /* pre-first-paint — keep the probe */ }
-      }
-      if(clear) pts.push({x:x,z:z});
+  // BARE ground only: the law is about terrain albedo, not structures or
+  // worn paint. Drop any fixed probe that today's town has covered —
+  // street ROW (roads are ground-paint's, not terrain's), canPlace()
+  // rejections (buildings/props), splat-painted worn-earth pixels.
+  var pts=[];
+  for(var pi=0; pi<LUM_PROBES.length; pi++){
+    var x=LUM_PROBES[pi][0], z=LUM_PROBES[pi][1];
+    if(terrainHeight(x,z)<=1.0) continue;
+    var clear=true;
+    for(var i=0;i<PLACEMENT_STREET_SEGS.length;i++){
+      var sg=PLACEMENT_STREET_SEGS[i];
+      if(distToSegXZ(x,z,sg.x0,sg.z0,sg.x1,sg.z1)<sg.halfW+4){ clear=false; break; }
     }
+    if(clear && !canPlace(x, z, 1.5, {})) clear = false;
+    if(clear){
+      try {
+        var D = window.__P1850._splatDebug;
+        if(x>CLOSE_BOX.xMin+6 && x<CLOSE_BOX.xMax-6 && z>CLOSE_BOX.zMin+6 && z<CLOSE_BOX.zMax-6){
+          if(D.closeAlphaAt(x,z)[3] > 8) clear = false;
+        } else if(x>TOWN_BOX.xMin+6 && x<TOWN_BOX.xMax-6 && z>TOWN_BOX.zMin+6 && z<TOWN_BOX.zMax-6){
+          if(D.townAlphaAt(x,z)[3] > 8) clear = false;
+        }
+      } catch(e) { /* pre-first-paint — keep the probe */ }
+    }
+    if(clear) pts.push({x:x,z:z});
   }
-  if(pts.length<6) return { pass:true, skipped:"fewer than 6 clear ground probes in frame" };
-  window.__P1850.render(); // fresh frame in THIS task — stalled-rAF (CDP) safe, buffer still live
-  var gl = renderer.getContext(), W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;
-  var buf = new Uint8Array(4), lums = [];
-  var v = new THREE.Vector3();
-  pts.forEach(function(p){
-    v.set(p.x, terrainHeight(p.x,p.z), p.z).project(camera);
-    if(v.z>=1 || v.x<-0.95 || v.x>0.95 || v.y<-0.95 || v.y>0.95) return;
-    var sx = Math.round((v.x*0.5+0.5)*W), sy = Math.round((v.y*0.5+0.5)*H); // readPixels origin = bottom-left = NDC y
-    gl.readPixels(sx, sy, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, buf);
-    lums.push((0.2126*buf[0]+0.7152*buf[1]+0.0722*buf[2])/255);
-  });
-  if(lums.length<6) return { pass:true, skipped:"probes projected off-screen" };
+  if(pts.length<6) return { pass:true, skipped:"fewer than 6 of the fixed probes still bare (town growth)" };
+  // ONE internal readback frame from the canonical framing; the user's
+  // camera state (and fog) is saved and restored — their frame comes back
+  // with a final render, so nothing on screen changes.
+  var savedPos = camera.position.clone(), savedQuat = camera.quaternion.clone();
+  var savedFov = camera.fov;
+  var savedFogNear = scene.fog.near, savedFogFar = scene.fog.far;
+  var lums = [];
+  try {
+    var fy = terrainHeight(LUM_CAM.fx, LUM_CAM.fz)+2;
+    // narrow (portrait) viewports shrink the horizontal FOV and would drop
+    // probes off-screen — temporarily widen the vertical FOV so the frame
+    // spans the same ground as the landscape baseline. Camera DISTANCE (the
+    // input the distance-keyed ground shading actually sees) is untouched,
+    // so readings match the calibration; depends only on the viewport,
+    // never on where the user's camera is.
+    if(camera.aspect < 1.2){
+      camera.fov = 2*Math.atan(Math.tan(savedFov*Math.PI/360) * 1.2/camera.aspect) * 180/Math.PI;
+      camera.updateProjectionMatrix();
+    }
+    camera.position.set(
+      LUM_CAM.fx + LUM_CAM.radius*Math.cos(LUM_CAM.elev)*Math.sin(LUM_CAM.yaw),
+      fy + LUM_CAM.radius*Math.sin(LUM_CAM.elev),
+      LUM_CAM.fz + LUM_CAM.radius*Math.cos(LUM_CAM.elev)*Math.cos(LUM_CAM.yaw));
+    camera.lookAt(LUM_CAM.fx, fy, LUM_CAM.fz);
+    // FIXED canonical fog for the readback — deterministic at any prior
+    // camera/fog state, and matching what the rig itself computes at this
+    // framing's ~390m eye altitude (the band was calibrated under it):
+    scene.fog.near = 250; scene.fog.far = 2550;
+    window.__P1850.render(); // fresh frame in THIS task — stalled-rAF (CDP) safe, buffer still live
+    var gl = renderer.getContext(), W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;
+    var buf = new Uint8Array(4);
+    var v = new THREE.Vector3();
+    pts.forEach(function(p){
+      v.set(p.x, terrainHeight(p.x,p.z), p.z).project(camera);
+      if(v.z>=1 || v.x<-0.92 || v.x>0.92 || v.y<-0.92 || v.y>0.92) return;
+      var sx = Math.round((v.x*0.5+0.5)*W), sy = Math.round((v.y*0.5+0.5)*H); // readPixels origin = bottom-left = NDC y
+      gl.readPixels(sx, sy, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+      lums.push((0.2126*buf[0]+0.7152*buf[1]+0.0722*buf[2])/255);
+    });
+  } finally {
+    camera.position.copy(savedPos);
+    camera.quaternion.copy(savedQuat);
+    if(camera.fov !== savedFov){ camera.fov = savedFov; camera.updateProjectionMatrix(); }
+    scene.fog.near = savedFogNear; scene.fog.far = savedFogFar;
+    camera.updateMatrixWorld(true);
+    window.__P1850.render(); // the user's frame, back on screen
+  }
+  if(lums.length<6) return { pass:true, skipped:"fewer than 6 probes on screen at the canonical framing" };
   lums.sort(function(a,b){return a-b;});
   var med = lums[Math.floor(lums.length/2)];
   // law band 0.55-0.70; +-0.05 readback tolerance (shadow dither, probe scatter)
   return { pass: med>=0.50 && med<=0.75, median:+med.toFixed(3), band:"0.55-0.70 (tol 0.05)",
-           n:lums.length, min:+lums[0].toFixed(3), max:+lums[lums.length-1].toFixed(3) };
+           n:lums.length, min:+lums[0].toFixed(3), max:+lums[lums.length-1].toFixed(3),
+           probe:"fixed world-anchored, canonical internal framing (s68)" };
 });
 
 /* dev-tooling visibility interface (layers-spec.md §15): this layer's visibility toggle */
