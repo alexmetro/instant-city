@@ -374,7 +374,14 @@
   .pp-markets td:last-child{ text-align:right; white-space:nowrap; }
 
   #horizon-ring{
-    position:fixed; top:0; left:0; right:0; z-index:6; pointer-events:none;
+    /* s66 R3 (masthead/world-news de-collision): the world-news band only
+       ever appears at extreme zoom-out, and it is full-bleed across the top —
+       so it MUST dock BELOW the persistent top-chrome row (seed · title ·
+       clock, and the paper masthead toggle whose foot sits at ~120px), not
+       over it. top:126px reserves that top band for the readouts; the label
+       declutter re-reads this element's live rect every tick, so moving it
+       keeps world labels clear of the new position automatically. */
+    position:fixed; top:126px; left:0; right:0; z-index:6; pointer-events:none;
     display:flex; justify-content:center; align-items:stretch; flex-wrap:wrap;
     padding:10px 14px 8px; text-align:center;
     background:linear-gradient(180deg, rgba(20,16,10,0.92), rgba(20,16,10,0.0));
@@ -642,15 +649,17 @@
     margin-top:2px; font-variant:small-caps;
   }
 
-  /* ---- s54 TOUCH CONTROL SURFACE ---- */
-  /* Speed pill — THE speed indicator+control on touch devices (grounding.md
-     §10 tiers: pause / LIVE 1:1 / 2× follow / day / week / month per sec).
-     Hidden on fine-pointer desktops, where the keyboard keys + the HUD
-     clock's speed line already serve. Genuine chrome: receives taps, never
-     pans (UI_STEAL_SELECTOR). */
+  /* ---- s66 TRANSPORT BAR (grounding.md §10 tiers: pause / LIVE 1:1 / 2×
+     follow / day / week / month per sec) ----
+     THE one time control on EVERY viewport, docked to the timeline as its
+     transport row (the video-player convention). It is a normal-flow child
+     of #hud-scrubber (below the track, ABOVE .scr-body in DOM order it is the
+     last sibling so it survives the collapse — see markup), so it moves with
+     the ribbon and needs no fixed positioning of its own. Genuine chrome:
+     receives clicks/taps, never pans (UI_STEAL_SELECTOR). */
   #speed-pill{
-    position:fixed; left:50%; bottom:14px; transform:translateX(-50%);
-    display:none; z-index:12; pointer-events:auto; cursor:pointer;
+    display:flex; justify-content:center; margin:2px auto 0;
+    width:max-content; max-width:100%; pointer-events:auto; cursor:pointer;
     /* s64 de-box: haloed ink text over a parchment scrim fading at both
        ends; segment separators stay as hairlines */
     background:linear-gradient(90deg, rgba(241,230,201,0) 0%, rgba(241,230,201,0.4) 9%,
@@ -661,19 +670,20 @@
     transition:opacity .5s ease;
   }
   #speed-pill .sp-seg{
-    min-width:42px; min-height:44px; box-sizing:border-box; padding:0 7px;
+    min-width:40px; min-height:32px; box-sizing:border-box; padding:0 8px;
     display:flex; align-items:center; justify-content:center;
     font-size:0.6rem; letter-spacing:1.2px; font-variant:small-caps;
     border-left:1px solid rgba(43,29,14,0.25);
   }
   #speed-pill .sp-seg:first-child{ border-left:none; }
+  #speed-pill .sp-seg:hover{ background:rgba(43,29,14,0.08); } /* fine-pointer affordance */
   /* s64: active tier reads as ink WEIGHT — bold glyph + a 3px ink underbar — not a solid fill */
   #speed-pill .sp-seg.active{ font-weight:700; box-shadow:inset 0 -3px 0 rgba(43,29,14,0.9); }
+  /* the transport is the single speed indicator everywhere now — the HUD
+     clock's redundant speed line is hidden on every viewport (s66 decision) */
+  #hud-clock .speed{ display:none; }
   @media (pointer:coarse){
-    #speed-pill{ display:flex; }
-    #hud-clock .speed{ display:none; } /* the pill replaces the HUD speed text on touch */
-    #hud-ticker{ bottom:72px; }        /* clear the pill's bottom band */
-    #hud-scrubber{ bottom:112px; }
+    #speed-pill .sp-seg{ min-width:44px; min-height:44px; } /* >=44px thumb targets */
   }
   /* follow-release chip (s54): shown inside the inspect panel while a
      person/documented figure is followed — the touch path for Esc. */
@@ -719,16 +729,18 @@
     #hud-seed.menu-forced{ display:block; top:8px; right:16px; left:auto; font-size:0.55rem; padding:0.25em 0.55em; }
     #hud-clock{ top:8px; left:16px; right:auto; min-width:0; font-size:0.66rem; text-align:left; padding:0.35em 0.85em;
       max-width:calc(100vw - 32px); box-sizing:border-box; } /* s54: the date chip must never clip off-screen */
-    #hud-clock .date, #hud-clock .speed{ display:inline; }
-    #hud-clock .speed{ margin-left:0.6em; opacity:0.7; }
-    /* s54: on touch phones the pill IS the speed indicator — the chip keeps
-       just the date (body prefix out-ranks the display:inline above; narrow
-       FINE-pointer windows keep the text since they have no pill). */
-    body.touch-device #hud-clock .speed{ display:none; }
+    #hud-clock .date{ display:inline; }
+    /* s66: the clock's speed line is hidden on every viewport now that the
+       timeline transport is the single speed indicator — the compact phone
+       chip keeps just the date. */
     #hud-ghost{ top:56px; left:50%; }
+    /* s66 R3: the mobile top chrome is just the compact clock (top-left) +
+       the briefly-shown title — a shallower reserve clears them without
+       wasting the small screen. */
+    #horizon-ring{ top:48px; }
     #paper-toggle.menu-forced{ display:block; top:100px; right:16px; }
     #hud-provenance.menu-forced{ display:block; top:56px; left:16px; max-width:60vw; font-size:0.55rem; letter-spacing:1px; white-space:normal; }
-    #hud-altitude.menu-forced{ display:block; min-width:0; font-size:0.7rem; bottom:150px; left:auto; right:16px; } /* s54: above the pill/ticker/scrubber stack */
+    #hud-altitude.menu-forced{ display:block; min-width:0; font-size:0.7rem; bottom:186px; left:auto; right:16px; } /* s66: above the taller ticker + scrubber(now carrying the transport row) stack */
     #paper-pane{ width:100vw; }
     /* §11 inspect law: on narrow viewports the panel docks as a bottom
        sheet instead of a right rail (thumb reach + map stays visible). */
@@ -743,15 +755,17 @@
        40vh band instead of z-fighting under/over it. The sheet keeps the
        bottom edge; the card yields upward — one owner per screen band. */
     body.ip-open #beat-card{ bottom:calc(40vh + 14px); }
-    /* s54 bottom stack, thumb-first: ☰ + speed pill on the bottom edge,
-       ticker full-width above them, timeline scrubber full-width above
-       the ticker. safe-area padding keeps the pill off the iOS home bar. */
+    /* s66 bottom stack, thumb-first: ☰ on the bottom-left edge; ticker
+       full-width above it; the timeline scrubber — which now CARRIES the
+       transport row as its bottom sibling — full-width above the ticker.
+       The old standalone bottom-right speed pill is gone (it lives in the
+       scrubber now), which frees the bottom-right corner. safe-area padding
+       keeps everything off the iOS home bar. */
     #hud-menu-toggle{ display:flex; left:10px; bottom:calc(10px + env(safe-area-inset-bottom, 0px)); }
-    #speed-pill{ left:auto; right:10px; transform:none; bottom:calc(10px + env(safe-area-inset-bottom, 0px)); }
     #hud-ticker{ left:8px; right:8px; transform:none; max-width:none; min-width:0;
-      box-sizing:border-box; bottom:calc(64px + env(safe-area-inset-bottom, 0px)); }
+      box-sizing:border-box; bottom:calc(58px + env(safe-area-inset-bottom, 0px)); }
     #hud-scrubber{ left:8px; right:8px; width:auto; transform:none;
-      box-sizing:border-box; bottom:calc(100px + env(safe-area-inset-bottom, 0px)); }
+      box-sizing:border-box; bottom:calc(92px + env(safe-area-inset-bottom, 0px)); }
   }
   @keyframes hudTitleAutoHide{ to{ opacity:0; visibility:hidden; pointer-events:none; } }
 </style>
@@ -792,17 +806,6 @@
 
   <div class="panel" id="hud-provenance">RECORD ONLY &nbsp;&middot;&nbsp; P</div>
   <div class="panel" id="hud-menu-toggle" title="menu">&#9776;</div>
-  <!-- s54 speed pill: segmented time control, coarse-pointer chrome.
-       data-speed values are the SIM_SPEEDS keys; setSimSpeed() keeps the
-       active segment highlighted, so the pill IS the speed indicator. -->
-  <div id="speed-pill" title="time — pause/play / live / follow / timelapse">
-    <div class="sp-seg" data-speed="0" id="sp-pauseplay">&#9654;</div>
-    <div class="sp-seg" data-speed="live">live</div>
-    <div class="sp-seg" data-speed="x2">2&times;</div>
-    <div class="sp-seg" data-speed="day">day</div>
-    <div class="sp-seg" data-speed="week">wk</div>
-    <div class="sp-seg" data-speed="month">mo</div>
-  </div>
 </div>
 <!-- s54: the ☰ menu sheet lives at BODY level, not inside #hud — #hud is a
      fixed-position stacking context with z-index:auto, so any z-indexed
@@ -888,6 +891,19 @@
       <div class="scr-chip" id="scr-chip"></div>
       <div class="scr-handle" id="scr-handle"></div>
     </div>
+  </div>
+  <!-- s66 TRANSPORT BAR: the segmented time control now lives on the timeline
+       (video-player transport row) — visible + clickable on EVERY device, and
+       a SIBLING of .scr-body so it survives the collapse (scr-body hides, this
+       stays). data-speed values are the SIM_SPEEDS keys; setSimSpeed() keeps
+       the active segment highlighted, so this IS the single speed indicator. -->
+  <div id="speed-pill" title="time — pause/play / live / follow / timelapse">
+    <div class="sp-seg" data-speed="0" id="sp-pauseplay">&#9654;</div>
+    <div class="sp-seg" data-speed="live">live</div>
+    <div class="sp-seg" data-speed="x2">2&times;</div>
+    <div class="sp-seg" data-speed="day">day</div>
+    <div class="sp-seg" data-speed="week">wk</div>
+    <div class="sp-seg" data-speed="month">mo</div>
   </div>
 </div>
 
