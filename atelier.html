@@ -4363,6 +4363,29 @@ function invalidateGroundPaint(){
    -> Phong (specular stays black, so the diffuse result is identical) —
    Lambert lights per-VERTEX in r128, and the detail-normal perturbation
    (see GROUND DETAIL ENGINE) needs per-FRAGMENT lighting to read. */
+/* s68 (#54) SPLAT-FOG PREMULTIPLY PATCH — audit counters + chunk builder.
+   Premultiplied-alpha blend (blendSrc One / blendDst OneMinusSrcAlpha) needs
+   the fog contribution scaled by fragment alpha; otherwise stock fog mixes
+   full fogColor into rgb even on a=0 texels and the AddEquation composites
+   that haze onto the background across the ENTIRE tier-plane footprint —
+   each tier's rectangle reads as a fog rect at altitude (the nested-rect
+   artifact). The prior patch string-matched the RESOLVED fog line inside
+   onBeforeCompile, but at that point the source still holds the UNRESOLVED
+   `#include <fog_fragment>` directive (includes expand AFTER the hook
+   returns) — so it never matched and warned x6. FIX: replace the include
+   DIRECTIVE (present verbatim pre-resolution) with the expanded chunk pulled
+   from THREE.ShaderChunk at runtime, patched at the mix line. */
+var SPLAT_MATERIALS = [];        // every splat tier material (world/town/close) — audit target
+function _patchedSplatFogChunk(){
+  var chunk = THREE.ShaderChunk && THREE.ShaderChunk.fog_fragment;
+  if(!chunk) return null;
+  var lit = "gl_FragColor.rgb = mix( gl_FragColor.rgb, fogColor, fogFactor );";
+  var fixed = "gl_FragColor.rgb = mix( gl_FragColor.rgb, fogColor * gl_FragColor.a, fogFactor );";
+  if(chunk.indexOf(lit) !== -1) return chunk.replace(lit, fixed);            // r128 exact (verified against pinned CDN)
+  var re = /gl_FragColor\.rgb\s*=\s*mix\(\s*gl_FragColor\.rgb\s*,\s*fogColor\s*,\s*fogFactor\s*\)\s*;/;
+  if(re.test(chunk)) return chunk.replace(re, fixed);                        // tolerant fallback if whitespace drifts
+  return null;
+}
 function makeSplatMaterial(tex, offsetAmt){
   var m = new THREE.MeshPhongMaterial({ map:tex, transparent:true, depthWrite:false, specular:0x000000, shininess:0,
     polygonOffset:true, polygonOffsetFactor:offsetAmt, polygonOffsetUnits:offsetAmt });
@@ -4374,14 +4397,21 @@ function makeSplatMaterial(tex, offsetAmt){
   m.blendEquation = THREE.AddEquation;
   m.blendSrc = THREE.OneFactor;
   m.blendDst = THREE.OneMinusSrcAlphaFactor;
+  SPLAT_MATERIALS.push(m);
+  m.userData.splatFogPatched = false;
   patchGroundDetailMaterial(m, "road", function(shader){
-    // Weight the fog target by alpha so transparent stays transparent and
-    // painted streets still fade into the haze.
-    var fogLine = "gl_FragColor.rgb = mix( gl_FragColor.rgb, fogColor, fogFactor );";
-    if(shader.fragmentShader.indexOf(fogLine) !== -1){
-      shader.fragmentShader = shader.fragmentShader.replace(fogLine,
-        "gl_FragColor.rgb = mix( gl_FragColor.rgb, fogColor * gl_FragColor.a, fogFactor );");
-    } else if(window.console) console.warn("splat fog premultiply patch: fog chunk not found — three version drift?");
+    // Weight the fog target by alpha so transparent stays transparent (a=0
+    // adds zero fog) and painted streets still fade into the haze (a=1 =
+    // stock fog; partial a = proportional). Replaces the INCLUDE DIRECTIVE,
+    // not the resolved line — the include hasn't expanded yet at hook time.
+    // Flag lives on the material (not a monotonic counter): a splat material
+    // may recompile (define/uniform churn), so we track the LAST compile's
+    // outcome per-material — the audit then can't false-positive on recompiles.
+    var patched = _patchedSplatFogChunk();
+    if(patched && shader.fragmentShader.indexOf("#include <fog_fragment>") !== -1){
+      shader.fragmentShader = shader.fragmentShader.replace("#include <fog_fragment>", patched);
+      m.userData.splatFogPatched = true;
+    } else { m.userData.splatFogPatched = false; if(window.console) console.warn("splat fog premultiply patch: fog chunk not found — three version drift?"); }
   });
   return m;
 }
@@ -11587,6 +11617,142 @@ registerAudit("ground-paint", "eraPaint", function(){
   });
   if(out.statsViolations.length || out.pixelViolations.length) out.pass = false;
   return out;
+});
+
+registerAudit("ground-paint", "fogPatchApplied", function(){
+  /* s68 (#54) MECHANICAL: the splat-fog premultiply patch (makeSplatMaterial)
+     must be live on EVERY splat tier material's compiled program. The prior
+     patch string-matched a fog line that isn't present at onBeforeCompile
+     time, so it silently never applied and warned x6 — the exact silent-no-op
+     class of failure audits exist to catch. Each material compiles on its
+     first render (all three before any screening's runAll); the per-material
+     flag records the LAST compile's outcome, so this stays true across
+     recompiles and would fail loudly if a future three bump renamed the fog
+     chunk (patch returns null -> flag false). */
+  var n = SPLAT_MATERIALS.length;
+  var patched = SPLAT_MATERIALS.filter(function(m){ return m.userData.splatFogPatched===true; }).length;
+  return { pass: n > 0 && patched === n, materials: n, patched: patched,
+           note: patched === n ? "all splat materials fog-patched"
+                 : "fog patch not live on every splat material — see console warns" };
+});
+
+/* Threshold calibrated against the A/B (s68): with the leak, the town-tier
+   edges show a perfectly-correlated (consistency ~1.0) luminance step of
+   ~0.011-0.016 at the readback framing/fog below; with the fix, every edge
+   is <=0.005 (the small residual is plaza-core paint clipping the close-tier
+   edge samples, not fog). 0.008 sits in that gap with margin on both sides.
+   The step is modest, not the ~0.3 one might expect, because the additive
+   premultiplied haze composites onto a background the WORLD tier + terrain
+   fog have already pushed toward fogColor — each extra tier layer adds little. */
+var RECT_LUM_STEP_THRESH = 0.008; // luminance step (0..1) along a straight tier edge that reads as a fog rect
+registerAudit("ground-paint", "tierEdgeRectSignature", function(){
+  /* s68 (#54) RECT-CLASS CATCHER: the premultiplied splat planes are
+     transparent everywhere except painted pixels, so a fog leak (fog mixed in
+     regardless of alpha) haze-tints each tier plane's WHOLE rectangular
+     footprint — a discrete luminance step along the straight box edge at
+     altitude (the nested-rect artifact). This samples bare-ground luminance in
+     pairs straddling each visible tier box edge (+-20m); a correlated step
+     (consistent sign, |median| over threshold) along a straight edge at
+     multiple points = a rect edge = FAIL. Boxes are read from the tier
+     geometry userData so the check tracks future resizes. Passes after the
+     fog premultiply fix; fails the broken build. Midday only (fogColor is
+     brightest, strongest signal), one internal readback frame, camera+fog
+     saved and restored. */
+  if(typeof nightFactor==="number" && nightFactor>0.05)
+    return { pass:true, skipped:"not midday (nightFactor="+nightFactor.toFixed(2)+")" };
+  if(!scene.fog) return { pass:true, skipped:"no fog — artifact cannot manifest" };
+  updateGridSwing(); // paint current for the date so the bare-ground (unpainted) probe rejection is accurate
+  var tiers = [
+    { name:"town",  box: splatTownGeo.userData.splatBox },
+    { name:"close", box: splatCloseGeo.userData.splatBox }
+  ].filter(function(t){ return t.box; });
+  if(!tiers.length) return { pass:false, error:"no tier boxes in geometry userData" };
+  var INSET = 20, N = 11; // straddle distance (m) each side; samples per edge (corner-clear span)
+  var savedPos = camera.position.clone(), savedQuat = camera.quaternion.clone();
+  var savedFov = camera.fov, savedAspect = camera.aspect;
+  var savedFogNear = scene.fog.near, savedFogFar = scene.fog.far;
+  // Frame the OUTER (town) box near-nadir from high altitude so both tier
+  // boxes sit fully inside NDC; deterministic regardless of user camera/fov.
+  var outer = tiers[0].box; // town tier registered first — the outer of the two visible boxes
+  var cx = (outer.xMin+outer.xMax)/2, cz = (outer.zMin+outer.zMax)/2;
+  var elev = 80*Math.PI/180, radius = 2600;
+  var edges = [];
+  try {
+    camera.fov = 60;
+    if(camera.aspect < 1.2){ // narrow viewport — widen vertical fov so the box's width stays on-screen
+      camera.fov = 2*Math.atan(Math.tan(60*Math.PI/360) * 1.2/camera.aspect) * 180/Math.PI;
+    }
+    camera.updateProjectionMatrix();
+    var cy = terrainMeshSurfaceY(cx,cz);
+    camera.position.set(cx + radius*Math.cos(elev)*Math.sin(0),
+                        cy + radius*Math.sin(elev),
+                        cz + radius*Math.cos(elev)*Math.cos(0));
+    camera.lookAt(cx, cy, cz);
+    // Strong deterministic fog across the box (the leak scales with fogFactor):
+    scene.fog.near = 300; scene.fog.far = 3600;
+    window.__P1850.render();
+    var gl = renderer.getContext(), W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;
+    var buf = new Uint8Array(4), v = new THREE.Vector3();
+    // BARE-GROUND only: the leak haze-tints the TRANSPARENT texels of the
+    // whole tier footprint, so a bare-ground inside/outside pair isolates the
+    // fog artifact exactly. Rejecting painted / plaza-core samples also kills
+    // the only fixed-state residual (paint clipping the close-tier edge near
+    // the dense village core), keeping the threshold date-robust.
+    function lumAt(x, z){
+      if(terrainHeight(x,z) <= 1.0) return null;   // water — its own fog path
+      if(_gpNearPlaza(x, z, 30)) return null;      // plaza mud/paint
+      var owner = _gpOwnerTier(x, z);
+      if(owner && _gpAlphaAt(owner, x, z) > 12) return null; // painted (street ROW etc.)
+      v.set(x, terrainMeshSurfaceY(x,z), z).project(camera);
+      if(v.z>=1 || v.x<-0.94 || v.x>0.94 || v.y<-0.94 || v.y>0.94) return null;
+      var sx = Math.round((v.x*0.5+0.5)*W), sy = Math.round((v.y*0.5+0.5)*H);
+      gl.readPixels(sx, sy, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+      return (0.2126*buf[0]+0.7152*buf[1]+0.0722*buf[2])/255;
+    }
+    tiers.forEach(function(t){
+      var b = t.box;
+      // 4 edges: for each, walk N stations across the corner-clear middle span,
+      // read luminance INSIDE (edge - 20m) vs OUTSIDE (edge + 20m).
+      var specs = [
+        { name:"xMin", along:"z", fixed:b.xMin, ni:[ b.xMin+INSET, 0 ], no:[ b.xMin-INSET, 0 ], lo:b.zMin, hi:b.zMax },
+        { name:"xMax", along:"z", fixed:b.xMax, ni:[ b.xMax-INSET, 0 ], no:[ b.xMax+INSET, 0 ], lo:b.zMin, hi:b.zMax },
+        { name:"zMin", along:"x", fixed:b.zMin, ni:[ 0, b.zMin+INSET ], no:[ 0, b.zMin-INSET ], lo:b.xMin, hi:b.xMax },
+        { name:"zMax", along:"x", fixed:b.zMax, ni:[ 0, b.zMax-INSET ], no:[ 0, b.zMax+INSET ], lo:b.xMin, hi:b.xMax }
+      ];
+      specs.forEach(function(e){
+        var deltas = [];
+        for(var k=0;k<N;k++){
+          var f = 0.12 + 0.76*(k/(N-1)); // 0.12..0.88 along the edge (clear of corners)
+          var coord = e.lo + (e.hi-e.lo)*f;
+          var ix, iz, ox, oz;
+          if(e.along==="z"){ ix=e.ni[0]; iz=coord; ox=e.no[0]; oz=coord; }
+          else            { ix=coord;   iz=e.ni[1]; ox=coord;   oz=e.no[1]; }
+          var li = lumAt(ix,iz), lo = lumAt(ox,oz);
+          if(li==null || lo==null) continue;
+          deltas.push(li - lo); // inside minus outside (haze brightens inside => positive)
+        }
+        if(deltas.length < 4){ edges.push({ tier:t.name, edge:e.name, n:deltas.length, skipped:true }); return; }
+        deltas.sort(function(a,c){return a-c;});
+        var med = deltas[Math.floor(deltas.length/2)];
+        var sameSign = deltas.filter(function(d){ return med>=0 ? d>0 : d<0; }).length / deltas.length;
+        var fail = Math.abs(med) > RECT_LUM_STEP_THRESH && sameSign >= 0.7;
+        edges.push({ tier:t.name, edge:e.name, n:deltas.length, medianStep:+med.toFixed(4),
+                     consistency:+sameSign.toFixed(2), fail:fail });
+      });
+    });
+  } finally {
+    camera.position.copy(savedPos); camera.quaternion.copy(savedQuat);
+    if(camera.fov !== savedFov){ camera.fov = savedFov; }
+    camera.aspect = savedAspect; camera.updateProjectionMatrix();
+    scene.fog.near = savedFogNear; scene.fog.far = savedFogFar;
+    camera.updateMatrixWorld(true);
+    window.__P1850.render();
+  }
+  var failed = edges.filter(function(e){ return e.fail; });
+  var scored = edges.filter(function(e){ return !e.skipped; });
+  if(scored.length < 4) return { pass:true, skipped:"too few tier edges on-screen at readback framing", edges:edges };
+  return { pass: failed.length===0, thresholdStep:RECT_LUM_STEP_THRESH,
+           edgesScored:scored.length, failing:failed, edges:edges };
 });
 
 /* dev-tooling visibility interface (layers-spec.md §15): this layer's visibility toggle */
