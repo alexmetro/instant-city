@@ -643,7 +643,15 @@ var ROAD_COLS = {
   rut:   "#241a0f",
   plank: "#a68a58"           // documented lighter-than-ground exception (wharf decking)
 };
-var ROAD_LAYER_ALPHA = { ghost:0.16, faint:0.42, door:0.52, trail:0.78, r3:0.90, r4:0.95, plank:0.92 };
+// s75 ROAD-FILL PACING (road-master-spec CONSTANT-WIDTH AMENDMENT + §9b, user
+// finding 2026-07-13 "road width getting too wide too quickly"): the ghost
+// ROW-hint (the ±W/2 boundary scratch-pair drawn under S1/S2) rendered at
+// alpha 0.16 (~41/255) — well above legibility, so a trail (S2) read as a
+// full-ROW-wide feature with two parallel edge rails (the Director's "double-
+// wide"). §9b/§9 want it "nearly invisible" — a faint HINT, not structure.
+// Dropped to 0.075 (~19/255): the trodden trail line is the read; the ROW is
+// barely there. fill:true tunable.
+var ROAD_LAYER_ALPHA = { ghost:0.075, faint:0.42, door:0.52, trail:0.78, r3:0.90, r4:0.95, plank:0.92 };
 // s65: "door" is the worn door-path class — its own compositing layer so the
 // footpath family can sit FAINTER than any street class (thinner + fainter
 // than streets, per the constant-width amendment's footpath register).
@@ -767,11 +775,27 @@ function _scrRoadRun(t, run){
   }
   var seed = run.seed, j, a, b, dx, dz, len, dk;
   if(partial){
-    /* S3 PARTIAL FILL: a light worn wash across the constant width, with
-       broken opaque worn bands (wheel/foot lanes) inside it — patchy fill
-       progression, never width progression. */
-    _scrStroke(ctx, t.pxFn, t.pxLenFn, nodes, coreW, _mixCol(base, _parseSplatCol(ROAD_COLS.partialWash), 0.55), "butt");
-    var bandDefs = [ {off:-0.28, w:0.26, ph:0.0}, {off:-0.01, w:0.30, ph:2.2}, {off:0.25, w:0.24, ph:4.1} ];
+    /* S3 PARTIAL FILL (s75 retune — road-master-spec §9b "S3 DEVELOPING:
+       widened worn track... width grows toward class width, ruts appear,
+       edges still ragged"). The old full-width `partialWash` base stroke
+       painted a SOLID edge-to-edge worn surface — an S4 "full worn surface"
+       read arriving at S3 (the "too wide too quickly" defect). Replaced with
+       a BROKEN, CENTRE-WEIGHTED worn track: a patchy central wash (~half the
+       ROW) plus broken wheel/foot lanes fanning outward, ground still showing
+       at the margins and between the lanes. Constant width intact — only the
+       FILL is partial; S4 remains the only full-ROW surface. fill:true. */
+    var washW = coreW*0.52, washCol = _mixCol(base, _parseSplatCol(ROAD_COLS.partialWash), 0.42);
+    var wd = 0, wrun = [];
+    for(var wk=0;wk<nodes.length;wk++){
+      if(wk>0) wd += Math.hypot(nodes[wk].x-nodes[wk-1].x, nodes[wk].z-nodes[wk-1].z);
+      var wv = 0.5+0.5*Math.sin(wd*0.03+seed*19.0) + (_strokeN(seed, 800+wk*2)-0.5)*0.5;
+      if(wv > 0.42) wrun.push(nodes[wk]);
+      if((wv <= 0.42 || wk===nodes.length-1) && wrun.length){
+        if(wrun.length>=2) _scrStroke(ctx, t.pxFn, t.pxLenFn, wrun, washW, washCol, "butt");
+        wrun = [];
+      }
+    }
+    var bandDefs = [ {off:-0.24, w:0.22, ph:0.0}, {off:0.0, w:0.18, ph:2.2}, {off:0.24, w:0.22, ph:4.1} ];
     for(var bi=0;bi<bandDefs.length;bi++){
       var bd = bandDefs[bi];
       var line = splatOffsetPolyline(nodes, coreW*bd.off);
@@ -1238,8 +1262,12 @@ function renderGroundSplat(skewAngle){
           { seed:seedS, noMeander:true, isStreet:true, src:"street:"+s.id+"#S2-trail" });
         _rec.wornSegs += curNodes.length-1;
       } else if(curKey===3){
+        // s75: NO casing at S3 — the developing worn track fills only the
+        // centre of the ROW, so a full-width casing rim would float as two
+        // isolated edge rails (the "double-wide" read). Casing returns at S4,
+        // where the worn surface actually reaches the ROW edges.
         addRun("r3", "road", curNodes, s.widthM, ROAD_COLS.r3,
-          { seed:seedS, noMeander:true, caseW:ROAD_CASE_W, caseCol:ROAD_COLS.r3case, ruts:true, fill:"partial", isStreet:true, src:"street:"+s.id+"#S3" });
+          { seed:seedS, noMeander:true, ruts:true, fill:"partial", isStreet:true, src:"street:"+s.id+"#S3" });
         _rec.wornSegs += curNodes.length-1;
       } else {
         addRun("r4", "road", curNodes, s.widthM, ROAD_COLS.r4,
@@ -2199,6 +2227,58 @@ registerAudit("ground-paint", "constantWidth", function(){
     var bad = widths.some(function(w){ return Math.abs(w - s.widthM) > tolAbs; }) ||
               (mx - mn) > Math.max(2.0, 0.30*s.widthM);
     if(bad){ out.pass = false; out.violations.push({ id:s.id, widthM:s.widthM, measured:widths }); }
+  });
+  return out;
+});
+
+/* s75 FILL-PACING ceilings (road-master-spec CONSTANT-WIDTH AMENDMENT + §9b):
+   the MAX fraction of the class ROW width a piece of each lifecycle state may
+   paint as a worn band. Emergence is FILL progression inside a constant width,
+   so an early-lifecycle piece must NOT read as a full-ROW worn surface (the
+   "too wide too quickly" defect: at mid-1847 trodden-trail S2 pieces painted
+   the full ROW via the ±W/2 ROW-hint rails, and S3 painted a solid edge-to-
+   edge wash). S4 is the only full-width worn surface and is width-audited
+   separately (constantWidth). fill:true tunables. */
+var FILL_PACING_CEIL = { 1:0.30, 2:0.42, 3:0.90 }; // state -> max painted-band fraction of ROW
+registerAudit("ground-paint", "fillPacing", function(){
+  /* At mid-block stations clear of junctions/plaza, scan perpendicular to the
+     centerline and measure the painted-band fraction of the class ROW per
+     lifecycle state; require each state's MEDIAN <= its ceiling. The ROW-hint
+     (faint boundary scratch) sits below the paint threshold by design, so a
+     lawful S1/S2 measures only its worn track. Would have FAILED today's live
+     (S2 median band ~0.6-0.99 of ROW); passes after the s75 retune. */
+  updateGridSwing(); // sync paint to the current date/skew (same as constantWidth)
+  var PT = 35; // alpha counted as "painted worn band" — above the faint ROW-hint (~19), below any worn fill
+  var out = { pass:true, date:simDateISO(dateFromSimDay(simDay)), byState:{}, violations:[], stations:0 };
+  if(!SPLAT_LAST_STATS){ return { pass:false, error:"no splat stats — paint never ran" }; }
+  var acc = { 1:[], 2:[], 3:[], 4:[] };
+  STREETS_RUNTIME.forEach(function(s){
+    var rec = SPLAT_LAST_STATS.streets[s.id];
+    if(!rec || !rec.pieces || rec.pieces.length<3) return;
+    var half = s.widthM/2, pcs = rec.pieces;
+    for(var i=1;i<pcs.length-1;i++){
+      var p = pcs[i]; if(p.st==="wet" || p.st===0) continue;
+      if(_gpNearOtherStreet(p.x, p.z, s.id, s.widthM/2 + 4)) continue;
+      if(_gpNearPlaza(p.x, p.z, 14)) continue;
+      var tier = _gpOwnerTier(p.x, p.z); if(!tier) continue;
+      var a2 = pcs[i-1], b2 = pcs[i+1];
+      var dx = b2.x-a2.x, dz = b2.z-a2.z, dl = Math.hypot(dx,dz); if(dl<1) continue;
+      var nx = -dz/dl, nz = dx/dl;
+      var posE = 0, negE = 0, overflow = false;
+      for(var off=-(half+4); off<=half+4; off+=0.4){
+        var al = _gpAlphaAt(tier, p.x+nx*off, p.z+nz*off);
+        if(al>=PT){ if(off>posE) posE=off; if(off<negE) negE=off; if(Math.abs(off)>half+3) overflow=true; }
+      }
+      if(overflow) continue; // junction / crossing-street bleed
+      if(acc[p.st]) { acc[p.st].push((posE-negE)/s.widthM); out.stations++; }
+    }
+  });
+  function med(arr){ var v=arr.slice().sort(function(a,b){return a-b;}); return v[Math.floor(v.length/2)]; }
+  [1,2,3,4].forEach(function(st){
+    var arr = acc[st]; if(arr.length<3){ if(arr.length) out.byState["S"+st]={ n:arr.length, note:"too few to score" }; return; }
+    var m = +med(arr).toFixed(3), ceil = FILL_PACING_CEIL[st];
+    out.byState["S"+st] = { n:arr.length, medBandFrac:m, ceil:ceil==null?"n/a (full by law)":ceil };
+    if(ceil!=null && m > ceil){ out.pass = false; out.violations.push({ state:"S"+st, medBandFrac:m, ceil:ceil }); }
   });
   return out;
 });
