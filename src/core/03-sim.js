@@ -68,6 +68,15 @@ function updateHashDate(){
   var h = location.hash.replace(/&?d=\d{4}-\d{2}-\d{2}/,"");
   if(h.indexOf("#")!==0) h = "#"+h;
   try{ history.replaceState(null,"", h+"&d="+iso); }catch(e){}
+  /* TWO-MIDDAYS FIX (s67): updateHashDate() is the commit choke point every
+     discrete time-set already flows through — jumpToDate() (scrub release,
+     notch click, [ / ], URL/debug jumps), skipToSunriseSunset() (T), and
+     pause. Re-derive the full light state synchronously here so a jump
+     relights the world in the same call, not one rAF frame later (or never,
+     in rAF-throttled/hidden QA tabs) — the "two middays" divergence. Same
+     pattern as animate(): core orchestration calling a layer's update entry
+     point (refreshLightState, effects.js — hoisted module-wide). */
+  refreshLightState();
 }
 var clockDateEl = document.getElementById("clock-date");
 var clockSpeedEl = document.getElementById("clock-speed");

@@ -165,6 +165,15 @@ function fbm(x,y,octaves){
 var __P1850_AUDITS = {};
 function registerAudit(layer, name, fn){
   (__P1850_AUDITS[layer] = __P1850_AUDITS[layer] || {})[name] = fn;
+  /* s67: core/06-debug's __P1850.audits namespace snapshots the registry's
+     LAYER KEYS when its chunk (70) runs — a layer whose first registerAudit
+     executes in a later chunk (effects' lightStateConsistency lives in
+     chunk 71) would be reachable via runAll() (which iterates the live
+     registry) but missing from __P1850.audits.<layer>. Attach late layers
+     to the exposed namespace here; same object reference, so per-audit
+     additions inside a known layer still surface either way. */
+  if(window.__P1850 && window.__P1850.audits && !window.__P1850.audits[layer])
+    window.__P1850.audits[layer] = __P1850_AUDITS[layer];
 }
 
 /* ---- LAYER VISIBILITY REGISTRY (dev-tooling interface, layers-spec.md §15) ----

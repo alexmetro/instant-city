@@ -1056,6 +1056,15 @@ function fbm(x,y,octaves){
 var __P1850_AUDITS = {};
 function registerAudit(layer, name, fn){
   (__P1850_AUDITS[layer] = __P1850_AUDITS[layer] || {})[name] = fn;
+  /* s67: core/06-debug's __P1850.audits namespace snapshots the registry's
+     LAYER KEYS when its chunk (70) runs — a layer whose first registerAudit
+     executes in a later chunk (effects' lightStateConsistency lives in
+     chunk 71) would be reachable via runAll() (which iterates the live
+     registry) but missing from __P1850.audits.<layer>. Attach late layers
+     to the exposed namespace here; same object reference, so per-audit
+     additions inside a known layer still surface either way. */
+  if(window.__P1850 && window.__P1850.audits && !window.__P1850.audits[layer])
+    window.__P1850.audits[layer] = __P1850_AUDITS[layer];
 }
 
 /* ---- LAYER VISIBILITY REGISTRY (dev-tooling interface, layers-spec.md §15) ----
@@ -6024,6 +6033,15 @@ function updateHashDate(){
   var h = location.hash.replace(/&?d=\d{4}-\d{2}-\d{2}/,"");
   if(h.indexOf("#")!==0) h = "#"+h;
   try{ history.replaceState(null,"", h+"&d="+iso); }catch(e){}
+  /* TWO-MIDDAYS FIX (s67): updateHashDate() is the commit choke point every
+     discrete time-set already flows through — jumpToDate() (scrub release,
+     notch click, [ / ], URL/debug jumps), skipToSunriseSunset() (T), and
+     pause. Re-derive the full light state synchronously here so a jump
+     relights the world in the same call, not one rAF frame later (or never,
+     in rAF-throttled/hidden QA tabs) — the "two middays" divergence. Same
+     pattern as animate(): core orchestration calling a layer's update entry
+     point (refreshLightState, effects.js — hoisted module-wide). */
+  refreshLightState();
 }
 var clockDateEl = document.getElementById("clock-date");
 var clockSpeedEl = document.getElementById("clock-speed");
@@ -16024,7 +16042,8 @@ function updateFire(dt){
   var windowDays = simDay>=FIRE.day0-0.05 && simDay<=FIRE.rebuildDay+FIRE.rebuildDur+1;
   if(!windowDays){
     if(_fireApplied && simDay<FIRE.day0) restoreFireSlices(); // jumped back before the fire
-    fireGlow = 0; flameMesh.count = 0; flameMesh.instanceMatrix.needsUpdate = true;
+    fireGlow = 0; _fireBurningCount = 0; // s67: zero the QA counter too — __P1850.fire.burning read stale after jumping out of the window
+    flameMesh.count = 0; flameMesh.instanceMatrix.needsUpdate = true;
     emberMesh.visible = false; fsmokeMesh.visible = false; fireLight.visible = false;
     charPatch.material.opacity = (simDay>FIRE.day1) ? 0.35 : 0; // char stays through the era's end
     return;
@@ -17582,6 +17601,33 @@ function updateTimeOfDay(dt){
   timeOfDay = mixTod(todFromSimDay(simDay), rep, lightBlend);
 }
 
+/* TWO-MIDDAYS FIX (s67, graphics-campaign.md caveat + D1.1): the entire
+   light rig (sun position/color/intensity, sky, fog, nightFactor, window
+   glow, water dim, fireGlow, weather/wet tint) was re-derived ONLY inside
+   the rAF loop. Every discrete time-set path (scrub release, notch click,
+   [ / ], T-skip, __P1850.jump/jumpDay/setHour, URL restore) moved the sim
+   clock and then waited for the next animate() frame to relight — so any
+   frame rendered before that (audit readbacks via __P1850.render(), CDP
+   captures, rAF-throttled/hidden tabs where the loop never runs at all)
+   showed the PREVIOUS moment's lighting: a midnight-dark "noon" failing
+   the Earth Palette luminance audit at 0.398, or a warm dusk/fire tint
+   persisting onto figures after a jump. One sun, one noon: this function
+   re-runs the full per-frame light chain synchronously, in animate()'s
+   exact order, and core's updateHashDate() — the one choke point every
+   discrete jump already commits through — calls it. lightBlend snaps to
+   its steady-state target (no cross-fade residue), so ANY path to a given
+   sim-hour lands in the identical light state the live loop converges to.
+   Audited by effects.lightStateConsistency below. */
+function refreshLightState(){
+  updateWeather();
+  updateWetTint();
+  updateFire(0);
+  var fireWindow = simDay>=FIRE.day0 && simDay<=FIRE.day1;
+  lightBlend = (timelapseActive()||SCRUBBING) && !fireWindow ? 1 : 0; // updateTimeOfDay's own wantRep target, snapped
+  updateTimeOfDay(0); // dt=0: chase() is a no-op on the already-snapped blend; timeOfDay derives fresh
+  updateDayNight();
+}
+
 var WATER_DEEP_BASE = new THREE.Color(0x2a5570);
 var WATER_SHALLOW_BASE = new THREE.Color(0x8fc2c9);
 
@@ -17655,6 +17701,62 @@ function updateDayNight(){
 
 /* dev-tooling visibility interface (layers-spec.md §15): this layer's visibility toggle (sun/hemi/ambient/sky excluded — lighting is scene infrastructure) */
 registerLayerVisibility("effects", function(v){ [smokeMesh, rainMesh, puddleMesh, mudPlankMesh, buildingShadowMesh, charPatch, flameMesh, emberMesh, fsmokeMesh, ghostGroup].concat(fogBanks.map(function(f){ return f.spr; })).forEach(function(m){ if(m) m.visible = v; }); });
+
+/* ---- effects audit (layers-spec.md rules block; s67 two-middays fix):
+   ONE SUN, ONE NOON — any path to a given sim-hour must produce IDENTICAL
+   lighting. Reaches the same noon three ways and compares the terrain-
+   luminance readback (median over ~28 bare-ground probes):
+     1. discrete jump — simDay set + updateHashDate(), the commit choke
+        point every explicit jump path funnels through (scrub release,
+        notch click, [ / ], T-skip, __P1850.jump/jumpDay/setHour);
+     2. live-play arrival — direct clock set + the animate() frame chain
+        at a normal frame dt (weather -> wet tint -> fire -> timeOfDay ->
+        day/night), exactly what a running loop does;
+     3. scrub-drag residue — SCRUBBING through the previous midnight
+        (representative-light blend engaged, night phase latched), then
+        release-commit to the target noon: dusk/night/rep state must not
+        persist through the landing.
+   Skips (pass, reason stated) when the frame can't host the probe — same
+   conditions as terrain.luminance — or inside the Great Fire burn window,
+   where the light state is legitimately dynamic (flame flicker). ---- */
+registerAudit("effects", "lightStateConsistency", function(){
+  var alt = lastKnownAlt||0;
+  if(!(alt>=100 && alt<=1500))
+    return { pass:true, skipped:"camera altitude "+Math.round(alt)+"m outside the 100-1500m calibration band" };
+  var day0 = simDay, scrub0 = SCRUBBING;
+  var target = Math.floor(day0)+0.5; // local noon of the current sim day
+  if(target>=FIRE.day0-0.05 && target<=FIRE.day1+1)
+    return { pass:true, skipped:"target noon inside the Great Fire window — flame flicker is legitimately dynamic" };
+  function lum(){
+    var r = __P1850_AUDITS.terrain.luminance();
+    return (r && r.median!=null) ? r.median : null;
+  }
+  function restore(){ simDay = day0; SCRUBBING = scrub0; updateHashDate(); }
+  try {
+    // path 1 — discrete jump (the updateHashDate -> refreshLightState commit)
+    simDay = target; updateHashDate();
+    var m1 = lum();
+    // path 2 — live-play arrival: the per-frame chain at a normal dt
+    simDay = target;
+    updateWeather(); updateWetTint(); updateFire(1/60); updateTimeOfDay(1/60); updateDayNight();
+    var m2 = lum();
+    // path 3 — scrub-drag through the previous midnight, then release-commit
+    SCRUBBING = true; simDay = Math.floor(day0);
+    updateTimeOfDay(0.05); updateDayNight(); // mid-drag frames: rep blend engaging, night phase latched
+    SCRUBBING = false; simDay = target; updateHashDate(); // release commits the jump
+    var m3 = lum();
+    restore();
+    if(m1==null || m2==null || m3==null)
+      return { pass:true, skipped:"luminance probe unavailable at target noon (offscreen/too few clear probes)",
+               medians:{ jump:m1, live:m2, scrubRelease:m3 } };
+    var spread = Math.max(m1,m2,m3) - Math.min(m1,m2,m3);
+    return { pass: spread<0.02, spread:+spread.toFixed(4),
+             medians:{ jump:+m1.toFixed(3), live:+m2.toFixed(3), scrubRelease:+m3.toFixed(3) } };
+  } catch(e){
+    restore();
+    return { pass:false, error:String(e && e.message || e) };
+  }
+});
 /* =====================================================================
    CAMERA RIG + INPUT — Annals-kingdom architecture (ported verbatim from
    research/annals-nav-reference.md, 2026-07-10; see field notes there).
