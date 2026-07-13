@@ -188,3 +188,6 @@ function updateDistrictZones(alt){
   tentMesh.material.opacity = structOpacity;
 }
 
+
+/* dev-tooling visibility interface (layers-spec.md §15): this layer's visibility toggle */
+registerLayerVisibility("zones-tint", function(v){ DISTRICT_ZONES.forEach(function(z){ if(z.tintMesh) z.tintMesh.visible = v; if(z.el) z.el.style.visibility = v ? "" : "hidden"; }); });

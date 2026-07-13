@@ -1881,3 +1881,6 @@ var LUMBER_YARD_SPOT = (function buildLumberYard(){
   console.log("[verify] Lumber yard at ("+p.x.toFixed(0)+","+p.z.toFixed(0)+")");
   return { key:"lumberyard", label:"the lumber yard", x:p.x, z:p.z, activity:"stationary" };
 })();
+
+/* dev-tooling visibility interface (layers-spec.md §15): this layer's visibility toggle */
+registerLayerVisibility("buildings", function(v){ [buildingsMesh, windowsMesh, growthBuildingMesh, growthBuildingMesh2, growthMaterialsMesh, growthFrameMesh, growthWallsMesh, constructionWorkerMesh, supplyCartMesh, tentMesh, campfireMesh, window.buildingTypeAccentMesh, window.buildingGlowAccentMesh].forEach(function(m){ if(m) m.visible = v; }); });

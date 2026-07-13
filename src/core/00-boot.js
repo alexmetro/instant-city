@@ -167,6 +167,15 @@ function registerAudit(layer, name, fn){
   (__P1850_AUDITS[layer] = __P1850_AUDITS[layer] || {})[name] = fn;
 }
 
+/* ---- LAYER VISIBILITY REGISTRY (dev-tooling interface, layers-spec.md §15) ----
+   Each render layer registers a setVisible(bool) toggle for its own
+   meshes/canvases from its OWN file via registerLayerVisibility(name, fn)
+   — a one-liner per layer. The only consumer is the SEPARATE dev-tool
+   build (see layers-spec.md slot 15); in this release build nothing ever
+   calls these, so the registry is a dormant object — zero per-frame cost. */
+var __P1850_LAYER_VIS = {};
+function registerLayerVisibility(name, setVisibleFn){ __P1850_LAYER_VIS[name] = setVisibleFn; }
+
 /* Generic string helpers (relocated from ui-chrome.js in the 2026-07-12
    cleanup — labels-inspect is escapeHTML's heaviest consumer and core
    routing uses cap(); cross-layer helper calls belong in core). Function

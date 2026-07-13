@@ -812,3 +812,6 @@ function updateFauna(dt){
 // were never fauna's: relocated to layers/people.js (chunk 50) and
 // core/03-sim.js (chunk 23) in the 2026-07-12 cleanup, per layers-spec OWNS.)
 
+
+/* dev-tooling visibility interface (layers-spec.md §15): this layer's visibility toggle */
+registerLayerVisibility("fauna", function(v){ [hogMesh, gullMesh, hitchedHorseMesh, quailMesh, cattleMesh, pelicanMesh, heronMesh, ratMesh, catMesh, dogMesh].forEach(function(m){ if(m) m.visible = v; }); });

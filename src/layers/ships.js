@@ -1475,3 +1475,6 @@ registerAudit("ships", "channel", function(){
            minDepths: rs.map(function(c){ return { path:c.name, minDepth:c.minDepth }; }),
            violations: bad };
 });
+
+/* dev-tooling visibility interface (layers-spec.md §15): this layer's visibility toggle */
+registerLayerVisibility("ships", function(v){ shipHullMeshes.concat(shipSailMeshes, shipFurlMeshes, mastClusterMeshes, [wharfBoatMesh, lighterMesh, window._wharfLandingMesh, window._centralWharfGroup, window._cwPileMesh]).forEach(function(m){ if(m) m.visible = v; }); Object.keys(STORESHIP_INFO).forEach(function(k){ (STORESHIP_INFO[k]._dress||[]).forEach(function(m){ m.visible = v && !!STORESHIP_INFO[k]._dressVis; }); }); });

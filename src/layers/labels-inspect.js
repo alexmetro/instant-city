@@ -1375,3 +1375,6 @@ function updateLabels(alt){
     L.el.style.top  = ((-_labelV.y*0.5+0.5)*window.innerHeight)+"px";
   }
 }
+
+/* dev-tooling visibility interface (layers-spec.md §15): this layer's visibility toggle (DOM labels via a CSS class gate whose rule ships only in the dev-tool artifact) */
+registerLayerVisibility("labels", function(v){ document.body.classList.toggle("dev-labels-off", !v); if(!v){ selRingMesh.visible = false; hoverRingMesh.visible = false; } });

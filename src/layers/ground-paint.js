@@ -1754,3 +1754,6 @@ registerAudit("ground-paint", "eraPaint", function(){
   if(out.statsViolations.length || out.pixelViolations.length) out.pass = false;
   return out;
 });
+
+/* dev-tooling visibility interface (layers-spec.md §15): this layer's visibility toggle */
+registerLayerVisibility("ground-paint", function(v){ [splatWorldMesh, splatTownMesh, splatCloseMesh].forEach(function(m){ m.visible = v; }); });

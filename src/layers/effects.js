@@ -935,3 +935,6 @@ function updateDayNight(){
   waterUniforms.uSunGlint.value = duskGlow*dayT*1.4;
 }
 
+
+/* dev-tooling visibility interface (layers-spec.md §15): this layer's visibility toggle (sun/hemi/ambient/sky excluded — lighting is scene infrastructure) */
+registerLayerVisibility("effects", function(v){ [smokeMesh, rainMesh, puddleMesh, mudPlankMesh, buildingShadowMesh, charPatch, flameMesh, emberMesh, fsmokeMesh, ghostGroup].concat(fogBanks.map(function(f){ return f.spr; })).forEach(function(m){ if(m) m.visible = v; }); });

@@ -70,6 +70,14 @@ const FILES = [
   "layers/ui-chrome.js"      // slot 13
 ];
 
+/* THE ATELIER (layers-spec.md slot 15, 2026-07-13): the dev workbench is a
+   FULLY SEPARATE artifact — app/atelier.html is the identical assembly PLUS
+   the workbench layer appended (chunk 75). The release index.html contains
+   ZERO workbench bytes (the file below is simply not part of its assembly);
+   loading atelier.html IS the opt-in — no flag, no runtime gate. Deleting
+   src/layers/workbench.js + this list + atelier.html erases the tool. */
+const ATELIER_FILES = FILES.concat(["layers/workbench.js"]);
+
 const CHUNK_RE = /^\/\* @P1850-CHUNK (\d+) — (.*) \*\/$/;
 
 function parseChunks(file, text) {
@@ -93,22 +101,41 @@ function parseChunks(file, text) {
   return chunks;
 }
 
-function assemble() {
-  const all = [];
-  for (const f of FILES) {
-    const p = path.join(SRC, f);
-    all.push(...parseChunks(f, fs.readFileSync(p, "utf8")));
+function assembleJS(files, spliceBeforeLastFrom) {
+  /* spliceBeforeLastFrom (atelier only): that file's chunks are dev-tool
+     extras spliced immediately BEFORE the final chunk — the final chunk is
+     core/07-main's render loop + the module IIFE close (`})();`), and the
+     dev tool must execute INSIDE the module closure to reach the layer
+     visibility registry and scene internals. Its chunk numbers continue
+     the global sequence (75+) purely as bookkeeping. */
+  const all = [], extras = [];
+  for (const f of files) {
+    const chunks = parseChunks(f, fs.readFileSync(path.join(SRC, f), "utf8"));
+    if (f === spliceBeforeLastFrom) extras.push(...chunks); else all.push(...chunks);
   }
   all.sort((a, b) => a.seq - b.seq);
   all.forEach((c, i) => {
     if (c.seq !== i + 1) throw new Error("chunk sequence broken at " + c.seq + " (" + c.file + ") — expected " + (i + 1));
   });
-  const js = all.map(c => c.body.join("\n")).join("\n");
+  extras.sort((a, b) => a.seq - b.seq);
+  const seq = extras.length ? all.slice(0, -1).concat(extras, all.slice(-1)) : all;
+  return { js: seq.map(c => c.body.join("\n")).join("\n"), chunkCount: seq.length };
+}
 
+function assemble() {
   const shell = fs.readFileSync(path.join(SRC, "shell.html"), "utf8");
   const MARK = "<!-- @P1850:APP-JS -->";
   if (shell.indexOf(MARK) < 0) throw new Error("shell.html missing " + MARK);
-  const html = shell.replace(MARK, () => js); // function form: '$&' etc. in the code must stay literal
+
+  const rel = assembleJS(FILES);
+  const html = shell.replace(MARK, () => rel.js); // function form: '$&' etc. in the code must stay literal
+
+  /* atelier variant: same shell, same chunks, PLUS the workbench layer
+     (spliced inside the module closure, just before the closing chunk).
+     A separate artifact by design (removable; release carries zero bytes). */
+  const atl = assembleJS(ATELIER_FILES, "layers/workbench.js");
+  const atelierHtml = shell.replace(MARK, () => atl.js);
+  const chunkCount = rel.chunkCount;
 
   /* dev variant: replace the whole <script>…marker…</script> block with a
      loader that fetches the same sources and assembles the same module. */
@@ -147,23 +174,34 @@ function assemble() {
   const devHtml = shell.replace("<script>\n" + MARK + "\n</script>", () => devLoader);
   if (devHtml === shell) throw new Error("dev splice failed — shell <script> block not in expected shape");
 
-  return { html, devHtml, chunkCount: all.length };
+  return { html, atelierHtml, devHtml, chunkCount };
 }
 
-const { html, devHtml, chunkCount } = assemble();
+const { html, atelierHtml, devHtml, chunkCount } = assemble();
 const outPath = path.join(APP, "index.html");
+const atelierPath = path.join(APP, "atelier.html");
 const devPath = path.join(APP, "index.dev.html");
 
 if (process.argv.includes("--check")) {
   const existing = fs.readFileSync(outPath, "utf8");
+  const existingAtelier = fs.existsSync(atelierPath) ? fs.readFileSync(atelierPath, "utf8") : null;
+  let ok = true;
   if (existing === html) {
     console.log("CHECK OK: assembled output is byte-identical to app/index.html (" + Buffer.byteLength(html) + " bytes, " + chunkCount + " chunks, " + (Date.now() - t0) + "ms)");
   } else {
     console.error("CHECK FAILED: assembled output differs from app/index.html (existing " + Buffer.byteLength(existing) + " bytes vs assembled " + Buffer.byteLength(html) + " bytes)");
-    process.exit(1);
+    ok = false;
   }
+  if (existingAtelier === atelierHtml) {
+    console.log("CHECK OK: assembled atelier output is byte-identical to app/atelier.html (" + Buffer.byteLength(atelierHtml) + " bytes)");
+  } else {
+    console.error("CHECK FAILED: assembled atelier output differs from app/atelier.html" + (existingAtelier === null ? " (file missing)" : ""));
+    ok = false;
+  }
+  if (!ok) process.exit(1);
 } else {
   fs.writeFileSync(outPath, html);
+  fs.writeFileSync(atelierPath, atelierHtml);
   fs.writeFileSync(devPath, devHtml);
-  console.log("built app/index.html (" + Buffer.byteLength(html) + " bytes) + app/index.dev.html from " + FILES.length + " files / " + chunkCount + " chunks in " + (Date.now() - t0) + "ms");
+  console.log("built app/index.html (" + Buffer.byteLength(html) + " bytes) + app/atelier.html (" + Buffer.byteLength(atelierHtml) + " bytes, +workbench) + app/index.dev.html from " + FILES.length + "(+1) files / " + chunkCount + " chunks in " + (Date.now() - t0) + "ms");
 }

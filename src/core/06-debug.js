@@ -16,6 +16,7 @@ window.__P1850 = {
   get terrainMesh(){ return TERRAIN_MESH_STATS; },
   get westFauna(){ return window._westFauna; },
   zoneAt: function(x,z){ return zoneAt(x,z); },
+  get layerVis(){ return Object.keys(__P1850_LAYER_VIS); }, // dev-tooling interface (layers-spec.md §15): registered per-layer visibility toggles
   invalidatePaint: function(){ invalidateGroundPaint(); return "redraped + repaint queued"; },
   _scene: function(){ return scene; },
   _renderer: function(){ return renderer; },

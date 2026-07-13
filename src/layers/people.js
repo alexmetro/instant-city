@@ -2138,3 +2138,6 @@ function applyFireCrowd(slot, day){
     slot._pose = "market"; slot._now = "watching the fire from the Plaza";
   }
 }
+
+/* dev-tooling visibility interface (layers-spec.md §15): this layer's visibility toggle */
+registerLayerVisibility("people", function(v){ personMeshes.concat(documentedMeshes, [personShadowMesh, lanternGlowMesh, lanternPoolMesh, streetSleeperMesh, arrivalBoatMesh, arrivalPassengerMesh]).forEach(function(m){ if(m) m.visible = v; }); });

@@ -738,3 +738,6 @@ registerAudit("terrain", "luminance", function(){
   return { pass: med>=0.50 && med<=0.75, median:+med.toFixed(3), band:"0.55-0.70 (tol 0.05)",
            n:lums.length, min:+lums[0].toFixed(3), max:+lums[lums.length-1].toFixed(3) };
 });
+
+/* dev-tooling visibility interface (layers-spec.md §15): this layer's visibility toggle */
+registerLayerVisibility("terrain", function(v){ [terrainMesh, bayWater, foamMesh].forEach(function(m){ if(m) m.visible = v; }); });

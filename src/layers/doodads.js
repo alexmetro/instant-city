@@ -1245,3 +1245,6 @@ function updateWaterfrontLife(){
   scene.add(chapMesh); scatterMeshes.push(chapMesh);
 })();
 
+
+/* dev-tooling visibility interface (layers-spec.md §15): this layer's visibility toggle */
+registerLayerVisibility("doodads", function(v){ scatterMeshes.concat(farScatterMeshes, Object.keys(DOODAD_POOLS).map(function(k){ return DOODAD_POOLS[k].mesh; }), [microChunkMesh, microTuftMesh, rowboatMesh, cargoPileMesh, timberStackMesh, laundryRopeMesh, laundryClothMesh]).forEach(function(m){ if(m) m.visible = v; }); });
