@@ -341,9 +341,34 @@ var DETAIL_FRAG_ROAD = [
   "    diffuseColor.rgb *= (1.0 - pool*0.07*dtFade);",
   "    dtGrad *= (1.0-pool*0.8);",
   "  }",
+  /* s65 PORTSMOUTH SQUARE MUD COUPLING — the plaza was notoriously bad in
+     the wet (unimproved, trampled, rutted open square). Inside the plaza
+     rect (renderGroundSplat hands the shader the current skewed frame each
+     repaint) the SAME uDetailWet signal that churns the town dirt pools
+     standing water in the trampled lows. Deliberately NOT gated on dtFade:
+     the term is world-space and cheap, so the wet plaza reads at the 200m
+     mid framing too, not just inside the detail bubble. Darken-only (§9:
+     paint never lighter than ground); pools kill the detail-normal
+     gradient so standing water reads flat. */
+  "  if(uPlazaHalf.x > 0.5 && uDetailWet > 0.01){",
+  "    vec2 prel = p - uPlazaC;",
+  "    float plu = abs(dot(prel, uPlazaU));",
+  "    float plv = abs(dot(prel, vec2(-uPlazaU.y, uPlazaU.x)));",
+  "    float plz = (1.0-smoothstep(uPlazaHalf.x-8.0, uPlazaHalf.x, plu)) * (1.0-smoothstep(uPlazaHalf.y-8.0, uPlazaHalf.y, plv));",
+  "    if(plz > 0.01){",
+  "      float ppool = smoothstep(0.04, 0.40, -dfbm2(p*0.85).x);",
+  "      diffuseColor.rgb *= 1.0 - plz*uDetailWet*(0.07 + ppool*0.17);",
+  "      dtGrad *= 1.0 - plz*uDetailWet*ppool*0.85;",
+  "    }",
+  "  }",
   // (s60 260-470m palette grade deleted s62 — superseded by the global earth palette, §9)
   "}"
 ].join("\n");
+/* s65: the current plaza rect (center / u-axis / half-extents, world XZ) —
+   written by renderGroundSplat() every repaint (the frame swings through the
+   O'Farrell window), consumed by the road-kind detail shader above. */
+var PLAZA_RECT_STATE = { cx:0, cz:0, ux:1, uz:0, hu:0, hv:0 };
+var PLAZA_UNIFORM_SETS = [];
 var DETAIL_FRAG_NORMAL = [
   "if(dtFade > 0.003){",
   "  vec3 dtPert = (viewMatrix * vec4(-dtGrad.x, 0.0, -dtGrad.y, 0.0)).xyz;", // world-up bump -> view space (vec4 form: GLSL ES 1.00-safe)
@@ -360,6 +385,12 @@ function patchGroundDetailMaterial(mat, kind, prevHook){
     if(kind==="road"){
       shader.uniforms.uGridDir = { value: new THREE.Vector2(Math.cos(GRID_ROT_BASE), Math.sin(GRID_ROT_BASE)) };
       shader.uniforms.uTileRoad = { value: TILE_KIT.road };   // s60 painterly tile kit
+      // s65 plaza mud coupling — seeded from the last repaint's frame (the
+      // shader compiles AFTER the first repaint), then repaint-updated.
+      shader.uniforms.uPlazaC    = { value: new THREE.Vector2(PLAZA_RECT_STATE.cx, PLAZA_RECT_STATE.cz) };
+      shader.uniforms.uPlazaU    = { value: new THREE.Vector2(PLAZA_RECT_STATE.ux, PLAZA_RECT_STATE.uz) };
+      shader.uniforms.uPlazaHalf = { value: new THREE.Vector2(PLAZA_RECT_STATE.hu, PLAZA_RECT_STATE.hv) };
+      PLAZA_UNIFORM_SETS.push(shader.uniforms);
     } else {
       shader.uniforms.uTileSand   = { value: TILE_KIT.sand };
       shader.uniforms.uTileGrass  = { value: TILE_KIT.grass };
@@ -378,7 +409,7 @@ function patchGroundDetailMaterial(mat, kind, prevHook){
       .replace("#include <common>", "#include <common>\n" + DETAIL_GLSL_PARS +
         (kind==="terrain"
           ? "\nvarying vec4 vSurfW;\nuniform sampler2D uTileSand;\nuniform sampler2D uTileGrass;\nuniform sampler2D uTileDirt;\nuniform sampler2D uTileMud;\nuniform sampler2D uTileMudWet;"
-          : "\nuniform vec2 uGridDir;\nuniform sampler2D uTileRoad;"))
+          : "\nuniform vec2 uGridDir;\nuniform sampler2D uTileRoad;\nuniform vec2 uPlazaC;\nuniform vec2 uPlazaU;\nuniform vec2 uPlazaHalf;"))
       .replace("#include <color_fragment>", "#include <color_fragment>\n" + (kind==="terrain" ? DETAIL_FRAG_TERRAIN : DETAIL_FRAG_ROAD))
       .replace("#include <normal_fragment_begin>", "#include <normal_fragment_begin>\n" + DETAIL_FRAG_NORMAL);
   };
@@ -608,7 +639,11 @@ var ROAD_COLS = {
   rut:   "#241a0f",
   plank: "#a68a58"           // documented lighter-than-ground exception (wharf decking)
 };
-var ROAD_LAYER_ALPHA = { ghost:0.16, faint:0.42, trail:0.78, r3:0.90, r4:0.95, plank:0.92 };
+var ROAD_LAYER_ALPHA = { ghost:0.16, faint:0.42, door:0.52, trail:0.78, r3:0.90, r4:0.95, plank:0.92 };
+// s65: "door" is the worn door-path class — its own compositing layer so the
+// footpath family can sit FAINTER than any street class (thinner + fainter
+// than streets, per the constant-width amendment's footpath register).
+var ROAD_LAYER_ORDER = ["ghost","faint","door","trail","r3","r4","plank"]; // low->high; each layer erases what lies beneath (one owner)
 
 /* Resample a run's raw centerline at ~7m with a seeded two-sine lateral
    meander (country roads / trails / work paths only — a PLATTED street's
@@ -937,6 +972,15 @@ var SPLAT_MISSION_PTS = [], SPLAT_ELCAMINO_PTS = [], SPLAT_PRESIDIO_PTS = [], SP
 var SPLAT_CLUTTER_PATHS = [], SPLAT_LEVELING_CART_PTS = [];
 var SPLAT_PLANK_APRONS = []; // {x0,z0,x1,z1,widthM,from} — pushed by the wharf builder
 
+/* ?debugroads (s65 STRAY-LINE CENSUS): every painted line gets a canvas-drawn
+   midpoint label with its source id (street id / door-path / desire-trail /
+   plaza-path / cart-track / ...), and splatStats.census counts every run by
+   source class — so "what IS that line" is answerable by system, not by eye.
+   Debug paint pollutes the alpha canvases: never run audits in a ?debugroads
+   tab. */
+var DEBUG_ROADS = /[?&]debugroads/i.test(location.search);
+var DEBUG_ROAD_LABELS = []; // {x,z,label} — rebuilt each repaint when DEBUG_ROADS
+
 /* THE master (re)draw. `skewAngle` is the grid's CURRENT skew — the full
    as-built Vioget frame (-6.5°) before Feb 1847, eased to the permanent
    GRID_ROT_BASE (-9.0°) by Aug 1847, per updateGridSwing() above. */
@@ -959,30 +1003,31 @@ function renderGroundSplat(skewAngle){
       box:CLOSE_BOX, skipInside:null, _dirty:null }
   ];
 
-  // Plaza — Portsmouth Square, opaque packed-earth polygon on the detail
-  // tiers, drawn first so the street network paints on top of it.
+  // Plaza — Portsmouth Square corner frame (streets swing it through the
+  // O'Farrell window). The authored plaza paint itself (paintPlaza below)
+  // runs AFTER network assembly; here we just fix the frame and hand the
+  // wet-season shader coupling its current rect (center/axes/half-extents).
   var plazaCorners = [
     gridToWorld(GEO.plaza.uMin, GEO.plaza.vMin), gridToWorld(GEO.plaza.uMax, GEO.plaza.vMin),
     gridToWorld(GEO.plaza.uMax, GEO.plaza.vMax), gridToWorld(GEO.plaza.uMin, GEO.plaza.vMax)
   ];
-  [ {ctx:splatTownCtx, pxFn:townPx, pxLenFn:townPxLen}, {ctx:splatCloseCtx, pxFn:closePx, pxLenFn:closePxLen} ].forEach(function(tp){
-    splatFillPoly(tp.ctx, tp.pxFn, plazaCorners, "#8a7350", 1);
-    // large, soft, LOW-frequency worn-earth blotches (not per-pixel noise)
+  (function(){
     var cx=(plazaCorners[0].x+plazaCorners[2].x)/2, cz=(plazaCorners[0].z+plazaCorners[2].z)/2;
-    var halfSpan = Math.hypot(plazaCorners[2].x-plazaCorners[0].x, plazaCorners[2].z-plazaCorners[0].z)/2;
-    [ {du:-0.35,dv:-0.2,r:0.55,col:"#7a6144",a:0.30}, {du:0.3,dv:0.25,r:0.6,col:"#96805a",a:0.22},
-      {du:-0.1,dv:0.35,r:0.42,col:"#6e5738",a:0.26}, {du:0.32,dv:-0.3,r:0.4,col:"#8a7350",a:0.18} ].forEach(function(b){
-      var wx=cx+b.du*halfSpan*1.4, wz=cz+b.dv*halfSpan*1.4;
-      var p = tp.pxFn(wx,wz), rp = tp.pxLenFn(b.r*halfSpan);
-      var grad = tp.ctx.createRadialGradient(p.x,p.y,0, p.x,p.y,rp);
-      grad.addColorStop(0, b.col); grad.addColorStop(1, "rgba(0,0,0,0)");
-      tp.ctx.save(); tp.ctx.globalAlpha=b.a; tp.ctx.fillStyle=grad;
-      tp.ctx.beginPath(); tp.ctx.arc(p.x,p.y,rp,0,Math.PI*2); tp.ctx.fill(); tp.ctx.restore();
-    });
-  });
+    var ux=plazaCorners[1].x-plazaCorners[0].x, uz=plazaCorners[1].z-plazaCorners[0].z;
+    var vx=plazaCorners[3].x-plazaCorners[0].x, vz=plazaCorners[3].z-plazaCorners[0].z;
+    var hu=Math.hypot(ux,uz)/2, hv=Math.hypot(vx,vz)/2;
+    var uux=ux/(hu*2), uuz=uz/(hu*2);
+    PLAZA_RECT_STATE.cx=cx; PLAZA_RECT_STATE.cz=cz;
+    PLAZA_RECT_STATE.ux=uux; PLAZA_RECT_STATE.uz=uuz;
+    PLAZA_RECT_STATE.hu=hu; PLAZA_RECT_STATE.hv=hv;
+    for(var pi=0; pi<PLAZA_UNIFORM_SETS.length; pi++){
+      var U = PLAZA_UNIFORM_SETS[pi];
+      U.uPlazaC.value.set(cx,cz); U.uPlazaU.value.set(uux,uuz); U.uPlazaHalf.value.set(hu,hv);
+    }
+  })();
 
   /* ---- assemble the per-class network layers ---- */
-  var LAYERS = { ghost:[], faint:[], trail:[], r3:[], r4:[], plank:[] };
+  var LAYERS = { ghost:[], faint:[], door:[], trail:[], r3:[], r4:[], plank:[] };
   var PIER_RUNS = [];
   function runBBox(nodes){
     var x0=Infinity,z0=Infinity,x1=-Infinity,z1=-Infinity;
@@ -1003,51 +1048,40 @@ function renderGroundSplat(skewAngle){
       fill:opts.fill||"full", // s62 constant-width amendment: lifecycle is FILL progression, never width
       detailOnly:!!opts.detailOnly, isStreet:!!opts.isStreet,
       fadeA:false, fadeB:!!opts.fadeB, fadeFrac:opts.fadeFrac||0.45, noEndFade:!!opts.noEndFade,
+      src:opts.src||"UNKNOWN", // s65 census: the LIVE SYSTEM this line came from — no source, no paint
       bbox:null };
     run.bbox = runBBox(nodes);
     LAYERS[bucket].push(run);
     return run;
   }
 
-  // Plaza corner-to-corner foot-worn diagonals — drawn DIRECTLY over the
-  // opaque plaza fill (not through the layer compositor, whose erase-
-  // then-draw would cut holes in the fill and read as bright paths on the
-  // pale terrain beneath — s27 mud-winter finding)
-  [ {a:plazaCorners[0], b:plazaCorners[2], al:0.40}, {a:plazaCorners[1], b:plazaCorners[3], al:0.35} ].forEach(function(dg){
-    [ {ctx:splatTownCtx, pxFn:townPx, pxLenFn:townPxLen}, {ctx:splatCloseCtx, pxFn:closePx, pxLenFn:closePxLen} ].forEach(function(tp){
-      splatStroke(tp.ctx, tp.pxFn, tp.pxLenFn, [dg.a, dg.b], 3.2, "#6e5b3c", dg.al, "butt");
-    });
-  });
+  // (plaza diagonals live in paintPlaza() now — s65 bespoke treatment)
 
   // Mission Road + El Camino Real — single irregular darker-than-ground
   // dirt tracks (screening #11 retone preserved): the Mission road is a
   // cart route (broken ruts), El Camino a fainter trace. Both fade out
   // raggedly at their far ends via the dead-end pass.
   if(SPLAT_MISSION_PTS.length>1)
-    addRun("trail", "road", smoothRoutePts(SPLAT_MISSION_PTS, 14), 4.8, "#7d693f", {amp:1.1, seed:0.37, ruts:true, isStreet:true});
+    addRun("trail", "road", smoothRoutePts(SPLAT_MISSION_PTS, 14), 4.8, "#7d693f", {amp:1.1, seed:0.37, ruts:true, isStreet:true, src:"mission-road"});
   if(SPLAT_ELCAMINO_PTS.length>1)
-    addRun("faint", "road", smoothRoutePts(SPLAT_ELCAMINO_PTS, 14), 3.4, "#93805a", {amp:1.2, seed:0.61, isStreet:true});
+    addRun("faint", "road", smoothRoutePts(SPLAT_ELCAMINO_PTS, 14), 3.4, "#93805a", {amp:1.2, seed:0.61, isStreet:true, src:"el-camino-real"});
   if(SPLAT_PRESIDIO_PTS.length>1) // s46: the documented village->Black Point->Presidio horse trail (peninsula-1846.md §5.5)
-    addRun("faint", "road", smoothRoutePts(SPLAT_PRESIDIO_PTS, 14), 3.0, "#93805a", {amp:1.15, seed:0.44, isStreet:true});
+    addRun("faint", "road", smoothRoutePts(SPLAT_PRESIDIO_PTS, 14), 3.0, "#93805a", {amp:1.15, seed:0.44, isStreet:true, src:"presidio-trail"});
 
-  // Worn door-paths — thin, detail tiers only (invisible at world scale).
-  SPLAT_DOOR_PATHS.forEach(function(p,i){
-    addRun("trail", "road", [{x:p.doorX,z:p.doorZ},{x:p.tx,z:p.tz}], 1.1, "#6e5b3c", {detailOnly:true, noEndFade:true, amp:0.25, seed:0.5+i*0.013});
-  });
-  // Worn yard-clutter paths toward the plaza
-  SPLAT_CLUTTER_PATHS.forEach(function(p,i){
-    addRun("faint", "road", [{x:p.x0,z:p.z0},{x:p.x1,z:p.z1}], 2.2, "#6e5b3c", {detailOnly:true, noEndFade:true, amp:0.4, seed:0.11+i*0.017});
-  });
-  // Dune-leveling cart track — a work path, not a street
+  // Dune-leveling cart track — a work path, not a street (live system:
+  // people.js's dune-leveling crew set-piece hands us its own waypoints)
   if(SPLAT_LEVELING_CART_PTS.length>1)
-    addRun("faint", "road", smoothRoutePts(SPLAT_LEVELING_CART_PTS, 12), 1.6, "#8f7a54", {detailOnly:true, amp:0.8, seed:0.71});
+    addRun("faint", "road", smoothRoutePts(SPLAT_LEVELING_CART_PTS, 12), 1.6, "#8f7a54", {detailOnly:true, amp:0.8, seed:0.71, src:"cart-track"});
 
   // Wharf plank aprons (§4 planked surface — documented decking, the
   // lighter-than-ground exception), date-gated by their builders.
-  SPLAT_PLANK_APRONS.forEach(function(ap){
+  SPLAT_PLANK_APRONS.forEach(function(ap,i){
     if(simDay < ap.from) return;
-    addRun("plank", "plank", [{x:ap.x0,z:ap.z0},{x:ap.x1,z:ap.z1}], ap.widthM, ROAD_COLS.plank, {noMeander:true, noEndFade:true});
+    addRun("plank", "plank", [{x:ap.x0,z:ap.z0},{x:ap.x1,z:ap.z1}], ap.widthM, ROAD_COLS.plank, {noMeander:true, noEndFade:true, src:"plank-apron#"+i});
   });
+  // (door-paths + desire trails moved BELOW the street network assembly —
+  //  s65: their endpoints are validated against the PAINTED network of this
+  //  very repaint, so an orphan stub can never be drawn.)
 
   /* ---- THE STREET NETWORK (grounding.md §9 + §9b) ---- */
   STREETS_RUNTIME.forEach(function(s){
@@ -1176,7 +1210,7 @@ function renderGroundSplat(skewAngle){
     function flushRun(){
       if(curKey==null || !curNodes || curNodes.length<2){ curKey=null; curNodes=null; return; }
       if(curKey===-1){ // wet — pier hint over the tideflat
-        PIER_RUNS.push({ pts:curNodes, widthM:s.widthM });
+        PIER_RUNS.push({ pts:curNodes, widthM:s.widthM, src:"street:"+s.id+"#pier" });
         _rec.pierSegs += curNodes.length-1;
         curKey=null; curNodes=null; return;
       }
@@ -1188,24 +1222,24 @@ function renderGroundSplat(skewAngle){
            S3 — partial fill: light wash + patchy worn bands, edge gradient
            S4 — full worn surface, edge gradient, ruts, churn */
       if(curKey===1){
-        addRun("ghost", "ghost", curNodes, s.widthM, ROAD_COLS.ghost, { seed:seedS, noMeander:true });
+        addRun("ghost", "ghost", curNodes, s.widthM, ROAD_COLS.ghost, { seed:seedS, noMeander:true, src:"street:"+s.id+"#S1-ghost" });
         _rec.ghostSegs += curNodes.length-1;
       } else if(curKey===2){
         if(s.surveyedDay!=null)
-          addRun("ghost", "ghost", curNodes, s.widthM, ROAD_COLS.ghost, { seed:seedS, noMeander:true });
+          addRun("ghost", "ghost", curNodes, s.widthM, ROAD_COLS.ghost, { seed:seedS, noMeander:true, src:"street:"+s.id+"#S2-row-hint" });
         var amp = s.surveyedDay!=null
           ? Math.min(2.2, Math.max(0.8, s.widthM/2 - STREET_TRAIL_W))  // wander stays inside the platted ROW
           : 2.8;                                                        // unplatted desire path — freer (§9b)
         addRun("trail", "road", meanderNodes(curNodes, amp), STREET_TRAIL_W, ROAD_COLS.trail,
-          { seed:seedS, noMeander:true, isStreet:true });
+          { seed:seedS, noMeander:true, isStreet:true, src:"street:"+s.id+"#S2-trail" });
         _rec.wornSegs += curNodes.length-1;
       } else if(curKey===3){
         addRun("r3", "road", curNodes, s.widthM, ROAD_COLS.r3,
-          { seed:seedS, noMeander:true, caseW:ROAD_CASE_W, caseCol:ROAD_COLS.r3case, ruts:true, fill:"partial", isStreet:true });
+          { seed:seedS, noMeander:true, caseW:ROAD_CASE_W, caseCol:ROAD_COLS.r3case, ruts:true, fill:"partial", isStreet:true, src:"street:"+s.id+"#S3" });
         _rec.wornSegs += curNodes.length-1;
       } else {
         addRun("r4", "road", curNodes, s.widthM, ROAD_COLS.r4,
-          { seed:seedS, noMeander:true, caseW:ROAD_CASE_W, caseCol:ROAD_COLS.r4case, ruts:true, churn:true, fill:"full", isStreet:true });
+          { seed:seedS, noMeander:true, caseW:ROAD_CASE_W, caseCol:ROAD_COLS.r4case, ruts:true, churn:true, fill:"full", isStreet:true, src:"street:"+s.id+"#S4" });
         _rec.wornSegs += curNodes.length-1;
       }
       curKey=null; curNodes=null;
@@ -1247,7 +1281,7 @@ function renderGroundSplat(skewAngle){
           eB = {x:lerp(eA.x,eB.x,tEnd), z:lerp(eA.z,eB.z,tEnd)};
         }
         addRun("faint", "road", [eA,eB], 1.8, "#7c6a4a",
-          { seed:_streetSeed(s.id)+0.31+side*0.17, amp:2.2, fadeB:true, fadeFrac:0.75, noEndFade:true });
+          { seed:_streetSeed(s.id)+0.31+side*0.17, amp:2.2, fadeB:true, fadeFrac:0.75, noEndFade:true, src:"street:"+s.id+"#stub" });
       });
     }
   });
@@ -1277,12 +1311,92 @@ function renderGroundSplat(skewAngle){
     if(!nearAnotherRun(r, r.nodes[r.nodes.length-1], rad)) r.fadeB = true;
   });
 
+  /* ---- s65 FOOTPATH FAMILY (door-paths + desire trails), assembled AFTER
+     the street network so endpoints validate against the network THIS
+     repaint actually painted. ENDPOINT LAW: a door-path must visibly
+     connect a building to a road; a desire trail must connect two real
+     destinations. A path whose far end resolves to no painted street is an
+     artifact and is NOT drawn (counted in the census as dropped). Faintness
+     is keyed to the core road-lifecycle use counter (roadPieceUse — the
+     same routed-traffic data that grades street wear), by mixing the stroke
+     color toward the trodden village ground tone: low use fades toward the
+     ground, never lighter than it. ---- */
+  function onPaintedStreet(x,z,pad){
+    for(var i=0;i<wornRuns.length;i++){
+      var o=wornRuns[i], bb=o.bbox, hw=o.widthM/2+(pad||0);
+      if(x<bb.x0-hw || x>bb.x1+hw || z<bb.z0-hw || z>bb.z1+hw) continue;
+      for(var k=0;k<o.nodes.length-1;k++){
+        // node spacing is ~7m; segment-distance so the ROW test has no gaps
+        var ax=o.nodes[k].x, az=o.nodes[k].z, bx=o.nodes[k+1].x, bz=o.nodes[k+1].z;
+        var dx=bx-ax, dz=bz-az, l2=dx*dx+dz*dz;
+        var t = l2>0 ? Math.max(0, Math.min(1, ((x-ax)*dx+(z-az)*dz)/l2)) : 0;
+        var qx=ax+dx*t-x, qz=az+dz*t-z;
+        if(qx*qx+qz*qz <= hw*hw) return true;
+      }
+    }
+    return false;
+  }
+  var _pathUseTone = "#645238"; // full-use trample core — darker than the trodden village ground
+  var _pathFaintTone = "#8d7854"; // low-use end of the ramp — approaches (never passes) the ground tone
+  function useToneAt(x,z){
+    var u01 = clamp(roadPieceUse(x,z,simDay)/ROAD_USE_T3, 0, 1);
+    return _mixCol(_parseSplatCol(_pathFaintTone), _parseSplatCol(_pathUseTone), 0.25+0.75*u01);
+  }
+  var _censusDropped = { doorPath:0, desireTrail:0 };
+  // Worn door-paths (live source: buildings.js pushes one per always-founded
+  // village door) — the narrow footpath constant, detail tiers only. The
+  // recorded street-side endpoint was computed in the PLACEMENT frame; the
+  // painted street can sit meters away once the O'Farrell swing moves the
+  // grid — so aim THROUGH the recorded point and clip to the network that
+  // is actually painted today. No painted road on the ray = orphan, dropped.
+  SPLAT_DOOR_PATHS.forEach(function(p,i){
+    var ddx=p.tx-p.doorX, ddz=p.tz-p.doorZ, ddl=Math.hypot(ddx,ddz)||1;
+    var hit = clipToPaintedStreet(p.doorX, p.doorZ, p.doorX+ddx/ddl*(ddl+18), p.doorZ+ddz/ddl*(ddl+18));
+    if(!hit){ _censusDropped.doorPath++; return; }
+    addRun("door", "road", [{x:p.doorX,z:p.doorZ},hit], 1.1, useToneAt(hit.x,hit.z),
+      {detailOnly:true, noEndFade:true, amp:0.25, seed:0.5+i*0.013, src:"door-path#"+i});
+  });
+  // Desire trails (live source: doodads.js yard-clutter anchors). The old
+  // far endpoint was lerp(yard->plaza, 0.32) — a stub ending in open ground
+  // (the census's one true artifact class). Re-target: walk the yard->plaza
+  // ray to the FIRST painted street right-of-way and end just inside it, so
+  // the trail connects yard -> road; no road on the ray = dropped.
+  function clipToPaintedStreet(x0,z0,x1,z1){
+    var dx=x1-x0, dz=z1-z0, len=Math.hypot(dx,dz);
+    if(len<2) return null;
+    dx/=len; dz/=len;
+    for(var d=3; d<=len; d+=1.5){
+      var qx=x0+dx*d, qz=z0+dz*d;
+      if(onPaintedStreet(qx,qz,-0.5)) return {x:qx+dx*1.0, z:qz+dz*1.0}; // 1m inside the ROW — visibly meets the road
+    }
+    return null;
+  }
+  SPLAT_CLUTTER_PATHS.forEach(function(p,i){
+    var hit = clipToPaintedStreet(p.x0, p.z0, PLAZA_CENTER.x, PLAZA_CENTER.z);
+    if(!hit){ _censusDropped.desireTrail++; return; }
+    addRun("faint", "road", [{x:p.x0,z:p.z0},hit], 1.8, useToneAt(hit.x,hit.z),
+      {detailOnly:true, noEndFade:true, amp:0.4, seed:0.11+i*0.017, src:"desire-trail#"+i});
+  });
+
+  /* ---- s65 NEAR-TOWN APRON (painted before the layer compositor runs, so
+     the street network still erases-then-draws on top). Apron anchors = the
+     places use actually concentrates: street-network dead ends, village
+     doors, working yards. (paintPlaza runs AFTER the compositor — see its
+     call below the tier loop.) ---- */
+  var apronAnchors = [];
+  wornRuns.forEach(function(r){
+    if(r.fadeA) apronAnchors.push({x:r.nodes[0].x, z:r.nodes[0].z, w:1.0});
+    if(r.fadeB) apronAnchors.push({x:r.nodes[r.nodes.length-1].x, z:r.nodes[r.nodes.length-1].z, w:1.0});
+  });
+  SPLAT_DOOR_PATHS.forEach(function(p){ apronAnchors.push({x:p.doorX, z:p.doorZ, w:0.55}); });
+  SPLAT_CLUTTER_PATHS.forEach(function(p){ apronAnchors.push({x:p.x0, z:p.z0, w:0.8}); });
+  var _apronStats = paintNearTownApron(apronAnchors);
+
   /* ---- paint: per tier, per class layer, low to high (each layer erases
      what lies beneath it — one owner per pixel across classes) ---- */
-  var LAYER_ORDER = ["ghost","faint","trail","r3","r4","plank"];
   TIERS.forEach(function(t){
     t._dirty = { x0:0, y0:0, x1:t.res, y1:t.res }; // scratch state unknown at start
-    LAYER_ORDER.forEach(function(lk){
+    ROAD_LAYER_ORDER.forEach(function(lk){
       drawRoadLayer(t, LAYERS[lk], ROAD_LAYER_ALPHA[lk]);
     });
     // pier-line hints (piles/stakes over the tideflat) — translucent
@@ -1308,6 +1422,45 @@ function renderGroundSplat(skewAngle){
   var lastT = TIERS[TIERS.length-1];
   if(lastT._dirty) splatScratchCtx.clearRect(lastT._dirty.x0, lastT._dirty.y0, lastT._dirty.x1-lastT._dirty.x0, lastT._dirty.y1-lastT._dirty.y0);
 
+  /* ---- s65 PORTSMOUTH SQUARE — painted AFTER the street compositor. The
+     fill is INSET to the bounding streets' ROW edges (they still own their
+     pixels untouched), while anything the data routes ACROSS the open
+     square (portsmouth-street, the documented "down Portsmouth street to
+     the landing" lane, starts at the plaza's center) is absorbed into the
+     square's own trampled surface — an open square has one worn ground,
+     not a striped band through it; the diagonals carry the crossing wear. */
+  paintPlaza(plazaCorners);
+
+  /* ---- s65 census: every painted line, counted by source class ---- */
+  (function(){
+    var census = {};
+    function bump(src){
+      var cls = src.indexOf("street:")===0 ? "street"+src.slice(src.indexOf("#")) // street:<id>#S4 -> "street#S4"
+              : src.split("#")[0];
+      census[cls] = (census[cls]||0)+1;
+    }
+    ROAD_LAYER_ORDER.forEach(function(lk){ LAYERS[lk].forEach(function(r){ bump(r.src); }); });
+    PIER_RUNS.forEach(function(pr){ bump(pr.src||"UNKNOWN"); });
+    PLAZA_DEBUG_LABELS.forEach(function(l){ bump(l.label); });
+    census["door-path DROPPED(unresolved)"] = _censusDropped.doorPath;
+    census["desire-trail DROPPED(unresolved)"] = _censusDropped.desireTrail;
+    census["apron-worn-spots"] = _apronStats.blotches;
+    _stats.census = census;
+  })();
+  if(DEBUG_ROADS){
+    DEBUG_ROAD_LABELS.length = 0;
+    ROAD_LAYER_ORDER.forEach(function(lk){ LAYERS[lk].forEach(function(r){
+      var m = r.nodes[Math.floor(r.nodes.length/2)];
+      DEBUG_ROAD_LABELS.push({ x:m.x, z:m.z, label:r.src });
+    }); });
+    PIER_RUNS.forEach(function(pr){
+      var m = pr.pts[Math.floor(pr.pts.length/2)];
+      DEBUG_ROAD_LABELS.push({ x:m.x, z:m.z, label:pr.src||"UNKNOWN" });
+    });
+    PLAZA_DEBUG_LABELS.forEach(function(l){ DEBUG_ROAD_LABELS.push(l); });
+    TIERS.forEach(function(t){ drawDebugRoadLabels(t); });
+  }
+
   applyTierOwnership();
 
   _stats.ms = +(performance.now()-_statT0).toFixed(1);
@@ -1315,6 +1468,299 @@ function renderGroundSplat(skewAngle){
   splatWorldTex.needsUpdate = true;
   splatTownTex.needsUpdate = true;
   splatCloseTex.needsUpdate = true;
+}
+
+/* =====================================================================
+   s65 PORTSMOUTH SQUARE — BESPOKE PLAZA TREATMENT (per the record:
+   research/geography-shoreline + demographics — an UNIMPROVED, trampled,
+   rutted open square, the sim's living room; never landscaped in this
+   window). Grammar:
+     - packed-earth base whose BOUNDARY is defined by the four bounding
+       streets: the fill is INSET to their ROW edges, so the streets' own
+       paint frames the square — no outline stroke of its own;
+     - heavy trample in the center (the crowd's ground) fading to PATCHY
+       edges: erase nibbles let the trodden village ground show through,
+       grass-tuft daubs survive where feet don't reach;
+     - the two corner-to-corner worn crossing paths, refined: meandered,
+       CONSTANT footpath width (1.8m core inside a soft 3.6m wash — fill
+       treatment, never width change), broken scuff dashes;
+     - a trampled gathering ring at the flagpole (plaza center);
+     - wagon-gauge rut pairs along the Washington (flag / old-adobe custom
+       house) side — the documented working edge of the square;
+     - wet-season coupling lives in the road-kind detail shader (see
+       DETAIL_FRAG_ROAD's uPlaza block) driven by the same uDetailWet
+       signal as the mud tiles, so the notorious plaza mud needs no
+       repaint to appear.
+   Every tone sits at or below the packed-earth base value — the plaza can
+   never read lighter than the ground around it (§9). Deterministic (hash2
+   dice only). Painted AFTER the layer compositor: the ROW-edge inset keeps
+   every bounding street untouched, and data lanes routed ACROSS the open
+   square are absorbed into its one worn surface (see the call site).
+   ===================================================================== */
+var PLAZA_DEBUG_LABELS = [];
+var _plzSpriteCache = {};
+function _plzSprite(color){
+  if(_plzSpriteCache[color]) return _plzSpriteCache[color];
+  var c=document.createElement("canvas"); c.width=c.height=64;
+  var x=c.getContext("2d");
+  var g=x.createRadialGradient(32,32,0,32,32,32);
+  g.addColorStop(0,color); g.addColorStop(1,"rgba(0,0,0,0)");
+  x.fillStyle=g; x.fillRect(0,0,64,64);
+  _plzSpriteCache[color]=c;
+  return c;
+}
+function _plzBlotch(tp, x, z, rM, color, alpha){
+  var p = tp.pxFn(x,z), r = Math.max(1, tp.pxLenFn(rM));
+  tp.ctx.globalAlpha = alpha;
+  tp.ctx.drawImage(_plzSprite(color), p.x-r, p.y-r, r*2, r*2);
+  tp.ctx.globalAlpha = 1;
+}
+function paintPlaza(corners){
+  PLAZA_DEBUG_LABELS.length = 0;
+  var cx=(corners[0].x+corners[2].x)/2, cz=(corners[0].z+corners[2].z)/2;
+  var ux=corners[1].x-corners[0].x, uz=corners[1].z-corners[0].z;   // west->east (Dupont->Kearny)
+  var vx=corners[3].x-corners[0].x, vz=corners[3].z-corners[0].z;   // north->south (Washington->Clay)
+  var huC=Math.hypot(ux,uz)/2, hvC=Math.hypot(vx,vz)/2;             // centerline-to-centerline half spans
+  var eux=ux/(huC*2), euz=uz/(huC*2), evx=vx/(hvC*2), evz=vz/(hvC*2);
+  /* INSET TO THE ROW EDGE (s65): GEO.plaza spans street CENTERLINES; the
+     old fill painted under the bounding streets' rights-of-way, where the
+     ghost/ROW-hint layers' erase-then-draw cut BRIGHT scratches through the
+     dark fill (worst in the wet). The fill now stops at each street's own
+     edge — the square's boundary IS the surrounding streets' paint. */
+  function _halfW(id){ var s=STREETS_RUNTIME_BY_ID[id]; return (s?s.widthM:14)/2 + 1.2; }
+  var inW=_halfW("dupont"), inE=_halfW("kearny"), inN=_halfW("washington"), inS=_halfW("clay");
+  var cIx = cx + eux*(inW-inE)/2 + evx*(inN-inS)/2;                 // inset-rect center
+  var cIz = cz + euz*(inW-inE)/2 + evz*(inN-inS)/2;
+  var hu = huC-(inW+inE)/2, hv = hvC-(inN+inS)/2;                   // inset half spans
+  function P(u,v){ return { x: cIx + eux*u*hu + evx*v*hv, z: cIz + euz*u*hu + evz*v*hv }; }
+  var insetCorners = [ P(-1,-1), P(1,-1), P(1,1), P(-1,1) ];
+  var BASE = "#836e4c";        // packed trampled earth — darker than the village trodden tint
+  var tiers = [ {ctx:splatTownCtx, pxFn:townPx, pxLenFn:townPxLen},
+                {ctx:splatCloseCtx, pxFn:closePx, pxLenFn:closePxLen} ];
+  tiers.forEach(function(tp){
+    var i, R;
+    // 1) base fill to the ROW edges — boundary owned by the surrounding
+    //    streets, not by an outline of our own
+    splatFillPoly(tp.ctx, tp.pxFn, insetCorners, BASE, 1);
+    // 2) center-weighted trample: broad soft worn-earth bodies (low
+    //    frequency, painterly — not per-pixel noise)
+    for(i=0;i<7;i++){
+      R = function(k){ return hash2(11.3+i*7.7+k*3.1, 4.9+i*1.7); };
+      var bu=(R(0)-0.5)*1.0, bv=(R(1)-0.5)*1.0, c1=P(bu,bv);
+      var dk = R(2)<0.6;
+      _plzBlotch(tp, c1.x, c1.z, (0.32+R(3)*0.22)*Math.min(hu,hv),
+        dk?"rgb(105,86,58)":"rgb(140,119,84)", dk?(0.17+R(4)*0.11):(0.09+R(4)*0.06));
+    }
+    // 3) micro churn, heaviest at the center, thinning outward
+    for(i=0;i<110;i++){
+      R = function(k){ return hash2(31.7+i*2.3+k*5.9, 9.1+i*0.61); };
+      var uu=(R(0)-0.5)*2, vv=(R(1)-0.5)*2;
+      var wgt = 1-Math.max(Math.abs(uu),Math.abs(vv));
+      if(R(2) > 0.22+0.78*wgt) continue;          // center-weighted density
+      var q=P(uu,vv), dk2 = R(3)<0.55;
+      _plzBlotch(tp, q.x, q.z, 0.5+R(4)*1.3, dk2?"rgb(97,80,54)":"rgb(134,114,80)", 0.10+R(5)*0.12);
+    }
+    // 4) patchy edges: erase nibbles (ground shows through) + grass-tuft
+    //    daubs in the outer band — feet don't polish the rim
+    tp.ctx.save();
+    for(i=0;i<150;i++){
+      R = function(k){ return hash2(51.1+i*3.7+k*7.3, 17.9+i*0.83); };
+      var edge = Math.floor(R(0)*4);              // 0 N, 1 S, 2 W, 3 E
+      var t2 = (R(1)-0.5)*2*0.96;
+      var inset = 0.86+R(2)*0.12;                 // outer 2-14% band
+      var pe = edge===0?P(t2,-inset) : edge===1?P(t2,inset) : edge===2?P(-inset,t2) : P(inset,t2);
+      if(R(3)<0.52){                              // erase nibble — trodden ground shows through
+        tp.ctx.globalCompositeOperation="destination-out";
+        _plzBlotch(tp, pe.x, pe.z, 0.6+R(4)*1.6, "rgb(0,0,0)", 0.22+R(5)*0.30);
+        tp.ctx.globalCompositeOperation="source-over";
+      } else {                                    // surviving grass tuft
+        _plzBlotch(tp, pe.x, pe.z, 0.35+R(4)*0.55, R(5)<0.5?"rgb(92,102,54)":"rgb(78,88,46)", 0.35+R(6)*0.25);
+      }
+    }
+    tp.ctx.restore();
+    // 5) the two worn crossing diagonals — meandered, constant footpath
+    //    width: soft wash + 1.8m core + broken scuffs (fill, never width)
+    [ {a:{u:-1,v:-1}, b:{u:1,v:1}, seed:0.23, al:1.00, tag:"plaza-diagonal#0"},
+      {a:{u:1,v:-1},  b:{u:-1,v:1}, seed:0.71, al:0.88, tag:"plaza-diagonal#1"} ].forEach(function(dg){
+      var steps = Math.max(24, Math.round(Math.hypot(hu,hv)*2/4)), nodes=[], k;
+      for(k=0;k<=steps;k++){
+        var t3=k/steps;
+        var mu=lerp(dg.a.u,dg.b.u,t3), mv=lerp(dg.a.v,dg.b.v,t3);
+        // clamp the wander INSIDE the square; zero at the corners so the
+        // path meets the street crossings exactly
+        var sinT = Math.sin(Math.PI*t3);
+        var off = (0.62*Math.sin(t3*9.2+dg.seed*37)+0.38*Math.sin(t3*3.1+dg.seed*91)) * 1.8 * sinT;
+        // lateral offset perpendicular to the diagonal, in world space:
+        var q0=P(mu,mv);
+        var ddx=(dg.b.u-dg.a.u)*hu*eux+(dg.b.v-dg.a.v)*hv*evx, ddz=(dg.b.u-dg.a.u)*hu*euz+(dg.b.v-dg.a.v)*hv*evz;
+        var dl=Math.hypot(ddx,ddz)||1;
+        nodes.push({x:q0.x+(-ddz/dl)*off, z:q0.z+(ddx/dl)*off});
+      }
+      splatStroke(tp.ctx, tp.pxFn, tp.pxLenFn, nodes, 3.6, "#75603f", 0.24*dg.al, "butt"); // soft worn wash
+      // trodden core (footpath constant width) — segment-jittered tone and
+      // alpha with slight overlap, so it reads worn-in rather than drawn
+      for(k=0;k<nodes.length-1;k++){
+        var ja=nodes[k], jb=nodes[k+1];
+        var jdx=jb.x-ja.x, jdz=jb.z-ja.z, jl=Math.hypot(jdx,jdz)||1;
+        var jaa = k===0?ja:{x:ja.x-jdx/jl*0.7, z:ja.z-jdz/jl*0.7};
+        var jdk = 1 + (hash2(k*7.1+dg.seed*29, 3.3)-0.5)*0.16;
+        splatStroke(tp.ctx, tp.pxFn, tp.pxLenFn, [jaa,jb], 1.8,
+          _jitterCol(_parseSplatCol("#63513a"), jdk), (0.34+hash2(k*1.7,dg.seed*13)*0.14)*dg.al, "butt");
+      }
+      var runPts=[], k2;                                                            // broken darker scuff dashes
+      for(k2=0;k2<nodes.length;k2++){
+        var v3 = 0.5+0.5*Math.sin(k2*0.9+dg.seed*53) + (hash2(k2*3.3+dg.seed*17,7.7)-0.5)*0.7;
+        if(v3>0.55) runPts.push(nodes[k2]);
+        if((v3<=0.55 || k2===nodes.length-1) && runPts.length){
+          if(runPts.length>=2) splatStroke(tp.ctx, tp.pxFn, tp.pxLenFn, runPts, 0.9, "#544430", 0.5*dg.al, "butt");
+          runPts=[];
+        }
+      }
+    });
+    // 6) gathering trample at the flagpole (plaza center)
+    for(i=0;i<16;i++){
+      R = function(k){ return hash2(71.3+i*4.1+k*2.7, 23.3+i*1.13); };
+      var ga=R(0)*6.283, gr=R(1)*8;
+      _plzBlotch(tp, cx+Math.cos(ga)*gr, cz+Math.sin(ga)*gr, 0.7+R(2)*1.4, "rgb(90,74,50)", 0.10+R(3)*0.10);
+    }
+    // 7) wagon-gauge ruts along the Washington (flag/custom-house) side —
+    //    broken twin grooves, two passes, absolute gauge (s62 rut law)
+    [ {vIn:5.2, seed:0.19}, {vIn:7.0, seed:0.37}, {vIn:9.2, seed:0.83} ].forEach(function(lane){
+      var vv2 = -(1 - lane.vIn/hv);
+      [ -0.78, 0.78 ].forEach(function(gOff, side){
+        var pts=[], n=Math.max(16, Math.round(hu*2/5)), k3;
+        for(k3=0;k3<=n;k3++){
+          var t4=(k3/n-0.5)*2*0.86;
+          var base2=P(t4, vv2);
+          var wob=Math.sin(t4*7+lane.seed*31)*0.35;
+          pts.push({x:base2.x+evx*(gOff+wob), z:base2.z+evz*(gOff+wob)});
+        }
+        var run2=[], k4;
+        for(k4=0;k4<pts.length;k4++){
+          var v4 = 0.5+0.5*Math.sin(k4*0.7+lane.seed*47+side*2.1) + (hash2(k4*2.9+lane.seed*11,3.1)-0.5)*0.6;
+          if(v4>0.42) run2.push(pts[k4]);
+          if((v4<=0.42 || k4===pts.length-1) && run2.length){
+            if(run2.length>=2) splatStroke(tp.ctx, tp.pxFn, tp.pxLenFn, run2, 0.4, "#4a3c2a", 0.62, "butt");
+            run2=[];
+          }
+        }
+      });
+    });
+  });
+  // census/debug entries (lines only — the fill/blotch fields are counted
+  // by their own census keys)
+  PLAZA_DEBUG_LABELS.push({ x:P(-0.5,-0.5).x, z:P(-0.5,-0.5).z, label:"plaza-diagonal#0" });
+  PLAZA_DEBUG_LABELS.push({ x:P(0.5,-0.5).x, z:P(0.5,-0.5).z, label:"plaza-diagonal#1" });
+  PLAZA_DEBUG_LABELS.push({ x:P(0,-(1-8/hv)).x, z:P(0,-(1-8/hv)).z, label:"plaza-ruts#washington-side" });
+}
+
+/* =====================================================================
+   s65 NEAR-TOWN APRON — the trodden zone around town, de-flattened.
+   NO uniform wash: deterministic worn-spot scatter whose acceptance is
+   (a) the SAME warped organic feather the s60 square-kill uses
+       (villageFeatherT — core-owned; no rect can reappear),
+   (b) a radial USE gradient read from the core road-lifecycle counter
+       (roadPieceUse — the routed-traffic + frontage data), so wear is
+       heaviest at street ends and door clusters and era-honest (a bigger
+       town tramples a wider apron; 1846 barely marks it),
+   (c) ecology-zone keyed tone (zoneAt): dune sand scuffs sandy-dark,
+       grassland wears to dirt, scrub in between — a PATCHY transition
+       between trample and dune/grass, never one tone.
+   Plus authored worn spots at the anchors themselves (street dead ends,
+   village doors, working yards/wells). All tones darker than the ground
+   they sit on (§9). Candidates are precomputed once; per-repaint cost is
+   the use lookup + sprite draws. Painted before the layer compositor —
+   streets stay on top; erased under inner tiers by tier ownership.
+   ===================================================================== */
+var APRON_CANDIDATES = null;
+function _apronBuildCandidates(){
+  var out = [], PAD = 280, STEP = 24;
+  var x0 = VILLAGE_BOX.xMin-PAD, x1 = VILLAGE_BOX.xMax+PAD;
+  var z0 = VILLAGE_BOX.zMin-PAD, z1 = VILLAGE_BOX.zMax+PAD;
+  for(var gx=x0; gx<=x1; gx+=STEP){
+    for(var gz=z0; gz<=z1; gz+=STEP){
+      var jx = gx+(hash2(gx*0.13,gz*0.17)-0.5)*STEP*0.9;
+      var jz = gz+(hash2(gx*0.19,gz*0.11)-0.5)*STEP*0.9;
+      if(terrainHeight(jx,jz)<=1.0) continue;              // never on the wet flats
+      if(_gpNearPlaza(jx,jz,2)) continue;                  // the plaza owns its own ground
+      var dOut = distOutsideBox(jx,jz,VILLAGE_BOX);
+      var envT = 1-villageFeatherT(jx,jz,dOut,260);        // s60 organic feather — 1 inside, warped falloff outside
+      if(dOut<=0) envT = 0.55;                             // interior: sparser (streets/yards carry the story there)
+      var patch = fbm(jx*0.011+9.1, jz*0.011, 2);          // patchiness — kills any uniform wash
+      var env = envT*(0.25+0.75*patch);
+      if(env<0.10) continue;
+      var zn = zoneAt(jx,jz);
+      out.push({ x:jx, z:jz, env:env, zn:zn });
+    }
+  }
+  return out;
+}
+function paintNearTownApron(anchors){
+  if(!APRON_CANDIDATES) APRON_CANDIDATES = _apronBuildCandidates();
+  var tiers = [ {ctx:splatTownCtx, pxFn:townPx, pxLenFn:townPxLen, box:TOWN_BOX},
+                {ctx:splatCloseCtx, pxFn:closePx, pxLenFn:closePxLen, box:CLOSE_BOX} ];
+  var drawn = 0;
+  function toneFor(zn, dk){
+    if(zn===1||zn===2) return dk?"rgb(118,99,68)":"rgb(139,119,84)";   // dune sand: sandy scuff
+    if(zn===3||zn===4) return dk?"rgb(96,82,54)":"rgb(112,95,63)";     // grass/woodland: worn to dirt
+    return dk?"rgb(107,90,61)":"rgb(126,107,74)";                      // default scrub-dirt
+  }
+  function drawSpot(x,z,rM,color,alpha){
+    for(var ti=0;ti<tiers.length;ti++){
+      var tp=tiers[ti], B=tp.box;
+      if(x<B.xMin+4||x>B.xMax-4||z<B.zMin+4||z>B.zMax-4) continue;
+      _plzBlotch(tp, x, z, rM, color, alpha);
+    }
+    drawn++;
+  }
+  // (a) the scattered patchy transition, use-graded
+  for(var i=0;i<APRON_CANDIDATES.length;i++){
+    var c = APRON_CANDIDATES[i];
+    var u01 = clamp(roadPieceUse(c.x,c.z,simDay)/ROAD_USE_T3, 0, 1);
+    var s = c.env*(0.18+0.82*u01);
+    if(s<0.07) continue;
+    var h1 = hash2(c.x*0.31,c.z*0.29), h2 = hash2(c.x*0.17,c.z*0.41);
+    drawSpot(c.x, c.z, 2.2+h1*3.8, toneFor(c.zn, h2<0.6), 0.045+s*0.11);
+    if(s>0.5 && h2>0.45) // heavy-use spots double up — reads as real traffic, not dots
+      drawSpot(c.x+(h1-0.5)*9, c.z+(h2-0.5)*9, 1.6+h2*2.6, toneFor(c.zn,true), 0.04+s*0.08);
+  }
+  // (b) authored worn spots at the use anchors (street ends, doors, yards)
+  for(var a=0; a<anchors.length; a++){
+    var an = anchors[a];
+    var u = clamp(roadPieceUse(an.x,an.z,simDay)/ROAD_USE_T3, 0, 1) * an.w;
+    if(u<0.05) continue;
+    var n = 3 + Math.round(u*7);
+    for(var k=0;k<n;k++){
+      var hh1 = hash2(an.x*0.7+k*3.9, an.z*0.9+k*1.3), hh2 = hash2(an.x*0.4-k*2.1, an.z*0.6+k*4.7);
+      var ang = hh1*6.283, rr = hh2*hh2*(4+u*9); // squared: clusters at the anchor, thins radially
+      drawSpot(an.x+Math.cos(ang)*rr, an.z+Math.sin(ang)*rr,
+        1.4+hh1*2.4, toneFor(zoneAt(an.x,an.z), hh2<0.65), 0.05+u*0.10);
+    }
+  }
+  return { blotches: drawn };
+}
+
+/* ---- ?debugroads label pass (s65 census): canvas-drawn, per tier ---- */
+function drawDebugRoadLabels(t){
+  var ctx = t.ctx;
+  ctx.save();
+  var fpx = Math.max(11, Math.round(t.pxLenFn(6)));
+  ctx.font = "bold "+fpx+"px monospace";
+  ctx.textAlign = "left"; ctx.textBaseline = "middle";
+  for(var i=0;i<DEBUG_ROAD_LABELS.length;i++){
+    var L = DEBUG_ROAD_LABELS[i];
+    if(t.box && (L.x<t.box.xMin||L.x>t.box.xMax||L.z<t.box.zMin||L.z>t.box.zMax)) continue;
+    var p = t.pxFn(L.x, L.z);
+    if(p.x<-40||p.y<-40||p.x>t.res+40||p.y>t.res+40) continue;
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = "#ff3b30";
+    ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(2, fpx*0.18), 0, 6.283); ctx.fill();
+    ctx.lineWidth = Math.max(2, fpx*0.16); ctx.strokeStyle = "rgba(0,0,0,0.9)";
+    ctx.strokeText(L.label, p.x+fpx*0.5, p.y);
+    ctx.fillStyle = "#ffe24a";
+    ctx.fillText(L.label, p.x+fpx*0.5, p.y);
+  }
+  ctx.restore();
 }
 
 /* =====================================================================
