@@ -1238,6 +1238,8 @@ var INTEREST = { slotCool:{}, siteCool:{}, typeCool:{}, nameCool:{}, hourSpent:{
    sim-clock + menu wiring inert until the effects layer restores the cycle. */
 var WET_OVERRIDE = null;              // FOUNDATION: awaiting admission of effects (debug wet override)
 var ghostVisible = false;             // FOUNDATION: awaiting admission of effects (altitude ghost overlay)
+var weatherState = { wet: 0, mud: 0 }; // FOUNDATION: awaiting admission of effects (camera fog + debug read it every frame; static-dry until weather returns)
+var puddleMesh = { count: 0 };        // FOUNDATION: awaiting admission of effects (debug wet getter reads .count)
 function fireClockStep(step){ return step; }   // FOUNDATION: awaiting admission of effects (no fire-day sub-stepping)
 function refreshLightState(){}        // FOUNDATION: awaiting admission of effects (noon is static; no relight on jump)
 function updateWetTint(){}            // FOUNDATION: awaiting admission of effects (ground stays dry)
