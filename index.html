@@ -967,7 +967,7 @@
 <script src="roster-1846-49.js"></script>
 <script src="catalog-occupations.js"></script>
 <script src="catalog-activities.js"></script>
-<script src="streets-geometry.js"></script>
+<script src="streets-geometry.js?v=s88"></script> <!-- ?v: cache-buster — bumped s88 (SoMa street re-spacing: true 200x300-vara Hundred Vara blocks + Howard/Mission) so a cached old bake can never pair with a new index.html -->
 <script src="plat-lots-known.js?v=s86"></script> <!-- s86: digitized survey lot registry (68 records, window.PLAT_LOTS_KNOWN), consumed by core/08 cadApplyRecord -->
 <script>
 /* =====================================================================
@@ -3789,34 +3789,47 @@ function cadIsWaterLot(cx, cz){
    THE HUNDRED VARA DISTRICT (s85 — THE TWO-STANDARD CADASTRE, the structural
    fix). South of Market, O'Farrell's 1847 survey DOUBLED the module: blocks
    are 200×300 varas (167.64 × 251.46 m) holding SIX 100×100-vara lots
-   (83.820 m square, 2 cols along Market × 3 rows into the district) — the same
-   6-lot COUNT as a Fifty Vara block but each lot 4× the AREA, on a grid rotated
+   (83.820 m square, 3 cols along Market [300 vara] × 2 rows into the district
+   [200 vara] — s88 correction, was mislabeled 2×3; adjudication §2d/§4) — the
+   same 6-lot COUNT as a Fifty Vara block but each lot 4× the AREA, on a grid rotated
    to Mission Road's bearing (~36° off the cardinal grid), a genuinely different
    frame (research/plat-truth-stage1.md §0, primary-corroborated by the Eddy
    1849 plat and by corpus "100 vara lot No. N" single-sale-unit citations).
 
-   DISTRICT DETECTION + GEOMETRY SOURCE (documented choice, s85): the fabric is
-   tiled ANALYTICALLY at the documented 100-vara module, ANCHORED to the
-   surveyed spine's SoMa frame (origin O = the Market/First-Street corner; axes
-   â = along-Market, b̂ = into-district, both read straight off the spine so the
-   ~36° bearing and origin are geodetic-locked, never re-anchored). It is NOT
-   derived cell-by-cell from the SoMa street lines because those lines are
-   spaced at 83.8 m = ONE 100-vara lot edge (numbered streets First–Eighth,
-   parallel streets Mission–Brannan) — i.e. the street data resolves the
-   district at LOT granularity, not the 200×300-vara BLOCK granularity, so
-   street-cell derivation would either give 1-lot "blocks" or, after ROW inset,
-   62.8 m lots (both wrong). The documented module is the robust source; the
-   street-spacing mismatch is a flagged finding for a future streets-data pass
-   (see the s85 report). Blocks are authored plat-dimension (property-line to
-   property-line) without ROW inset in v1 (the bounding-street widths are the
-   very data in dispute). Zero dice — a pure function of the spine, exactly like
-   the Fifty Vara fabric. Edge blocks (a partial column/row where the envelope
-   is not an even multiple of the 2×3 module) are flagged non-standard, the same
-   way the cardinal lattice flags its edge blocks. */
+   DISTRICT DETECTION + GEOMETRY SOURCE (documented choice, s85; DERIVATION
+   DECISION REAFFIRMED s88 with the corrected street data — research/
+   soma-streets-adjudication.md): the fabric is tiled ANALYTICALLY at the
+   documented 100-vara module, ANCHORED to the surveyed spine's SoMa frame
+   (origin O = the Market/First-Street corner; axes â = along-Market, b̂ =
+   into-district, both read straight off the spine so the ~36° bearing and
+   origin are geodetic-locked, never re-anchored). WHY still analytic, not
+   cell-by-cell street derivation like the cardinal north (s88 decision): (1)
+   the SoMa streets are DIAGONAL (~36° off cardinal), so they fail the cardinal
+   lattice's constant-u / constant-v classifier (CAD_NS/CAD_EW) — feeding them
+   in would need a whole separate frame-aware cell derivation; (2) the corrected
+   street set is still INCOMPLETE (Fremont/Anthony/Beale/Spear, the waterfront
+   fringe streets, remain absent — adjudication §3/§5 flagged follow-ups), so
+   cell derivation would be gappy at the bay edge. The analytic pass is the
+   robust source AND it is already spine-anchored: after the s88 street fix the
+   numbered streets sit exactly at s = 0, 251.46, 502.9… (every 3rd lot = 300
+   vara) and the named streets at t = 0, 167.64, 335.28… (every 2nd lot = 200
+   vara), so the tiling's block seams COINCIDE with the corrected streets —
+   the lot fabric aligns to the drawn streets by construction (before s88 the
+   streets were mis-spaced at one 83.8 m lot edge, so this alignment was the
+   flagged defect this sprint resolves). The tiling naturally EXTENDS past the
+   named-street coverage (the deep into-district band beyond Brannan where the
+   long numbered streets — e.g. Second's 11 blocks — run but no named cross
+   street is documented): that region is "analytic beyond street coverage",
+   documented here, not street-derivable. Blocks are authored plat-dimension
+   (property-line to property-line) without ROW inset in v1. Zero dice — a pure
+   function of the spine, exactly like the Fifty Vara fabric. Edge blocks (a
+   partial column/row where the envelope is not an even multiple of the 3×2
+   module) are flagged non-standard, the same way the cardinal lattice flags its
+   edge blocks. */
 var CAD_HV_LOT_VARA   = 100;
 var CAD_HV_LOT_STD_M  = CAD_HV_LOT_VARA * CAD_VARA_M;      // 83.820 m — the 100-vara reference lot
-var CAD_HV_BLOCK_COLS = 2;                                 // along Market (200 vara)
-var CAD_HV_BLOCK_ROWS = 3;                                 // into the district (300 vara)
+var CAD_HV_BLOCK_COLS = 3;                                 // along Market (300 vara = 3 lots, between numbered streets) — s88 correction (was 2; see adjudication)
+var CAD_HV_BLOCK_ROWS = 2;                                 // into the district (200 vara = 2 lots, between named streets) — s88 correction (was 3)
 var CAD_HV_SURVEY_DAY = ERA_MAP_SIMDAY["ofarrell-1847"];   // 396 (Aug 1 1847) — the Hundred Vara survey
 
 /* The SoMa frame, DERIVED from the surveyed spine (geodetic lock — never a new

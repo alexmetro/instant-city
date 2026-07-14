@@ -297,7 +297,7 @@
   makeChild("lots",   "PLAT LOTS",
     "The dated cadastre: blocks and 50-vara lots born at their survey checkpoints; scrub the timeline to watch the plat appear. white = lot lines · gold fill = record lot (number + owner via probe; ground labels arrive with the labels layer) · gold tick = corner lots marked at their corner point · cyan = water lot (1847 beach-and-water auction) · magenta = non-standard block. The plaza block is a public reserve — no lots.");
   makeChild("parcels","NAMED PARCELS",
-    "Named ground parcels carrying allowed-asset-class law (plaza · cove · mud/beach bands · camp · mission · presidio). One zone truth: placement reads these. s87: all parcels are polygons — land/water parcels clipped to the 1849 shore (happy-valley-camp hugs the coast), the two shoreline bands drawn as real triangulated tints (raster exception gone).");
+    "Named ground parcels carrying allowed-asset-class law (plaza · cove · mud/beach bands · camp · mission · presidio). One zone truth: placement reads these. oxblood = public reserve (the plaza common) · blue = cove · brown/tan = mud/beach bands · orange = camp · violet = mission · green = presidio. s87: all parcels are polygons — land/water parcels clipped to the 1849 shore (happy-valley-camp hugs the coast), the two shoreline bands drawn as real triangulated tints (raster exception gone).");
 
   groupCb.addEventListener("change", function(){
     var want = groupCb.checked;
@@ -471,10 +471,11 @@
     if(goldPos.length) grp.add(wbLineSegs(goldPos,goldCol,0.98,1000)); // record-lot boundary on top
     return grp;
   }
-  /* plaza is a distinct WARM GOLD so it can never read as the cove's blue
-     (s81 finding C — the reported "cove includes the plaza" was the flat-plane
-     shear PLUS two near-identical blues; geometry is correct, see the audit). */
-  var CAD_PARCEL_COLS = { plaza:[242,206,88], water:[70,150,200], mud:[130,90,70], beach:[210,190,120],
+  /* plaza (public reserve) is OXBLOOD — the game-read spec's civic accent
+     (Director rider, s88). It was WARM GOLD, which after s87's gold record-lot
+     fill made the plaza read as "a third record block" with both overlays on;
+     oxblood is unmistakably not gold and not the cove's blue (s81 finding C). */
+  var CAD_PARCEL_COLS = { plaza:[114,32,32], water:[70,150,200], mud:[130,90,70], beach:[210,190,120],
     camp:[220,140,70], mission:[180,120,200], presidio:[110,170,90], survey:[90,110,130] };
   /* NAMED PARCELS — EXACT POLYGON TINT (Director addendum 2026-07-14). The old
      path rasterized parcel MEMBERSHIP onto a coarse draped tint grid, so the
@@ -549,7 +550,8 @@
       var rgb = CAD_PARCEL_COLS[p.cls]||[200,60,200], c={ r:rgb[0]/255, g:rgb[1]/255, b:rgb[2]/255 };
       rings.forEach(function(ring){
         if(!ring || ring.length<3) return;
-        wbPushDrapedRun(strokePos, strokeCol, ring.concat([ring[0]]), c, 0.55, false, 9); // exact-edge boundary
+        var sc = (p.cls==="plaza") ? { r:0.31, g:0.08, b:0.08 } : c; // s88: deeper oxblood boundary for the public reserve
+        wbPushDrapedRun(strokePos, strokeCol, ring.concat([ring[0]]), sc, 0.55, false, 9); // exact-edge boundary
         if(p.cls==="survey") return;                        // platted-region: boundary only (fill blankets the town)
         wbEarClip(ring).forEach(function(t){
           var A=ring[t[0]], Bp=ring[t[1]], C=ring[t[2]];
