@@ -1378,6 +1378,9 @@ LABELS.push(
   { name:"Mountain Lake",        cat:"water", near:true, x:-5700, z:695,  y:null },
   { name:"Lobos Creek",          cat:"water", near:true, x:-6100, z:190,  y:null },
   { name:"Washerwoman's Lagoon", cat:"water", near:true, x:-2754, z:-816, y:null },
+  // s78: named waterways from the baked hydrology-draft (blue-italic 'water' tier)
+  { name:"Laguna de los Dolores", cat:"water", near:true, x:-1360, z:3280, y:null },
+  { name:"El Polin Spring",      cat:"water", near:true, x:-4715, z:-450, y:null },
   { name:"SEAL ROCKS",           cat:"region", x:-9880, z:1620, y:14 },
   { name:"POINT LOBOS",          cat:"region", x:-9200, z:1150, y:null },
   { name:"THE GREAT SAND BANK",  cat:"region", x:-7300, z:3600, y:null },
