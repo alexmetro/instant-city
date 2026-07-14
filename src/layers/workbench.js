@@ -70,7 +70,7 @@
     muted: {},            // layerName -> true when hidden
     solo: null,           // layerName | null
     probe: false,
-    overlays: { row:false, keepout:false, zones:false, audits:false },
+    overlays: { row:false, keepout:false, zones:false, audits:false, lots:false, parcels:false },
     knobs: { sunMul:1, hemiMul:1, ambientMul:1, nightLift:0, detailAmp:null, doodadMul:1, streetAlphaMul:1 }
   };
   var WB_ORDER = ["terrain","ground-paint","zones-tint","buildings","doodads","people","ships","fauna","effects","labels"];
@@ -105,6 +105,17 @@
       var v = L._base * WB.knobs[L.key] + (L.night ? WB.knobs.nightLift*nf : 0);
       L.o.intensity = v; L._set = v;
     });
+    // GROUND PLAN era-scrub (s80a): rebuild the date-gated lot/parcel overlays
+    // when the timeline day moves, so scrubbing shows the plat being born at
+    // the survey checkpoints (cheap 2D/line redraw, once per integer day).
+    if((WB.overlays.lots || WB.overlays.parcels) && Math.floor(simDay)!==_lotOverlayDay){
+      ["lots","parcels"].forEach(function(key){
+        if(!WB.overlays[key]) return;
+        if(overlayObjs[key]){ scene.remove(overlayObjs[key]); }
+        overlayObjs[key] = buildOverlay(key);
+        if(overlayObjs[key]) scene.add(overlayObjs[key]);
+      });
+    }
   }
   renderer.render = function(s,c){ wbFrame(); _wbRender(s,c); };
 
@@ -147,12 +158,14 @@
 
   /* ---- 3. RULE OVERLAYS ---- */
   el("div","wb-sec","RULE OVERLAYS");
-  var overlayObjs = { row:null, keepout:null, zones:null, audits:null };
+  var overlayObjs = { row:null, keepout:null, zones:null, audits:null, lots:null, parcels:null };
   var overlayDefs = [
     { key:"row",     label:"street rights-of-way (constant class widths; cyan=base frame, magenta=Vioget)" },
     { key:"keepout", label:"walkBlockedAt keep-out mask (red = blocked, sampled at current date)" },
     { key:"zones",   label:"ecology zones (zoneAt tint over the whole domain)" },
-    { key:"audits",  label:"audit failures (runs audits.runAll(), red markers at violation coords)" }
+    { key:"audits",  label:"audit failures (runs audits.runAll(), red markers at violation coords)" },
+    { key:"lots",    label:"GROUND PLAN — plat lots (era-gated: scrub the timeline to watch the plat be born · cyan=water lot, gold=corner, magenta=non-standard block)" },
+    { key:"parcels", label:"GROUND PLAN — named parcel tints (plaza · cove · mud/beach bands · camp · mission · presidio)" }
   ];
   var auditStatusEl = null;
   overlayDefs.forEach(function(def){
@@ -162,7 +175,7 @@
     cb.addEventListener("change", function(){
       WB.overlays[def.key] = cb.checked;
       if(cb.checked){
-        if(def.key==="keepout" || def.key==="audits" || !overlayObjs[def.key]){ // rebuild date-dependent overlays fresh
+        if(def.key==="keepout" || def.key==="audits" || def.key==="lots" || def.key==="parcels" || !overlayObjs[def.key]){ // rebuild date-dependent overlays fresh
           if(overlayObjs[def.key]){ scene.remove(overlayObjs[def.key]); }
           overlayObjs[def.key] = buildOverlay(def.key);
         }
@@ -178,8 +191,63 @@
     if(key==="keepout") return buildKeepoutOverlay();
     if(key==="zones") return buildZonesOverlay();
     if(key==="audits") return buildAuditOverlay();
+    if(key==="lots") return buildLotOverlay();
+    if(key==="parcels") return buildParcelOverlay();
     return null;
   }
+
+  /* ---- GROUND PLAN overlays (s80a) — draped lot boundaries + parcel tints,
+     era-gated to simDay so scrubbing the timeline shows the plat being born at
+     each survey checkpoint (1846 Vioget region only → 1847 O'Farrell fabric +
+     cove water lots → 1849 Eddy extension). Rebuilt whenever the date moves
+     (see wbFrame's watcher below). Reads the core cadastre only. ---- */
+  var CAD_COL_WATER=new THREE.Color(0x3fd0e0), CAD_COL_CORNER=new THREE.Color(0xe8c24e),
+      CAD_COL_STD=new THREE.Color(0xcbd6dd), CAD_COL_NONSTD=new THREE.Color(0xe07ac0);
+  var _lotOverlayDay = null;
+  function buildLotOverlay(){
+    _lotOverlayDay = Math.floor(simDay);
+    var blocks = blocksAt(simDay), pos=[], col=[], SUB=5;
+    function edge(a,b,c){
+      for(var k=0;k<SUB;k++){
+        var x0=a.x+(b.x-a.x)*k/SUB, z0=a.z+(b.z-a.z)*k/SUB;
+        var x1=a.x+(b.x-a.x)*(k+1)/SUB, z1=a.z+(b.z-a.z)*(k+1)/SUB;
+        pos.push(x0, terrainHeight(x0,z0)+0.5, z0,  x1, terrainHeight(x1,z1)+0.5, z1);
+        col.push(c.r,c.g,c.b, c.r,c.g,c.b);
+      }
+    }
+    blocks.forEach(function(b){
+      b.lots.forEach(function(l){
+        var c = l.water ? CAD_COL_WATER : (!b.standard ? CAD_COL_NONSTD : (l.corner ? CAD_COL_CORNER : CAD_COL_STD));
+        var q=l.quad; // [SW,SE,NE,NW] world corners
+        edge(q[0],q[1],c); edge(q[1],q[2],c); edge(q[2],q[3],c); edge(q[3],q[0],c);
+      });
+    });
+    var g=new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.Float32BufferAttribute(pos,3));
+    g.setAttribute("color", new THREE.Float32BufferAttribute(col,3));
+    var m=new THREE.LineSegments(g, new THREE.LineBasicMaterial({ vertexColors:true, transparent:true, opacity:0.92, depthTest:false }));
+    m.renderOrder=999; m.frustumCulled=false;
+    return m;
+  }
+  var CAD_PARCEL_COLS = { plaza:[120,200,255], water:[70,150,200], mud:[130,90,70], beach:[210,190,120],
+    camp:[220,140,70], mission:[180,120,200], presidio:[110,170,90], survey:[90,110,130] };
+  function buildParcelOverlay(){
+    _lotOverlayDay = Math.floor(simDay);
+    var B = (typeof TOWN_BOX==="object" && TOWN_BOX) ? TOWN_BOX : VILLAGE_BOX, pad=900;
+    var box = { xMin:B.xMin-pad, xMax:B.xMax+pad+400, zMin:B.zMin-pad, zMax:B.zMax+pad };
+    var parcels = window.__P1850.groundPlan.parcels;
+    return samplePlaneOverlay(box, 220, function(x,z){
+      for(var i=0;i<parcels.length;i++){ var p=parcels[i];
+        if(p.name==="survey") continue; // boundary only — skip its fill (it blankets the town)
+        if((p.birth<=simDay) && window.__P1850.groundPlan.parcelByName(p.name) && cadParcelHit(p,x,z)){
+          var c=CAD_PARCEL_COLS[p.cls]||[200,60,200]; return [c[0],c[1],c[2],90];
+        }
+      }
+      return null;
+    });
+  }
+  // point-in-parcel (mirrors core cadParcelContains via the exposed helpers)
+  function cadParcelHit(p,x,z){ return groundPlanParcelContains(p.name, x, z); }
 
   function buildRowOverlay(){
     var pos=[], col=[], cB=new THREE.Color(0x35e0e8), cV=new THREE.Color(0xe855d0);
@@ -382,6 +450,24 @@
       + (inROW ? " — INSIDE right-of-way" : "") + (roadState ? " · lifecycle "+roadState : "") : "no street nearby")
       + " · splat alpha town="+(townA==null?"n/a":townA)+" close="+(closeA==null?"n/a":closeA)
       + " · surface: " + (inROW ? "road" : (painted ? "painted path/plaza/trodden" : "open ground")));
+    // GROUND PLAN (s80a) — the cadastre card: lot id, block, dims, deviation-
+    // from-standard, birth date, water flag, and the parcels containing the point.
+    try{
+      var gp = groundPlanAt(x, z, simDay);
+      if(gp.platLot){
+        var lot = lotById(gp.platLot), bDate = simDateISO(dateFromSimDay(lot.birth));
+        probeLine(probeOut, "ground-plan", "lot <b>"+gp.platLot+"</b>"
+          + " · "+lot.widthM.toFixed(2)+"×"+lot.depthM.toFixed(2)+"m"
+          + " · dev-from-50vara "+(lot.dev*100).toFixed(2)+"%"
+          + (lot.corner?" · CORNER":"") + (lot.water?" · WATER LOT":"")
+          + " · born "+(lot.birth<-1000?"pre-sim":bDate));
+        probeLine(probeOut, "block", gp.block);
+      } else {
+        probeLine(probeOut, "ground-plan", gp.block ? ("block "+gp.block+" (point off its lot fabric)") : "unplatted ground (no block at this date)");
+      }
+      probeLine(probeOut, "parcels", gp.parcels.length ? gp.parcels.join(" · ") : "none");
+      if(gp.band) probeLine(probeOut, "band", gp.band);
+    }catch(e){ probeLine(probeOut, "ground-plan", "(cadastre error: "+e.message+")"); }
     probeLine(probeOut, "buildings", bld || "no footprint here");
     probeLine(probeOut, "doodads", dd || "no doodad within 2.5m");
     probeLine(probeOut, "people", pn || "no figure within 6m");

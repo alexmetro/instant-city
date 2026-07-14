@@ -409,28 +409,18 @@ function canPlaceXZ(x,z,footprintR,opts){
    it and at/below the +0.5m high-water line (matches terrain.js's baked tidal
    profile and __P1850.shipAudit's mud classification). */
 function terrainSlopePct(x,z){ return Math.tan(terrainSlopeDeg(x,z)*Math.PI/180)*100; }
-function inIntertidalBand(x,z){ return x >= shorelineX(z) - 4 && terrainHeight(x,z) <= 0.5; }
-function inBeachBand(x,z){ // dry-ish working beach just landward of the waterline (flotsam belongs here)
-  var h = terrainHeight(x,z);
-  return x >= shorelineX(z) - 30 && h > -0.6 && h <= 1.8;
-}
-/* s76 PORTSMOUTH SQUARE KEEP-OUT (building-spawn-spec §1.5 / P6 fence law):
-   the public square is open ground — no yard fence, lot line, or addressed
-   structure may enter it. A fence run was crossing the plaza diagonally (the
-   Director's 1847/1849 mega-fence frame): a plaza-adjacent building's yard rect
-   reached across the open square and the fence P6 law had no square keep-out.
-   Test the point against the plaza block in BOTH grid frames the town ever
-   renders in (Vioget as-built and the O'Farrell base), so the keep-out holds
-   through the grid swing exactly like PLACEMENT_STREET_SEGS unions both frames. */
-function inPublicSquare(x,z){
-  var P=GEO.plaza, X=x-GRID_ORIGIN_X, Z=z-GRID_ORIGIN_Z, frames=[VIOGET_SKEW, GRID_ROT_BASE];
-  for(var f=0;f<frames.length;f++){
-    var c=Math.cos(frames[f]), s=Math.sin(frames[f]);
-    var u=X*c + Z*s, v=-X*s + Z*c;   // inverse of gridToWorldAt
-    if(u>=P.uMin && u<=P.uMax && v>=P.vMin && v<=P.vMax) return true;
-  }
-  return false;
-}
+/* s80a THE GROUND PLAN FOLD (building-spawn-spec §1): these three predicates
+   are now THIN WRAPPERS over the named-parcel cadastre (core/08-cadastre) so
+   there is ONE zone truth. The intertidal + beach bands are the storeship-mud
+   and beach parcels; the public square is the portsmouth-square parcel (the
+   two-frame keep-out math moved there verbatim). Behavior is byte-preserved —
+   __P1850.audits.placement.parcelIntegrity proves the wrappers agree with the
+   original inline formulas at 500 fixed points. The function signatures are
+   unchanged, so every existing caller (canPlaceClass, the placement audits,
+   the fence P6 keep-out) keeps working with zero edits. */
+function inIntertidalBand(x,z){ return groundPlanParcelContains("storeship-mud-band", x, z); }
+function inBeachBand(x,z){ return groundPlanParcelContains("beach-band", x, z); } // dry-ish working beach just landward of the waterline (flotsam belongs here) — INDEPENDENT of the intertidal band (they overlap by design), so folded to each parcel's own predicate, never the priority-band label
+function inPublicSquare(x,z){ return groundPlanParcelContains("portsmouth-square", x, z); }
 
 /* LAW_TABLES — per-class placement law, DATA-DRIVEN so a new asset class is a
    table row, not new code (placement-spec §1). Every numeric threshold here is

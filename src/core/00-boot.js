@@ -116,7 +116,13 @@ var lifeVariant = 0;       // life-stream variant — constant across ordinary j
 })();
 document.getElementById("seed-val").textContent = seedStr;
 var seeds = cyrb128("p1850-"+seedStr);
-var rngBuild = sfc32(seeds[0],seeds[1],seeds[2],seeds[3]);
+/* RNG_CALL_COUNT (s80a): a transparent call counter over the seeded dice —
+   returns the identical stream, byte-for-byte, but lets the cadastre's
+   lotDeterminism audit PROVE the plat consumes zero dice (a pure function of
+   the spine must never advance this counter when re-derived). */
+var RNG_CALL_COUNT = 0;
+var _rngBuildCore = sfc32(seeds[0],seeds[1],seeds[2],seeds[3]);
+var rngBuild = function(){ RNG_CALL_COUNT++; return _rngBuildCore(); };
 function seedHashValue(){ return seedStr + (lifeVariant ? ("."+lifeVariant) : ""); }
 function updateHashSeed(){
   var h = location.hash.replace(/s=[A-Za-z0-9]+(?:\.\d+)?/, "s="+seedHashValue());

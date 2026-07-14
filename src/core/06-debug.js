@@ -337,6 +337,21 @@ window.__P1850 = {
       boundingSphere: m.boundingSphere ? {x:m.boundingSphere.center.x,y:m.boundingSphere.center.y,z:m.boundingSphere.center.z,r:m.boundingSphere.radius} : null };
   },
   get plazaCenter(){ return { x:PLAZA_CENTER.x, z:PLAZA_CENTER.z }; },
+  /* s80a THE GROUND PLAN cadastre (core/08-cadastre): the dated blocks/plat-
+     lots/parcels system beside the spine. `at` is the one query every future
+     admission consumes; the accessors + stats support screening and the
+     Atelier overlay. */
+  groundPlan: {
+    at: function(x,z,day){ return groundPlanAt(x,z,day==null?simDay:day); },
+    lotById: function(id){ return lotById(id); },
+    blocksAt: function(day){ return blocksAt(day==null?simDay:day).map(function(b){ return b.key; }); },
+    parcelByName: function(n){ return parcelByName(n); },
+    band: function(x,z){ return groundPlanBand(x,z); },
+    get stats(){ return groundPlanStats(); },
+    get blocks(){ return GROUND_PLAN.blocks; },
+    get lots(){ return GROUND_PLAN.lots; },
+    get parcels(){ return GROUND_PARCELS; }
+  },
   get fauna(){
     return { hogs:hogMesh.count, hogTarget:hogTargetCount(simDay), gulls:gullMesh.count,
       gullShipsInRange:(window._gullShips||[]).length, horses:hitchedHorseMesh.count,

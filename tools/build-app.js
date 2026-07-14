@@ -60,6 +60,7 @@ const FILES = [
   "core/00-boot.js",
   "core/01-geography.js",
   "core/02-scene.js",
+  "core/08-cadastre.js",     // core (s80a) — THE GROUND PLAN cadastre (chunk 04): blocks/plat lots/parcels + groundPlanAt(); folds the zone predicates
   "core/03-sim.js",
   "core/04-roads.js",
   "core/05-routing.js",      // core plumbing (walkBlockedAt/graph) — kept, its removed-layer obstacle inputs stubbed empty
