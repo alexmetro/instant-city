@@ -1,0 +1,4 @@
+# DEV-ONLY harness — vendored Playwright + generated artifacts never ship / never commit.
+node_modules/
+report/
+package-lock.json

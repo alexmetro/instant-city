@@ -1,0 +1,20 @@
+{
+  "_meta": {
+    "purpose": "Geodesic ground-truth control points for the P1850 verification harness (foundation-reset §2 GEODETIC LOCK). STORED ONCE — verify.js runs NEVER hit the network.",
+    "provenance": "OSM Overpass way-intersection nodes (shared node between the two named street ways), fetched 2026-07-11. Canonical source of record: tools/map-overlay.py CONTROL_POINTS (docs repo) and the core.geodeticLock audit (src/core/06-debug.js), verbatim. SF's downtown grid is unchanged since O'Farrell 1847, so modern intersections are valid 1846-56 ground truth.",
+    "regenerate": "tools/map-overlay.py holds the Overpass query used to obtain these; re-run it to refresh, then update this file. The harness intentionally does not fetch at run time.",
+    "fields": "name, lat (WGS84), lon (WGS84), u (grid metres E), v (grid metres N in the reprojected data/streets-geometry.json frame)",
+    "yardstick_m_per_deg_at_37p795N": { "lat": 110992.6, "lon": 88076.6, "note": "Snyder WGS84 @37.795N; the affine absorbs a uniform scale so fit RMS is identical to the repo's 111320 constant." },
+    "gates": { "datasetFitRms_m": 2.0, "canonicalEndToEndRms_m": 2.0, "azimuthDriftDeg": 0.1, "worldToGridRoundTrip_m": 0.001 }
+  },
+  "controlPoints": [
+    { "name": "montgomery_clay",       "lat": 37.7946763, "lon": -122.4031576, "u":    0.0,   "v":   49.39 },
+    { "name": "montgomery_washington", "lat": 37.7955349, "lon": -122.4033265, "u":    0.0,   "v":  -49.39 },
+    { "name": "kearny_clay",           "lat": 37.7944619, "lon": -122.4047926, "u": -145.71,  "v":   49.39 },
+    { "name": "kearny_washington",     "lat": 37.7953282, "lon": -122.4049700, "u": -145.71,  "v":  -49.39 },
+    { "name": "market_kearny",         "lat": 37.7876758, "lon": -122.4034364, "u": -145.71,  "v":  815.06 },
+    { "name": "market_montgomery",     "lat": 37.7888178, "lon": -122.4019881, "u":    0.0,   "v":  709.20 },
+    { "name": "broadway_battery",      "lat": 37.7985851, "lon": -122.4010680, "u":  249.6,   "v": -350.79 },
+    { "name": "sansome_clay",          "lat": 37.7948561, "lon": -122.4015163, "u":  145.71,  "v":   49.39 }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "name": "p1850-verify",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DEV-ONLY verification harness for Project 1850 (foundation-reset §3 gate). NEVER shipped — the app stays single-file. Isolated Playwright browser drives the built index.html + atelier.html through the NOON PROTOCOL and measurement tables, emits report/{report.json,report.md}.",
+  "type": "commonjs",
+  "scripts": { "verify": "node verify.js" },
+  "dependencies": { "playwright": "1.49.1" }
+}

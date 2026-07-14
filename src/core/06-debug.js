@@ -545,6 +545,48 @@ window.__P1850.audits = (function(){
   return ns;
 })();
 
+/* ---- s89 (ITEM 0) THE VERIFICATION HARNESS HOOKS — __P1850.verify.*.
+   Promotes the existing alignment/measurement MATH (it already lives inside
+   the audits, which only return pass/fail + detail) into callable MEASUREMENT
+   TABLES the harness (tools/verify/verify.js) parses directly. Each hook runs
+   the underlying audit fresh (pure function of simDay — rewind-exact) and
+   projects the numbers the Director/harness reads. Zero new geometry: this is
+   an EXPOSURE layer over the registry, not a second source of truth.
+     • verify.geodeticFit()   — the geodetic control-point fit (core.geodeticLock):
+       dataset-fit RMS, canonical end-to-end RMS/max, azimuth drift, round-trip.
+     • verify.paintAlignment() — paint-vs-centerline (ground-paint.constantWidth
+       + .eraPaint + .oneOwner + .roadDarkerThanGround): ROW width conformance,
+       era-state paint coverage, single-owner-per-pixel.
+     • verify.lotFit()        — lot-vs-ROW (placement.platClosure + .lotDeterminism
+       + .parcelIntegrity + .platFrame): plat closure error, lot determinism,
+       parcel/ROW non-overlap.
+     • verify.tables()        — all three + the current date, one object the
+       harness serialises into report.json's measurement section.
+   The harness asserts the same gates the audits do; these hooks just make the
+   numbers machine-readable without scraping audit detail blobs. */
+window.__P1850.verify = (function(){
+  function A(layer,name){
+    var a = __P1850_AUDITS[layer] && __P1850_AUDITS[layer][name];
+    if(!a) return { pass:false, missing:layer+"."+name };
+    try { return a(); } catch(e){ return { pass:false, error:String(e&&e.message||e) }; }
+  }
+  return {
+    geodeticFit: function(){ return A("core","geodeticLock"); },
+    paintAlignment: function(){
+      return { constantWidth:A("ground-paint","constantWidth"), eraPaint:A("ground-paint","eraPaint"),
+               oneOwner:A("ground-paint","oneOwner"), roadDarkerThanGround:A("ground-paint","roadDarkerThanGround") };
+    },
+    lotFit: function(){
+      return { platClosure:A("placement","platClosure"), lotDeterminism:A("placement","lotDeterminism"),
+               parcelIntegrity:A("placement","parcelIntegrity"), platFrame:A("placement","platFrame") };
+    },
+    tables: function(){
+      return { date:simDateISO(dateFromSimDay(simDay)), simDay:simDay,
+               geodeticFit:this.geodeticFit(), paintAlignment:this.paintAlignment(), lotFit:this.lotFit() };
+    }
+  };
+})();
+
 /* =========================================================================
    s67 (#49) UNIVERSAL PLACEMENT AUDITS (placement-spec.md P1–P14).
    Core-owned (layers-spec rules block: "placement — cross-layer, core-owned").
