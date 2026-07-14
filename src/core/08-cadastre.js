@@ -115,6 +115,14 @@ function cadIsWaterLot(cx, cz){
    closes exactly against the real block polygon). */
 function deriveGroundPlan(){
   var blocks = [], lots = [], byId = {};
+  /* PUBLIC RESERVE (s82): Portsmouth Square was the city common — a reserved
+     PUBLIC block, never subdivided in our window. The block containing the
+     plaza centroid (PLAZA_CENTER, inverted through the resting base frame —
+     the post-1847-swing frame the plat rests in) is flagged publicReserve and
+     generates ZERO plat lots (platted common ≠ platted lots). The parcel
+     polygon below is DERIVED from this block, so parcel and plat can never
+     disagree. */
+  var plazaG = cadWorldToGridAt(PLAZA_CENTER.x, PLAZA_CENTER.z, GRID_ROT_BASE);
   for(var i=0;i<CAD_NS.length-1;i++) for(var j=0;j<CAD_EW.length-1;j++){
     var wS=CAD_NS[i], eS=CAD_NS[i+1], nS=CAD_EW[j], sS=CAD_EW[j+1];
     var uLoC=wS.u, uHiC=eS.u, vLoC=nS.v, vHiC=sS.v; // centerline cell
@@ -134,10 +142,12 @@ function deriveGroundPlan(){
     var nU=Math.max(1, Math.round(extU/CAD_LOT_STD_M)), nV=Math.max(1, Math.round(extV/CAD_LOT_STD_M));
     var std = (nU*nV===CAD_STD_LOTS_PER_BLOCK) && ((nU===3&&nV===2)||(nU===2&&nV===3));
     var key = "B|"+wS.id+"|"+eS.id+"|"+nS.id+"|"+sS.id;
+    var isReserve = plazaG.u>uLo && plazaG.u<uHi && plazaG.v>vLo && plazaG.v<vHi;
     var blk = { key:key, birth:birth, edges:{ west:wS.id, east:eS.id, north:nS.id, south:sS.id },
                 uLo:uLo, uHi:uHi, vLo:vLo, vHi:vHi, extU:extU, extV:extV, nU:nU, nV:nV,
-                standard:std, waterLots:0, lots:[] };
+                standard:std, publicReserve:isReserve, waterLots:0, lots:[] };
     var waterN=0;
+    if(isReserve){ blocks.push(blk); continue; }         // public reserve: ZERO plat lots
     for(var a=0;a<nU;a++) for(var b=0;b<nV;b++){
       var lu0=uLo+extU*a/nU, lu1=uLo+extU*(a+1)/nU, lv0=vLo+extV*b/nV, lv1=vLo+extV*(b+1)/nV;
       var wM=lu1-lu0, dM=lv1-lv0;
@@ -215,19 +225,25 @@ function lotWorldQuad(lotOrId, day){
    ===================================================================== */
 var CAD_DAY_ALWAYS = -1e9;
 
-/* Portsmouth Square — the plaza proto-parcel folds IN. Membership is the
-   EXACT two-frame test the old inPublicSquare used (Vioget as-built AND the
-   O'Farrell base), so the fold is behavior-preserving (parcelIntegrity proves
-   it). Open ground — structures/lot-lines/fences keep out. */
-function cadPlazaContains(x,z){
-  var P=GEO.plaza, X=x-GRID_ORIGIN_X, Z=z-GRID_ORIGIN_Z, frames=[VIOGET_SKEW, GRID_ROT_BASE];
-  for(var f=0;f<frames.length;f++){
-    var c=Math.cos(frames[f]), s=Math.sin(frames[f]);
-    var u=X*c + Z*s, v=-X*s + Z*c;
-    if(u>=P.uMin && u<=P.uMax && v>=P.vMin && v<=P.vMax) return true;
-  }
-  return false;
-}
+/* Portsmouth Square — BLOCK-DERIVED (s82, user finding on the live atelier).
+   The plaza parcel polygon IS its cadastre block polygon (the publicReserve
+   block bounded by Kearny/Clay/Dupont/Washington, found via the plaza
+   centroid in deriveGroundPlan). It therefore inherits the exact ROW-edge
+   fit (block bounds = centerline − surveyed half-width, the same numbers the
+   lots close against) and, as a uv-space parcel, the day-frame behavior
+   automatically (cadParcelContains inverts uv polys through cadSkewAt).
+   Replaces the old hand-authored two-frame GEO.plaza rect, which spanned
+   street CENTERLINES and so overlapped the surrounding rights-of-way.
+   Open ground — structures/lot-lines/fences keep out; the block generates
+   zero plat lots (platted common, never subdivided in-window). */
+var CAD_PLAZA_BLOCK = (function(){
+  var r = GROUND_PLAN.blocks.filter(function(b){ return b.publicReserve; });
+  return r.length===1 ? r[0] : null;   // !==1 is a parcelIntegrity failure, reported not forced
+})();
+var CAD_PLAZA_POLY = CAD_PLAZA_BLOCK ? [
+  { u:CAD_PLAZA_BLOCK.uLo, v:CAD_PLAZA_BLOCK.vLo }, { u:CAD_PLAZA_BLOCK.uHi, v:CAD_PLAZA_BLOCK.vLo },
+  { u:CAD_PLAZA_BLOCK.uHi, v:CAD_PLAZA_BLOCK.vHi }, { u:CAD_PLAZA_BLOCK.uLo, v:CAD_PLAZA_BLOCK.vHi }
+] : null;
 /* storeship mud band = the intertidal band (folds inIntertidalBand's math). */
 function cadIntertidalContains(x,z){ return x >= shorelineX(z) - 4 && terrainHeight(x,z) <= 0.5; }
 /* beach band (folds inBeachBand's math). */
@@ -266,7 +282,8 @@ var CAD_HAPPY_VALLEY_POLY = (function(){
 function cadCirclePoly(cx,cz,r,n){ var out=[]; for(var i=0;i<n;i++){ var a=i/n*Math.PI*2; out.push({x:cx+Math.cos(a)*r, z:cz+Math.sin(a)*r}); } return out; }
 
 var GROUND_PARCELS = [
-  { name:"portsmouth-square", cls:"plaza",  birth:CAD_DAY_ALWAYS, allow:["civic","promenade","fountain","well"], keepOutStructures:true, contains:cadPlazaContains },
+  { name:"portsmouth-square", cls:"plaza",  birth:CAD_DAY_ALWAYS, allow:["civic","promenade","fountain","well"], keepOutStructures:true,
+    space:"uv", poly:CAD_PLAZA_POLY, blockDerived:(CAD_PLAZA_BLOCK?CAD_PLAZA_BLOCK.key:null) /* s82: the parcel IS its block */ },
   { name:"yerba-buena-cove",  cls:"water",  birth:CAD_DAY_ALWAYS, allow:["ship","storeship","wharf","mooring","boat"], space:"world", poly:CAD_COVE_POLY },
   { name:"storeship-mud-band",cls:"mud",    birth:CAD_DAY_ALWAYS, allow:["storeship","wharf","beached-boat","flotsam"], band:"intertidal", contains:cadIntertidalContains },
   { name:"beach-band",        cls:"beach",  birth:CAD_DAY_ALWAYS, allow:["flotsam","beached-boat","boat"], band:"beach", contains:cadBeachContains },
@@ -277,10 +294,15 @@ var GROUND_PARCELS = [
 ];
 var GROUND_PARCELS_BY_NAME = {}; GROUND_PARCELS.forEach(function(p){ GROUND_PARCELS_BY_NAME[p.name]=p; });
 
-function cadPointInPoly(pts, x, z){ // ray cast, points {x,z}
+function cadPointInPoly(pts, x, z){ // ray cast; points {x,z} (world) or {u,v} (uv parcels)
+  /* s82 FIX (proven by parcelIntegrity): uv-space parcel rings are authored
+     as {u,v} points, but this reader only knew {x,z} — every uv poly test
+     read undefined→NaN and returned false (the plaza centroid was "outside"
+     its own parcel; the platted-region parcel silently matched nothing). */
   var inside=false;
   for(var i=0,j=pts.length-1; i<pts.length; j=i++){
-    var xi=pts[i].x, zi=pts[i].z, xj=pts[j].x, zj=pts[j].z;
+    var xi=(pts[i].x!=null?pts[i].x:pts[i].u), zi=(pts[i].z!=null?pts[i].z:pts[i].v);
+    var xj=(pts[j].x!=null?pts[j].x:pts[j].u), zj=(pts[j].z!=null?pts[j].z:pts[j].v);
     if(((zi>z)!==(zj>z)) && (x < (xj-xi)*(z-zi)/(zj-zi)+xi)) inside=!inside;
   }
   return inside;
@@ -361,6 +383,7 @@ function groundPlanStats(){
   return { blocks:B.length, lots:L.length, waterLots:L.filter(function(l){ return l.water; }).length,
            standardBlocks:B.filter(function(b){ return b.standard; }).length,
            nonStandardBlocks:B.filter(function(b){ return !b.standard; }).length,
+           publicReserveBlocks:B.filter(function(b){ return b.publicReserve; }).length, // s82: plaza — platted common, zero lots
            parcels:GROUND_PARCELS.length, maxDevPct:+(maxDev*100).toFixed(3), perEra:per };
 }
 
@@ -379,10 +402,16 @@ function groundPlanStats(){
 
   /* platClosure — every STANDARD block's 6 lots tile it exactly (area
      conservation, no gaps/overlaps). Non-standard blocks reported with counts,
-     never failed (building-spawn-spec: edge/partial blocks are flagged). */
+     never failed (building-spawn-spec: edge/partial blocks are flagged).
+     PUBLIC RESERVE blocks (s82: the plaza) are exempt from closure and must
+     instead hold ZERO plat lots — the common was never subdivided. */
   registerAudit("placement", "platClosure", function(){
-    var B=GROUND_PLAN.blocks, closureFail=[], nonStd=[], i;
+    var B=GROUND_PLAN.blocks, closureFail=[], nonStd=[], reserveBad=[], reserveN=0, i;
     for(i=0;i<B.length;i++){ var b=B[i];
+      if(b.publicReserve){ reserveN++;
+        if(b.lots.length!==0) reserveBad.push({ block:b.key, lots:b.lots.length });
+        continue;
+      }
       // partition integrity: lot count == nU*nV, unique ordinals, areas sum to block
       var area=b.extU*b.extV, lotArea=0, seen={}, dup=false;
       for(var k=0;k<b.lots.length;k++){ var l=b.lots[k]; lotArea+=l.widthM*l.depthM;
@@ -391,8 +420,9 @@ function groundPlanStats(){
       if(b.standard){ if(!closed) closureFail.push({ block:b.key, dArea:+(lotArea-area).toFixed(4), lots:b.lots.length }); }
       else nonStd.push({ block:b.key, shape:b.nU+"x"+b.nV, lots:b.lots.length, water:b.waterLots });
     }
-    return { pass: closureFail.length===0, law:"platClosure",
-             standardBlocks:B.filter(function(x){return x.standard;}).length,
+    return { pass: closureFail.length===0 && reserveBad.length===0, law:"platClosure",
+             standardBlocks:B.filter(function(x){return x.standard && !x.publicReserve;}).length,
+             publicReserveBlocks:reserveN, publicReserveWithLots:reserveBad,
              nonStandardFlagged:nonStd.length, closureFailures:closureFail.length,
              failList:closureFail.slice(0,20), nonStandardList:nonStd.slice(0,30) };
   });
@@ -447,7 +477,11 @@ function groundPlanStats(){
     function checkDay(day){
       var skew = cadSkewAt(day), bad = [], maxDev = 0, checked = 0, B = blocksAt(day);
       B.forEach(function(b){
-        var q = lotWorldQuad(b.lots[0], day).quad;
+        // publicReserve blocks (s82) hold zero lots — check the block rect
+        // itself through the same day-frame API (lotWorldQuad takes any
+        // {u:{lo,hi},v:{lo,hi}} rect), so the plaza block stays frame-audited.
+        var l0 = b.lots[0] || { u:{ lo:b.uLo, hi:b.uHi }, v:{ lo:b.vLo, hi:b.vHi } };
+        var q = lotWorldQuad(l0, day).quad;
         var pairs = [ ["north", az(q[1].x-q[0].x, q[1].z-q[0].z)],   // SW->SE edge vs the E-W street
                       ["west",  az(q[3].x-q[0].x, q[3].z-q[0].z)] ]; // SW->NW edge vs the N-S street
         pairs.forEach(function(p){
@@ -479,14 +513,13 @@ function groundPlanStats(){
     // (1) closed rings
     var openRings=[];
     GROUND_PARCELS.forEach(function(p){ if(p.poly && p.poly.length<3) openRings.push(p.name); });
-    // (2) fold agreement — reference math IS the original predicate formula
+    // (2) fold agreement — reference math IS the parcel's defining formula
     function refIntertidal(x,z){ return x >= shorelineX(z) - 4 && terrainHeight(x,z) <= 0.5; }
     function refBeach(x,z){ var h=terrainHeight(x,z); return x >= shorelineX(z) - 30 && h > -0.6 && h <= 1.8; }
-    function refPlaza(x,z){
-      var P=GEO.plaza, X=x-GRID_ORIGIN_X, Z=z-GRID_ORIGIN_Z, frames=[VIOGET_SKEW, GRID_ROT_BASE];
-      for(var f=0;f<frames.length;f++){ var c=Math.cos(frames[f]), s=Math.sin(frames[f]);
-        var u=X*c+Z*s, v=-X*s+Z*c; if(u>=P.uMin&&u<=P.uMax&&v>=P.vMin&&v<=P.vMax) return true; }
-      return false;
+    function refPlaza(x,z){ // s82: block-derived — point inside the reserve block's uv bounds, DAY frame
+      if(!CAD_PLAZA_BLOCK) return false;
+      var g = cadWorldToGridAt(x, z, cadSkewAt(null)), b = CAD_PLAZA_BLOCK;
+      return g.u>=b.uLo && g.u<=b.uHi && g.v>=b.vLo && g.v<=b.vHi;
     }
     // fixed 500-point lattice over the town + cove bbox (deterministic, no dice)
     var x0=PLAZA_CENTER.x-700, x1=PLAZA_CENTER.x+1400, z0=PLAZA_CENTER.z-700, z1=PLAZA_CENTER.z+900;
@@ -517,8 +550,69 @@ function groundPlanStats(){
     });
     var plazaParcel = GROUND_PARCELS_BY_NAME["portsmouth-square"];
     var plazaSelf = !!(plazaParcel && cadParcelContains(plazaParcel, pc.x, pc.z));
-    return { pass: openRings.length===0 && disagree===0 && inlandInWater.length===0 && plazaSelf, law:"parcelIntegrity",
+    // (4) PLAZA BLOCK-DERIVATION (s82) — three numeric laws:
+    //   (4a) public-square parcels contain ZERO plat lots (no lot's uv rect
+    //        intersects the plaza poly's uv bounds);
+    //   (4b) the plaza parcel polygon lies WITHIN its block's uv bounds
+    //        (identity expected — derived from it) ⇒ no overlap with any ROW;
+    //   (4c) plaza parcel edge-to-ROW-edge offset = 0.00 m at 3 stations per
+    //        edge, all 4 edges, in BOTH survey frames (1846-07-01 Vioget /
+    //        1848-04-01 base) — the same exactness standard the lots meet.
+    var plazaOne = !!CAD_PLAZA_BLOCK;                       // exactly one reserve block claimed
+    var lotsInPlaza = [];
+    if(CAD_PLAZA_BLOCK){ var pb=CAD_PLAZA_BLOCK;
+      GROUND_PLAN.lots.forEach(function(l){
+        if(l.u.hi > pb.uLo+1e-9 && l.u.lo < pb.uHi-1e-9 && l.v.hi > pb.vLo+1e-9 && l.v.lo < pb.vHi-1e-9)
+          lotsInPlaza.push(l.id);
+      });
+    }
+    var polyInBlock = false, polyBoundsDev = null;
+    if(CAD_PLAZA_BLOCK && plazaParcel && plazaParcel.poly){
+      var dU=0, dV=0;
+      plazaParcel.poly.forEach(function(p){
+        dU = Math.max(dU, Math.max(pb.uLo-p.u, p.u-pb.uHi));
+        dV = Math.max(dV, Math.max(pb.vLo-p.v, p.v-pb.vHi));
+      });
+      polyBoundsDev = +Math.max(dU, dV, 0).toFixed(6);      // m outside the block bounds (0 = inside)
+      polyInBlock = dU <= 1e-6 && dV <= 1e-6;
+    }
+    var rowOffsets = { maxM:null, stations:0, list:[] };
+    if(CAD_PLAZA_BLOCK){
+      var days = [eventDateToSimDay("1846-07-01"), eventDateToSimDay("1848-04-01")], maxOff = 0;
+      days.forEach(function(dd){
+        var skew = cadSkewAt(dd);
+        var edges = [
+          { id:pb.edges.west,  pts:[[pb.uLo, pb.vLo+(pb.vHi-pb.vLo)*0.25],[pb.uLo,(pb.vLo+pb.vHi)/2],[pb.uLo, pb.vLo+(pb.vHi-pb.vLo)*0.75]] },
+          { id:pb.edges.east,  pts:[[pb.uHi, pb.vLo+(pb.vHi-pb.vLo)*0.25],[pb.uHi,(pb.vLo+pb.vHi)/2],[pb.uHi, pb.vLo+(pb.vHi-pb.vLo)*0.75]] },
+          { id:pb.edges.north, pts:[[pb.uLo+(pb.uHi-pb.uLo)*0.25, pb.vLo],[(pb.uLo+pb.uHi)/2, pb.vLo],[pb.uLo+(pb.uHi-pb.uLo)*0.75, pb.vLo]] },
+          { id:pb.edges.south, pts:[[pb.uLo+(pb.uHi-pb.uLo)*0.25, pb.vHi],[(pb.uLo+pb.uHi)/2, pb.vHi],[pb.uLo+(pb.uHi-pb.uLo)*0.75, pb.vHi]] }
+        ];
+        edges.forEach(function(e){
+          var st = STREETS_RUNTIME_BY_ID[e.id]; if(!st) return;
+          var ang = st.swings ? skew : GRID_ROT_BASE, cl = [];
+          for(var pi=0; pi<st.polyline.length; pi++) cl.push(gridToWorldAt(st.polyline[pi].u, st.polyline[pi].v, ang));
+          e.pts.forEach(function(uv){
+            var w = gridToWorldAt(uv[0], uv[1], skew), dmin = Infinity;
+            for(var si=0; si<cl.length-1; si++) dmin = Math.min(dmin, distToSegXZ(w.x, w.z, cl[si].x, cl[si].z, cl[si+1].x, cl[si+1].z));
+            var off = Math.abs(dmin - st.widthM/2);
+            rowOffsets.stations++;
+            if(off > maxOff) maxOff = off;
+            rowOffsets.list.push({ day:dd, edge:e.id, offM:+off.toFixed(4) });
+          });
+        });
+      });
+      rowOffsets.maxM = +maxOff.toFixed(4);
+      rowOffsets.list = rowOffsets.list.slice(0,8);
+    }
+    var plazaRowExact = rowOffsets.maxM!=null && rowOffsets.maxM <= 0.005; // 0.00 m at report precision
+    return { pass: openRings.length===0 && disagree===0 && inlandInWater.length===0 && plazaSelf
+                   && plazaOne && lotsInPlaza.length===0 && polyInBlock && plazaRowExact,
+             law:"parcelIntegrity",
              parcels:GROUND_PARCELS.length, openRings:openRings, sampledPoints:side*side*3, predicateDisagreements:disagree,
-             inlandPointsInWater:inlandInWater, plazaCentroidInOwnParcel:plazaSelf };
+             inlandPointsInWater:inlandInWater, plazaCentroidInOwnParcel:plazaSelf,
+             plazaBlockDerived:{ oneBlock:plazaOne, block:(CAD_PLAZA_BLOCK?CAD_PLAZA_BLOCK.key:null),
+               lotsInsidePlaza:lotsInPlaza.length, lotList:lotsInPlaza.slice(0,8),
+               polyWithinBlock:polyInBlock, polyBoundsDevM:polyBoundsDev,
+               edgeToRowOffset:{ stations:rowOffsets.stations, maxM:rowOffsets.maxM, exact:plazaRowExact, sample:rowOffsets.list } } };
   });
 })();

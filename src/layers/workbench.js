@@ -295,7 +295,7 @@
   makeChild("row",    "STREET RIGHTS-OF-WAY",
     "Legal street corridors: each street's constant surveyed width centered on its master centerline. Paint and placement law both derive from these. cyan = base −9.0° frame · magenta = Vioget 1839 frame");
   makeChild("lots",   "PLAT LOTS",
-    "The dated cadastre: blocks and 50-vara lots born at their survey checkpoints; scrub the timeline to watch the plat appear. gold = corner lot · cyan = water lot (1847 beach-and-water auction) · magenta = non-standard block. Pattern-derived; numbered-plat anchoring pending.");
+    "The dated cadastre: blocks and 50-vara lots born at their survey checkpoints; scrub the timeline to watch the plat appear. white = lot lines · gold tick = corner lots marked at their corner point · cyan = water lot (1847 beach-and-water auction) · magenta = non-standard block. The plaza block is a public reserve — no lots. Pattern-derived; numbered-plat anchoring pending.");
   makeChild("parcels","NAMED PARCELS",
     "Named ground parcels carrying allowed-asset-class law (plaza · cove · mud/beach bands · camp · mission · presidio). One zone truth: placement reads these.");
 
@@ -322,8 +322,8 @@
     r.cb.addEventListener("change", function(){ setOverlay(key, r.cb.checked); });
     return r;
   }
-  makeFlat("framecmp", "FRAME COMPARISON",
-    "Renders both survey frames for divergence inspection. Reference only — the ROW overlay above shows each street's single ACTIVE frame; this shows the full swing sweep the placement law reserves. cyan = base −9.0° · magenta = Vioget 1839.");
+  makeFlat("framecmp", "THE 1847 RE-SURVEY — before/after",
+    "O'Farrell's 1847 re-survey rotated the whole grid 2.5°; this draws BOTH alignments at once (Vioget 1839 in magenta, O'Farrell in cyan) so the divergence is inspectable. Reference x-ray only — the overlays above always show the single frame in force at the current date.");
   var keepoutRow = makeFlat("keepout", "WALK KEEP-OUT",
     "Where walking is forbidden at the current date (red). Sources: water, placed footprints, registered keep-outs. Status line shows the live blocked-cell count — expect near-empty until blocking layers are admitted.");
   keepoutStatusEl = el("div","wb-ov-status","(toggle to sample the walk mask at this date)",flatWrap);
@@ -426,11 +426,25 @@
   function buildLotOverlay(){
     _overlayDay = Math.floor(simDay);
     var blocks = blocksAt(simDay), pos=[], col=[];
+    /* s82 legibility: lot LINES are one color (white); corner lots are marked
+       with a small gold tick (diamond) at their block-corner vertex instead of
+       full gold outlines (4 of 6 lots in a standard block are corners — whole-
+       perimeter gold read as noise). water lots stay cyan; non-standard blocks
+       stay magenta. */
+    function cornerTick(p){ var r=2.4, cc=CAD_COL_CORNER;
+      wbPushDrapedRun(pos,col,[{x:p.x-r,z:p.z},{x:p.x,z:p.z-r},{x:p.x+r,z:p.z},{x:p.x,z:p.z+r},{x:p.x-r,z:p.z}],cc,0.6,false,3);
+    }
     blocks.forEach(function(b){
       b.lots.forEach(function(l){
-        var c = l.water ? CAD_COL_WATER : (!b.standard ? CAD_COL_NONSTD : (l.corner ? CAD_COL_CORNER : CAD_COL_STD));
+        var c = l.water ? CAD_COL_WATER : (!b.standard ? CAD_COL_NONSTD : CAD_COL_STD);
         var q = lotWorldQuad(l, simDay).quad;          // day-frame world geometry from the cadastre
         wbPushDrapedRun(pos,col,[q[0],q[1],q[2],q[3],q[0]],c,0.5,false,9); // closed loop, draped
+        if(l.corner){                                  // tick at the vertex that IS the block corner
+          if(l.iU===0      && l.iV===0)      cornerTick(q[0]); // (u.lo,v.lo) = SW quad vertex
+          if(l.iU===b.nU-1 && l.iV===0)      cornerTick(q[1]);
+          if(l.iU===b.nU-1 && l.iV===b.nV-1) cornerTick(q[2]);
+          if(l.iU===0      && l.iV===b.nV-1) cornerTick(q[3]);
+        }
       });
     });
     return wbLineSegs(pos,col,0.92,999);
@@ -716,8 +730,13 @@
           + (lot.corner?" · CORNER":"") + (lot.water?" · WATER LOT":"")
           + " · born "+(lot.birth<-1000?"pre-sim":bDate));
         probeLine(probeOut, "block", gp.block);
+      } else if(gp.block){
+        var pBlk = cadBlockAt(x, z, simDay);
+        probeLine(probeOut, "ground-plan", (pBlk && pBlk.publicReserve)
+          ? ("PUBLIC RESERVE — block "+gp.block+" (the plaza common, never subdivided; zero plat lots)")
+          : ("block "+gp.block+" (point off its lot fabric)"));
       } else {
-        probeLine(probeOut, "ground-plan", gp.block ? ("block "+gp.block+" (point off its lot fabric)") : "unplatted ground (no block at this date)");
+        probeLine(probeOut, "ground-plan", "unplatted ground (no block at this date)");
       }
       probeLine(probeOut, "parcels", gp.parcels.length ? gp.parcels.join(" · ") : "none");
       if(gp.band) probeLine(probeOut, "band", gp.band);
