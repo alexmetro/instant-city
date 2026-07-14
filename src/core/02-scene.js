@@ -273,34 +273,23 @@ function distToSegXZ(x,z,x0,z0,x1,z1){
    buildings never end up standing where a not-yet-surveyed later street
    will run; only the SPLAT PAINTER and LABELS are era-gated, since only
    they need to visibly grow over time). Projected via gridToWorldAt() at
-   the UNION of every frame a street ever renders in (below): swinging
-   streets contribute BOTH the Vioget (-6.5°) and canonical base (-9.0°)
-   frames, non-swinging streets only -9.0°. That way a building's clearance
-   reserves the right-of-way across the whole 1847 swing sweep, independent
-   of the s77 GEODETIC LOCK change to the resting gridToWorld() frame. */
-/* s62 BUILDINGS-ON-ROADS FIX (road-master-spec constant-width amendment):
-   this list used to be built ONLY in the fixed Vioget frame (-6.5°), but
-   streets PAINT at GRID_ROT_BASE (-9.0°) after the Aug-1847 swing — and
-   non-swinging (post-O'Farrell) streets paint at -9.0° ALWAYS. The 2.5°
-   frame delta is up to ~26m of lateral divergence at the block extremes,
-   which is exactly how frontage rows ended up standing on the painted
-   roadway. Placement clearance is now the UNION of every frame a street
-   ever renders in: swinging streets contribute BOTH frames (the swing
-   sweep), non-swinging streets contribute the -9.0° frame they always
-   paint at. halfW is the street's CONSTANT surveyed class width — the
-   right-of-way is reserved at full width from day one. */
+   the one canonical GRID_ROT_BASE (-9.0°) frame. halfW is the street's
+   CONSTANT surveyed class width — the right-of-way is reserved at full
+   width from day one, so no frontage row can stand on the painted roadway.
+   SINGLE-FRAME LIBERTY (2026-07-14, road-master-spec SINGLE-FRAME
+   AMENDMENT): this list used to be the UNION of two frames (swinging
+   streets contributed BOTH the Vioget -6.5° and base -9.0° sweeps of the
+   1847 grid-swing). The swing is deleted — there is one frame, so one seg
+   per street segment. */
 var PLACEMENT_STREET_SEGS = (function(){
   var segs = [];
   STREETS_RUNTIME.forEach(function(s){
     var i1 = s.checkpoints.length ? s.checkpoints[s.checkpoints.length-1].extent[1] : s.polyline.length-1;
     var halfW = s.widthM/2;
-    var frames = s.swings ? [{a:VIOGET_SKEW,f:"vioget"}, {a:GRID_ROT_BASE,f:"base"}] : [{a:GRID_ROT_BASE,f:"base"}];
-    frames.forEach(function(fr){
-      for(var i=0;i<i1;i++){
-        var a=gridToWorldAt(s.polyline[i].u, s.polyline[i].v, fr.a), b=gridToWorldAt(s.polyline[i+1].u, s.polyline[i+1].v, fr.a);
-        segs.push({x0:a.x,z0:a.z,x1:b.x,z1:b.z,halfW:halfW,frame:fr.f,id:s.id});
-      }
-    });
+    for(var i=0;i<i1;i++){
+      var a=gridToWorldAt(s.polyline[i].u, s.polyline[i].v, GRID_ROT_BASE), b=gridToWorldAt(s.polyline[i+1].u, s.polyline[i+1].v, GRID_ROT_BASE);
+      segs.push({x0:a.x,z0:a.z,x1:b.x,z1:b.z,halfW:halfW,id:s.id});
+    }
   });
   return segs;
 })();

@@ -175,26 +175,18 @@ function deriveGroundPlan(){
 var GROUND_PLAN = deriveGroundPlan();
 
 /* =====================================================================
-   THE DAY FRAME (s81 Director ruling: the swing is materialized INSIDE the
-   cadastre, never in consumers). The plat is stored frame-agnostic in (u,v);
-   world geometry is produced AT QUERY TIME in the frame the streets render
-   in on the queried day — Vioget (−6.5°) before the O'Farrell swing, eased
-   to base (−9.0°) across Feb–Aug 1847, base after (the same law
-   updateGridSwing applies to the paint). Consumers (overlays, buildings
-   placement, anything future) call the API and do ZERO frame math of their
-   own — consumer-side frame math is the outlawed pre-s77 class. Derives
-   only from the canonical constants (VIOGET_SKEW / GRID_ROT_BASE /
-   GRID_ORIGIN_X/Z — the geodetic lock's own numbers) + the sim's swing
-   window. OFARRELL_SWING_START/END live in the sim chunk (module var
-   hoisting makes them visible here); guarded so a pre-init call degrades
-   to the resting base frame.
+   THE DAY FRAME — SINGLE FRAME (user decision + Director concurrence,
+   2026-07-14, road-master-spec SINGLE-FRAME AMENDMENT). The plat is stored
+   frame-agnostic in (u,v); world geometry is produced AT QUERY TIME. cadSkewAt
+   once materialized the Feb-Aug 1847 O'Farrell grid-swing HERE (Vioget −6.5°
+   → base −9.0°, eased by date) so consumers did zero frame math. The swing is
+   now DELETED as geometry — no street physically rotated — so cadSkewAt
+   resolves to the ONE canonical frame (GRID_ROT_BASE, −9.0°) at every date.
+   The `day` parameter is RETAINED for API stability (lotWorldQuad(lot, day)
+   and every point-query keep their signatures) but no longer changes the
+   frame: one frame, all dates.
    ===================================================================== */
-function cadSkewAt(day){
-  if(day == null) day = (typeof simDay === "number") ? simDay : 1e9;
-  if(typeof OFARRELL_SWING_START !== "number" || !isFinite(OFARRELL_SWING_START)) return GRID_ROT_BASE;
-  var t = Math.max(0, Math.min(1, (day - OFARRELL_SWING_START) / (OFARRELL_SWING_END - OFARRELL_SWING_START)));
-  return VIOGET_SKEW + (GRID_ROT_BASE - VIOGET_SKEW) * t;
-}
+function cadSkewAt(day){ return GRID_ROT_BASE; } // day ignored — single frame (2026-07-14)
 /* Parameterized inverse of gridToWorldAt() — same canonical origin/angle
    constants (geodetic lock: DERIVED from the one fit, never re-anchored).
    worldToGrid() is exactly this at the resting base frame. */
@@ -320,9 +312,9 @@ function cadParcelContains(p, x, z, day){
 /* =====================================================================
    THE API — the one interface every future admission consumes.
    ===================================================================== */
-/* Point queries invert through the DAY frame (cadSkewAt) — a click on a lot
-   corner at an 1846 date maps to the (u,v) the Vioget-frame streets bound,
-   not the resting base frame 2.5° away (~17 m at the grid edge). */
+/* Point queries invert through cadSkewAt — the one canonical frame at every
+   date (single frame 2026-07-14: the grid-swing and its 1846 Vioget offset are
+   deleted, so there is no date-dependent skew to invert through). */
 function cadBlockAt(x, z, day){
   var g = cadWorldToGridAt(x, z, cadSkewAt(day));
   for(var i=0;i<GROUND_PLAN.blocks.length;i++){ var b=GROUND_PLAN.blocks[i];
@@ -343,7 +335,7 @@ function cadRowAt(x, z){ // the right-of-way (street id) the point sits inside, 
   if(typeof PLACEMENT_STREET_SEGS==="undefined") return null;
   for(var i=0;i<PLACEMENT_STREET_SEGS.length;i++){ var s=PLACEMENT_STREET_SEGS[i];
     var d=distToSegXZ(x,z,s.x0,s.z0,s.x1,s.z1);
-    if(d<s.halfW && (!best || d<best.d)) best={ id:s.id, d:d, halfW:s.halfW, frame:s.frame };
+    if(d<s.halfW && (!best || d<best.d)) best={ id:s.id, d:d, halfW:s.halfW };
   }
   return best;
 }
@@ -465,12 +457,14 @@ function groundPlanStats(){
              monotone:mono, list:bad.slice(0,20) };
   });
 
-  /* platFrame (s81 Director ruling) — the cadastre's day-frame world geometry
-     matches the streets' rendered frame NUMERICALLY: at 1846-07-01 (Vioget,
-     −6.5°) and 1848-04-01 (post-swing base, −9.0°), for EVERY block present,
-     the lot-edge azimuths (both axes, from lotWorldQuad at that day) equal the
-     bounding streets' rendered polyline azimuths within 0.2°. Also asserts the
-     day frame itself resolves to the correct constant at both dates. */
+  /* platFrame (s81 Director ruling; SINGLE-FRAME 2026-07-14) — the cadastre's
+     day-frame world geometry matches the streets' rendered frame NUMERICALLY:
+     for EVERY block present, the lot-edge azimuths (both axes, from lotWorldQuad
+     at that day) equal the bounding streets' rendered polyline azimuths within
+     0.2°. Checked at 1846-07-01 AND 1849-09-01 — both now resolve to the ONE
+     canonical frame (GRID_ROT_BASE, −9.0°): the grid-swing is deleted, so the
+     dual-frame (Vioget-1846 / base-1848) branch is gone. The audit still
+     asserts the day frame resolves to −9.0° at both dates. */
   registerAudit("placement", "platFrame", function(){
     function az(dx,dz){ var a = Math.atan2(dz,dx)*180/Math.PI; return ((a%180)+180)%180; }   // undirected line azimuth
     function angDiff(a,b){ var d = Math.abs(a-b)%180; return Math.min(d, 180-d); }
@@ -486,10 +480,9 @@ function groundPlanStats(){
                       ["west",  az(q[3].x-q[0].x, q[3].z-q[0].z)] ]; // SW->NW edge vs the N-S street
         pairs.forEach(function(p){
           var st = STREETS_RUNTIME_BY_ID[b.edges[p[0]]]; if(!st) return;
-          var ang = st.swings ? skew : GRID_ROT_BASE;
-          var n = st.polyline.length;
-          var p0 = gridToWorldAt(st.polyline[0].u, st.polyline[0].v, ang);
-          var p1 = gridToWorldAt(st.polyline[n-1].u, st.polyline[n-1].v, ang);
+          var n = st.polyline.length;               // single frame: every street at GRID_ROT_BASE
+          var p0 = gridToWorldAt(st.polyline[0].u, st.polyline[0].v, GRID_ROT_BASE);
+          var p1 = gridToWorldAt(st.polyline[n-1].u, st.polyline[n-1].v, GRID_ROT_BASE);
           var d = angDiff(p[1], az(p1.x-p0.x, p1.z-p0.z)); checked++;
           if(d > maxDev) maxDev = d;
           if(d > 0.2) bad.push({ block:b.key, edge:p[0], street:st.id, devDeg:+d.toFixed(3) });
@@ -499,10 +492,10 @@ function groundPlanStats(){
                maxDevDeg:+maxDev.toFixed(4), violations:bad.length, list:bad.slice(0,10) };
     }
     var d1846 = checkDay(eventDateToSimDay("1846-07-01"));
-    var d1848 = checkDay(eventDateToSimDay("1848-04-01"));
-    var framesRight = Math.abs(d1846.skewDeg - VIOGET_SKEW_DEG) < 0.01 && Math.abs(d1848.skewDeg - GRID_ROT_BASE_DEG) < 0.01;
-    return { pass: d1846.violations===0 && d1848.violations===0 && framesRight, law:"platFrame",
-             framesResolve:framesRight, "vioget-1846":d1846, "base-1848":d1848 };
+    var d1849 = checkDay(eventDateToSimDay("1849-09-01"));
+    var framesRight = Math.abs(d1846.skewDeg - GRID_ROT_BASE_DEG) < 0.01 && Math.abs(d1849.skewDeg - GRID_ROT_BASE_DEG) < 0.01;
+    return { pass: d1846.violations===0 && d1849.violations===0 && framesRight, law:"platFrame",
+             singleFrame:framesRight, "base-1846":d1846, "base-1849":d1849 };
   });
 
   /* parcelIntegrity — (1) every polygon parcel is a closed ring (>=3 pts);
@@ -556,8 +549,9 @@ function groundPlanStats(){
     //   (4b) the plaza parcel polygon lies WITHIN its block's uv bounds
     //        (identity expected — derived from it) ⇒ no overlap with any ROW;
     //   (4c) plaza parcel edge-to-ROW-edge offset = 0.00 m at 3 stations per
-    //        edge, all 4 edges, in BOTH survey frames (1846-07-01 Vioget /
-    //        1848-04-01 base) — the same exactness standard the lots meet.
+    //        edge, all 4 edges, at 1846-07-01 AND 1849-09-01 — both now the ONE
+    //        canonical frame (single frame 2026-07-14) — the same exactness
+    //        standard the lots meet.
     var plazaOne = !!CAD_PLAZA_BLOCK;                       // exactly one reserve block claimed
     var lotsInPlaza = [];
     if(CAD_PLAZA_BLOCK){ var pb=CAD_PLAZA_BLOCK;
@@ -578,7 +572,7 @@ function groundPlanStats(){
     }
     var rowOffsets = { maxM:null, stations:0, list:[] };
     if(CAD_PLAZA_BLOCK){
-      var days = [eventDateToSimDay("1846-07-01"), eventDateToSimDay("1848-04-01")], maxOff = 0;
+      var days = [eventDateToSimDay("1846-07-01"), eventDateToSimDay("1849-09-01")], maxOff = 0;
       days.forEach(function(dd){
         var skew = cadSkewAt(dd);
         var edges = [
@@ -589,8 +583,8 @@ function groundPlanStats(){
         ];
         edges.forEach(function(e){
           var st = STREETS_RUNTIME_BY_ID[e.id]; if(!st) return;
-          var ang = st.swings ? skew : GRID_ROT_BASE, cl = [];
-          for(var pi=0; pi<st.polyline.length; pi++) cl.push(gridToWorldAt(st.polyline[pi].u, st.polyline[pi].v, ang));
+          var cl = [];   // single frame: every street at GRID_ROT_BASE
+          for(var pi=0; pi<st.polyline.length; pi++) cl.push(gridToWorldAt(st.polyline[pi].u, st.polyline[pi].v, GRID_ROT_BASE));
           e.pts.forEach(function(uv){
             var w = gridToWorldAt(uv[0], uv[1], skew), dmin = Infinity;
             for(var si=0; si<cl.length-1; si++) dmin = Math.min(dmin, distToSegXZ(w.x, w.z, cl[si].x, cl[si].z, cl[si+1].x, cl[si+1].z));

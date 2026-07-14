@@ -1278,18 +1278,20 @@ function setProvenanceOnly(){}        // FOUNDATION: awaiting admission of label
       45.06°, well inside the ±0.5° acceptance). SIGN: in this file's
       convention (+x east, +z south, x = u·cos a − v·sin a) a NEGATIVE
       angle leans grid-north west of true north, as measured.
-   2. SEMANTICS SPLIT (geography-shoreline.md §2 + its uncertainty #3):
-      the historical "O'Farrell swing" corrected Vioget's ~2.5° error
-      WITHIN the ~9°-rotated grid — the 2.5° is the SWING DELTA, not the
-      grid's rotation. GRID_ROT_BASE (-9.0°, permanent, = the measured
-      modern/post-1847 grid) and VIOGET_ERROR_DEG (2.5°, the pre-1847
-      as-built offset the Feb-Aug 1847 swing removes) are now separate
-      numbers; the as-built pre-swing frame is base + error = -6.5°.
-      (The error's SIGN/direction is undocumented — the record says only
-      "2.5° off true right angles", mechanism contested per
-      geography-shoreline.md consolidated-uncertainty #3 — so the swing
-      keeps this file's long-standing direction convention: pre-1847 sits
-      2.5° counterclockwise-of-base in app angle terms.)
+   2. SINGLE FRAME (user decision + Director concurrence, 2026-07-14 —
+      road-master-spec.md SINGLE-FRAME AMENDMENT): GRID_ROT_BASE (-9.0°,
+      the measured modern/post-1847 O'Farrell grid) is the ONE frame for the
+      entire window. The historical "O'Farrell swing" corrected Vioget's
+      ~2.5° error on PAPER in 1847 — no street or building physically
+      rotated — so it is NOT modeled as geometry here. The old dual-frame
+      machinery (VIOGET_ERROR_DEG 2.5°, the as-built -6.5° VIOGET_SKEW, the
+      Feb-Aug 1847 easing) was deleted; it produced a recurring consumer-bug
+      class (the -6.5° pin, the cadastre lot shear) for no visible gain. The
+      1847 survey remains a full spine/plat CHECKPOINT (streets + lots appear
+      on their dates); only the ~2.5° alignment of 1846's few physical
+      streets is simplified — a DELIBERATE, TAGGED liberty (that physical
+      1846 alignment is itself barely documented, and trails meander by §9b
+      law, so this contradicts nothing).
    3. TERRAIN REGISTRATION: the heightmap bake's world frame is centered
       on (37.7955N, 122.4045W) while the street grid's (u,v)=(0,0) —
       Montgomery St's centerline at the Washington–Clay midrow — is really
@@ -1313,12 +1315,18 @@ function setProvenanceOnly(){}        // FOUNDATION: awaiting admission of label
    spacing ≈ 98.8 m (100-vara block + documented 14.97 m cross width;
    measured Washington↔Clay 96.7-97.7 m). */
 var GRID_ROT_BASE_DEG = -9.0;            // fitted base grid rotation (measured, permanent — the
-                                          // O'Farrell/modern grid; VALIDATION-2026-07-11 §4.1)
-var VIOGET_ERROR_DEG = 2.5;              // "Vioget's error" — the 1847 swing DELTA within the
-                                          // rotated grid (geography-shoreline.md §2; direction
-                                          // modeled, mechanism contested per uncertainty #3)
-var VIOGET_SKEW_DEG = GRID_ROT_BASE_DEG + VIOGET_ERROR_DEG; // -6.5° — the as-built pre-1847 frame
-var VIOGET_SKEW = VIOGET_SKEW_DEG*Math.PI/180;
+                                          // O'Farrell/modern grid; VALIDATION-2026-07-11 §4.1).
+                                          // SINGLE-FRAME LIBERTY (2026-07-14): this is now the ONE
+                                          // frame for the entire sim window — the animated Vioget
+                                          // (-6.5°) → O'Farrell (-9.0°) grid-swing is DELETED as
+                                          // geometry (it modeled a paper survey correction as a
+                                          // physical rotation that never happened). 1846-47 renders
+                                          // at the corrected O'Farrell alignment; the ~2.5° Vioget
+                                          // divergence is not modeled as geometry — see
+                                          // road-master-spec.md SINGLE-FRAME AMENDMENT. The former
+                                          // VIOGET_ERROR_DEG / VIOGET_SKEW_DEG / VIOGET_SKEW chain
+                                          // and updateGridSwing()/CURRENT_STREET_SKEW easing were
+                                          // deleted with it.
 var GRID_ROT_BASE = GRID_ROT_BASE_DEG*Math.PI/180;
 /* Terrain↔grid registration (VALIDATION-2026-07-11 §4.3): world offset of
    the grid origin inside the terrain bake's frame. Derived: grid (0,0) is
@@ -1352,28 +1360,22 @@ var STREET_STUB_LEN = 100;               // sandy-track fade-out length beyond t
    into the terrain frame via GRID_ORIGIN_X/Z (fix #3 above). Every street,
    block and the plaza itself is defined in (u,v) and only converted at the
    end, so the whole grid tilts together instead of being hand-skewed per
-   street. gridToWorldAt() is parameterized so the GROUND-SPLAT street
-   painter (below) can ease the angle from the as-built VIOGET_SKEW (-6.5°)
-   to GRID_ROT_BASE (-9.0°) for the O'Farrell 1847 grid-swing. */
+   street. SINGLE-FRAME LIBERTY (2026-07-14): the skewAngle parameter is
+   retained (paint/overlays/audits still call it), but the ONLY angle any
+   consumer passes is now GRID_ROT_BASE — the Vioget-frame branch is gone. */
 function gridToWorldAt(u,v,skewAngle){
   var c = Math.cos(skewAngle), s = Math.sin(skewAngle);
   return { x: u*c - v*s + GRID_ORIGIN_X, z: u*s + v*c + GRID_ORIGIN_Z };
 }
-/* gridToWorld(): THE canonical resting frame (GRID_ROT_BASE, −9.0°) — the
-   measured/post-1847 O'Farrell grid. s77 GEODETIC LOCK FIX: this was pinned
-   at VIOGET_SKEW (−6.5°), so every fixed anchor that reads it (GEO.plaza
-   fill, doodad fences, the wharf/anchorage, the fire block, the routing
-   walker graph, ship berths) sat 9–13 m off the −9.0° streets it is
-   supposed to bound (end-to-end that pin measured 18 m RMS / 35 m worst vs
-   the OSM control points; the canonical −9.0° measures 1.2 m RMS). The
-   deliberate pre-survey Vioget-frame consumers — the founding-village
-   scatter + City Hotel, an intentional "existing buildings kept Vioget's
-   crooked alignment, new construction followed the corrected grid" model —
-   now call gridToWorldAt(u,v,VIOGET_SKEW) EXPLICITLY, so there is no silent
-   frame left anywhere. The visible street ground-paint still eases −6.5°→
-   −9.0° across Feb–Aug 1847 (renderGroundSplat); at rest (which is the
-   entire post-Aug-1847 window, i.e. essentially the whole Gold-Rush sim)
-   everything shares the one −9.0° frame. */
+/* gridToWorld(): THE canonical frame (GRID_ROT_BASE, −9.0°) — the
+   measured/post-1847 O'Farrell grid, and now the ONE frame for the entire
+   sim window (SINGLE-FRAME AMENDMENT). s77 GEODETIC LOCK FIX: this was once
+   pinned at the as-built Vioget −6.5°, so every fixed anchor that reads it
+   (GEO.plaza fill, the wharf/anchorage, the fire block, the routing walker
+   graph, ship berths) sat 9–13 m off the −9.0° streets it is supposed to
+   bound (that pin measured 18 m RMS / 35 m worst vs the OSM control points;
+   the canonical −9.0° measures 1.2 m RMS). With the grid-swing deleted there
+   is no second frame anywhere — no consumer passes any angle but −9.0°. */
 function gridToWorld(u,v){ return gridToWorldAt(u,v,GRID_ROT_BASE); }
 /* worldToGrid(): the canonical inverse of gridToWorld() — the single source
    for every world→(u,v) mapping (routing's nearestStreetPair, the fire
@@ -1386,58 +1388,30 @@ function worldToGrid(x,z){
   return { u: lx*c + lz*s, v: -lx*s + lz*c };
 }
 
-/* GAPS-2026-07-09 item 4 (reconciler flag) — the O'Farrell "grid swing":
-   the comment above always noted the 1847 correction but never executed
-   it. STREET RENDERING REBUILD (2026-07-10): previously this rotated a
-   THREE.Group the street meshes were parented to, but
-   OFARRELL_SWING_START/END were computed here via eventDateToSimDay()
-   before SIM_START_MS existed (it's assigned much further down, see
-   "PHASE 2 — THE CLOCK"), so both evaluated to NaN and the group's
-   rotation was NaN from the very first frame — the swing never actually
-   played. Fixed by moving the OFARRELL_SWING_START/END assignment down
-   next to SIM_START_MS/eventDateToSimDay's real definitions (search
-   "OFARRELL_SWING_START" below); the swing is now driven by re-painting
-   the ground-splat street layer (see GROUND SPLAT-MAP) at the current
-   skew angle instead of rotating a mesh group, which sidesteps the whole
-   rotation-convention question the old comment worked around. */
-var LAST_SPLAT_SWING_T = -1;
-// LABEL-SKEW-MATCH fix (2026-07-10, iPad field-test defect #5): the current
-// street-grid skew angle, read by updateStreetLabels() every frame so DOM
-// street labels always track the SAME angle renderGroundSplat() just
-// painted the streets at — previously labels were seated once at the fixed
-// VIOGET_SKEW and never updated, visibly diverging from the street paint
-// during the Feb-Aug 1847 grid swing.
-var CURRENT_STREET_SKEW = VIOGET_SKEW;
-function updateGridSwing(){
-  var t = clamp((simDay-OFARRELL_SWING_START)/(OFARRELL_SWING_END-OFARRELL_SWING_START), 0, 1);
-  // t=0 (pre-Feb 1847): full as-built Vioget frame (-6.5°), same as the
-  // buildings. t=1 (post-Aug 1847): eased to GRID_ROT_BASE (-9.0°) — the
-  // O'Farrell swing removes only the 2.5° VIOGET_ERROR_DEG delta, it does
-  // NOT square the grid to cardinal (the measured modern grid the swing
-  // produced is itself rotated -9°; see the GEOMETRY TRUTH block above).
-  // Buildings (never re-baked) stay in the Vioget frame, same as the
-  // historical record describes for existing structures versus new
-  // post-survey construction.
-  CURRENT_STREET_SKEW = VIOGET_SKEW + (GRID_ROT_BASE - VIOGET_SKEW)*t;
-  // Re-paints the splat canvases when EITHER the swing angle has moved
-  // (cheap 2D redraw, no need to redo it 60x/sec) OR simDay has crossed
-  // some street's own survey/worn-track/checkpoint threshold (see
-  // STREET_REPAINT_THRESHOLDS above) — the swing-only trigger used to be
-  // the sole repaint driver, which silently stopped mattering forever
-  // after Aug 1847 (t pinned at 1) even though streets keep
-  // appearing/upgrading for years afterward. streetTopologyMayHaveChanged
-  // also fires unconditionally the first time (LAST_SPLAT_SIMDAY===null),
-  // AND correctly re-detects a threshold crossing on a BACKWARD time-jump
-  // (rewind), not just forward playback. CURRENT_STREET_SKEW itself is
-  // still updated above every call so labels stay perfectly in sync even
-  // between repaints.
+/* SINGLE-FRAME LIBERTY (2026-07-14, road-master-spec SINGLE-FRAME AMENDMENT)
+   — the old site of updateGridSwing()/CURRENT_STREET_SKEW. The O'Farrell
+   grid-swing (the Feb-Aug 1847 -6.5°→-9.0° easing that repainted the streets
+   at an animated skew) is DELETED as geometry: the survey correction was a
+   paper event, no street physically rotated. What survives is the DATE-DRIVEN
+   repaint duty — the ground-splat street layer must still be re-painted when
+   simDay crosses a street's survey/first-mention/checkpoint threshold or the
+   town's built density changes (streets keep appearing/upgrading for years).
+   updateStreetPaint() below is that driver, minus all angle easing — it now
+   only decides WHEN to repaint, never at what frame (renderGroundSplat()
+   always paints at the one canonical GRID_ROT_BASE frame). */
+function updateStreetPaint(){
+  // Re-paints the splat canvas when simDay has crossed some street's own
+  // survey/worn-track/checkpoint threshold (STREET_REPAINT_THRESHOLDS) — fires
+  // unconditionally the first time (LAST_SPLAT_SIMDAY===null), and correctly
+  // re-detects a threshold crossing on a BACKWARD time-jump (rewind), not just
+  // forward playback.
   var topologyChanged = streetTopologyMayHaveChanged(LAST_SPLAT_SIMDAY, simDay);
   // WEAR-ON-USE fix (task #28 item 3): also repaint when the spawned-
   // building count has moved — street wear now reads nearby built density,
   // which changes continuously as the town grows, not just at the fixed
   // survey/checkpoint thresholds streetTopologyMayHaveChanged() tracks.
   var buildingCountChanged = (spawnedBuildings.length + spawnedTents.length) !== LAST_SPLAT_BUILDING_COUNT; // tents count too (s20 on-use ruling: tent camps wear streets)
-  var needRepaint = Math.abs(t-LAST_SPLAT_SWING_T)>0.015 || topologyChanged || buildingCountChanged;
+  var needRepaint = topologyChanged || buildingCountChanged;
   if(needRepaint && typeof renderGroundSplat==="function"){
     // REPAINT THROTTLE (s20 sprint, 2026-07-11): the hand-worn stroke
     // engine made repaints heavier, and timelapse growth changes the
@@ -1448,10 +1422,9 @@ function updateGridSwing(){
     var nowMs = performance.now();
     if(LAST_SPLAT_SIMDAY===null || nowMs - _lastSplatRepaintMs > 350){
       _lastSplatRepaintMs = nowMs;
-      LAST_SPLAT_SWING_T = t;
       LAST_SPLAT_SIMDAY = simDay;
       LAST_SPLAT_BUILDING_COUNT = spawnedBuildings.length + spawnedTents.length;
-      renderGroundSplat(CURRENT_STREET_SKEW);
+      renderGroundSplat();
     }
   }
 }
@@ -1480,13 +1453,10 @@ if(!SG){ throw new Error("streets-geometry.js failed to load — check the <scri
 // checkpoints, e.g. Montgomery's vioget-1839 [pacific..california] stub
 // growing to its full ofarrell-1847 [vallejo..market-crossing] run).
 // Hardcoded as plain simDay integers (not via eventDateToSimDay(), which
-// isn't defined until much further down — see ITS OWN comment on why
-// OFARRELL_SWING_START/END has to live there) rather than left as NaN
-// bait; ofarrell-1847's value is asserted equal to OFARRELL_SWING_END
-// where that constant is finally defined, so the two can never drift.
+// isn't defined until much further down) rather than left as NaN bait.
 var ERA_MAP_SIMDAY = {
   "vioget-1839": -999999, "none": -999999, "primary-corpus": -999999, // already-there-at-sim-start baselines
-  "ofarrell-1847": 396,   // Aug 1 1847 == OFARRELL_SWING_END (asserted below, once that const exists)
+  "ofarrell-1847": 396,   // Aug 1 1847 — O'Farrell survey CHECKPOINT (streets grow to their surveyed extent; NOT a frame swing — single-frame amendment 2026-07-14)
   "eddy-1849": 1279,      // Dec 31 1849 — Eddy's re-survey
   "coast-survey-1853": 2376 // Jan 1 1853 — the Coast Survey chart (no finer date in the record)
 };
@@ -1518,12 +1488,14 @@ var STREETS_RUNTIME = (function(){
   }
   var out = [];
   function addEntry(id,name,widthM,polyline,checkpoints,appears,cls){
-    var swings = checkpoints.some(function(c){ return c.map==="vioget-1839"; }); // only the original Vioget-surveyed streets ease through the O'Farrell skew
+    // SINGLE-FRAME LIBERTY (2026-07-14): the per-street `swings` flag is gone —
+    // every street renders at the one canonical GRID_ROT_BASE frame at every
+    // date; there is no Vioget-frame branch to select anymore.
     var ckpts = checkpoints.filter(function(c){ return Array.isArray(c.extent); }).map(function(c){
       return { day: ERA_MAP_SIMDAY[c.map]!=null ? ERA_MAP_SIMDAY[c.map] : -999999, extent:c.extent };
     }).sort(function(a,b){ return a.day-b.day; });
     out.push({ id:id, name:name, widthM:widthM, cls:cls||"lane", polyline:polyline, checkpoints:ckpts,
-      surveyedDay: appears?appears.surveyedDay:null, firstMentionDay: appears?appears.firstMentionDay:null, swings:swings });
+      surveyedDay: appears?appears.surveyedDay:null, firstMentionDay: appears?appears.firstMentionDay:null });
   }
   SG.streets.forEach(function(s){
     if(s.id==="mission-street" || s.id==="western-addition-future-streets") return;
@@ -1546,11 +1518,10 @@ function streetVConst(id){ return STREETS_RUNTIME_BY_ID[id].polyline[0].v; } // 
 
 /* Every simDay where SOME street's rendered state could change — its own
    survey/worn-track dates, or a checkpoint-era boundary that grows its
-   drawn extent (read by updateGridSwing() below, which used to repaint
-   the splat canvases ONLY when the O'Farrell skew was still easing; once
-   that finishes (t=1, forever after) it would otherwise never notice
-   Eddy's 1849 extensions or a street's firstMentionDay arriving — exactly
-   the "time-jump leaves the world stale" failure class the P0 quartet
+   drawn extent (read by updateStreetPaint() below, the date-driven repaint
+   driver; it must notice Eddy's 1849 extensions or a street's firstMentionDay
+   arriving — exactly the "time-jump leaves the world stale" failure class
+   the P0 quartet
    fixed for population/ships/people, now closed for streets too). */
 // Wear-ramp constants, hoisted out of renderGroundSplat() (s20 sprint,
 // 2026-07-11) so the repaint-threshold table below can see them: a street's
@@ -1598,7 +1569,7 @@ function streetTopologyMayHaveChanged(prevDay, curDay){
 // comment further down), which grows continuously as the town fills in —
 // not just at the discrete survey/first-mention/checkpoint dates
 // STREET_REPAINT_THRESHOLDS tracks. LAST_SPLAT_BUILDING_COUNT (checked by
-// updateGridSwing() below) triggers an extra repaint whenever the spawned-
+// updateStreetPaint() below) triggers an extra repaint whenever the spawned-
 // building count itself has moved, so a paused jump's synchronous growth
 // catch-up (P0-1) is reflected in the very next repaint, same frame.
 var LAST_SPLAT_BUILDING_COUNT = -1;
@@ -2155,26 +2126,18 @@ function deriveGroundPlan(){
 var GROUND_PLAN = deriveGroundPlan();
 
 /* =====================================================================
-   THE DAY FRAME (s81 Director ruling: the swing is materialized INSIDE the
-   cadastre, never in consumers). The plat is stored frame-agnostic in (u,v);
-   world geometry is produced AT QUERY TIME in the frame the streets render
-   in on the queried day — Vioget (−6.5°) before the O'Farrell swing, eased
-   to base (−9.0°) across Feb–Aug 1847, base after (the same law
-   updateGridSwing applies to the paint). Consumers (overlays, buildings
-   placement, anything future) call the API and do ZERO frame math of their
-   own — consumer-side frame math is the outlawed pre-s77 class. Derives
-   only from the canonical constants (VIOGET_SKEW / GRID_ROT_BASE /
-   GRID_ORIGIN_X/Z — the geodetic lock's own numbers) + the sim's swing
-   window. OFARRELL_SWING_START/END live in the sim chunk (module var
-   hoisting makes them visible here); guarded so a pre-init call degrades
-   to the resting base frame.
+   THE DAY FRAME — SINGLE FRAME (user decision + Director concurrence,
+   2026-07-14, road-master-spec SINGLE-FRAME AMENDMENT). The plat is stored
+   frame-agnostic in (u,v); world geometry is produced AT QUERY TIME. cadSkewAt
+   once materialized the Feb-Aug 1847 O'Farrell grid-swing HERE (Vioget −6.5°
+   → base −9.0°, eased by date) so consumers did zero frame math. The swing is
+   now DELETED as geometry — no street physically rotated — so cadSkewAt
+   resolves to the ONE canonical frame (GRID_ROT_BASE, −9.0°) at every date.
+   The `day` parameter is RETAINED for API stability (lotWorldQuad(lot, day)
+   and every point-query keep their signatures) but no longer changes the
+   frame: one frame, all dates.
    ===================================================================== */
-function cadSkewAt(day){
-  if(day == null) day = (typeof simDay === "number") ? simDay : 1e9;
-  if(typeof OFARRELL_SWING_START !== "number" || !isFinite(OFARRELL_SWING_START)) return GRID_ROT_BASE;
-  var t = Math.max(0, Math.min(1, (day - OFARRELL_SWING_START) / (OFARRELL_SWING_END - OFARRELL_SWING_START)));
-  return VIOGET_SKEW + (GRID_ROT_BASE - VIOGET_SKEW) * t;
-}
+function cadSkewAt(day){ return GRID_ROT_BASE; } // day ignored — single frame (2026-07-14)
 /* Parameterized inverse of gridToWorldAt() — same canonical origin/angle
    constants (geodetic lock: DERIVED from the one fit, never re-anchored).
    worldToGrid() is exactly this at the resting base frame. */
@@ -2300,9 +2263,9 @@ function cadParcelContains(p, x, z, day){
 /* =====================================================================
    THE API — the one interface every future admission consumes.
    ===================================================================== */
-/* Point queries invert through the DAY frame (cadSkewAt) — a click on a lot
-   corner at an 1846 date maps to the (u,v) the Vioget-frame streets bound,
-   not the resting base frame 2.5° away (~17 m at the grid edge). */
+/* Point queries invert through cadSkewAt — the one canonical frame at every
+   date (single frame 2026-07-14: the grid-swing and its 1846 Vioget offset are
+   deleted, so there is no date-dependent skew to invert through). */
 function cadBlockAt(x, z, day){
   var g = cadWorldToGridAt(x, z, cadSkewAt(day));
   for(var i=0;i<GROUND_PLAN.blocks.length;i++){ var b=GROUND_PLAN.blocks[i];
@@ -2323,7 +2286,7 @@ function cadRowAt(x, z){ // the right-of-way (street id) the point sits inside, 
   if(typeof PLACEMENT_STREET_SEGS==="undefined") return null;
   for(var i=0;i<PLACEMENT_STREET_SEGS.length;i++){ var s=PLACEMENT_STREET_SEGS[i];
     var d=distToSegXZ(x,z,s.x0,s.z0,s.x1,s.z1);
-    if(d<s.halfW && (!best || d<best.d)) best={ id:s.id, d:d, halfW:s.halfW, frame:s.frame };
+    if(d<s.halfW && (!best || d<best.d)) best={ id:s.id, d:d, halfW:s.halfW };
   }
   return best;
 }
@@ -2445,12 +2408,14 @@ function groundPlanStats(){
              monotone:mono, list:bad.slice(0,20) };
   });
 
-  /* platFrame (s81 Director ruling) — the cadastre's day-frame world geometry
-     matches the streets' rendered frame NUMERICALLY: at 1846-07-01 (Vioget,
-     −6.5°) and 1848-04-01 (post-swing base, −9.0°), for EVERY block present,
-     the lot-edge azimuths (both axes, from lotWorldQuad at that day) equal the
-     bounding streets' rendered polyline azimuths within 0.2°. Also asserts the
-     day frame itself resolves to the correct constant at both dates. */
+  /* platFrame (s81 Director ruling; SINGLE-FRAME 2026-07-14) — the cadastre's
+     day-frame world geometry matches the streets' rendered frame NUMERICALLY:
+     for EVERY block present, the lot-edge azimuths (both axes, from lotWorldQuad
+     at that day) equal the bounding streets' rendered polyline azimuths within
+     0.2°. Checked at 1846-07-01 AND 1849-09-01 — both now resolve to the ONE
+     canonical frame (GRID_ROT_BASE, −9.0°): the grid-swing is deleted, so the
+     dual-frame (Vioget-1846 / base-1848) branch is gone. The audit still
+     asserts the day frame resolves to −9.0° at both dates. */
   registerAudit("placement", "platFrame", function(){
     function az(dx,dz){ var a = Math.atan2(dz,dx)*180/Math.PI; return ((a%180)+180)%180; }   // undirected line azimuth
     function angDiff(a,b){ var d = Math.abs(a-b)%180; return Math.min(d, 180-d); }
@@ -2466,10 +2431,9 @@ function groundPlanStats(){
                       ["west",  az(q[3].x-q[0].x, q[3].z-q[0].z)] ]; // SW->NW edge vs the N-S street
         pairs.forEach(function(p){
           var st = STREETS_RUNTIME_BY_ID[b.edges[p[0]]]; if(!st) return;
-          var ang = st.swings ? skew : GRID_ROT_BASE;
-          var n = st.polyline.length;
-          var p0 = gridToWorldAt(st.polyline[0].u, st.polyline[0].v, ang);
-          var p1 = gridToWorldAt(st.polyline[n-1].u, st.polyline[n-1].v, ang);
+          var n = st.polyline.length;               // single frame: every street at GRID_ROT_BASE
+          var p0 = gridToWorldAt(st.polyline[0].u, st.polyline[0].v, GRID_ROT_BASE);
+          var p1 = gridToWorldAt(st.polyline[n-1].u, st.polyline[n-1].v, GRID_ROT_BASE);
           var d = angDiff(p[1], az(p1.x-p0.x, p1.z-p0.z)); checked++;
           if(d > maxDev) maxDev = d;
           if(d > 0.2) bad.push({ block:b.key, edge:p[0], street:st.id, devDeg:+d.toFixed(3) });
@@ -2479,10 +2443,10 @@ function groundPlanStats(){
                maxDevDeg:+maxDev.toFixed(4), violations:bad.length, list:bad.slice(0,10) };
     }
     var d1846 = checkDay(eventDateToSimDay("1846-07-01"));
-    var d1848 = checkDay(eventDateToSimDay("1848-04-01"));
-    var framesRight = Math.abs(d1846.skewDeg - VIOGET_SKEW_DEG) < 0.01 && Math.abs(d1848.skewDeg - GRID_ROT_BASE_DEG) < 0.01;
-    return { pass: d1846.violations===0 && d1848.violations===0 && framesRight, law:"platFrame",
-             framesResolve:framesRight, "vioget-1846":d1846, "base-1848":d1848 };
+    var d1849 = checkDay(eventDateToSimDay("1849-09-01"));
+    var framesRight = Math.abs(d1846.skewDeg - GRID_ROT_BASE_DEG) < 0.01 && Math.abs(d1849.skewDeg - GRID_ROT_BASE_DEG) < 0.01;
+    return { pass: d1846.violations===0 && d1849.violations===0 && framesRight, law:"platFrame",
+             singleFrame:framesRight, "base-1846":d1846, "base-1849":d1849 };
   });
 
   /* parcelIntegrity — (1) every polygon parcel is a closed ring (>=3 pts);
@@ -2536,8 +2500,9 @@ function groundPlanStats(){
     //   (4b) the plaza parcel polygon lies WITHIN its block's uv bounds
     //        (identity expected — derived from it) ⇒ no overlap with any ROW;
     //   (4c) plaza parcel edge-to-ROW-edge offset = 0.00 m at 3 stations per
-    //        edge, all 4 edges, in BOTH survey frames (1846-07-01 Vioget /
-    //        1848-04-01 base) — the same exactness standard the lots meet.
+    //        edge, all 4 edges, at 1846-07-01 AND 1849-09-01 — both now the ONE
+    //        canonical frame (single frame 2026-07-14) — the same exactness
+    //        standard the lots meet.
     var plazaOne = !!CAD_PLAZA_BLOCK;                       // exactly one reserve block claimed
     var lotsInPlaza = [];
     if(CAD_PLAZA_BLOCK){ var pb=CAD_PLAZA_BLOCK;
@@ -2558,7 +2523,7 @@ function groundPlanStats(){
     }
     var rowOffsets = { maxM:null, stations:0, list:[] };
     if(CAD_PLAZA_BLOCK){
-      var days = [eventDateToSimDay("1846-07-01"), eventDateToSimDay("1848-04-01")], maxOff = 0;
+      var days = [eventDateToSimDay("1846-07-01"), eventDateToSimDay("1849-09-01")], maxOff = 0;
       days.forEach(function(dd){
         var skew = cadSkewAt(dd);
         var edges = [
@@ -2569,8 +2534,8 @@ function groundPlanStats(){
         ];
         edges.forEach(function(e){
           var st = STREETS_RUNTIME_BY_ID[e.id]; if(!st) return;
-          var ang = st.swings ? skew : GRID_ROT_BASE, cl = [];
-          for(var pi=0; pi<st.polyline.length; pi++) cl.push(gridToWorldAt(st.polyline[pi].u, st.polyline[pi].v, ang));
+          var cl = [];   // single frame: every street at GRID_ROT_BASE
+          for(var pi=0; pi<st.polyline.length; pi++) cl.push(gridToWorldAt(st.polyline[pi].u, st.polyline[pi].v, GRID_ROT_BASE));
           e.pts.forEach(function(uv){
             var w = gridToWorldAt(uv[0], uv[1], skew), dmin = Infinity;
             for(var si=0; si<cl.length-1; si++) dmin = Math.min(dmin, distToSegXZ(w.x, w.z, cl[si].x, cl[si].z, cl[si+1].x, cl[si+1].z));
@@ -3443,34 +3408,23 @@ function distToSegXZ(x,z,x0,z0,x1,z1){
    buildings never end up standing where a not-yet-surveyed later street
    will run; only the SPLAT PAINTER and LABELS are era-gated, since only
    they need to visibly grow over time). Projected via gridToWorldAt() at
-   the UNION of every frame a street ever renders in (below): swinging
-   streets contribute BOTH the Vioget (-6.5°) and canonical base (-9.0°)
-   frames, non-swinging streets only -9.0°. That way a building's clearance
-   reserves the right-of-way across the whole 1847 swing sweep, independent
-   of the s77 GEODETIC LOCK change to the resting gridToWorld() frame. */
-/* s62 BUILDINGS-ON-ROADS FIX (road-master-spec constant-width amendment):
-   this list used to be built ONLY in the fixed Vioget frame (-6.5°), but
-   streets PAINT at GRID_ROT_BASE (-9.0°) after the Aug-1847 swing — and
-   non-swinging (post-O'Farrell) streets paint at -9.0° ALWAYS. The 2.5°
-   frame delta is up to ~26m of lateral divergence at the block extremes,
-   which is exactly how frontage rows ended up standing on the painted
-   roadway. Placement clearance is now the UNION of every frame a street
-   ever renders in: swinging streets contribute BOTH frames (the swing
-   sweep), non-swinging streets contribute the -9.0° frame they always
-   paint at. halfW is the street's CONSTANT surveyed class width — the
-   right-of-way is reserved at full width from day one. */
+   the one canonical GRID_ROT_BASE (-9.0°) frame. halfW is the street's
+   CONSTANT surveyed class width — the right-of-way is reserved at full
+   width from day one, so no frontage row can stand on the painted roadway.
+   SINGLE-FRAME LIBERTY (2026-07-14, road-master-spec SINGLE-FRAME
+   AMENDMENT): this list used to be the UNION of two frames (swinging
+   streets contributed BOTH the Vioget -6.5° and base -9.0° sweeps of the
+   1847 grid-swing). The swing is deleted — there is one frame, so one seg
+   per street segment. */
 var PLACEMENT_STREET_SEGS = (function(){
   var segs = [];
   STREETS_RUNTIME.forEach(function(s){
     var i1 = s.checkpoints.length ? s.checkpoints[s.checkpoints.length-1].extent[1] : s.polyline.length-1;
     var halfW = s.widthM/2;
-    var frames = s.swings ? [{a:VIOGET_SKEW,f:"vioget"}, {a:GRID_ROT_BASE,f:"base"}] : [{a:GRID_ROT_BASE,f:"base"}];
-    frames.forEach(function(fr){
-      for(var i=0;i<i1;i++){
-        var a=gridToWorldAt(s.polyline[i].u, s.polyline[i].v, fr.a), b=gridToWorldAt(s.polyline[i+1].u, s.polyline[i+1].v, fr.a);
-        segs.push({x0:a.x,z0:a.z,x1:b.x,z1:b.z,halfW:halfW,frame:fr.f,id:s.id});
-      }
-    });
+    for(var i=0;i<i1;i++){
+      var a=gridToWorldAt(s.polyline[i].u, s.polyline[i].v, GRID_ROT_BASE), b=gridToWorldAt(s.polyline[i+1].u, s.polyline[i+1].v, GRID_ROT_BASE);
+      segs.push({x0:a.x,z0:a.z,x1:b.x,z1:b.z,halfW:halfW,id:s.id});
+    }
   });
   return segs;
 })();
@@ -3755,9 +3709,11 @@ var splatWorldMesh = new THREE.Mesh(splatWorldGeo, splatWorldMat);
 splatWorldMesh.renderOrder = 1;
 scene.add(splatWorldMesh);
 
-/* ---- THE PAINT PASS. Called by core updateGridSwing() when simDay crosses a
-   street's survey/first-mention/checkpoint day or the O'Farrell grid swing
-   moves (throttled ~3/s). One clear + one pass over the platted spine. ---- */
+/* ---- THE PAINT PASS. Called by core updateStreetPaint() when simDay crosses a
+   street's survey/first-mention/checkpoint day (throttled ~3/s). One clear +
+   one pass over the platted spine. SINGLE-FRAME (2026-07-14): paints at the one
+   canonical GRID_ROT_BASE frame — the old O'Farrell grid-swing skew argument is
+   gone. ---- */
 var SPLAT_LAST_STATS = null;  // s20 QA hook (read by __P1850.splatStats + the audits)
 var _gpID = null;             // cached ImageData for audits, dropped each repaint
 
@@ -3772,11 +3728,11 @@ function _gpStrokeRun(pts, cls){
   gpCtx.globalAlpha = 1;
 }
 
-function renderGroundSplat(skew){
+function renderGroundSplat(){
   gpCtx.clearRect(0, 0, GP_W, GP_H);
   gpCtx.lineCap = "butt";     // butt caps: clean street ends, no spike, no round bloom
   gpCtx.lineJoin = "round";   // smooth bends within a run
-  var stats = { simDay:simDay, skew:skew, streets:{} };
+  var stats = { simDay:simDay, skew:GRID_ROT_BASE, streets:{} }; // single frame (2026-07-14)
 
   STREETS_RUNTIME.forEach(function(s){
     var rec = stats.streets[s.id] = { painted:false, ghostSegs:0, wornSegs:0, state:0, worldPoly:null, stations:[] };
@@ -3787,7 +3743,7 @@ function renderGroundSplat(skew){
     for(var ci = 0; ci < s.checkpoints.length; ci++){ if(s.checkpoints[ci].day <= simDay) active = s.checkpoints[ci]; }
     if(!active) return;
     var i0 = active.extent[0], i1 = active.extent[1];
-    var angle = s.swings ? skew : GRID_ROT_BASE;
+    var angle = GRID_ROT_BASE; // single frame (2026-07-14): every street at the one canonical frame
     var viogetFloor = (s.surveyedDay != null && s.surveyedDay <= 0); // Vioget-1839 lanes read as worn trails from sim start
     var wpts = [];
     for(var pi = i0; pi <= i1; pi++) wpts.push(gridToWorldAt(s.polyline[pi].u, s.polyline[pi].v, angle));
@@ -3867,7 +3823,7 @@ function _gpNearOtherStreet(x, z, selfId, r){
    invariant structurally (exactly one ground-paint mesh) and that painted
    street centres do read paint from it. */
 registerAudit("ground-paint", "oneOwner", function(){
-  updateGridSwing();
+  updateStreetPaint();
   var meshes = 0; scene.traverse(function(o){ if(o === splatWorldMesh) meshes++; });
   var probes = 0, painted = 0;
   if(SPLAT_LAST_STATS) STREETS_RUNTIME.forEach(function(s){
@@ -3883,7 +3839,7 @@ registerAudit("ground-paint", "oneOwner", function(){
    stations clear of junctions, scan alpha perpendicular to the centreline and
    require the painted width ≈ widthM and the stations mutually constant. */
 registerAudit("ground-paint", "constantWidth", function(){
-  updateGridSwing();
+  updateStreetPaint();
   var out = { pass:true, streetsProbed:0, stations:0, violations:[], skipped:[] };
   if(!SPLAT_LAST_STATS) return { pass:false, error:"no splat stats — paint never ran" };
   STREETS_RUNTIME.forEach(function(s){
@@ -3922,7 +3878,7 @@ registerAudit("ground-paint", "constantWidth", function(){
    unappeared street; (b) a centreline pixel probe clear of every OTHER street
    reads alpha ~0 (crossing streets' legal paint is excluded). */
 registerAudit("ground-paint", "eraPaint", function(){
-  updateGridSwing();
+  updateStreetPaint();
   var out = { pass:true, unappeared:0, probes:0, statsViolations:[], pixelViolations:[] };
   STREETS_RUNTIME.forEach(function(s){
     var gateDay = s.surveyedDay != null ? s.surveyedDay : s.firstMentionDay;
@@ -3930,7 +3886,7 @@ registerAudit("ground-paint", "eraPaint", function(){
     out.unappeared++;
     var rec = SPLAT_LAST_STATS && SPLAT_LAST_STATS.streets[s.id];
     if(rec && (rec.ghostSegs + rec.wornSegs) > 0) out.statsViolations.push(s.id);
-    var angle = s.swings ? CURRENT_STREET_SKEW : GRID_ROT_BASE, probed = 0;
+    var angle = GRID_ROT_BASE, probed = 0; // single frame (2026-07-14)
     for(var pi = 0; pi + 1 < s.polyline.length && probed < 8; pi++){
       var A = gridToWorldAt(s.polyline[pi].u,   s.polyline[pi].v,   angle);
       var B = gridToWorldAt(s.polyline[pi+1].u, s.polyline[pi+1].v, angle);
@@ -3983,14 +3939,13 @@ registerLayerVisibility("ground-paint", function(v){ splatWorldMesh.visible = v;
    (SIM_START_MS / SIM_END_DAY / dateFromSimDay / eventDateToSimDay moved
    to the TOP of the module, s56 P0 fix — see the SIM CLOCK CONSTANTS
    block up there for why parse-order mattered.) */
-/* O'Farrell's Feb-Aug 1847 grid-swing window (see updateGridSwing() up in
-   the GEO/gridToWorld section) — historical note: this assignment once had
-   to sit down here because eventDateToSimDay() lived just above; with the
-   sim-clock constants hoisted to the module top (s56) the order is safe
-   everywhere, and this stays put only to avoid churn. */
-var OFARRELL_SWING_START = eventDateToSimDay("1847-02-01");
-var OFARRELL_SWING_END = eventDateToSimDay("1847-08-01");
-console.assert(ERA_MAP_SIMDAY["ofarrell-1847"]===OFARRELL_SWING_END, "ERA_MAP_SIMDAY's hardcoded ofarrell-1847 day has drifted from OFARRELL_SWING_END — update the literal near STREETS_RUNTIME to match");
+/* SINGLE-FRAME LIBERTY (2026-07-14, road-master-spec SINGLE-FRAME AMENDMENT):
+   OFARRELL_SWING_START/END are DELETED — they only ever parameterized the
+   Feb-Aug 1847 grid-swing easing, which is gone (no street physically
+   rotated; the survey correction was a paper event). The 1847 survey remains
+   a street/plat CHECKPOINT via ERA_MAP_SIMDAY["ofarrell-1847"] (Aug 1 1847,
+   day 396) up in the STREETS_RUNTIME section — that literal is a documented
+   street-appearance date, not a frame boundary. */
 
 /* =========================================================================
    1. SIM CLOCK — fractional sim-days since 1846-07-01. Speeds read straight
@@ -5952,7 +5907,7 @@ window.__P1850 = {
     for(var ci=0; ci<s.checkpoints.length; ci++){ if(s.checkpoints[ci].day<=simDay) active=s.checkpoints[ci]; }
     if(!active) return out;
     var i0=active.extent[0], i1=active.extent[1];
-    var angle = s.swings ? CURRENT_STREET_SKEW : GRID_ROT_BASE;
+    var angle = GRID_ROT_BASE; // single-frame (2026-07-14): every street at the one canonical frame
     var viogetExt = (s.surveyedDay!=null && s.surveyedDay<=0 && s.checkpoints.length) ? s.checkpoints[0].extent : null;
     var maxSt = 0;
     for(var pi=i0; pi<i1; pi++){
@@ -5982,8 +5937,9 @@ window.__P1850 = {
   roadAudit: function(){ /* s62 (road-master-spec constant-width amendment):
     ZERO structures on any right-of-way at any era. Checks every placed or
     placeable footprint (village incl. documented rows, growth candidates,
-    tent candidates) against the constant-class-width street segments in
-    EVERY frame a street ever renders in (PLACEMENT_STREET_SEGS). */
+    tent candidates) against the constant-class-width street segments
+    (PLACEMENT_STREET_SEGS — one canonical frame since the single-frame
+    amendment 2026-07-14). */
     function rectPts(x,z,rot,hw,hd){
       var c=Math.cos(rot), sn=Math.sin(rot), out=[];
       [[-hw,-hd],[hw,-hd],[hw,hd],[-hw,hd],[0,0],[hw,0],[-hw,0],[0,hd],[0,-hd]].forEach(function(o){
@@ -5991,24 +5947,19 @@ window.__P1850 = {
       });
       return out;
     }
-    function onRoad(pts, pad, postSwingOnly){
+    function onRoad(pts, pad){
       for(var i=0;i<PLACEMENT_STREET_SEGS.length;i++){
         var sg=PLACEMENT_STREET_SEGS[i];
-        // a structure founded AFTER the O'Farrell swing never coexists with
-        // the pre-1847 Vioget-frame paint — audit it only against the frame
-        // its streets actually render in while it stands
-        if(postSwingOnly && sg.frame==="vioget") continue;
         for(var k=0;k<pts.length;k++){
-          if(distToSegXZ(pts[k].x,pts[k].z,sg.x0,sg.z0,sg.x1,sg.z1) < sg.halfW+(pad||0)-0.05) return {id:sg.id, frame:sg.frame};
+          if(distToSegXZ(pts[k].x,pts[k].z,sg.x0,sg.z0,sg.x1,sg.z1) < sg.halfW+(pad||0)-0.05) return {id:sg.id};
         }
       }
       return null;
     }
     var bad=[];
     VILLAGE_BUILDING_SPOTS.forEach(function(b,i){
-      var postSwing = b.foundedDay!=null && b.foundedDay >= OFARRELL_SWING_END;
-      var hit = onRoad(rectPts(b.x,b.z,b.rot||0,(b.w||4)/2,(b.d||4)/2), 0, postSwing);
-      if(hit) bad.push({kind:"village", i:i, name:b.name||null, x:Math.round(b.x), z:Math.round(b.z), st:hit.id, frame:hit.frame});
+      var hit = onRoad(rectPts(b.x,b.z,b.rot||0,(b.w||4)/2,(b.d||4)/2), 0);
+      if(hit) bad.push({kind:"village", i:i, name:b.name||null, x:Math.round(b.x), z:Math.round(b.z), st:hit.id});
     });
     growthBuildingCandidates.forEach(function(c,i){
       if(onRoad([{x:c.x,z:c.z}], 3.2)) bad.push({kind:"growth", i:i, x:Math.round(c.x), z:Math.round(c.z)});
@@ -6975,8 +6926,9 @@ window.__P1850.audits = (function(){
         −9.0° it measures ~1.2 m.
      C) NO TRANSFORM DRIFT — gridToWorld()'s implied base azimuth must equal
         GRID_ROT_BASE within 0.1°; worldToGrid() must invert gridToWorld() to
-        <1e-3 m; VIOGET_SKEW must remain GRID_ROT_BASE+VIOGET_ERROR. Any
-        future layer that re-defines its own origin/angle trips this.
+        <1e-3 m. Any future layer that re-defines its own origin/angle trips
+        this. (SINGLE-FRAME 2026-07-14: the old VIOGET_SKEW relation check is
+        gone — there is one frame; this audit is now strictly simpler.)
    This is the permanent gate for all future grid EXPANSION.
    ========================================================================= */
 registerAudit("core", "geodeticLock", function(){
@@ -7060,9 +7012,8 @@ registerAudit("core", "geodeticLock", function(){
     var wp=gridToWorld(CP[m][3],CP[m][4]); var g=worldToGrid(wp.x,wp.z);
     rtMax=Math.max(rtMax, Math.hypot(g.u-CP[m][3], g.v-CP[m][4]));
   }
-  var viogetOK=Math.abs(VIOGET_SKEW_DEG-(GRID_ROT_BASE_DEG+VIOGET_ERROR_DEG))<1e-9;
 
-  var pass = fitRms<=2.0 && e2eRms<=2.0 && azErr<=0.1 && rtMax<=1e-3 && viogetOK;
+  var pass = fitRms<=2.0 && e2eRms<=2.0 && azErr<=0.1 && rtMax<=1e-3;
   return {
     pass: pass,
     datasetFitRms_m: +fitRms.toFixed(3),
@@ -7071,7 +7022,7 @@ registerAudit("core", "geodeticLock", function(){
     gridToWorldAzDeg: +g2wAzDeg.toFixed(4), gridRotBaseDeg: GRID_ROT_BASE_DEG,
     azimuthDriftDeg: +azErr.toFixed(4),
     worldToGridRoundTripMax_m: +rtMax.toExponential(2),
-    viogetRelationOK: viogetOK,
+    singleFrame: true,   // one canonical frame (-9.0°) — grid-swing deleted 2026-07-14
     controlPoints: n,
     gates: "fitRms<=2, e2eRms<=2, azDrift<=0.1deg, roundTrip<=1e-3m"
   };
@@ -7803,7 +7754,7 @@ function animate(){
      Lighting is STATIC NOON now (core/02-scene owns the rig), so no
      updateTimeOfDay/updateDayNight either — the sun does not move until the
      effects layer is admitted. The sim CLOCK still advances (date/timeline
-     live); the ground-paint repaint still fires from updateGridSwing() below
+     live); the ground-paint repaint still fires from updateStreetPaint() below
      as streets cross their appear/checkpoint days. */
   updateSimClock(dt);
   updateTicker();
@@ -7827,7 +7778,7 @@ function animate(){
   var alt = applyCameraRig(dt);
   lastKnownAlt = alt;
   updateHud(alt);
-  updateGridSwing(); // refreshes CURRENT_STREET_SKEW + repaints the ground-paint splat as streets appear/upgrade by simDay
+  updateStreetPaint(); // repaints the ground-paint splat as streets appear/upgrade by simDay (single-frame: no angle easing)
   updatePaper();
   updateHorizonRing(alt);
   updatePulse(dt);

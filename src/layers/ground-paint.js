@@ -106,9 +106,11 @@ var splatWorldMesh = new THREE.Mesh(splatWorldGeo, splatWorldMat);
 splatWorldMesh.renderOrder = 1;
 scene.add(splatWorldMesh);
 
-/* ---- THE PAINT PASS. Called by core updateGridSwing() when simDay crosses a
-   street's survey/first-mention/checkpoint day or the O'Farrell grid swing
-   moves (throttled ~3/s). One clear + one pass over the platted spine. ---- */
+/* ---- THE PAINT PASS. Called by core updateStreetPaint() when simDay crosses a
+   street's survey/first-mention/checkpoint day (throttled ~3/s). One clear +
+   one pass over the platted spine. SINGLE-FRAME (2026-07-14): paints at the one
+   canonical GRID_ROT_BASE frame — the old O'Farrell grid-swing skew argument is
+   gone. ---- */
 var SPLAT_LAST_STATS = null;  // s20 QA hook (read by __P1850.splatStats + the audits)
 var _gpID = null;             // cached ImageData for audits, dropped each repaint
 
@@ -123,11 +125,11 @@ function _gpStrokeRun(pts, cls){
   gpCtx.globalAlpha = 1;
 }
 
-function renderGroundSplat(skew){
+function renderGroundSplat(){
   gpCtx.clearRect(0, 0, GP_W, GP_H);
   gpCtx.lineCap = "butt";     // butt caps: clean street ends, no spike, no round bloom
   gpCtx.lineJoin = "round";   // smooth bends within a run
-  var stats = { simDay:simDay, skew:skew, streets:{} };
+  var stats = { simDay:simDay, skew:GRID_ROT_BASE, streets:{} }; // single frame (2026-07-14)
 
   STREETS_RUNTIME.forEach(function(s){
     var rec = stats.streets[s.id] = { painted:false, ghostSegs:0, wornSegs:0, state:0, worldPoly:null, stations:[] };
@@ -138,7 +140,7 @@ function renderGroundSplat(skew){
     for(var ci = 0; ci < s.checkpoints.length; ci++){ if(s.checkpoints[ci].day <= simDay) active = s.checkpoints[ci]; }
     if(!active) return;
     var i0 = active.extent[0], i1 = active.extent[1];
-    var angle = s.swings ? skew : GRID_ROT_BASE;
+    var angle = GRID_ROT_BASE; // single frame (2026-07-14): every street at the one canonical frame
     var viogetFloor = (s.surveyedDay != null && s.surveyedDay <= 0); // Vioget-1839 lanes read as worn trails from sim start
     var wpts = [];
     for(var pi = i0; pi <= i1; pi++) wpts.push(gridToWorldAt(s.polyline[pi].u, s.polyline[pi].v, angle));
@@ -218,7 +220,7 @@ function _gpNearOtherStreet(x, z, selfId, r){
    invariant structurally (exactly one ground-paint mesh) and that painted
    street centres do read paint from it. */
 registerAudit("ground-paint", "oneOwner", function(){
-  updateGridSwing();
+  updateStreetPaint();
   var meshes = 0; scene.traverse(function(o){ if(o === splatWorldMesh) meshes++; });
   var probes = 0, painted = 0;
   if(SPLAT_LAST_STATS) STREETS_RUNTIME.forEach(function(s){
@@ -234,7 +236,7 @@ registerAudit("ground-paint", "oneOwner", function(){
    stations clear of junctions, scan alpha perpendicular to the centreline and
    require the painted width ≈ widthM and the stations mutually constant. */
 registerAudit("ground-paint", "constantWidth", function(){
-  updateGridSwing();
+  updateStreetPaint();
   var out = { pass:true, streetsProbed:0, stations:0, violations:[], skipped:[] };
   if(!SPLAT_LAST_STATS) return { pass:false, error:"no splat stats — paint never ran" };
   STREETS_RUNTIME.forEach(function(s){
@@ -273,7 +275,7 @@ registerAudit("ground-paint", "constantWidth", function(){
    unappeared street; (b) a centreline pixel probe clear of every OTHER street
    reads alpha ~0 (crossing streets' legal paint is excluded). */
 registerAudit("ground-paint", "eraPaint", function(){
-  updateGridSwing();
+  updateStreetPaint();
   var out = { pass:true, unappeared:0, probes:0, statsViolations:[], pixelViolations:[] };
   STREETS_RUNTIME.forEach(function(s){
     var gateDay = s.surveyedDay != null ? s.surveyedDay : s.firstMentionDay;
@@ -281,7 +283,7 @@ registerAudit("ground-paint", "eraPaint", function(){
     out.unappeared++;
     var rec = SPLAT_LAST_STATS && SPLAT_LAST_STATS.streets[s.id];
     if(rec && (rec.ghostSegs + rec.wornSegs) > 0) out.statsViolations.push(s.id);
-    var angle = s.swings ? CURRENT_STREET_SKEW : GRID_ROT_BASE, probed = 0;
+    var angle = GRID_ROT_BASE, probed = 0; // single frame (2026-07-14)
     for(var pi = 0; pi + 1 < s.polyline.length && probed < 8; pi++){
       var A = gridToWorldAt(s.polyline[pi].u,   s.polyline[pi].v,   angle);
       var B = gridToWorldAt(s.polyline[pi+1].u, s.polyline[pi+1].v, angle);

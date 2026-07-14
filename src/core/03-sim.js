@@ -22,14 +22,13 @@
    (SIM_START_MS / SIM_END_DAY / dateFromSimDay / eventDateToSimDay moved
    to the TOP of the module, s56 P0 fix — see the SIM CLOCK CONSTANTS
    block up there for why parse-order mattered.) */
-/* O'Farrell's Feb-Aug 1847 grid-swing window (see updateGridSwing() up in
-   the GEO/gridToWorld section) — historical note: this assignment once had
-   to sit down here because eventDateToSimDay() lived just above; with the
-   sim-clock constants hoisted to the module top (s56) the order is safe
-   everywhere, and this stays put only to avoid churn. */
-var OFARRELL_SWING_START = eventDateToSimDay("1847-02-01");
-var OFARRELL_SWING_END = eventDateToSimDay("1847-08-01");
-console.assert(ERA_MAP_SIMDAY["ofarrell-1847"]===OFARRELL_SWING_END, "ERA_MAP_SIMDAY's hardcoded ofarrell-1847 day has drifted from OFARRELL_SWING_END — update the literal near STREETS_RUNTIME to match");
+/* SINGLE-FRAME LIBERTY (2026-07-14, road-master-spec SINGLE-FRAME AMENDMENT):
+   OFARRELL_SWING_START/END are DELETED — they only ever parameterized the
+   Feb-Aug 1847 grid-swing easing, which is gone (no street physically
+   rotated; the survey correction was a paper event). The 1847 survey remains
+   a street/plat CHECKPOINT via ERA_MAP_SIMDAY["ofarrell-1847"] (Aug 1 1847,
+   day 396) up in the STREETS_RUNTIME section — that literal is a documented
+   street-appearance date, not a frame boundary. */
 
 /* @P1850-CHUNK 24 — sim clock: speeds, hash date, clock DOM readouts */
 /* =========================================================================

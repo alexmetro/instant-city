@@ -25,7 +25,7 @@ function animate(){
      Lighting is STATIC NOON now (core/02-scene owns the rig), so no
      updateTimeOfDay/updateDayNight either — the sun does not move until the
      effects layer is admitted. The sim CLOCK still advances (date/timeline
-     live); the ground-paint repaint still fires from updateGridSwing() below
+     live); the ground-paint repaint still fires from updateStreetPaint() below
      as streets cross their appear/checkpoint days. */
   updateSimClock(dt);
   updateTicker();
@@ -49,7 +49,7 @@ function animate(){
   var alt = applyCameraRig(dt);
   lastKnownAlt = alt;
   updateHud(alt);
-  updateGridSwing(); // refreshes CURRENT_STREET_SKEW + repaints the ground-paint splat as streets appear/upgrade by simDay
+  updateStreetPaint(); // repaints the ground-paint splat as streets appear/upgrade by simDay (single-frame: no angle easing)
   updatePaper();
   updateHorizonRing(alt);
   updatePulse(dt);

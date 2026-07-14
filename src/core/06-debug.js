@@ -166,7 +166,7 @@ window.__P1850 = {
     for(var ci=0; ci<s.checkpoints.length; ci++){ if(s.checkpoints[ci].day<=simDay) active=s.checkpoints[ci]; }
     if(!active) return out;
     var i0=active.extent[0], i1=active.extent[1];
-    var angle = s.swings ? CURRENT_STREET_SKEW : GRID_ROT_BASE;
+    var angle = GRID_ROT_BASE; // single-frame (2026-07-14): every street at the one canonical frame
     var viogetExt = (s.surveyedDay!=null && s.surveyedDay<=0 && s.checkpoints.length) ? s.checkpoints[0].extent : null;
     var maxSt = 0;
     for(var pi=i0; pi<i1; pi++){
@@ -196,8 +196,9 @@ window.__P1850 = {
   roadAudit: function(){ /* s62 (road-master-spec constant-width amendment):
     ZERO structures on any right-of-way at any era. Checks every placed or
     placeable footprint (village incl. documented rows, growth candidates,
-    tent candidates) against the constant-class-width street segments in
-    EVERY frame a street ever renders in (PLACEMENT_STREET_SEGS). */
+    tent candidates) against the constant-class-width street segments
+    (PLACEMENT_STREET_SEGS — one canonical frame since the single-frame
+    amendment 2026-07-14). */
     function rectPts(x,z,rot,hw,hd){
       var c=Math.cos(rot), sn=Math.sin(rot), out=[];
       [[-hw,-hd],[hw,-hd],[hw,hd],[-hw,hd],[0,0],[hw,0],[-hw,0],[0,hd],[0,-hd]].forEach(function(o){
@@ -205,24 +206,19 @@ window.__P1850 = {
       });
       return out;
     }
-    function onRoad(pts, pad, postSwingOnly){
+    function onRoad(pts, pad){
       for(var i=0;i<PLACEMENT_STREET_SEGS.length;i++){
         var sg=PLACEMENT_STREET_SEGS[i];
-        // a structure founded AFTER the O'Farrell swing never coexists with
-        // the pre-1847 Vioget-frame paint — audit it only against the frame
-        // its streets actually render in while it stands
-        if(postSwingOnly && sg.frame==="vioget") continue;
         for(var k=0;k<pts.length;k++){
-          if(distToSegXZ(pts[k].x,pts[k].z,sg.x0,sg.z0,sg.x1,sg.z1) < sg.halfW+(pad||0)-0.05) return {id:sg.id, frame:sg.frame};
+          if(distToSegXZ(pts[k].x,pts[k].z,sg.x0,sg.z0,sg.x1,sg.z1) < sg.halfW+(pad||0)-0.05) return {id:sg.id};
         }
       }
       return null;
     }
     var bad=[];
     VILLAGE_BUILDING_SPOTS.forEach(function(b,i){
-      var postSwing = b.foundedDay!=null && b.foundedDay >= OFARRELL_SWING_END;
-      var hit = onRoad(rectPts(b.x,b.z,b.rot||0,(b.w||4)/2,(b.d||4)/2), 0, postSwing);
-      if(hit) bad.push({kind:"village", i:i, name:b.name||null, x:Math.round(b.x), z:Math.round(b.z), st:hit.id, frame:hit.frame});
+      var hit = onRoad(rectPts(b.x,b.z,b.rot||0,(b.w||4)/2,(b.d||4)/2), 0);
+      if(hit) bad.push({kind:"village", i:i, name:b.name||null, x:Math.round(b.x), z:Math.round(b.z), st:hit.id});
     });
     growthBuildingCandidates.forEach(function(c,i){
       if(onRoad([{x:c.x,z:c.z}], 3.2)) bad.push({kind:"growth", i:i, x:Math.round(c.x), z:Math.round(c.z)});
@@ -1189,8 +1185,9 @@ window.__P1850.audits = (function(){
         −9.0° it measures ~1.2 m.
      C) NO TRANSFORM DRIFT — gridToWorld()'s implied base azimuth must equal
         GRID_ROT_BASE within 0.1°; worldToGrid() must invert gridToWorld() to
-        <1e-3 m; VIOGET_SKEW must remain GRID_ROT_BASE+VIOGET_ERROR. Any
-        future layer that re-defines its own origin/angle trips this.
+        <1e-3 m. Any future layer that re-defines its own origin/angle trips
+        this. (SINGLE-FRAME 2026-07-14: the old VIOGET_SKEW relation check is
+        gone — there is one frame; this audit is now strictly simpler.)
    This is the permanent gate for all future grid EXPANSION.
    ========================================================================= */
 registerAudit("core", "geodeticLock", function(){
@@ -1274,9 +1271,8 @@ registerAudit("core", "geodeticLock", function(){
     var wp=gridToWorld(CP[m][3],CP[m][4]); var g=worldToGrid(wp.x,wp.z);
     rtMax=Math.max(rtMax, Math.hypot(g.u-CP[m][3], g.v-CP[m][4]));
   }
-  var viogetOK=Math.abs(VIOGET_SKEW_DEG-(GRID_ROT_BASE_DEG+VIOGET_ERROR_DEG))<1e-9;
 
-  var pass = fitRms<=2.0 && e2eRms<=2.0 && azErr<=0.1 && rtMax<=1e-3 && viogetOK;
+  var pass = fitRms<=2.0 && e2eRms<=2.0 && azErr<=0.1 && rtMax<=1e-3;
   return {
     pass: pass,
     datasetFitRms_m: +fitRms.toFixed(3),
@@ -1285,7 +1281,7 @@ registerAudit("core", "geodeticLock", function(){
     gridToWorldAzDeg: +g2wAzDeg.toFixed(4), gridRotBaseDeg: GRID_ROT_BASE_DEG,
     azimuthDriftDeg: +azErr.toFixed(4),
     worldToGridRoundTripMax_m: +rtMax.toExponential(2),
-    viogetRelationOK: viogetOK,
+    singleFrame: true,   // one canonical frame (-9.0°) — grid-swing deleted 2026-07-14
     controlPoints: n,
     gates: "fitRms<=2, e2eRms<=2, azDrift<=0.1deg, roundTrip<=1e-3m"
   };
