@@ -782,11 +782,22 @@
       var gp = groundPlanAt(x, z, simDay);
       if(gp.platLot){
         var lot = lotById(gp.platLot), bDate = simDateISO(dateFromSimDay(lot.birth));
+        var distName = (lot.district==="hundred-vara") ? "100-vara (SoMa)" : "50-vara";
+        var devRef = (lot.district==="hundred-vara") ? "100vara" : "50vara";
         probeLine(probeOut, "ground-plan", "lot <b>"+gp.platLot+"</b>"
+          + " · "+distName+" district"
           + " · "+lot.widthM.toFixed(2)+"×"+lot.depthM.toFixed(2)+"m"
-          + " · dev-from-50vara "+(lot.dev*100).toFixed(2)+"%"
+          + " · dev-from-"+devRef+" "+(lot.dev*100).toFixed(2)+"%"
           + (lot.corner?" · CORNER":"") + (lot.water?" · WATER LOT":"")
           + " · born "+(lot.birth<-1000?"pre-sim":bDate));
+        // s85: record-lot provenance — the digitized survey identity where a
+        // plat-lots-known.json entry claims this lot (else pattern-fill fabric).
+        if(lot.source==="record"){
+          probeLine(probeOut, "record", "<b>Lot "+(lot.lotNumber||"?")+"</b> — "+(lot.recordSource||"eddy-1849")+" plat"
+            + (lot.recordCitation ? " · "+String(lot.recordCitation).slice(0,90) : ""));
+        } else {
+          probeLine(probeOut, "record", "pattern-fill (no digitized record for this lot yet)");
+        }
         probeLine(probeOut, "block", gp.block);
       } else if(gp.block){
         var pBlk = cadBlockAt(x, z, simDay);
