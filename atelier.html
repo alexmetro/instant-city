@@ -968,7 +968,7 @@
 <script src="catalog-occupations.js"></script>
 <script src="catalog-activities.js"></script>
 <script src="streets-geometry.js"></script>
-<script src="plat-lots-known.js?v=s85"></script> <!-- s85: digitized survey lot registry (window.PLAT_LOTS_KNOWN), consumed by core/08 cadApplyRecord -->
+<script src="plat-lots-known.js?v=s86"></script> <!-- s86: digitized survey lot registry (68 records, window.PLAT_LOTS_KNOWN), consumed by core/08 cadApplyRecord -->
 <script>
 (function(){
 "use strict";
@@ -2308,21 +2308,40 @@ function deriveGroundPlan(){
    IDENTITY + a recorded-dimension check; it does not yet re-cut fractional lot
    GEOMETRY (a fast-follow — the pattern division stands as the lot's shape until
    per-lot boundary widths are recovered from the Block Book). Records are keyed
-   by block_ref → the cadastre's block; a record's (col,row) or lot-position hint
-   maps it onto a pattern lot's (iU,iV). PURE (data join, zero dice). Records
-   that name a publicReserve block (the plaza common, which holds zero lots) or a
-   block/position not present in the plan are collected as `unmatched` for the
-   platRecords audit rather than forced. */
+   by block_ref (or, s86, an explicit resolved `cadKey`) → the cadastre's block;
+   a record's (col,row) or lot-position hint maps it onto a pattern lot's (iU,iV).
+   The record also carries an owners[] witness chain (Wheeler-1852 grant +
+   Buckelew-1847 map, chronological) which is stamped onto the matched lot for the
+   probe/who-is-where surface. PURE (data join, zero dice). Records that name a
+   publicReserve block (the plaza common, zero lots), a still-UNRESOLVED
+   descriptive block_ref (s86 Buckelew 1847 — no cadastre key derivable, honest
+   gap; carries cadKey:null + `unresolved`), or a block/position not present in
+   the plan are collected as `unmatched` with a reason rather than forced — no
+   record silently vanishes. Duplicate lot numbers (documented survey reality,
+   e.g. Buckelew's 8/38/69 + Wheeler's 695/709/753) are tallied separately, not
+   as failures. */
 function cadApplyRecord(blocks, byId){
   var REG = (typeof window!=="undefined" && window.PLAT_LOTS_KNOWN) ? window.PLAT_LOTS_KNOWN : null;
-  GROUND_PLAN_RECORD_STATS = { registryLoaded:!!REG, records:0, matched:0, unmatched:[], dimFlags:[] };
+  GROUND_PLAN_RECORD_STATS = { registryLoaded:!!REG, records:0, matched:0, unmatched:[], dimFlags:[], unresolved:0, duplicates:[] };
   if(!REG || !REG.lots) return;
   var byBlock = {}; blocks.forEach(function(b){ byBlock[b.key]=b; });
+  var lotNumSeen = {};                                     // lot_number -> [block_ref,…] for duplicate tally
   REG.lots.forEach(function(rec){
     if(rec.type==="named_parcel") return;                 // named parcels handled by GROUND_PARCELS
     GROUND_PLAN_RECORD_STATS.records++;
-    var b = byBlock[rec.block_ref];
-    if(!b){ GROUND_PLAN_RECORD_STATS.unmatched.push({ lot:rec.lot_number, block:rec.block_ref, reason:"block-not-in-plan" }); return; }
+    (lotNumSeen[rec.lot_number] = lotNumSeen[rec.lot_number] || []).push(rec.block_ref);
+    // s86: prefer an explicitly resolved cadastre key over a (possibly
+    // descriptive) block_ref. A descriptive Buckelew ref that could NOT be
+    // resolved carries cadKey:null + `unresolved` — surfaced honestly, not lost.
+    var joinKey = (rec.cadKey != null) ? rec.cadKey : rec.block_ref;
+    var b = byBlock[joinKey];
+    if(!b){
+      var descriptive = (rec.block_ref_spine_match === false) || (rec.unresolved != null);
+      if(descriptive) GROUND_PLAN_RECORD_STATS.unresolved++;
+      GROUND_PLAN_RECORD_STATS.unmatched.push({ lot:rec.lot_number, block:rec.block_ref,
+        reason: descriptive ? "unresolved-descriptive-block" : "block-not-in-plan" });
+      return;
+    }
     if(b.publicReserve){ GROUND_PLAN_RECORD_STATS.unmatched.push({ lot:rec.lot_number, block:rec.block_ref, reason:"public-reserve-zero-lots" }); return; }
     // map the record onto a pattern lot: explicit (iU,iV) if given, else first free lot
     var lot=null;
@@ -2331,6 +2350,7 @@ function cadApplyRecord(blocks, byId){
     if(!lot){ GROUND_PLAN_RECORD_STATS.unmatched.push({ lot:rec.lot_number, block:rec.block_ref, reason:"no-free-lot" }); return; }
     lot.source="record"; lot.lotNumber=rec.lot_number; lot.recordSource=rec.survey || (rec._source||"eddy-1849");
     lot.recordCitation = rec.note || null;
+    lot.owners = rec.owners || null;                       // s86: witness chain (Wheeler grant + Buckelew map)
     GROUND_PLAN_RECORD_STATS.matched++;
     // recorded-dimension check (record-only; flags, never forces geometry)
     if(rec.dimensions && rec.dimensions.width_m!=null){
@@ -2340,8 +2360,11 @@ function cadApplyRecord(blocks, byId){
         recW:+rec.dimensions.width_m.toFixed(2), patW:+lot.widthM.toFixed(2), dW:+dW.toFixed(2), dD:+dD.toFixed(2) });
     }
   });
+  // duplicate lot numbers across records (documented survey reality, not a fault)
+  Object.keys(lotNumSeen).forEach(function(n){ if(lotNumSeen[n].length>1)
+    GROUND_PLAN_RECORD_STATS.duplicates.push({ lot:n, count:lotNumSeen[n].length, blocks:lotNumSeen[n] }); });
 }
-var GROUND_PLAN_RECORD_STATS = { registryLoaded:false, records:0, matched:0, unmatched:[], dimFlags:[] };
+var GROUND_PLAN_RECORD_STATS = { registryLoaded:false, records:0, matched:0, unmatched:[], dimFlags:[], unresolved:0, duplicates:[] };
 
 var GROUND_PLAN = deriveGroundPlan();
 
@@ -2883,16 +2906,23 @@ function groundPlanStats(){
                edgeToRowOffset:{ stations:rowOffsets.stations, maxM:rowOffsets.maxM, exact:plazaRowExact, sample:rowOffsets.list } } };
   });
 
-  /* platRecords (s85 — CADASTRE CONSUMES THE RECORD). Every plat-lots-known.json
-     record either (a) stamps a real plan lot (source:"record", carrying the
-     recorded lot number + citation) or (b) is accounted-for in `unmatched` with
-     a reason (block not in plan, or a publicReserve block that holds zero lots).
-     No record silently vanishes. Record lots whose recorded dimensions diverge
-     from their (district-correct) pattern dimensions by >2 m are flagged (v1
-     overlays identity, not fractional geometry — a flag is expected, not a fail,
-     until per-lot widths land; the audit PASSES on flags, FAILS only if a record
-     is lost). If the registry is absent (sidecar not built), the audit is a
-     documented no-op pass. */
+  /* platRecords (s85 — CADASTRE CONSUMES THE RECORD; s86 — REGISTRY INTEGRATION).
+     Every plat-lots-known.json record either (a) stamps a real plan lot
+     (source:"record", carrying the recorded lot number + citation + owners[]
+     witness chain) or (b) is accounted-for in `unmatched` with a reason:
+       • public-reserve-zero-lots  — names the plaza common (zero lots by design)
+       • unresolved-descriptive-block — an s86 Buckelew 1847 descriptive block_ref
+         that could not be resolved to a cadastre key (cadKey:null; honest gap —
+         the sheet's orientation is not pixel-derivable and no cadastre block
+         beyond Eddy Block B/Block C carries official lot numbers to anchor against)
+       • block-not-in-plan — a genuine spine-keyed miss (none expected)
+     No record silently vanishes: matched + unmatched must equal records. Recorded
+     dimensions diverging >2 m from the (district-correct) pattern are flagged (v1
+     overlays identity, not fractional geometry — a flag is expected, not a fail).
+     DUPLICATE lot numbers (Buckelew read 8/38/69 at two cells; Wheeler documents
+     695/709/753 on the official map) are surfaced as documented survey reality,
+     NOT failures. The audit PASSES on flags/unresolved/duplicates, FAILS only if a
+     record is lost. Registry absent ⇒ documented no-op pass. */
   registerAudit("placement", "platRecords", function(){
     var R = (typeof GROUND_PLAN_RECORD_STATS!=="undefined") ? GROUND_PLAN_RECORD_STATS : null;
     if(!R || !R.registryLoaded) return { pass:true, law:"platRecords", registryLoaded:false, note:"plat-lots-known sidecar not loaded — pure pattern fabric" };
@@ -2901,11 +2931,18 @@ function groundPlanStats(){
     // record is either matched or explained in unmatched (nothing lost).
     var accounted = R.matched + R.unmatched.length;
     var ok = (accounted===R.records) && (recordLots.length===R.matched);
+    // unmatched reason census
+    var reasons={}; R.unmatched.forEach(function(u){ reasons[u.reason]=(reasons[u.reason]||0)+1; });
+    var withOwners = recordLots.filter(function(l){ return l.owners && l.owners.length; }).length;
     return { pass: ok, law:"platRecords", registryLoaded:true,
              records:R.records, matched:R.matched, recordLotsInPlan:recordLots.length,
-             unmatched:R.unmatched.length, unmatchedList:R.unmatched.slice(0,12),
+             recordLotsWithOwnerChain:withOwners,
+             unmatched:R.unmatched.length, unmatchedByReason:reasons,
+             unresolvedDescriptive:R.unresolved, unmatchedList:R.unmatched.slice(0,12),
+             duplicateLotNumbers:R.duplicates.length, duplicateList:R.duplicates,
              dimensionFlags:R.dimFlags.length, dimFlagList:R.dimFlags.slice(0,12),
-             sample:recordLots.slice(0,6).map(function(l){ return { id:l.id, lotNumber:l.lotNumber, district:l.district, source:l.recordSource }; }) };
+             sample:recordLots.slice(0,6).map(function(l){ return { id:l.id, lotNumber:l.lotNumber, district:l.district, source:l.recordSource,
+               owners:(l.owners?l.owners.map(function(o){return o.dateOrInterval+" "+o.name;}):null) }; }) };
   });
 })();
 
@@ -8972,6 +9009,14 @@ function updateHud(alt){
         if(lot.source==="record"){
           probeLine(probeOut, "record", "<b>Lot "+(lot.lotNumber||"?")+"</b> — "+(lot.recordSource||"eddy-1849")+" plat"
             + (lot.recordCitation ? " · "+String(lot.recordCitation).slice(0,90) : ""));
+          // s86: chronological owner witness chain (Wheeler-1852 grant + Buckelew
+          // 1847 map) — the data surface for the future who-is-where registry.
+          if(lot.owners && lot.owners.length){
+            probeLine(probeOut, "owners", lot.owners.map(function(o){
+              var src = o.source.indexOf("wheeler")>=0 ? "Wheeler grant" : (o.source.indexOf("buckelew")>=0 ? "Buckelew map" : o.source);
+              return "<b>"+o.dateOrInterval+"</b>: "+o.name+" ("+src+")";
+            }).join(" · "));
+          }
         } else {
           probeLine(probeOut, "record", "pattern-fill (no digitized record for this lot yet)");
         }
