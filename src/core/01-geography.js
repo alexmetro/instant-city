@@ -253,7 +253,13 @@ var STREETS_RUNTIME = (function(){
       surveyedDay: appears?appears.surveyedDay:null, firstMentionDay: appears?appears.firstMentionDay:null });
   }
   SG.streets.forEach(function(s){
-    if(s.id==="mission-street" || s.id==="western-addition-future-streets") return;
+    // s84: mission-street is now INCLUDED — its dataset polyline is the
+    // s84 dune-field-swale route (12 vertices threading the SoMa hollows,
+    // re-anchored to Kearny x California per the franchise text), which is
+    // topologically truer than the deleted legacy straight line/findLowRoute.
+    // presidio-road (new s84 trail) flows through here too. Only the
+    // deliberately-empty western-addition pointer is excluded.
+    if(s.id==="western-addition-future-streets") return;
     if(s.members){ // hundred-vara-district-streets, numbered-streets-first-eighth: no growth across checkpoints, full length from ofarrell-1847
       var wM = widthFor(s);
       s.members.forEach(function(m){
@@ -270,6 +276,46 @@ var STREETS_RUNTIME = (function(){
 var STREETS_RUNTIME_BY_ID = {}; STREETS_RUNTIME.forEach(function(s){ STREETS_RUNTIME_BY_ID[s.id]=s; });
 function streetUConst(id){ return STREETS_RUNTIME_BY_ID[id].polyline[0].u; } // cardinal N-S streets only: constant u along the whole run
 function streetVConst(id){ return STREETS_RUNTIME_BY_ID[id].polyline[0].v; } // cardinal E-W streets only: constant v along the whole run
+
+/* =====================================================================
+   PIER-CLASS SPINE MEMBERS (s84 — THE SPINE EXPANSION, road-master-spec.md
+   SPINE MEMBERSHIP AMENDMENT). "A wharf is a street on piles." Each pier is a
+   first-class spine member (class 'pier') with a CONSTANT surveyed width, DATED
+   construction/extension checkpoints (extent grows with the build), and an
+   anchor street it extends bayward. Read from window.STREETS_GEOMETRY.piers
+   (data/streets-geometry.json, dossier research/outward-and-wharf-network-
+   1846-50.md Part 1). PIERS_RUNTIME mirrors STREETS_RUNTIME's shape so the same
+   ground-paint pass strokes both — but the pier deck is a PLANK surface over
+   WATER (the ground-paint pier branch bypasses the wet-lot skip and paints the
+   documented never-lighter-than-terrain plank tone, grounding §9 planked
+   exception). The DECK EDGES (centerline +/- width/2) are the mooring / ship-
+   exclusion boundary consumed at the ships admission — exposed by
+   core/08-cadastre pierEdgesAt()/pierDeckQuad(). No ships code consumes it yet.
+   Dates -> simDay via eventDateToSimDay (defined in core/00-boot, available
+   here). ===================================================================== */
+var PIERS_RUNTIME = (function(){
+  if(!SG.piers || !SG.piers.members) return [];
+  return SG.piers.members.map(function(m){
+    var poly = m.polyline.map(function(p){ return {u:p[0], v:p[1]}; });
+    var ck = (m.checkpoints||[]).map(function(c){
+      return { day: eventDateToSimDay(c.date), extent: c.extent, lengthFt: c.lengthFt, confidence: c.confidence };
+    }).sort(function(a,b){ return a.day-b.day; });
+    return { id:m.id, name:m.name, cls:"pier", widthM:m.width_m,
+             anchorStreet:m.anchorStreet, anchorFoot:m.anchorFoot, baywardAxis:m.baywardAxis||[1,0],
+             polyline:poly, checkpoints:ck,
+             birthDay: eventDateToSimDay(m.birth),
+             provenance:m.provenance, dossier:m.dossier };
+  });
+})();
+var PIERS_RUNTIME_BY_ID = {}; PIERS_RUNTIME.forEach(function(p){ PIERS_RUNTIME_BY_ID[p.id]=p; });
+/* The active checkpoint (largest extent whose date has arrived) for a pier at a
+   given simDay, or null if the pier is not yet born. */
+function pierActiveCheckpoint(p, day){
+  if(day < p.birthDay) return null;
+  var active = null;
+  for(var i=0;i<p.checkpoints.length;i++){ if(p.checkpoints[i].day <= day) active = p.checkpoints[i]; }
+  return active || (p.checkpoints.length ? p.checkpoints[0] : null);
+}
 
 /* Every simDay where SOME street's rendered state could change — its own
    survey/worn-track dates, or a checkpoint-era boundary that grows its
@@ -301,6 +347,12 @@ var STREET_REPAINT_THRESHOLDS = (function(){
     if(s.surveyedDay!=null) set[s.surveyedDay]=1;
     if(s.firstMentionDay!=null){ set[s.firstMentionDay]=1; set[s.firstMentionDay+WEAR_MENTION_RAMP]=1; }
     s.checkpoints.forEach(function(c){ if(c.day>-999999) set[c.day]=1; });
+  });
+  // s84: pier construction/extension dates are repaint thresholds too, so the
+  // deck appears on its birth date and grows at each extension checkpoint.
+  PIERS_RUNTIME.forEach(function(p){
+    set[p.birthDay]=1;
+    p.checkpoints.forEach(function(c){ set[c.day]=1; });
   });
   return Object.keys(set).map(Number).sort(function(a,b){ return a-b; });
 })();

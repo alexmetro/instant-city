@@ -364,6 +364,59 @@ function groundPlanAt(x, z, day){
 function lotById(id){ return GROUND_PLAN.byId[id] || null; }
 function blocksAt(day){ return GROUND_PLAN.blocks.filter(function(b){ return day==null || b.birth<=day; }); }
 function parcelByName(name){ return GROUND_PARCELS_BY_NAME[name] || null; }
+
+/* =====================================================================
+   PIER DECK-EDGE / MOORING SURFACE (s84 — THE SPINE EXPANSION, road-master-spec
+   SPINE MEMBERSHIP AMENDMENT). A pier is UNIQUELY double-sided: its deck edges
+   (centerline +/- width/2) are BOTH the walk-path boundary AND the mooring /
+   ship-exclusion line the anchorage/mooring laws (placement-spec P12/P13) will
+   consume at the SHIPS admission. This is the data surface those consumers will
+   read; NO ships code consumes it yet (design-and-document, per the s84 brief).
+   The deck geometry is a PURE function of the pier spine + the queried day
+   (the active construction/extension checkpoint), produced at query time in the
+   one canonical frame — never a baked/stale frame (same discipline as
+   lotWorldQuad). A pier reads as a parcel-like WATER-EXCLUSION band, not a plat
+   lot. ===================================================================== */
+function pierEdgesAt(idOrPier, day){
+  var p = typeof idOrPier === "string" ? (typeof PIERS_RUNTIME_BY_ID !== "undefined" ? PIERS_RUNTIME_BY_ID[idOrPier] : null) : idOrPier;
+  if(!p) return null;
+  var active = pierActiveCheckpoint(p, day);
+  var base = { id:p.id, anchorStreet:p.anchorStreet, width:p.widthM, active:false,
+               centerline:[], leftEdge:[], rightEdge:[], deckQuad:[], innerEnd:null, outerEnd:null };
+  if(!active) return base;                        // not yet built at `day` — no deck, no mooring band
+  var i0 = active.extent[0], i1 = active.extent[1], hw = p.widthM/2;
+  var pts = [];
+  for(var i=i0;i<=i1;i++){ var w = gridToWorld(p.polyline[i].u, p.polyline[i].v); pts.push({ x:w.x, z:w.z }); }
+  var cl=[], L=[], R=[];
+  for(var k=0;k<pts.length;k++){
+    var a = pts[Math.max(0,k-1)], b = pts[Math.min(pts.length-1,k+1)];
+    var dx=b.x-a.x, dz=b.z-a.z, dl=Math.hypot(dx,dz)||1, nx=-dz/dl, nz=dx/dl; // left unit normal
+    cl.push({ x:pts[k].x, z:pts[k].z });
+    L.push({ x:pts[k].x+nx*hw, z:pts[k].z+nz*hw });
+    R.push({ x:pts[k].x-nx*hw, z:pts[k].z-nz*hw });
+  }
+  var deckQuad = L.concat(R.slice().reverse());   // closed ring: left edge out, right edge back
+  return { id:p.id, anchorStreet:p.anchorStreet, width:p.widthM, active:true,
+           lengthFt:active.lengthFt, centerline:cl, leftEdge:L, rightEdge:R, deckQuad:deckQuad,
+           innerEnd:cl[0], outerEnd:cl[cl.length-1] };
+}
+function pierDeckQuad(idOrPier, day){ var e = pierEdgesAt(idOrPier, day); return e && e.active ? e.deckQuad : null; }
+function piersAt(day){ return (typeof PIERS_RUNTIME !== "undefined" ? PIERS_RUNTIME : []).filter(function(p){ return day==null || day>=p.birthDay; }); }
+/* Point-in-deck test — which pier's deck (if any) a world point sits on at `day`
+   (the P12/P13 water-exclusion query a ship-placement pass will run). */
+function pierAt(x, z, day){
+  var live = piersAt(day);
+  for(var i=0;i<live.length;i++){ var q = pierDeckQuad(live[i], day); if(q && cadPointInPoly(q, x, z)) return live[i].id; }
+  return null;
+}
+function pierStats(){
+  return (typeof PIERS_RUNTIME !== "undefined" ? PIERS_RUNTIME : []).map(function(p){
+    var e = pierEdgesAt(p, 1e9);                  // full built extent, for the census
+    return { id:p.id, anchor:p.anchorStreet, width_m:p.widthM, birthDay:+p.birthDay.toFixed(0),
+             fullLengthFt:(p.checkpoints.length?p.checkpoints[p.checkpoints.length-1].lengthFt:null),
+             provenance:p.provenance, outerEnd:e.outerEnd };
+  });
+}
 /* Cadastre census (for __P1850 + reporting). */
 function groundPlanStats(){
   var B=GROUND_PLAN.blocks, L=GROUND_PLAN.lots;
@@ -610,3 +663,59 @@ function groundPlanStats(){
                edgeToRowOffset:{ stations:rowOffsets.stations, maxM:rowOffsets.maxM, exact:plazaRowExact, sample:rowOffsets.list } } };
   });
 })();
+
+/* =====================================================================
+   spine.pierAnchors (s84 — THE SPINE EXPANSION). The pier-membership integrity
+   guard: every pier-class spine member must (1) name an anchor street that
+   EXISTS in the spine; (2) be COLLINEAR with that anchor (its bayward bearing
+   matches the anchor street's bearing, undirected, within 6deg); (3) have its
+   INNER vertex sit ON the anchor street's centerline (continuity at the
+   shoreline crossing — within the anchor's half-width + margin); (4) carry a
+   single constant width; (5) have in-bounds, monotone construction/extension
+   extents. Framing-independent (walks spine data / fixed world probes, no
+   camera). A new `spine` audit namespace — late-attaches to __P1850.audits via
+   registerAudit (core/00-boot). ===================================================================== */
+registerAudit("spine", "pierAnchors", function(){
+  function az(dx,dz){ var a = Math.atan2(dz,dx)*180/Math.PI; return ((a%180)+180)%180; } // undirected
+  function angDiff(a,b){ var d = Math.abs(a-b)%180; return Math.min(d, 180-d); }
+  var out = { pass:true, piers:0, violations:[], detail:[] };
+  if(typeof PIERS_RUNTIME === "undefined" || !PIERS_RUNTIME.length) return { pass:true, piers:0, note:"no piers in spine" };
+  PIERS_RUNTIME.forEach(function(p){
+    out.piers++;
+    var d = { id:p.id, anchor:p.anchorStreet, width_m:p.widthM, birthDay:+p.birthDay.toFixed(0) };
+    var anchor = STREETS_RUNTIME_BY_ID[p.anchorStreet];
+    if(!anchor){ out.violations.push({ id:p.id, reason:"anchor-street-missing", anchor:p.anchorStreet }); d.anchorExists=false; out.detail.push(d); return; }
+    d.anchorExists = true;
+    // world geometry (one canonical frame)
+    var inner = gridToWorld(p.polyline[0].u, p.polyline[0].v);
+    var outer = gridToWorld(p.polyline[p.polyline.length-1].u, p.polyline[p.polyline.length-1].v);
+    var acl = anchor.polyline.map(function(q){ return gridToWorld(q.u, q.v); });
+    // (3) continuity: inner vertex distance to the anchor centerline
+    var dmin = Infinity;
+    for(var i=0;i<acl.length-1;i++) dmin = Math.min(dmin, distToSegXZ(inner.x, inner.z, acl[i].x, acl[i].z, acl[i+1].x, acl[i+1].z));
+    d.innerToAnchorLineM = +dmin.toFixed(2);
+    // (2) bearing alignment (pier bayward vs anchor overall bearing, undirected)
+    var pierAz = az(outer.x-inner.x, outer.z-inner.z);
+    var anchAz = az(acl[acl.length-1].x-acl[0].x, acl[acl.length-1].z-acl[0].z);
+    d.bearingDevDeg = +angDiff(pierAz, anchAz).toFixed(2);
+    var contOk = dmin <= (anchor.widthM/2 + 12);
+    var bearOk = d.bearingDevDeg <= 6;
+    if(!contOk) out.violations.push({ id:p.id, reason:"inner-vertex-off-anchor-centerline", distM:d.innerToAnchorLineM, tolM:+(anchor.widthM/2+12).toFixed(1) });
+    if(!bearOk) out.violations.push({ id:p.id, reason:"pier-not-collinear-with-anchor", devDeg:d.bearingDevDeg });
+    // (4) constant width present
+    if(!(p.widthM > 0)) out.violations.push({ id:p.id, reason:"no-width" });
+    // (5) extents in-bounds + monotone
+    var pn = p.polyline.length, lastI1 = -1;
+    p.checkpoints.forEach(function(c){
+      if(c.extent[0] < 0 || c.extent[1] >= pn || c.extent[1] <= c.extent[0]) out.violations.push({ id:p.id, reason:"bad-extent", extent:c.extent, verts:pn });
+      if(c.extent[1] < lastI1) out.violations.push({ id:p.id, reason:"non-monotone-extent", extent:c.extent });
+      lastI1 = c.extent[1];
+    });
+    // length proof: outer-extent world length vs the documented feet (record-only)
+    d.builtLengthM = +Math.hypot(outer.x-inner.x, outer.z-inner.z).toFixed(1);
+    d.builtLengthFt = +(d.builtLengthM/0.3048).toFixed(0);
+    out.detail.push(d);
+  });
+  out.pass = out.violations.length === 0;
+  return out;
+});

@@ -1498,7 +1498,13 @@ var STREETS_RUNTIME = (function(){
       surveyedDay: appears?appears.surveyedDay:null, firstMentionDay: appears?appears.firstMentionDay:null });
   }
   SG.streets.forEach(function(s){
-    if(s.id==="mission-street" || s.id==="western-addition-future-streets") return;
+    // s84: mission-street is now INCLUDED — its dataset polyline is the
+    // s84 dune-field-swale route (12 vertices threading the SoMa hollows,
+    // re-anchored to Kearny x California per the franchise text), which is
+    // topologically truer than the deleted legacy straight line/findLowRoute.
+    // presidio-road (new s84 trail) flows through here too. Only the
+    // deliberately-empty western-addition pointer is excluded.
+    if(s.id==="western-addition-future-streets") return;
     if(s.members){ // hundred-vara-district-streets, numbered-streets-first-eighth: no growth across checkpoints, full length from ofarrell-1847
       var wM = widthFor(s);
       s.members.forEach(function(m){
@@ -1515,6 +1521,46 @@ var STREETS_RUNTIME = (function(){
 var STREETS_RUNTIME_BY_ID = {}; STREETS_RUNTIME.forEach(function(s){ STREETS_RUNTIME_BY_ID[s.id]=s; });
 function streetUConst(id){ return STREETS_RUNTIME_BY_ID[id].polyline[0].u; } // cardinal N-S streets only: constant u along the whole run
 function streetVConst(id){ return STREETS_RUNTIME_BY_ID[id].polyline[0].v; } // cardinal E-W streets only: constant v along the whole run
+
+/* =====================================================================
+   PIER-CLASS SPINE MEMBERS (s84 — THE SPINE EXPANSION, road-master-spec.md
+   SPINE MEMBERSHIP AMENDMENT). "A wharf is a street on piles." Each pier is a
+   first-class spine member (class 'pier') with a CONSTANT surveyed width, DATED
+   construction/extension checkpoints (extent grows with the build), and an
+   anchor street it extends bayward. Read from window.STREETS_GEOMETRY.piers
+   (data/streets-geometry.json, dossier research/outward-and-wharf-network-
+   1846-50.md Part 1). PIERS_RUNTIME mirrors STREETS_RUNTIME's shape so the same
+   ground-paint pass strokes both — but the pier deck is a PLANK surface over
+   WATER (the ground-paint pier branch bypasses the wet-lot skip and paints the
+   documented never-lighter-than-terrain plank tone, grounding §9 planked
+   exception). The DECK EDGES (centerline +/- width/2) are the mooring / ship-
+   exclusion boundary consumed at the ships admission — exposed by
+   core/08-cadastre pierEdgesAt()/pierDeckQuad(). No ships code consumes it yet.
+   Dates -> simDay via eventDateToSimDay (defined in core/00-boot, available
+   here). ===================================================================== */
+var PIERS_RUNTIME = (function(){
+  if(!SG.piers || !SG.piers.members) return [];
+  return SG.piers.members.map(function(m){
+    var poly = m.polyline.map(function(p){ return {u:p[0], v:p[1]}; });
+    var ck = (m.checkpoints||[]).map(function(c){
+      return { day: eventDateToSimDay(c.date), extent: c.extent, lengthFt: c.lengthFt, confidence: c.confidence };
+    }).sort(function(a,b){ return a.day-b.day; });
+    return { id:m.id, name:m.name, cls:"pier", widthM:m.width_m,
+             anchorStreet:m.anchorStreet, anchorFoot:m.anchorFoot, baywardAxis:m.baywardAxis||[1,0],
+             polyline:poly, checkpoints:ck,
+             birthDay: eventDateToSimDay(m.birth),
+             provenance:m.provenance, dossier:m.dossier };
+  });
+})();
+var PIERS_RUNTIME_BY_ID = {}; PIERS_RUNTIME.forEach(function(p){ PIERS_RUNTIME_BY_ID[p.id]=p; });
+/* The active checkpoint (largest extent whose date has arrived) for a pier at a
+   given simDay, or null if the pier is not yet born. */
+function pierActiveCheckpoint(p, day){
+  if(day < p.birthDay) return null;
+  var active = null;
+  for(var i=0;i<p.checkpoints.length;i++){ if(p.checkpoints[i].day <= day) active = p.checkpoints[i]; }
+  return active || (p.checkpoints.length ? p.checkpoints[0] : null);
+}
 
 /* Every simDay where SOME street's rendered state could change — its own
    survey/worn-track dates, or a checkpoint-era boundary that grows its
@@ -1546,6 +1592,12 @@ var STREET_REPAINT_THRESHOLDS = (function(){
     if(s.surveyedDay!=null) set[s.surveyedDay]=1;
     if(s.firstMentionDay!=null){ set[s.firstMentionDay]=1; set[s.firstMentionDay+WEAR_MENTION_RAMP]=1; }
     s.checkpoints.forEach(function(c){ if(c.day>-999999) set[c.day]=1; });
+  });
+  // s84: pier construction/extension dates are repaint thresholds too, so the
+  // deck appears on its birth date and grows at each extension checkpoint.
+  PIERS_RUNTIME.forEach(function(p){
+    set[p.birthDay]=1;
+    p.checkpoints.forEach(function(c){ set[c.day]=1; });
   });
   return Object.keys(set).map(Number).sort(function(a,b){ return a-b; });
 })();
@@ -2315,6 +2367,59 @@ function groundPlanAt(x, z, day){
 function lotById(id){ return GROUND_PLAN.byId[id] || null; }
 function blocksAt(day){ return GROUND_PLAN.blocks.filter(function(b){ return day==null || b.birth<=day; }); }
 function parcelByName(name){ return GROUND_PARCELS_BY_NAME[name] || null; }
+
+/* =====================================================================
+   PIER DECK-EDGE / MOORING SURFACE (s84 — THE SPINE EXPANSION, road-master-spec
+   SPINE MEMBERSHIP AMENDMENT). A pier is UNIQUELY double-sided: its deck edges
+   (centerline +/- width/2) are BOTH the walk-path boundary AND the mooring /
+   ship-exclusion line the anchorage/mooring laws (placement-spec P12/P13) will
+   consume at the SHIPS admission. This is the data surface those consumers will
+   read; NO ships code consumes it yet (design-and-document, per the s84 brief).
+   The deck geometry is a PURE function of the pier spine + the queried day
+   (the active construction/extension checkpoint), produced at query time in the
+   one canonical frame — never a baked/stale frame (same discipline as
+   lotWorldQuad). A pier reads as a parcel-like WATER-EXCLUSION band, not a plat
+   lot. ===================================================================== */
+function pierEdgesAt(idOrPier, day){
+  var p = typeof idOrPier === "string" ? (typeof PIERS_RUNTIME_BY_ID !== "undefined" ? PIERS_RUNTIME_BY_ID[idOrPier] : null) : idOrPier;
+  if(!p) return null;
+  var active = pierActiveCheckpoint(p, day);
+  var base = { id:p.id, anchorStreet:p.anchorStreet, width:p.widthM, active:false,
+               centerline:[], leftEdge:[], rightEdge:[], deckQuad:[], innerEnd:null, outerEnd:null };
+  if(!active) return base;                        // not yet built at `day` — no deck, no mooring band
+  var i0 = active.extent[0], i1 = active.extent[1], hw = p.widthM/2;
+  var pts = [];
+  for(var i=i0;i<=i1;i++){ var w = gridToWorld(p.polyline[i].u, p.polyline[i].v); pts.push({ x:w.x, z:w.z }); }
+  var cl=[], L=[], R=[];
+  for(var k=0;k<pts.length;k++){
+    var a = pts[Math.max(0,k-1)], b = pts[Math.min(pts.length-1,k+1)];
+    var dx=b.x-a.x, dz=b.z-a.z, dl=Math.hypot(dx,dz)||1, nx=-dz/dl, nz=dx/dl; // left unit normal
+    cl.push({ x:pts[k].x, z:pts[k].z });
+    L.push({ x:pts[k].x+nx*hw, z:pts[k].z+nz*hw });
+    R.push({ x:pts[k].x-nx*hw, z:pts[k].z-nz*hw });
+  }
+  var deckQuad = L.concat(R.slice().reverse());   // closed ring: left edge out, right edge back
+  return { id:p.id, anchorStreet:p.anchorStreet, width:p.widthM, active:true,
+           lengthFt:active.lengthFt, centerline:cl, leftEdge:L, rightEdge:R, deckQuad:deckQuad,
+           innerEnd:cl[0], outerEnd:cl[cl.length-1] };
+}
+function pierDeckQuad(idOrPier, day){ var e = pierEdgesAt(idOrPier, day); return e && e.active ? e.deckQuad : null; }
+function piersAt(day){ return (typeof PIERS_RUNTIME !== "undefined" ? PIERS_RUNTIME : []).filter(function(p){ return day==null || day>=p.birthDay; }); }
+/* Point-in-deck test — which pier's deck (if any) a world point sits on at `day`
+   (the P12/P13 water-exclusion query a ship-placement pass will run). */
+function pierAt(x, z, day){
+  var live = piersAt(day);
+  for(var i=0;i<live.length;i++){ var q = pierDeckQuad(live[i], day); if(q && cadPointInPoly(q, x, z)) return live[i].id; }
+  return null;
+}
+function pierStats(){
+  return (typeof PIERS_RUNTIME !== "undefined" ? PIERS_RUNTIME : []).map(function(p){
+    var e = pierEdgesAt(p, 1e9);                  // full built extent, for the census
+    return { id:p.id, anchor:p.anchorStreet, width_m:p.widthM, birthDay:+p.birthDay.toFixed(0),
+             fullLengthFt:(p.checkpoints.length?p.checkpoints[p.checkpoints.length-1].lengthFt:null),
+             provenance:p.provenance, outerEnd:e.outerEnd };
+  });
+}
 /* Cadastre census (for __P1850 + reporting). */
 function groundPlanStats(){
   var B=GROUND_PLAN.blocks, L=GROUND_PLAN.lots;
@@ -2561,6 +2666,62 @@ function groundPlanStats(){
                edgeToRowOffset:{ stations:rowOffsets.stations, maxM:rowOffsets.maxM, exact:plazaRowExact, sample:rowOffsets.list } } };
   });
 })();
+
+/* =====================================================================
+   spine.pierAnchors (s84 — THE SPINE EXPANSION). The pier-membership integrity
+   guard: every pier-class spine member must (1) name an anchor street that
+   EXISTS in the spine; (2) be COLLINEAR with that anchor (its bayward bearing
+   matches the anchor street's bearing, undirected, within 6deg); (3) have its
+   INNER vertex sit ON the anchor street's centerline (continuity at the
+   shoreline crossing — within the anchor's half-width + margin); (4) carry a
+   single constant width; (5) have in-bounds, monotone construction/extension
+   extents. Framing-independent (walks spine data / fixed world probes, no
+   camera). A new `spine` audit namespace — late-attaches to __P1850.audits via
+   registerAudit (core/00-boot). ===================================================================== */
+registerAudit("spine", "pierAnchors", function(){
+  function az(dx,dz){ var a = Math.atan2(dz,dx)*180/Math.PI; return ((a%180)+180)%180; } // undirected
+  function angDiff(a,b){ var d = Math.abs(a-b)%180; return Math.min(d, 180-d); }
+  var out = { pass:true, piers:0, violations:[], detail:[] };
+  if(typeof PIERS_RUNTIME === "undefined" || !PIERS_RUNTIME.length) return { pass:true, piers:0, note:"no piers in spine" };
+  PIERS_RUNTIME.forEach(function(p){
+    out.piers++;
+    var d = { id:p.id, anchor:p.anchorStreet, width_m:p.widthM, birthDay:+p.birthDay.toFixed(0) };
+    var anchor = STREETS_RUNTIME_BY_ID[p.anchorStreet];
+    if(!anchor){ out.violations.push({ id:p.id, reason:"anchor-street-missing", anchor:p.anchorStreet }); d.anchorExists=false; out.detail.push(d); return; }
+    d.anchorExists = true;
+    // world geometry (one canonical frame)
+    var inner = gridToWorld(p.polyline[0].u, p.polyline[0].v);
+    var outer = gridToWorld(p.polyline[p.polyline.length-1].u, p.polyline[p.polyline.length-1].v);
+    var acl = anchor.polyline.map(function(q){ return gridToWorld(q.u, q.v); });
+    // (3) continuity: inner vertex distance to the anchor centerline
+    var dmin = Infinity;
+    for(var i=0;i<acl.length-1;i++) dmin = Math.min(dmin, distToSegXZ(inner.x, inner.z, acl[i].x, acl[i].z, acl[i+1].x, acl[i+1].z));
+    d.innerToAnchorLineM = +dmin.toFixed(2);
+    // (2) bearing alignment (pier bayward vs anchor overall bearing, undirected)
+    var pierAz = az(outer.x-inner.x, outer.z-inner.z);
+    var anchAz = az(acl[acl.length-1].x-acl[0].x, acl[acl.length-1].z-acl[0].z);
+    d.bearingDevDeg = +angDiff(pierAz, anchAz).toFixed(2);
+    var contOk = dmin <= (anchor.widthM/2 + 12);
+    var bearOk = d.bearingDevDeg <= 6;
+    if(!contOk) out.violations.push({ id:p.id, reason:"inner-vertex-off-anchor-centerline", distM:d.innerToAnchorLineM, tolM:+(anchor.widthM/2+12).toFixed(1) });
+    if(!bearOk) out.violations.push({ id:p.id, reason:"pier-not-collinear-with-anchor", devDeg:d.bearingDevDeg });
+    // (4) constant width present
+    if(!(p.widthM > 0)) out.violations.push({ id:p.id, reason:"no-width" });
+    // (5) extents in-bounds + monotone
+    var pn = p.polyline.length, lastI1 = -1;
+    p.checkpoints.forEach(function(c){
+      if(c.extent[0] < 0 || c.extent[1] >= pn || c.extent[1] <= c.extent[0]) out.violations.push({ id:p.id, reason:"bad-extent", extent:c.extent, verts:pn });
+      if(c.extent[1] < lastI1) out.violations.push({ id:p.id, reason:"non-monotone-extent", extent:c.extent });
+      lastI1 = c.extent[1];
+    });
+    // length proof: outer-extent world length vs the documented feet (record-only)
+    d.builtLengthM = +Math.hypot(outer.x-inner.x, outer.z-inner.z).toFixed(1);
+    d.builtLengthFt = +(d.builtLengthM/0.3048).toFixed(0);
+    out.detail.push(d);
+  });
+  out.pass = out.violations.length === 0;
+  return out;
+});
 /* =====================================================================
    GEOMETRY / MERGE HELPERS  (no BufferGeometryUtils dependency — manual)
    ===================================================================== */
@@ -3642,6 +3803,13 @@ var GP_TONE_ROAD  = "#6b5838"; // rgb(107,88,56) — luminance ~0.35, well under
 var GP_TONE_GHOST = "#5c4e33"; // the surveyor's line: darker still, drawn faint
 var GP_GHOST_ALPHA = 0.30;
 var GP_GHOST_WM = 1.6;         // ghost hairline width (m) — a thin scratch, never a class-width band
+/* s84: PIER PLANK DECK tone. grounding.md §9 EXCEPTION — a planked surface (a
+   wharf deck) is DOCUMENTED to read as WOOD, lawfully slightly LIGHTER than the
+   terrain/road (the never-lighter-than-terrain floor applies to dirt roads, not
+   planks). Weathered warm grey-brown, distinguishable from dirt at a glance but
+   still restrained (lum ~0.51). Dumb & uniform like the roads: one tone, no
+   plank strokes / piles / props (that is ships-admission art). */
+var GP_TONE_PLANK = "#9c8560"; // rgb(156,133,96) — luminance ~0.51, reads as wood deck
 
 /* ---- WORLD-SPACE PAINT CANVAS. Uniform px/m on both axes (canvas sized to
    the world aspect), so a constant class width in metres paints a constant
@@ -3720,6 +3888,7 @@ var _gpID = null;             // cached ImageData for audits, dropped each repai
 function _gpStrokeRun(pts, cls){
   if(pts.length < 2) return;
   if(cls === 1){ gpCtx.globalAlpha = GP_GHOST_ALPHA; gpCtx.strokeStyle = GP_TONE_GHOST; gpCtx.lineWidth = Math.max(1, gpPxLen(GP_GHOST_WM)); }
+  else if(cls === 3){ gpCtx.globalAlpha = 1;         gpCtx.strokeStyle = GP_TONE_PLANK; gpCtx.lineWidth = Math.max(1, gpPxLen(pts._wM)); } // s84 pier plank deck
   else         { gpCtx.globalAlpha = 1;              gpCtx.strokeStyle = GP_TONE_ROAD;  gpCtx.lineWidth = Math.max(1, gpPxLen(pts._wM)); }
   var p0 = gpPx(pts[0].x, pts[0].z);
   gpCtx.beginPath(); gpCtx.moveTo(p0.x, p0.y);
@@ -3779,6 +3948,30 @@ function renderGroundSplat(){
     rec.painted = (rec.ghostSegs + rec.wornSegs) > 0;
   });
 
+  /* s84: PIER-CLASS SPINE MEMBERS — plank decks (road-master-spec SPINE
+     MEMBERSHIP AMENDMENT). Painted AFTER the streets so a deck sits over the
+     wet-lot gap its anchor street leaves. Constant class width, era-gated by
+     construction date (pierActiveCheckpoint == null ⇒ not yet built ⇒ zero
+     paint), extent GROWS with the dated checkpoints. The wet-lot skip does NOT
+     apply — a pier IS over water; the plank tone is the documented §9 exception
+     (wood, lawfully slightly lighter than terrain). One uniform tone, one pass. */
+  if(typeof PIERS_RUNTIME !== "undefined") PIERS_RUNTIME.forEach(function(p){
+    var rec = stats.streets[p.id] = { painted:false, ghostSegs:0, wornSegs:0, state:4, worldPoly:null, stations:[], isPier:true };
+    var active = pierActiveCheckpoint(p, simDay);
+    if(!active) return; // era gate: not yet built at simDay
+    var i0 = active.extent[0], i1 = active.extent[1], wpts = [];
+    for(var pi = i0; pi <= i1; pi++) wpts.push(gridToWorldAt(p.polyline[pi].u, p.polyline[pi].v, GRID_ROT_BASE));
+    if(wpts.length < 2) return;
+    rec.worldPoly = wpts;
+    var run = wpts.slice(); run._wM = p.widthM;
+    _gpStrokeRun(run, 3);                       // class 3 = plank deck
+    rec.wornSegs = wpts.length - 1; rec.painted = true;
+    for(var si = 0; si < wpts.length - 1 && rec.stations.length < 3; si++){
+      var a = wpts[si], b = wpts[si+1], dl = Math.hypot(b.x-a.x, b.z-a.z);
+      if(dl > 8) rec.stations.push({ x:(a.x+b.x)/2, z:(a.z+b.z)/2, nx:-(b.z-a.z)/dl, nz:(b.x-a.x)/dl });
+    }
+  });
+
   gpTex.needsUpdate = true;
   _gpID = null;
   SPLAT_LAST_STATS = stats;
@@ -3801,12 +3994,24 @@ function _gpAlphaAtWorld(x, z){
   if(px < 0 || py < 0 || px >= GP_W || py >= GP_H) return 0;
   return _gpImage().data[(py * GP_W + px) * 4 + 3];
 }
+/* Neighbourhood alpha (max over a ±r-px plus/square) — a sub-pixel-thin member
+   (a ~2 m TRAIL paints ≈1 px at GP_PXPM) can leave its exact rounded centre
+   pixel antialiased near zero while the line itself is painted; a 1-px window
+   reads the line robustly without widening the invariant (s84). */
+function _gpAlphaNearWorld(x, z, r){
+  r = r || 1; var p = gpPx(x, z), cx = Math.round(p.x), cy = Math.round(p.y), best = 0;
+  for(var dy = -r; dy <= r; dy++) for(var dx = -r; dx <= r; dx++){
+    var px = cx+dx, py = cy+dy; if(px < 0 || py < 0 || px >= GP_W || py >= GP_H) continue;
+    var a = _gpImage().data[(py * GP_W + px) * 4 + 3]; if(a > best) best = a;
+  }
+  return best;
+}
 /* proximity to any OTHER painted street's active world polyline (junction skip) */
-function _gpNearOtherStreet(x, z, selfId, r){
+function _gpNearOtherStreet(x, z, selfId, r, alsoIgnoreId){
   if(!SPLAT_LAST_STATS) return false;
   var r2 = r * r, ids = Object.keys(SPLAT_LAST_STATS.streets);
   for(var i = 0; i < ids.length; i++){
-    if(ids[i] === selfId) continue;
+    if(ids[i] === selfId || ids[i] === alsoIgnoreId) continue; // s84: a pier ignores its anchor street (collinear by design)
     var wp = SPLAT_LAST_STATS.streets[ids[i]].worldPoly; if(!wp) continue;
     for(var j = 0; j < wp.length - 1; j++){
       var a = wp[j], b = wp[j+1], dx = b.x-a.x, dz = b.z-a.z, l2 = dx*dx+dz*dz;
@@ -3825,13 +4030,14 @@ function _gpNearOtherStreet(x, z, selfId, r){
 registerAudit("ground-paint", "oneOwner", function(){
   updateStreetPaint();
   var meshes = 0; scene.traverse(function(o){ if(o === splatWorldMesh) meshes++; });
-  var probes = 0, painted = 0;
+  var probes = 0, painted = 0, unpainted = [];
   if(SPLAT_LAST_STATS) STREETS_RUNTIME.forEach(function(s){
     var rec = SPLAT_LAST_STATS.streets[s.id]; if(!rec || !rec.stations.length) return;
     var st = rec.stations[0]; probes++;
-    if(_gpAlphaAtWorld(st.x, st.z) > 0) painted++;
+    // ±1 px window so a ~1-px trail line registers at its own centre (s84)
+    if(_gpAlphaNearWorld(st.x, st.z, 1) > 0) painted++; else unpainted.push({ id:s.id, cls:s.cls, wM:s.widthM, x:Math.round(st.x), z:Math.round(st.z) });
   });
-  return { pass: meshes === 1 && (probes === 0 || painted === probes), canvases:1, meshes:meshes, probes:probes, painted:painted };
+  return { pass: meshes === 1 && (probes === 0 || painted === probes), canvases:1, meshes:meshes, probes:probes, painted:painted, unpainted:unpainted };
 });
 
 /* AUDIT 2 — constantWidth (layers-spec.md CONSTANT-WIDTH AMENDMENT). Every
@@ -3840,14 +4046,17 @@ registerAudit("ground-paint", "oneOwner", function(){
    require the painted width ≈ widthM and the stations mutually constant. */
 registerAudit("ground-paint", "constantWidth", function(){
   updateStreetPaint();
-  var out = { pass:true, streetsProbed:0, stations:0, violations:[], skipped:[] };
+  var out = { pass:true, streetsProbed:0, piersProbed:0, stations:0, violations:[], skipped:[] };
   if(!SPLAT_LAST_STATS) return { pass:false, error:"no splat stats — paint never ran" };
-  STREETS_RUNTIME.forEach(function(s){
+  // s84: piers extend the constant-width law (plank decks paint their class
+  // width too). Iterate streets + pier spine members through the same probe.
+  var _members = STREETS_RUNTIME.concat(typeof PIERS_RUNTIME !== "undefined" ? PIERS_RUNTIME : []);
+  _members.forEach(function(s){
     var rec = SPLAT_LAST_STATS.streets[s.id]; if(!rec || !rec.stations.length) return;
-    var widths = [];
+    var widths = [], _anchorId = (s.cls === "pier" ? s.anchorStreet : null);
     for(var k = 0; k < rec.stations.length; k++){
       var st = rec.stations[k];
-      if(_gpNearOtherStreet(st.x, st.z, s.id, s.widthM/2 + 4)) continue; // junction / parallel bleed
+      if(_gpNearOtherStreet(st.x, st.z, s.id, s.widthM/2 + 4, _anchorId)) continue; // junction / parallel bleed (pier ignores its own anchor)
       var centerA = _gpAlphaAtWorld(st.x, st.z); if(centerA < 50) continue;
       var thr = centerA * 0.45, half = {}, sides = [1, -1], overflow = false;
       for(var si = 0; si < 2; si++){
@@ -3863,7 +4072,7 @@ registerAudit("ground-paint", "constantWidth", function(){
       widths.push(+(half[1] + half[-1]).toFixed(2)); out.stations++;
     }
     if(!widths.length){ out.skipped.push(s.id); return; }
-    out.streetsProbed++;
+    if(s.cls === "pier") out.piersProbed++; else out.streetsProbed++;
     var mn = Math.min.apply(null, widths), mx = Math.max.apply(null, widths);
     var tolAbs = Math.max(2.5, 0.35 * s.widthM);
     if(widths.some(function(w){ return Math.abs(w - s.widthM) > tolAbs; }) || (mx - mn) > Math.max(2.0, 0.30 * s.widthM)){
@@ -3896,6 +4105,17 @@ registerAudit("ground-paint", "eraPaint", function(){
       probed++; out.probes++;
       if(_gpAlphaAtWorld(mx, mz) > 12) out.pixelViolations.push({ id:s.id, x:Math.round(mx), z:Math.round(mz), alpha:_gpAlphaAtWorld(mx, mz) });
     }
+  });
+  /* s84: PIER birth-date era-gating. Piers are over water (terrainHeight<=0.5),
+     so the pixel-probe tooth above would skip every pier station — the deck's
+     era gate is verified via the STATS tooth instead: a pier not yet built at
+     simDay (birthDay > simDay) must have recorded ZERO plank segments. */
+  out.unappearedPiers = 0;
+  if(typeof PIERS_RUNTIME !== "undefined") PIERS_RUNTIME.forEach(function(p){
+    if(simDay >= p.birthDay) return; // built — outside this rule
+    out.unappearedPiers++;
+    var rec = SPLAT_LAST_STATS && SPLAT_LAST_STATS.streets[p.id];
+    if(rec && (rec.ghostSegs + rec.wornSegs) > 0) out.statsViolations.push(p.id);
   });
   if(out.statsViolations.length || out.pixelViolations.length) out.pass = false;
   return out;
