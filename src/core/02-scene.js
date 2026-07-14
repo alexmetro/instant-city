@@ -208,13 +208,12 @@ function distToSegXZ(x,z,x0,z0,x1,z1){
    deliberately treats the network as already fully grown, so early
    buildings never end up standing where a not-yet-surveyed later street
    will run; only the SPLAT PAINTER and LABELS are era-gated, since only
-   they need to visibly grow over time). Projected via the same fixed
-   gridToWorld() (permanent VIOGET_SKEW) every OTHER placement call in this
-   file uses — matching the existing, already-screening-passed convention
-   that collision geometry lives in buildings' own fixed frame, not
-   whatever angle a street happens to be painted at post-swing (see
-   updateGridSwing()'s comment on why buildings "never re-baked" is
-   historically correct, not a bug). */
+   they need to visibly grow over time). Projected via gridToWorldAt() at
+   the UNION of every frame a street ever renders in (below): swinging
+   streets contribute BOTH the Vioget (-6.5°) and canonical base (-9.0°)
+   frames, non-swinging streets only -9.0°. That way a building's clearance
+   reserves the right-of-way across the whole 1847 swing sweep, independent
+   of the s77 GEODETIC LOCK change to the resting gridToWorld() frame. */
 /* s62 BUILDINGS-ON-ROADS FIX (road-master-spec constant-width amendment):
    this list used to be built ONLY in the fixed Vioget frame (-6.5°), but
    streets PAINT at GRID_ROT_BASE (-9.0°) after the Aug-1847 swing — and

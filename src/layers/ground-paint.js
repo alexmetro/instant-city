@@ -1070,10 +1070,12 @@ function renderGroundSplat(skewAngle){
       box:CLOSE_BOX, skipInside:null, _dirty:null }
   ];
 
-  // Plaza — Portsmouth Square corner frame (streets swing it through the
-  // O'Farrell window). The authored plaza paint itself (paintPlaza below)
-  // runs AFTER network assembly; here we just fix the frame and hand the
-  // wet-season shader coupling its current rect (center/axes/half-extents).
+  // Plaza — Portsmouth Square corner frame. s77 GEODETIC LOCK: gridToWorld
+  // is now the canonical -9.0° resting frame, so the plaza rect sits square
+  // between its four bounding streets (post-Aug-1847 rest state) instead of
+  // 9-13m off in the old -6.5° pin. The authored plaza paint (paintPlaza
+  // below) runs AFTER network assembly; here we just fix the frame and hand
+  // the wet-season shader its rect (center/axes/half-extents).
   var plazaCorners = [
     gridToWorld(GEO.plaza.uMin, GEO.plaza.vMin), gridToWorld(GEO.plaza.uMax, GEO.plaza.vMin),
     gridToWorld(GEO.plaza.uMax, GEO.plaza.vMax), gridToWorld(GEO.plaza.uMin, GEO.plaza.vMax)

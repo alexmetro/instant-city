@@ -513,11 +513,13 @@ function buildWanderPoly(rng, day){
   return buildPolyline(walkAdjustPts(pts, 1e9), false);
 }
 function worldToGridApprox(x,z){
-  // exact inverse of gridToWorld(): un-register the terrain-frame origin
-  // offset, then rotate back by the permanent placement skew.
-  var lx = x - GRID_ORIGIN_X, lz = z - GRID_ORIGIN_Z;
-  var c=Math.cos(-VIOGET_SKEW), s=Math.sin(-VIOGET_SKEW);
-  return { u: lx*c - lz*s, v: lx*s + lz*c };
+  // s77 GEODETIC LOCK: was its own inverse pinned at −VIOGET_SKEW (−6.5°),
+  // which disagreed with gridToWorld's actual frame and mis-mapped every
+  // world→grid lookup (nearestStreetPair labels, the fire-footprint test)
+  // by the same 2.5° the frame fix removes. Now delegates to the ONE
+  // canonical inverse (core/01-geography worldToGrid), so it can never
+  // drift from gridToWorld again.
+  return worldToGrid(x,z);
 }
 function nearestStreetPair(x,z){
   var g = worldToGridApprox(x,z);

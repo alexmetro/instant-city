@@ -89,22 +89,57 @@ var STREET_STUB_LEN = 100;               // sandy-track fade-out length beyond t
                                           // reach + a color that paled toward bright tan read as
                                           // radiating bright scratches spiking off the grid edge)
 
-/* Rotates an "ideal" square-grid coordinate (u = ideal east/west, v = ideal
+/* =====================================================================
+   THE GEODETIC LOCK (foundation-reset §2) — the ONE canonical world↔grid
+   transform. gridToWorldAt() is the primitive; gridToWorld()/worldToGrid()
+   are the canonical (resting-frame) mapping every subsystem must derive
+   from. No layer defines its own origin/angle or m-per-degree constant —
+   the outlawed class is the pre-s77 "gridToWorld pinned at −6.5° while its
+   streets render at −9.0°" bug. Verified LIVE by the standing guard
+   __P1850.audits.core.geodeticLock(), which re-fits the 8 OSM control
+   points and re-projects gridToWorld() end-to-end against them (FAIL if
+   RMS > ~2 m or any transform's implied base angle drifts from
+   GRID_ROT_BASE by >0.1°). Grid EXPANSION extends from this same fit —
+   never re-anchored locally.
+
+   Rotates an "ideal" square-grid coordinate (u = ideal east/west, v = ideal
    north/south) into world (x,z) at a GIVEN skew angle, then registers it
    into the terrain frame via GRID_ORIGIN_X/Z (fix #3 above). Every street,
    block and the plaza itself is defined in (u,v) and only converted at the
    end, so the whole grid tilts together instead of being hand-skewed per
-   street. gridToWorld() is the permanent (never-swinging) Vioget-skew
-   mapping used by buildings/lots/placement; gridToWorldAt() is the same
-   math parameterized so the GROUND-SPLAT street painter (below) can ease
-   the angle from the as-built VIOGET_SKEW (-6.5°) to GRID_ROT_BASE (-9.0°)
-   for the O'Farrell 1847 grid-swing without touching anything else's
-   coordinates. */
+   street. gridToWorldAt() is parameterized so the GROUND-SPLAT street
+   painter (below) can ease the angle from the as-built VIOGET_SKEW (-6.5°)
+   to GRID_ROT_BASE (-9.0°) for the O'Farrell 1847 grid-swing. */
 function gridToWorldAt(u,v,skewAngle){
   var c = Math.cos(skewAngle), s = Math.sin(skewAngle);
   return { x: u*c - v*s + GRID_ORIGIN_X, z: u*s + v*c + GRID_ORIGIN_Z };
 }
-function gridToWorld(u,v){ return gridToWorldAt(u,v,VIOGET_SKEW); }
+/* gridToWorld(): THE canonical resting frame (GRID_ROT_BASE, −9.0°) — the
+   measured/post-1847 O'Farrell grid. s77 GEODETIC LOCK FIX: this was pinned
+   at VIOGET_SKEW (−6.5°), so every fixed anchor that reads it (GEO.plaza
+   fill, doodad fences, the wharf/anchorage, the fire block, the routing
+   walker graph, ship berths) sat 9–13 m off the −9.0° streets it is
+   supposed to bound (end-to-end that pin measured 18 m RMS / 35 m worst vs
+   the OSM control points; the canonical −9.0° measures 1.2 m RMS). The
+   deliberate pre-survey Vioget-frame consumers — the founding-village
+   scatter + City Hotel, an intentional "existing buildings kept Vioget's
+   crooked alignment, new construction followed the corrected grid" model —
+   now call gridToWorldAt(u,v,VIOGET_SKEW) EXPLICITLY, so there is no silent
+   frame left anywhere. The visible street ground-paint still eases −6.5°→
+   −9.0° across Feb–Aug 1847 (renderGroundSplat); at rest (which is the
+   entire post-Aug-1847 window, i.e. essentially the whole Gold-Rush sim)
+   everything shares the one −9.0° frame. */
+function gridToWorld(u,v){ return gridToWorldAt(u,v,GRID_ROT_BASE); }
+/* worldToGrid(): the canonical inverse of gridToWorld() — the single source
+   for every world→(u,v) mapping (routing's nearestStreetPair, the fire
+   footprint test). Un-registers the terrain-frame origin, then rotates back
+   by −GRID_ROT_BASE. Any other inverse in the codebase must call this, not
+   re-derive its own angle (GEODETIC LOCK). */
+function worldToGrid(x,z){
+  var lx = x - GRID_ORIGIN_X, lz = z - GRID_ORIGIN_Z;
+  var c = Math.cos(GRID_ROT_BASE), s = Math.sin(GRID_ROT_BASE);
+  return { u: lx*c + lz*s, v: -lx*s + lz*c };
+}
 
 /* GAPS-2026-07-09 item 4 (reconciler flag) — the O'Farrell "grid swing":
    the comment above always noted the 1847 correction but never executed
@@ -355,7 +390,10 @@ var GEO = {
   // tools/bake-terrain.js), so the analytic curve and the baked heightmap
   // can never disagree; east of the curve the heightmap alone is truth.
   zNorthHeadland: -900,
-  zSouthHeadland: 765,    // Rincon Point — traced promontory tip z (was 1020 hand-derived)
+  zSouthHeadland: 1224,   // Rincon Point tip z — s77 re-trace to Harrison & Spear
+                          // (data/shoreline-natural-1849.json; was 765, ~460m too far
+                          // north, collapsing the cove span 18%). Only drives the
+                          // modern/ghost 2026 shoreline falloff extent below.
 
   // fixed offset for the then/now 2026 ghost shoreline (fill was greatest
   // mid-cove, least near the natural headlands)

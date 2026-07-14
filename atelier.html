@@ -1235,22 +1235,57 @@ var STREET_STUB_LEN = 100;               // sandy-track fade-out length beyond t
                                           // reach + a color that paled toward bright tan read as
                                           // radiating bright scratches spiking off the grid edge)
 
-/* Rotates an "ideal" square-grid coordinate (u = ideal east/west, v = ideal
+/* =====================================================================
+   THE GEODETIC LOCK (foundation-reset §2) — the ONE canonical world↔grid
+   transform. gridToWorldAt() is the primitive; gridToWorld()/worldToGrid()
+   are the canonical (resting-frame) mapping every subsystem must derive
+   from. No layer defines its own origin/angle or m-per-degree constant —
+   the outlawed class is the pre-s77 "gridToWorld pinned at −6.5° while its
+   streets render at −9.0°" bug. Verified LIVE by the standing guard
+   __P1850.audits.core.geodeticLock(), which re-fits the 8 OSM control
+   points and re-projects gridToWorld() end-to-end against them (FAIL if
+   RMS > ~2 m or any transform's implied base angle drifts from
+   GRID_ROT_BASE by >0.1°). Grid EXPANSION extends from this same fit —
+   never re-anchored locally.
+
+   Rotates an "ideal" square-grid coordinate (u = ideal east/west, v = ideal
    north/south) into world (x,z) at a GIVEN skew angle, then registers it
    into the terrain frame via GRID_ORIGIN_X/Z (fix #3 above). Every street,
    block and the plaza itself is defined in (u,v) and only converted at the
    end, so the whole grid tilts together instead of being hand-skewed per
-   street. gridToWorld() is the permanent (never-swinging) Vioget-skew
-   mapping used by buildings/lots/placement; gridToWorldAt() is the same
-   math parameterized so the GROUND-SPLAT street painter (below) can ease
-   the angle from the as-built VIOGET_SKEW (-6.5°) to GRID_ROT_BASE (-9.0°)
-   for the O'Farrell 1847 grid-swing without touching anything else's
-   coordinates. */
+   street. gridToWorldAt() is parameterized so the GROUND-SPLAT street
+   painter (below) can ease the angle from the as-built VIOGET_SKEW (-6.5°)
+   to GRID_ROT_BASE (-9.0°) for the O'Farrell 1847 grid-swing. */
 function gridToWorldAt(u,v,skewAngle){
   var c = Math.cos(skewAngle), s = Math.sin(skewAngle);
   return { x: u*c - v*s + GRID_ORIGIN_X, z: u*s + v*c + GRID_ORIGIN_Z };
 }
-function gridToWorld(u,v){ return gridToWorldAt(u,v,VIOGET_SKEW); }
+/* gridToWorld(): THE canonical resting frame (GRID_ROT_BASE, −9.0°) — the
+   measured/post-1847 O'Farrell grid. s77 GEODETIC LOCK FIX: this was pinned
+   at VIOGET_SKEW (−6.5°), so every fixed anchor that reads it (GEO.plaza
+   fill, doodad fences, the wharf/anchorage, the fire block, the routing
+   walker graph, ship berths) sat 9–13 m off the −9.0° streets it is
+   supposed to bound (end-to-end that pin measured 18 m RMS / 35 m worst vs
+   the OSM control points; the canonical −9.0° measures 1.2 m RMS). The
+   deliberate pre-survey Vioget-frame consumers — the founding-village
+   scatter + City Hotel, an intentional "existing buildings kept Vioget's
+   crooked alignment, new construction followed the corrected grid" model —
+   now call gridToWorldAt(u,v,VIOGET_SKEW) EXPLICITLY, so there is no silent
+   frame left anywhere. The visible street ground-paint still eases −6.5°→
+   −9.0° across Feb–Aug 1847 (renderGroundSplat); at rest (which is the
+   entire post-Aug-1847 window, i.e. essentially the whole Gold-Rush sim)
+   everything shares the one −9.0° frame. */
+function gridToWorld(u,v){ return gridToWorldAt(u,v,GRID_ROT_BASE); }
+/* worldToGrid(): the canonical inverse of gridToWorld() — the single source
+   for every world→(u,v) mapping (routing's nearestStreetPair, the fire
+   footprint test). Un-registers the terrain-frame origin, then rotates back
+   by −GRID_ROT_BASE. Any other inverse in the codebase must call this, not
+   re-derive its own angle (GEODETIC LOCK). */
+function worldToGrid(x,z){
+  var lx = x - GRID_ORIGIN_X, lz = z - GRID_ORIGIN_Z;
+  var c = Math.cos(GRID_ROT_BASE), s = Math.sin(GRID_ROT_BASE);
+  return { u: lx*c + lz*s, v: -lx*s + lz*c };
+}
 
 /* GAPS-2026-07-09 item 4 (reconciler flag) — the O'Farrell "grid swing":
    the comment above always noted the 1847 correction but never executed
@@ -1501,7 +1536,10 @@ var GEO = {
   // tools/bake-terrain.js), so the analytic curve and the baked heightmap
   // can never disagree; east of the curve the heightmap alone is truth.
   zNorthHeadland: -900,
-  zSouthHeadland: 765,    // Rincon Point — traced promontory tip z (was 1020 hand-derived)
+  zSouthHeadland: 1224,   // Rincon Point tip z — s77 re-trace to Harrison & Spear
+                          // (data/shoreline-natural-1849.json; was 765, ~460m too far
+                          // north, collapsing the cove span 18%). Only drives the
+                          // modern/ghost 2026 shoreline falloff extent below.
 
   // fixed offset for the then/now 2026 ghost shoreline (fill was greatest
   // mid-cove, least near the natural headlands)
@@ -3530,10 +3568,12 @@ function renderGroundSplat(skewAngle){
       box:CLOSE_BOX, skipInside:null, _dirty:null }
   ];
 
-  // Plaza — Portsmouth Square corner frame (streets swing it through the
-  // O'Farrell window). The authored plaza paint itself (paintPlaza below)
-  // runs AFTER network assembly; here we just fix the frame and hand the
-  // wet-season shader coupling its current rect (center/axes/half-extents).
+  // Plaza — Portsmouth Square corner frame. s77 GEODETIC LOCK: gridToWorld
+  // is now the canonical -9.0° resting frame, so the plaza rect sits square
+  // between its four bounding streets (post-Aug-1847 rest state) instead of
+  // 9-13m off in the old -6.5° pin. The authored plaza paint (paintPlaza
+  // below) runs AFTER network assembly; here we just fix the frame and hand
+  // the wet-season shader its rect (center/axes/half-extents).
   var plazaCorners = [
     gridToWorld(GEO.plaza.uMin, GEO.plaza.vMin), gridToWorld(GEO.plaza.uMax, GEO.plaza.vMin),
     gridToWorld(GEO.plaza.uMax, GEO.plaza.vMax), gridToWorld(GEO.plaza.uMin, GEO.plaza.vMax)
@@ -4755,13 +4795,12 @@ function distToSegXZ(x,z,x0,z0,x1,z1){
    deliberately treats the network as already fully grown, so early
    buildings never end up standing where a not-yet-surveyed later street
    will run; only the SPLAT PAINTER and LABELS are era-gated, since only
-   they need to visibly grow over time). Projected via the same fixed
-   gridToWorld() (permanent VIOGET_SKEW) every OTHER placement call in this
-   file uses — matching the existing, already-screening-passed convention
-   that collision geometry lives in buildings' own fixed frame, not
-   whatever angle a street happens to be painted at post-swing (see
-   updateGridSwing()'s comment on why buildings "never re-baked" is
-   historically correct, not a bug). */
+   they need to visibly grow over time). Projected via gridToWorldAt() at
+   the UNION of every frame a street ever renders in (below): swinging
+   streets contribute BOTH the Vioget (-6.5°) and canonical base (-9.0°)
+   frames, non-swinging streets only -9.0°. That way a building's clearance
+   reserves the right-of-way across the whole 1847 swing sweep, independent
+   of the s77 GEODETIC LOCK change to the resting gridToWorld() frame. */
 /* s62 BUILDINGS-ON-ROADS FIX (road-master-spec constant-width amendment):
    this list used to be built ONLY in the fixed Vioget frame (-6.5°), but
    streets PAINT at GRID_ROT_BASE (-9.0°) after the Aug-1847 swing — and
@@ -5683,7 +5722,13 @@ function landmarkFoundedDay(name){
         }
         var fr = frontify(gu, gv, uLo,uHi,vLo,vHi);
         var coin = rngBuild()<0.5?0:Math.PI/2; // consumed (stream); the frontage rot is used instead
-        var p = gridToWorld(fr.u, fr.v);
+        // s77 GEODETIC LOCK: founding-village work sits in the as-built
+        // Vioget frame BY DESIGN (existing pre-survey buildings kept their
+        // crooked alignment). Now that gridToWorld() is the canonical −9.0°
+        // frame, that intent is made EXPLICIT here rather than riding a
+        // silently-pinned gridToWorld — the deliberate building split the
+        // METROLOGY audit ratified is preserved byte-for-byte.
+        var p = gridToWorldAt(fr.u, fr.v, VIOGET_SKEW);
         placeBuilding(p.x, p.z, fr.rot);
         lastG = fr;
       }
@@ -5693,9 +5738,12 @@ function landmarkFoundedDay(name){
   // a few outliers just past the grid's surveyed edge — squatters' huts
   // along the fading tracks, thinning the town out rather than a hard wall
   [
-    gridToWorld(uVals[0]-90, vVals[2]+20),
-    gridToWorld(uVals[1]-40, vVals[0]-70),
-    gridToWorld(uVals[2]+30, vVals[5]+80)
+    // s77 GEODETIC LOCK: squatters' huts are founding-era, pre-survey work —
+    // pinned to the Vioget frame explicitly (same deliberate split as the
+    // village frontage above), not the canonical −9.0° gridToWorld.
+    gridToWorldAt(uVals[0]-90, vVals[2]+20, VIOGET_SKEW),
+    gridToWorldAt(uVals[1]-40, vVals[0]-70, VIOGET_SKEW),
+    gridToWorldAt(uVals[2]+30, vVals[5]+80, VIOGET_SKEW)
   ].forEach(function(p){ placeBuilding(p.x, p.z, rngBuild()<0.5?0:Math.PI/2, {unaddressed:true}); }); // §5: squatter huts past the surveyed edge — deliberately unaddressed/loose
 
   /* -----------------------------------------------------------------------
@@ -13153,11 +13201,13 @@ function buildWanderPoly(rng, day){
   return buildPolyline(walkAdjustPts(pts, 1e9), false);
 }
 function worldToGridApprox(x,z){
-  // exact inverse of gridToWorld(): un-register the terrain-frame origin
-  // offset, then rotate back by the permanent placement skew.
-  var lx = x - GRID_ORIGIN_X, lz = z - GRID_ORIGIN_Z;
-  var c=Math.cos(-VIOGET_SKEW), s=Math.sin(-VIOGET_SKEW);
-  return { u: lx*c - lz*s, v: lx*s + lz*c };
+  // s77 GEODETIC LOCK: was its own inverse pinned at −VIOGET_SKEW (−6.5°),
+  // which disagreed with gridToWorld's actual frame and mis-mapped every
+  // world→grid lookup (nearestStreetPair labels, the fire-footprint test)
+  // by the same 2.5° the frame fix removes. Now delegates to the ONE
+  // canonical inverse (core/01-geography worldToGrid), so it can never
+  // drift from gridToWorld again.
+  return worldToGrid(x,z);
 }
 function nearestStreetPair(x,z){
   var g = worldToGridApprox(x,z);
@@ -19378,6 +19428,130 @@ window.__P1850.audits = (function(){
              gradientOK:(coreF>=edgeF), violations:violations, list:interior.slice(0,15) };
   });
 })();
+
+/* =========================================================================
+   THE GEODETIC LOCK standing guard (core.geodeticLock). Lives in debug.js's
+   chunk 70 alongside the other core/placement audits (07-main's chunk 74 is
+   the module IIFE close, so this must precede it). Registered lazily; the
+   "core" namespace late-attaches to __P1850.audits (core/00-boot).
+   core.geodeticLock (foundation-reset §2 "THE GEODETIC LOCK"): the standing
+   control-point audit that fails any build whose geometry drifts from the
+   verified affine fit. Re-derives everything LIVE from the 8 OSM street-
+   intersection control points (tools/map-overlay.py; SF's downtown grid is
+   unchanged since O'Farrell 1847, so modern intersections are valid 1846-56
+   ground truth). Three independent checks, all FRAMING-INDEPENDENT:
+     A) DATASET FIDELITY — least-squares affine fit real(local-m)→(u,v) over
+        the 8 points; FAIL if RMS > 2 m (the reprojected street dataset must
+        still register to ground truth). Measured baseline: 1.13 m.
+     B) CANONICAL TRANSFORM vs GROUND TRUTH — run gridToWorld() end-to-end
+        (u,v)→world→lat/lon (bake frame) and compare to each point's OSM
+        lat/lon; FAIL if RMS > 2 m. This is the guard that catches the
+        outlawed "gridToWorld pinned to the wrong angle" class: at the old
+        −6.5° pin this measured 18 m RMS (35 m worst); at the canonical
+        −9.0° it measures ~1.2 m.
+     C) NO TRANSFORM DRIFT — gridToWorld()'s implied base azimuth must equal
+        GRID_ROT_BASE within 0.1°; worldToGrid() must invert gridToWorld() to
+        <1e-3 m; VIOGET_SKEW must remain GRID_ROT_BASE+VIOGET_ERROR. Any
+        future layer that re-defines its own origin/angle trips this.
+   This is the permanent gate for all future grid EXPANSION.
+   ========================================================================= */
+registerAudit("core", "geodeticLock", function(){
+  // (lat, lon, u, v) — the 8 control points, verbatim from tools/map-overlay.py
+  // CONTROL_POINTS (OSM Overpass way-intersection nodes; (u,v) from the
+  // reprojected data/streets-geometry.json).
+  var CP = [
+    ["montgomery_clay",       37.7946763, -122.4031576,    0.0,    49.39],
+    ["montgomery_washington", 37.7955349, -122.4033265,    0.0,   -49.39],
+    ["kearny_clay",           37.7944619, -122.4047926, -145.71,   49.39],
+    ["kearny_washington",     37.7953282, -122.4049700, -145.71,  -49.39],
+    ["market_kearny",         37.7876758, -122.4034364, -145.71,  815.06],
+    ["market_montgomery",     37.7888178, -122.4019881,    0.0,   709.20],
+    ["broadway_battery",      37.7985851, -122.4010680,  249.6,  -350.79],
+    ["sansome_clay",          37.7948561, -122.4015163,  145.71,   49.39]
+  ];
+  // yardstick — independent WGS84 m/deg @37.795°N (Snyder), the audit's own
+  // yardstick, NOT the repo's 111320 (the affine absorbs a uniform scale, so
+  // the fit RMS is identical either way; kept explicit for the record).
+  var FIT_OLAT=37.7946617, FIT_OLON=-122.4028640, FIT_MLAT=110992.6, FIT_MLON=88076.6;
+  // bake frame — MUST mirror tools/bake-terrain.js metersToLatLon (the frame
+  // gridToWorld's world (x,z) lives in). Used only to re-project the canonical
+  // transform back to lat/lon for check B.
+  var BAKE_CLAT=37.7955, BAKE_CLON=-122.4045;
+  var BAKE_MLAT=111320.0, BAKE_MLON=111320.0*Math.cos(BAKE_CLAT*Math.PI/180);
+
+  function solve3(M,b){ // Gaussian elimination, 3x3 (M is [[..],[..],[..]])
+    var A=[M[0].concat(b[0]), M[1].concat(b[1]), M[2].concat(b[2])];
+    for(var i=0;i<3;i++){
+      var piv=i; for(var r=i+1;r<3;r++) if(Math.abs(A[r][i])>Math.abs(A[piv][i])) piv=r;
+      var tmp=A[i]; A[i]=A[piv]; A[piv]=tmp;
+      for(var r2=0;r2<3;r2++){ if(r2===i) continue; var f=A[r2][i]/A[i][i];
+        for(var c=i;c<4;c++) A[r2][c]-=f*A[i][c]; }
+    }
+    return [A[0][3]/A[0][0], A[1][3]/A[1][1], A[2][3]/A[2][2]];
+  }
+  function haversine(la1,lo1,la2,lo2){
+    var R=6371008.8, p1=la1*Math.PI/180, p2=la2*Math.PI/180;
+    var dp=(la2-la1)*Math.PI/180, dl=(lo2-lo1)*Math.PI/180;
+    var h=Math.sin(dp/2)*Math.sin(dp/2)+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)*Math.sin(dl/2);
+    return 2*R*Math.asin(Math.sqrt(h));
+  }
+
+  // --- A) affine fit real(local-m)→(u,v) via normal equations ---
+  var Sxx=0,Sxy=0,Sx=0,Syy=0,Sy=0,n=CP.length;
+  var bux=0,buy=0,bu=0,bvx=0,bvy=0,bv=0;
+  var src=[];
+  for(var i=0;i<n;i++){
+    var lat=CP[i][1], lon=CP[i][2], u=CP[i][3], v=CP[i][4];
+    var sx=(lon-FIT_OLON)*FIT_MLON, sy=(lat-FIT_OLAT)*FIT_MLAT; src.push([sx,sy]);
+    Sxx+=sx*sx; Sxy+=sx*sy; Sx+=sx; Syy+=sy*sy; Sy+=sy;
+    bux+=sx*u; buy+=sy*u; bu+=u; bvx+=sx*v; bvy+=sy*v; bv+=v;
+  }
+  var NM=[[Sxx,Sxy,Sx],[Sxy,Syy,Sy],[Sx,Sy,n]];
+  var au=solve3(NM,[[bux],[buy],[bu]]); // u = au0*sx+au1*sy+au2
+  var av=solve3(NM,[[bvx],[bvy],[bv]]);
+  var sse=0;
+  for(var j=0;j<n;j++){
+    var pu=au[0]*src[j][0]+au[1]*src[j][1]+au[2];
+    var pv=av[0]*src[j][0]+av[1]*src[j][1]+av[2];
+    sse+=(pu-CP[j][3])*(pu-CP[j][3])+(pv-CP[j][4])*(pv-CP[j][4]);
+  }
+  var fitRms=Math.sqrt(sse/n);
+
+  // --- B) canonical gridToWorld() end-to-end vs OSM lat/lon ---
+  var e2eSse=0, e2eMax=0, worst="";
+  for(var k=0;k<n;k++){
+    var w=gridToWorld(CP[k][3], CP[k][4]);
+    var plat=BAKE_CLAT - w.z/BAKE_MLAT, plon=BAKE_CLON + w.x/BAKE_MLON;
+    var d=haversine(CP[k][1],CP[k][2],plat,plon);
+    e2eSse+=d*d; if(d>e2eMax){ e2eMax=d; worst=CP[k][0]; }
+  }
+  var e2eRms=Math.sqrt(e2eSse/n);
+
+  // --- C) no-transform-drift ---
+  var probe=gridToWorld(1000,0);
+  var g2wAzDeg=Math.atan2(probe.z-GRID_ORIGIN_Z, probe.x-GRID_ORIGIN_X)*180/Math.PI;
+  var azErr=Math.abs(g2wAzDeg - GRID_ROT_BASE_DEG);
+  var rtMax=0;
+  for(var m=0;m<n;m++){
+    var wp=gridToWorld(CP[m][3],CP[m][4]); var g=worldToGrid(wp.x,wp.z);
+    rtMax=Math.max(rtMax, Math.hypot(g.u-CP[m][3], g.v-CP[m][4]));
+  }
+  var viogetOK=Math.abs(VIOGET_SKEW_DEG-(GRID_ROT_BASE_DEG+VIOGET_ERROR_DEG))<1e-9;
+
+  var pass = fitRms<=2.0 && e2eRms<=2.0 && azErr<=0.1 && rtMax<=1e-3 && viogetOK;
+  return {
+    pass: pass,
+    datasetFitRms_m: +fitRms.toFixed(3),
+    canonicalEndToEndRms_m: +e2eRms.toFixed(3),
+    canonicalEndToEndMax_m: +e2eMax.toFixed(3), worst: worst,
+    gridToWorldAzDeg: +g2wAzDeg.toFixed(4), gridRotBaseDeg: GRID_ROT_BASE_DEG,
+    azimuthDriftDeg: +azErr.toFixed(4),
+    worldToGridRoundTripMax_m: +rtMax.toExponential(2),
+    viogetRelationOK: viogetOK,
+    controlPoints: n,
+    gates: "fitRms<=2, e2eRms<=2, azDrift<=0.1deg, roundTrip<=1e-3m"
+  };
+});
 /* =====================================================================
    DAY / NIGHT CYCLE — SUN FROM THE SIM CLOCK (fix sprint 2026-07-11, P0)
    The old system ran its own wall-clock cycle (DAY_CYCLE_SECONDS=420, a

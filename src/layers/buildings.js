@@ -370,7 +370,13 @@ function landmarkFoundedDay(name){
         }
         var fr = frontify(gu, gv, uLo,uHi,vLo,vHi);
         var coin = rngBuild()<0.5?0:Math.PI/2; // consumed (stream); the frontage rot is used instead
-        var p = gridToWorld(fr.u, fr.v);
+        // s77 GEODETIC LOCK: founding-village work sits in the as-built
+        // Vioget frame BY DESIGN (existing pre-survey buildings kept their
+        // crooked alignment). Now that gridToWorld() is the canonical −9.0°
+        // frame, that intent is made EXPLICIT here rather than riding a
+        // silently-pinned gridToWorld — the deliberate building split the
+        // METROLOGY audit ratified is preserved byte-for-byte.
+        var p = gridToWorldAt(fr.u, fr.v, VIOGET_SKEW);
         placeBuilding(p.x, p.z, fr.rot);
         lastG = fr;
       }
@@ -380,9 +386,12 @@ function landmarkFoundedDay(name){
   // a few outliers just past the grid's surveyed edge — squatters' huts
   // along the fading tracks, thinning the town out rather than a hard wall
   [
-    gridToWorld(uVals[0]-90, vVals[2]+20),
-    gridToWorld(uVals[1]-40, vVals[0]-70),
-    gridToWorld(uVals[2]+30, vVals[5]+80)
+    // s77 GEODETIC LOCK: squatters' huts are founding-era, pre-survey work —
+    // pinned to the Vioget frame explicitly (same deliberate split as the
+    // village frontage above), not the canonical −9.0° gridToWorld.
+    gridToWorldAt(uVals[0]-90, vVals[2]+20, VIOGET_SKEW),
+    gridToWorldAt(uVals[1]-40, vVals[0]-70, VIOGET_SKEW),
+    gridToWorldAt(uVals[2]+30, vVals[5]+80, VIOGET_SKEW)
   ].forEach(function(p){ placeBuilding(p.x, p.z, rngBuild()<0.5?0:Math.PI/2, {unaddressed:true}); }); // §5: squatter huts past the surveyed edge — deliberately unaddressed/loose
 
   /* -----------------------------------------------------------------------

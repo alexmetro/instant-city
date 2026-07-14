@@ -1151,3 +1151,127 @@ window.__P1850.audits = (function(){
              gradientOK:(coreF>=edgeF), violations:violations, list:interior.slice(0,15) };
   });
 })();
+
+/* =========================================================================
+   THE GEODETIC LOCK standing guard (core.geodeticLock). Lives in debug.js's
+   chunk 70 alongside the other core/placement audits (07-main's chunk 74 is
+   the module IIFE close, so this must precede it). Registered lazily; the
+   "core" namespace late-attaches to __P1850.audits (core/00-boot).
+   core.geodeticLock (foundation-reset §2 "THE GEODETIC LOCK"): the standing
+   control-point audit that fails any build whose geometry drifts from the
+   verified affine fit. Re-derives everything LIVE from the 8 OSM street-
+   intersection control points (tools/map-overlay.py; SF's downtown grid is
+   unchanged since O'Farrell 1847, so modern intersections are valid 1846-56
+   ground truth). Three independent checks, all FRAMING-INDEPENDENT:
+     A) DATASET FIDELITY — least-squares affine fit real(local-m)→(u,v) over
+        the 8 points; FAIL if RMS > 2 m (the reprojected street dataset must
+        still register to ground truth). Measured baseline: 1.13 m.
+     B) CANONICAL TRANSFORM vs GROUND TRUTH — run gridToWorld() end-to-end
+        (u,v)→world→lat/lon (bake frame) and compare to each point's OSM
+        lat/lon; FAIL if RMS > 2 m. This is the guard that catches the
+        outlawed "gridToWorld pinned to the wrong angle" class: at the old
+        −6.5° pin this measured 18 m RMS (35 m worst); at the canonical
+        −9.0° it measures ~1.2 m.
+     C) NO TRANSFORM DRIFT — gridToWorld()'s implied base azimuth must equal
+        GRID_ROT_BASE within 0.1°; worldToGrid() must invert gridToWorld() to
+        <1e-3 m; VIOGET_SKEW must remain GRID_ROT_BASE+VIOGET_ERROR. Any
+        future layer that re-defines its own origin/angle trips this.
+   This is the permanent gate for all future grid EXPANSION.
+   ========================================================================= */
+registerAudit("core", "geodeticLock", function(){
+  // (lat, lon, u, v) — the 8 control points, verbatim from tools/map-overlay.py
+  // CONTROL_POINTS (OSM Overpass way-intersection nodes; (u,v) from the
+  // reprojected data/streets-geometry.json).
+  var CP = [
+    ["montgomery_clay",       37.7946763, -122.4031576,    0.0,    49.39],
+    ["montgomery_washington", 37.7955349, -122.4033265,    0.0,   -49.39],
+    ["kearny_clay",           37.7944619, -122.4047926, -145.71,   49.39],
+    ["kearny_washington",     37.7953282, -122.4049700, -145.71,  -49.39],
+    ["market_kearny",         37.7876758, -122.4034364, -145.71,  815.06],
+    ["market_montgomery",     37.7888178, -122.4019881,    0.0,   709.20],
+    ["broadway_battery",      37.7985851, -122.4010680,  249.6,  -350.79],
+    ["sansome_clay",          37.7948561, -122.4015163,  145.71,   49.39]
+  ];
+  // yardstick — independent WGS84 m/deg @37.795°N (Snyder), the audit's own
+  // yardstick, NOT the repo's 111320 (the affine absorbs a uniform scale, so
+  // the fit RMS is identical either way; kept explicit for the record).
+  var FIT_OLAT=37.7946617, FIT_OLON=-122.4028640, FIT_MLAT=110992.6, FIT_MLON=88076.6;
+  // bake frame — MUST mirror tools/bake-terrain.js metersToLatLon (the frame
+  // gridToWorld's world (x,z) lives in). Used only to re-project the canonical
+  // transform back to lat/lon for check B.
+  var BAKE_CLAT=37.7955, BAKE_CLON=-122.4045;
+  var BAKE_MLAT=111320.0, BAKE_MLON=111320.0*Math.cos(BAKE_CLAT*Math.PI/180);
+
+  function solve3(M,b){ // Gaussian elimination, 3x3 (M is [[..],[..],[..]])
+    var A=[M[0].concat(b[0]), M[1].concat(b[1]), M[2].concat(b[2])];
+    for(var i=0;i<3;i++){
+      var piv=i; for(var r=i+1;r<3;r++) if(Math.abs(A[r][i])>Math.abs(A[piv][i])) piv=r;
+      var tmp=A[i]; A[i]=A[piv]; A[piv]=tmp;
+      for(var r2=0;r2<3;r2++){ if(r2===i) continue; var f=A[r2][i]/A[i][i];
+        for(var c=i;c<4;c++) A[r2][c]-=f*A[i][c]; }
+    }
+    return [A[0][3]/A[0][0], A[1][3]/A[1][1], A[2][3]/A[2][2]];
+  }
+  function haversine(la1,lo1,la2,lo2){
+    var R=6371008.8, p1=la1*Math.PI/180, p2=la2*Math.PI/180;
+    var dp=(la2-la1)*Math.PI/180, dl=(lo2-lo1)*Math.PI/180;
+    var h=Math.sin(dp/2)*Math.sin(dp/2)+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)*Math.sin(dl/2);
+    return 2*R*Math.asin(Math.sqrt(h));
+  }
+
+  // --- A) affine fit real(local-m)→(u,v) via normal equations ---
+  var Sxx=0,Sxy=0,Sx=0,Syy=0,Sy=0,n=CP.length;
+  var bux=0,buy=0,bu=0,bvx=0,bvy=0,bv=0;
+  var src=[];
+  for(var i=0;i<n;i++){
+    var lat=CP[i][1], lon=CP[i][2], u=CP[i][3], v=CP[i][4];
+    var sx=(lon-FIT_OLON)*FIT_MLON, sy=(lat-FIT_OLAT)*FIT_MLAT; src.push([sx,sy]);
+    Sxx+=sx*sx; Sxy+=sx*sy; Sx+=sx; Syy+=sy*sy; Sy+=sy;
+    bux+=sx*u; buy+=sy*u; bu+=u; bvx+=sx*v; bvy+=sy*v; bv+=v;
+  }
+  var NM=[[Sxx,Sxy,Sx],[Sxy,Syy,Sy],[Sx,Sy,n]];
+  var au=solve3(NM,[[bux],[buy],[bu]]); // u = au0*sx+au1*sy+au2
+  var av=solve3(NM,[[bvx],[bvy],[bv]]);
+  var sse=0;
+  for(var j=0;j<n;j++){
+    var pu=au[0]*src[j][0]+au[1]*src[j][1]+au[2];
+    var pv=av[0]*src[j][0]+av[1]*src[j][1]+av[2];
+    sse+=(pu-CP[j][3])*(pu-CP[j][3])+(pv-CP[j][4])*(pv-CP[j][4]);
+  }
+  var fitRms=Math.sqrt(sse/n);
+
+  // --- B) canonical gridToWorld() end-to-end vs OSM lat/lon ---
+  var e2eSse=0, e2eMax=0, worst="";
+  for(var k=0;k<n;k++){
+    var w=gridToWorld(CP[k][3], CP[k][4]);
+    var plat=BAKE_CLAT - w.z/BAKE_MLAT, plon=BAKE_CLON + w.x/BAKE_MLON;
+    var d=haversine(CP[k][1],CP[k][2],plat,plon);
+    e2eSse+=d*d; if(d>e2eMax){ e2eMax=d; worst=CP[k][0]; }
+  }
+  var e2eRms=Math.sqrt(e2eSse/n);
+
+  // --- C) no-transform-drift ---
+  var probe=gridToWorld(1000,0);
+  var g2wAzDeg=Math.atan2(probe.z-GRID_ORIGIN_Z, probe.x-GRID_ORIGIN_X)*180/Math.PI;
+  var azErr=Math.abs(g2wAzDeg - GRID_ROT_BASE_DEG);
+  var rtMax=0;
+  for(var m=0;m<n;m++){
+    var wp=gridToWorld(CP[m][3],CP[m][4]); var g=worldToGrid(wp.x,wp.z);
+    rtMax=Math.max(rtMax, Math.hypot(g.u-CP[m][3], g.v-CP[m][4]));
+  }
+  var viogetOK=Math.abs(VIOGET_SKEW_DEG-(GRID_ROT_BASE_DEG+VIOGET_ERROR_DEG))<1e-9;
+
+  var pass = fitRms<=2.0 && e2eRms<=2.0 && azErr<=0.1 && rtMax<=1e-3 && viogetOK;
+  return {
+    pass: pass,
+    datasetFitRms_m: +fitRms.toFixed(3),
+    canonicalEndToEndRms_m: +e2eRms.toFixed(3),
+    canonicalEndToEndMax_m: +e2eMax.toFixed(3), worst: worst,
+    gridToWorldAzDeg: +g2wAzDeg.toFixed(4), gridRotBaseDeg: GRID_ROT_BASE_DEG,
+    azimuthDriftDeg: +azErr.toFixed(4),
+    worldToGridRoundTripMax_m: +rtMax.toExponential(2),
+    viogetRelationOK: viogetOK,
+    controlPoints: n,
+    gates: "fitRms<=2, e2eRms<=2, azDrift<=0.1deg, roundTrip<=1e-3m"
+  };
+});
