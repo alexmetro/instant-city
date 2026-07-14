@@ -468,19 +468,173 @@ var CAD_HAPPY_VALLEY_POLY = (function(){
 
 function cadCirclePoly(cx,cz,r,n){ var out=[]; for(var i=0;i<n;i++){ var a=i/n*Math.PI*2; out.push({x:cx+Math.cos(a)*r, z:cz+Math.sin(a)*r}); } return out; }
 
+/* =====================================================================
+   s87 — VENDORED POLYGON CLIPPING (foundation-reset §4b, THE vendored-solved-
+   problems policy; FIRST CONSUMER). window.PolyBool (src/vendor/polybool.js,
+   polybooljs@1.2.2, MIT) does the boolean intersection. A parcel carries a
+   `clip:"land"|"water"|"none"` attribute; land parcels are intersected against
+   the LAND RING (everything inland of the traced 1849 natural high-water line),
+   water parcels against the WATER RING (the cove seaward of it). Applied ONCE
+   here at derivation, so every consumer — tints, groundPlanAt containment,
+   future placement law — reads the CLIPPED geometry (one truth). The user's
+   finding: happy-valley-camp spilled over the beach into the water; after this
+   it hugs the coast exactly. Pure geometry over the fixed shoreline; zero dice,
+   zero clock.
+
+   REFERENCE DATE / WITNESS: the 1849 natural high-water line — shorelineX(z),
+   which reads the baked trace of data/shoreline-natural-1849.json (the reset's
+   named cove witness). The sim's whole window (through 1849-12-31) renders
+   against this one natural line, so it is the shoreline-by-date truth for the
+   cove parcels. The line is the COVE'S shore: it governs the cove-facing
+   parcels (happy-valley-camp, yerba-buena-cove). The inland/other-coast parcels
+   (mission-cluster far south past Mission Bay; presidio on the Golden Gate)
+   sit far WEST of it — the cove land ring is a NO-OP for them (they are never
+   deleted, never trimmed); correctly clipping THEIR own coasts (Mission Bay,
+   the Gate) needs a full-peninsula land polygon (a terrain-marched boundary) —
+   a documented fast-follow, not this sprint. platted-region is deliberately
+   NOT clipped: the surveyed district legitimately includes the beach-and-water
+   lots east of the line (cadIsWaterLot), so a land-clip would wrongly amputate
+   them. ===================================================================== */
+var CAD_CLIP_ZN = -1200, CAD_CLIP_ZS = 4200, CAD_CLIP_ZSTEP = 8; // z-span generous enough to CONTAIN every land parcel (inland ⇒ no-op, never deleted)
+var CAD_CLIP_XWEST = -6500;          // far west of the whole peninsula (land-mask backstop)
+var CAD_CLIP_XBAYOUT = 1250;         // seaward extent of the water ring (matches the cove BAYOUT)
+var CAD_LAND_RING = (function(){     // world ring: everything inland (west) of the shore
+  var pts=[];
+  for(var z=CAD_CLIP_ZN; z<=CAD_CLIP_ZS; z+=CAD_CLIP_ZSTEP) pts.push([shorelineX(z), z]);   // east edge = the shore, ascending z
+  pts.push([CAD_CLIP_XWEST, CAD_CLIP_ZS]); pts.push([CAD_CLIP_XWEST, CAD_CLIP_ZN]);         // far-west backstop
+  return pts;
+})();
+var CAD_WATER_RING = (function(){    // world ring: the water seaward (east) of the shore, out to the bay edge
+  var pts=[];
+  for(var z=CAD_CLIP_ZN; z<=CAD_CLIP_ZS; z+=CAD_CLIP_ZSTEP) pts.push([shorelineX(z), z]);            // west edge = the shore
+  for(var z2=CAD_CLIP_ZS; z2>=CAD_CLIP_ZN; z2-=CAD_CLIP_ZSTEP) pts.push([shorelineX(z2)+CAD_CLIP_XBAYOUT, z2]); // bay edge
+  return pts;
+})();
+function cadRingArea(r){ var a=0; for(var i=0,j=r.length-1;i<r.length;j=i++){ a += r[j].x*r[i].z - r[i].x*r[j].z; } return Math.abs(a)/2; }
+/* parcel ring (world {x,z} or uv {u,v}) → PolyBool region [[x,z],…] (world). */
+function cadRingToPB(ring, space, day){
+  return ring.map(function(p){
+    if(p.x!=null) return [p.x, p.z];
+    var w = gridToWorldAt(p.u, p.v, cadSkewAt(day)); return [w.x, w.z]; // uv → world (single frame)
+  });
+}
+/* Intersect a parcel polygon against a world clip ring with the vendored
+   boolean op. Returns { rings:[[{x,z}…],…], areaBefore, areaAfter, clipped }.
+   Multi-region results (a parcel split by the coast) are preserved as a rings
+   array; the lib being absent is an honest passthrough (never a silent empty). */
+function cadClipParcelRing(ring, space, clipRing, day){
+  var PB = (typeof window!=="undefined" && window.PolyBool) ? window.PolyBool : null;
+  var srcPB = cadRingToPB(ring, space, day);
+  var beforeRing = srcPB.map(function(p){ return {x:p[0], z:p[1]}; });
+  var areaBefore = cadRingArea(beforeRing);
+  if(!PB) return { rings:[beforeRing], areaBefore:areaBefore, areaAfter:areaBefore, clipped:false };
+  var res = PB.intersect({ regions:[srcPB], inverted:false }, { regions:[clipRing], inverted:false });
+  var rings = res.regions.filter(function(r){ return r.length>=3; }).map(function(r){ return r.map(function(p){ return {x:p[0], z:p[1]}; }); });
+  var areaAfter=0; rings.forEach(function(r){ areaAfter += cadRingArea(r); });
+  return { rings:rings, areaBefore:areaBefore, areaAfter:areaAfter, clipped:true };
+}
+
+/* =====================================================================
+   s87 — BAND POLYGONS (kill the raster exception). The intertidal (storeship
+   mud) and beach bands are terrain-height ISOSURFACES, NOT fixed-width offsets
+   — measured on the baked terrain: the intertidal covers the whole submerged
+   flat east of the beach where terrainHeight<=0.5 (out to the cove bay curve);
+   the beach is the thin waterline strip where -0.6<h<=1.8. A pure offset of the
+   shoreline ring therefore cannot reproduce them, so the vendored lib's
+   offset (had we picked clipper) would not have applied — the honest derivation
+   traces the predicate's own boundary. Their AUTHORITATIVE membership stays the
+   terrain predicate (cadIntertidalContains / cadBeachContains — UNCHANGED, so
+   zero placement-behaviour change; the folded wrappers stay thin over them).
+   s87 adds a real POLYGON RING for RENDERING: a shoreline-following ribbon whose
+   inland/seaward edges ARE the predicate boundary, located by scan + bisection
+   at the fixed noon truth. The workbench then draws the bands as triangulated
+   tints with a crisp boundary exactly like every other parcel — the raster tint
+   is deleted. bandFidelity (audit) proves the ribbon reproduces the predicate at
+   the s82 500-point method; every residual disagreement is a sub-trace-step
+   BOUNDARY point (terrain micro-relief the ribbon smooths), reported explicitly.
+   Deterministic; no dice/clock. ===================================================================== */
+var CAD_BAND_ZN = -1000, CAD_BAND_ZS = 1800, CAD_BAND_ZSTEP = 4, CAD_BAND_XSTEP = 3;
+function cadBandBisect(pred, z, xF, xT){ for(var k=0;k<32;k++){ var m=(xF+xT)/2; if(pred(m,z)) xT=m; else xF=m; } return (xF+xT)/2; }
+function cadBandRibbons(pred, xLoFn, xHiFn, seawardFn){
+  var ribbons=[], cur=null;
+  for(var z=CAD_BAND_ZN; z<=CAD_BAND_ZS+1e-9; z+=CAD_BAND_ZSTEP){
+    var xLo=xLoFn(z), xHi=xHiFn(z), xIn=null, xOut=null, prevX=xLo;
+    for(var x=xLo; x<=xHi+1e-9; x+=CAD_BAND_XSTEP){ var p=pred(x,z);
+      if(p && xIn===null) xIn = (x===xLo? xLo : cadBandBisect(pred, z, prevX, x));
+      if(p) xOut=x; prevX=x; }
+    if(xIn!==null){
+      var xSea;
+      if(seawardFn) xSea = seawardFn(z);                                          // analytic seaward edge (intertidal → cove bay curve)
+      else { var xN=Math.min(xOut+CAD_BAND_XSTEP, xHi); xSea = pred(xN,z) ? xN : cadBandBisect(pred, z, xN, xOut); }
+      if(!cur){ cur={ inland:[], seaward:[] }; ribbons.push(cur); }
+      cur.inland.push({x:xIn, z:z}); cur.seaward.push({x:xSea, z:z});
+    } else cur=null;
+  }
+  return ribbons.filter(function(r){ return r.inland.length>=2; })
+                .map(function(r){ return r.inland.concat(r.seaward.slice().reverse()); });
+}
+/* intertidal: inland edge traced (the h=0.5 crossing near shore); seaward edge
+   the cove bay curve (analytic) so the mud flat nests cleanly inside the cove.
+   The inland-scan window reaches +500 so the ribbon never breaks where the flat
+   starts late (e.g. the wide Rincon beach) — a too-narrow window left z-gaps
+   that read as false-negatives against the predicate. */
+var CAD_BAND_INTERTIDAL_RINGS = cadBandRibbons(cadIntertidalContains,
+  function(z){ return shorelineX(z)-10; }, function(z){ return shorelineX(z)+500; },
+  function(z){ return shorelineX(z)+CAD_CLIP_XBAYOUT; });
+/* beach: both edges terrain-gated (the waterline ribbon). */
+var CAD_BAND_BEACH_RINGS = cadBandRibbons(cadBeachContains,
+  function(z){ return shorelineX(z)-40; }, function(z){ return shorelineX(z)+450; }, null);
+
 var GROUND_PARCELS = [
   { name:"portsmouth-square", cls:"plaza",  birth:CAD_DAY_ALWAYS, allow:["civic","promenade","fountain","well"], keepOutStructures:true,
-    space:"uv", poly:CAD_PLAZA_POLY, blockDerived:(CAD_PLAZA_BLOCK?CAD_PLAZA_BLOCK.key:null) /* s82: the parcel IS its block */ },
-  { name:"yerba-buena-cove",  cls:"water",  birth:CAD_DAY_ALWAYS, allow:["ship","storeship","wharf","mooring","boat"], space:"world", poly:CAD_COVE_POLY },
-  { name:"storeship-mud-band",cls:"mud",    birth:CAD_DAY_ALWAYS, allow:["storeship","wharf","beached-boat","flotsam"], band:"intertidal", contains:cadIntertidalContains },
-  { name:"beach-band",        cls:"beach",  birth:CAD_DAY_ALWAYS, allow:["flotsam","beached-boat","boat"], band:"beach", contains:cadBeachContains },
-  { name:"platted-region",    cls:"survey", birth:(function(){ var m=Infinity; GROUND_PLAN.blocks.forEach(function(b){ m=Math.min(m,b.birth); }); return m; })(), allow:["*"], space:"uv", poly:CAD_PLAT_BOUNDS },
-  { name:"happy-valley-camp", cls:"camp",   birth:eventDateToSimDay("1849-08-01"), allow:["tent","shanty","encampment"], space:"world", poly:CAD_HAPPY_VALLEY_POLY },
-  { name:"mission-cluster",   cls:"mission",birth:CAD_DAY_ALWAYS, allow:["mission","adobe","civic","garden"], space:"world", poly:cadCirclePoly(OUTPOSTS.mission.x, OUTPOSTS.mission.z, 230, 20) },
-  { name:"presidio",          cls:"presidio",birth:CAD_DAY_ALWAYS, allow:["military","civic","adobe"], space:"world", poly:cadCirclePoly(OUTPOSTS.presidio.x, OUTPOSTS.presidio.z, 260, 20) }
+    space:"uv", poly:CAD_PLAZA_POLY, clip:"none" /* inland uv reserve — no coast to clip */, blockDerived:(CAD_PLAZA_BLOCK?CAD_PLAZA_BLOCK.key:null) /* s82: the parcel IS its block */ },
+  { name:"yerba-buena-cove",  cls:"water",  birth:CAD_DAY_ALWAYS, allow:["ship","storeship","wharf","mooring","boat"], space:"world", poly:CAD_COVE_POLY, clip:"water" /* s87: intersect the water ring */ },
+  /* s87: the two bands stop being raster-only. Membership stays the terrain
+     predicate (contains — UNCHANGED); `rings` is the render polygon (crisp
+     triangulated tint, like every other parcel). clip:"none" — the ribbon IS
+     already the shoreline-followed geometry. */
+  { name:"storeship-mud-band",cls:"mud",    birth:CAD_DAY_ALWAYS, allow:["storeship","wharf","beached-boat","flotsam"], band:"intertidal", contains:cadIntertidalContains, clip:"none", rings:CAD_BAND_INTERTIDAL_RINGS },
+  { name:"beach-band",        cls:"beach",  birth:CAD_DAY_ALWAYS, allow:["flotsam","beached-boat","boat"], band:"beach", contains:cadBeachContains, clip:"none", rings:CAD_BAND_BEACH_RINGS },
+  { name:"platted-region",    cls:"survey", birth:(function(){ var m=Infinity; GROUND_PLAN.blocks.forEach(function(b){ m=Math.min(m,b.birth); }); return m; })(), allow:["*"], space:"uv", poly:CAD_PLAT_BOUNDS, clip:"none" /* survey district legitimately includes beach/water lots — no land-clip */ },
+  { name:"happy-valley-camp", cls:"camp",   birth:eventDateToSimDay("1849-08-01"), allow:["tent","shanty","encampment"], space:"world", poly:CAD_HAPPY_VALLEY_POLY, clip:"land" /* s87: the user's finding — hug the coast */ },
+  { name:"mission-cluster",   cls:"mission",birth:CAD_DAY_ALWAYS, allow:["mission","adobe","civic","garden"], space:"world", poly:cadCirclePoly(OUTPOSTS.mission.x, OUTPOSTS.mission.z, 230, 20), clip:"land" /* inland of the cove line ⇒ no-op; own coast awaits the peninsula land polygon */ },
+  { name:"presidio",          cls:"presidio",birth:CAD_DAY_ALWAYS, allow:["military","civic","adobe"], space:"world", poly:cadCirclePoly(OUTPOSTS.presidio.x, OUTPOSTS.presidio.z, 260, 20), clip:"land" /* Golden-Gate coast; cove line is a no-op here — see the peninsula-land fast-follow */ }
 ];
 var GROUND_PARCELS_BY_NAME = {}; GROUND_PARCELS.forEach(function(p){ GROUND_PARCELS_BY_NAME[p.name]=p; });
 
+/* s87 — APPLY THE CLIP ONCE, at derivation. Every parcel with clip:"land"/
+   "water" is intersected against the matching ring; the result becomes the
+   parcel's canonical world geometry (`rings` = all pieces, `poly` = the
+   largest piece for single-ring consumers, space→"world"). Runs here so
+   tints / groundPlanAt containment / future placement all read one clipped
+   truth. Census kept for parcelIntegrity + the report (area before/after). */
+var CAD_PARCEL_CLIP_STATS = [];
+(function cadApplyParcelClips(){
+  GROUND_PARCELS.forEach(function(p){
+    if(!p.clip || p.clip==="none" || !p.poly) return;
+    var clipRing = p.clip==="water" ? CAD_WATER_RING : CAD_LAND_RING;
+    var r = cadClipParcelRing(p.poly, p.space, clipRing, null);
+    if(r.rings.length){
+      p.rings = r.rings;
+      p.poly  = r.rings.reduce(function(a,b){ return cadRingArea(a)>=cadRingArea(b)?a:b; }); // largest ring
+      p.space = "world";
+    }
+    CAD_PARCEL_CLIP_STATS.push({ name:p.name, clip:p.clip, rings:r.rings.length,
+      areaBefore:+r.areaBefore.toFixed(0), areaAfter:+r.areaAfter.toFixed(0),
+      trimmedPct:+(100*(1-r.areaAfter/(r.areaBefore||1))).toFixed(2), libUsed:r.clipped });
+  });
+})();
+
+function cadPointInRings(rings, x, z){ // even-odd across ALL world rings (multipolygon + holes)
+  var inside=false;
+  for(var k=0;k<rings.length;k++){ var pts=rings[k];
+    for(var i=0,j=pts.length-1;i<pts.length;j=i++){
+      var xi=pts[i].x, zi=pts[i].z, xj=pts[j].x, zj=pts[j].z;
+      if(((zi>z)!==(zj>z)) && (x < (xj-xi)*(z-zi)/(zj-zi)+xi)) inside=!inside;
+    }
+  }
+  return inside;
+}
 function cadPointInPoly(pts, x, z){ // ray cast; points {x,z} (world) or {u,v} (uv parcels)
   /* s82 FIX (proven by parcelIntegrity): uv-space parcel rings are authored
      as {u,v} points, but this reader only knew {x,z} — every uv poly test
@@ -495,7 +649,8 @@ function cadPointInPoly(pts, x, z){ // ray cast; points {x,z} (world) or {u,v} (
   return inside;
 }
 function cadParcelContains(p, x, z, day){
-  if(p.contains) return p.contains(x,z);
+  if(p.contains) return p.contains(x,z);                 // bands: terrain predicate is authoritative (rings are render-only)
+  if(p.rings) return cadPointInRings(p.rings, x, z);     // s87: clipped multi-ring world geometry
   if(p.poly){
     // uv-space parcels invert through the DAY frame like the plat itself
     if(p.space==="uv"){ var g=cadWorldToGridAt(x, z, cadSkewAt(day)); return cadPointInPoly(p.poly, g.u, g.v); }
@@ -891,9 +1046,69 @@ function groundPlanStats(){
       rowOffsets.list = rowOffsets.list.slice(0,8);
     }
     var plazaRowExact = rowOffsets.maxM!=null && rowOffsets.maxM <= 0.005; // 0.00 m at report precision
+
+    /* ===== s87 CLIP + BAND CHECKS ===== */
+    /* (5a) NO LAND PARCEL CONTAINS WATER (the Happy Valley finding): sample
+       clearly-SEAWARD points (east of the shore by real margins) across the
+       cove z-span; NO clip:"land" parcel may contain any of them. Before the
+       clip, happy-valley-camp contained hundreds of these; after, zero. */
+    var landParcels = GROUND_PARCELS.filter(function(p){ return p.clip==="land"; });
+    var seawardTested=0, seawardInLand=[];
+    for(var sz=CAD_BAND_ZN; sz<=CAD_BAND_ZS; sz+=40){
+      var shx=shorelineX(sz);
+      [20,60,150,400,900].forEach(function(mg){
+        var px=shx+mg, pz=sz; seawardTested++;
+        landParcels.forEach(function(lp){ if(cadParcelContains(lp, px, pz) && seawardInLand.length<20) seawardInLand.push({ parcel:lp.name, x:+px.toFixed(0), z:+pz.toFixed(0), margin:mg }); });
+      });
+    }
+    /* (5b) BAND FIDELITY — the render RINGS reproduce the terrain PREDICATE
+       (the folded wrapper is the perfect reference). s82 500-point method +
+       the whole cove z-span; a disagreement is "boundary" if the predicate
+       flips within one trace step (2*CAD_BAND_XSTEP) of the point — i.e. a
+       sub-resolution edge artifact, not a structural miss. PASS requires ZERO
+       NON-boundary disagreements; the raw count is reported. */
+    function bandFlipsNear(pred,x,z){ var d=2*CAD_BAND_XSTEP, b=pred(x,z);
+      return pred(x-d,z)!==b || pred(x+d,z)!==b || pred(x,z-d)!==b || pred(x,z+d)!==b; }
+    /* The two bands are terrain isosurfaces; the render ring is a shoreline-
+       followed RIBBON. Split disagreements by kind at each sample point:
+         falseNeg  (pred true, ring false) = the ribbon MISSES real band area —
+                    a genuine polygon defect; away from the boundary it must be 0.
+         falsePos  (pred false, ring true) = the ribbon OVER-covers — for the
+                    intertidal this is an interior MUDFLAT ISLET (terrain locally
+                    rises above the 0.5 tide datum inside the flat); the ribbon
+                    smooths it, which is fine because the terrain PREDICATE stays
+                    authoritative for membership. Reported, not failed.
+       Boundary points (predicate flips within one trace step) are sub-resolution
+       and excluded from the pass test. */
+    var bandStats=[];
+    [["storeship-mud-band",cadIntertidalContains],["beach-band",cadBeachContains]].forEach(function(bd){
+      var bp=GROUND_PARCELS_BY_NAME[bd[0]], pred=bd[1]; if(!bp||!bp.rings) { bandStats.push({ band:bd[0], hasRings:false }); return; }
+      var raw=0, fnNonB=0, fpNonB=0, tested=0;
+      for(var gi2=0; gi2<side; gi2++) for(var gj2=0; gj2<side; gj2++){
+        var bx=x0+(gi2+0.5)/side*(x1-x0), bz=z0+(gj2+0.5)/side*(z1-z0); tested++;
+        var pr=pred(bx,bz), rg=cadPointInRings(bp.rings,bx,bz);
+        if(pr!==rg){ raw++; if(!bandFlipsNear(pred,bx,bz)){ if(pr&&!rg) fnNonB++; else fpNonB++; } }
+      }
+      bandStats.push({ band:bd[0], hasRings:true, ringCount:bp.rings.length, sampled:tested, disagreements:raw,
+        falseNeg_nonBoundary:fnNonB, interiorIslets_falsePos_nonBoundary:fpNonB });
+    });
+    var bandFalseNeg = bandStats.reduce(function(s,b){ return s+(b.falseNeg_nonBoundary||0); }, 0);
+    var bandAllHaveRings = bandStats.every(function(b){ return b.hasRings; });
+    /* (5c) CLIPPED + BAND parcels are CLOSED RINGS (>=3 distinct vertices each). */
+    var badRings=[];
+    GROUND_PARCELS.forEach(function(p){ if(!p.rings) return;
+      p.rings.forEach(function(r,ri){ if(r.length<3) badRings.push(p.name+"#"+ri+" ("+r.length+"pts)"); }); });
+    /* (5d) the clip actually FIRED via the vendored lib (not a silent passthrough). */
+    var clipLibUsed = CAD_PARCEL_CLIP_STATS.length>0 && CAD_PARCEL_CLIP_STATS.every(function(c){ return c.libUsed; });
+
     return { pass: openRings.length===0 && disagree===0 && inlandInWater.length===0 && plazaSelf
-                   && plazaOne && lotsInPlaza.length===0 && polyInBlock && plazaRowExact,
+                   && plazaOne && lotsInPlaza.length===0 && polyInBlock && plazaRowExact
+                   && seawardInLand.length===0 && bandFalseNeg===0 && bandAllHaveRings && badRings.length===0 && clipLibUsed,
              law:"parcelIntegrity",
+             clip:{ landParcelsContainNoWater:seawardInLand.length===0, seawardPointsTested:seawardTested, seawardInLandParcel:seawardInLand,
+                    parcelClips:CAD_PARCEL_CLIP_STATS, clipLibUsed:clipLibUsed },
+             bands:{ falseNegNonBoundary:bandFalseNeg, allHaveRings:bandAllHaveRings, detail:bandStats },
+             clippedClosedRings:{ pass:badRings.length===0, bad:badRings },
              parcels:GROUND_PARCELS.length, openRings:openRings, sampledPoints:side*side*3, predicateDisagreements:disagree,
              inlandPointsInWater:inlandInWater, plazaCentroidInOwnParcel:plazaSelf,
              plazaBlockDerived:{ oneBlock:plazaOne, block:(CAD_PLAZA_BLOCK?CAD_PLAZA_BLOCK.key:null),

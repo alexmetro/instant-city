@@ -295,9 +295,9 @@
   makeChild("row",    "STREET RIGHTS-OF-WAY",
     "Legal street corridors: each street's constant surveyed width centered on its master centerline. Paint and placement law both derive from these. cyan = the one canonical −9.0° frame (single-frame amendment 2026-07-14).");
   makeChild("lots",   "PLAT LOTS",
-    "The dated cadastre: blocks and 50-vara lots born at their survey checkpoints; scrub the timeline to watch the plat appear. white = lot lines · gold tick = corner lots marked at their corner point · cyan = water lot (1847 beach-and-water auction) · magenta = non-standard block. The plaza block is a public reserve — no lots. Pattern-derived; numbered-plat anchoring pending.");
+    "The dated cadastre: blocks and 50-vara lots born at their survey checkpoints; scrub the timeline to watch the plat appear. white = lot lines · gold fill = record lot (number + owner via probe; ground labels arrive with the labels layer) · gold tick = corner lots marked at their corner point · cyan = water lot (1847 beach-and-water auction) · magenta = non-standard block. The plaza block is a public reserve — no lots.");
   makeChild("parcels","NAMED PARCELS",
-    "Named ground parcels carrying allowed-asset-class law (plaza · cove · mud/beach bands · camp · mission · presidio). One zone truth: placement reads these.");
+    "Named ground parcels carrying allowed-asset-class law (plaza · cove · mud/beach bands · camp · mission · presidio). One zone truth: placement reads these. s87: all parcels are polygons — land/water parcels clipped to the 1849 shore (happy-valley-camp hugs the coast), the two shoreline bands drawn as real triangulated tints (raster exception gone).");
 
   groupCb.addEventListener("change", function(){
     var want = groupCb.checked;
@@ -422,20 +422,35 @@
       CAD_COL_STD=new THREE.Color(0xcbd6dd), CAD_COL_NONSTD=new THREE.Color(0xe07ac0);
   function buildLotOverlay(){
     _overlayDay = Math.floor(simDay);
-    var blocks = blocksAt(simDay), pos=[], col=[];
+    var blocks = blocksAt(simDay), pos=[], col=[], goldPos=[], goldCol=[], fillPos=[], fillCol=[];
     /* s82 legibility: lot LINES are one color (white); corner lots are marked
        with a small gold tick (diamond) at their block-corner vertex instead of
        full gold outlines (4 of 6 lots in a standard block are corners — whole-
        perimeter gold read as noise). water lots stay cyan; non-standard blocks
-       stay magenta. */
+       stay magenta.
+       s87 (Director item 1 — RECORD-LOT VISIBILITY): a lot carrying registry
+       data (source:"record", i.e. a digitized plat/Wheeler lot number ± an owner
+       chain) reads AT A GLANCE, before any click — a soft GOLD FILL + a stronger
+       gold boundary, vs the plain white pattern lots. (Ground-text numbers/owners
+       arrive with the unified label layer next; this is the indicator only.) */
+    var GOLD_FILL={ r:0.91, g:0.78, b:0.36 };
+    function isRecordLot(l){ return l.source==="record" || (l.owners && l.owners.length); }
     function cornerTick(p){ var r=2.4, cc=CAD_COL_CORNER;
       wbPushDrapedRun(pos,col,[{x:p.x-r,z:p.z},{x:p.x,z:p.z-r},{x:p.x+r,z:p.z},{x:p.x,z:p.z+r},{x:p.x-r,z:p.z}],cc,0.6,false,3);
     }
     blocks.forEach(function(b){
       b.lots.forEach(function(l){
-        var c = l.water ? CAD_COL_WATER : (!b.standard ? CAD_COL_NONSTD : CAD_COL_STD);
         var q = lotWorldQuad(l, simDay).quad;          // day-frame world geometry from the cadastre
-        wbPushDrapedRun(pos,col,[q[0],q[1],q[2],q[3],q[0]],c,0.5,false,9); // closed loop, draped
+        if(isRecordLot(l)){
+          var before=fillPos.length;                   // soft gold fill (two draped tris)
+          wbPushDrapedTri(fillPos, q[0],q[1],q[2], 0.30, 1);
+          wbPushDrapedTri(fillPos, q[0],q[2],q[3], 0.30, 1);
+          for(var f=0,added=(fillPos.length-before)/3; f<added; f++) fillCol.push(GOLD_FILL.r,GOLD_FILL.g,GOLD_FILL.b);
+          wbPushDrapedRun(goldPos,goldCol,[q[0],q[1],q[2],q[3],q[0]],CAD_COL_CORNER,0.64,false,9); // stronger boundary
+        } else {
+          var c = l.water ? CAD_COL_WATER : (!b.standard ? CAD_COL_NONSTD : CAD_COL_STD);
+          wbPushDrapedRun(pos,col,[q[0],q[1],q[2],q[3],q[0]],c,0.5,false,9); // closed loop, draped
+        }
         if(l.corner){                                  // tick at the vertex that IS the block corner
           if(l.iU===0      && l.iV===0)      cornerTick(q[0]); // (u.lo,v.lo) = SW quad vertex
           if(l.iU===b.nU-1 && l.iV===0)      cornerTick(q[1]);
@@ -444,7 +459,17 @@
         }
       });
     });
-    return wbLineSegs(pos,col,0.92,999);
+    var grp=new THREE.Group(); grp.frustumCulled=false;
+    if(fillPos.length){
+      var fg=new THREE.BufferGeometry();
+      fg.setAttribute("position", new THREE.Float32BufferAttribute(fillPos,3));
+      fg.setAttribute("color", new THREE.Float32BufferAttribute(fillCol,3));
+      var fm=new THREE.Mesh(fg, new THREE.MeshBasicMaterial({ vertexColors:true, transparent:true, opacity:0.30, depthTest:false, depthWrite:false, side:THREE.DoubleSide }));
+      fm.renderOrder=996; fm.frustumCulled=false; grp.add(fm);
+    }
+    if(pos.length)     grp.add(wbLineSegs(pos,col,0.92,999));
+    if(goldPos.length) grp.add(wbLineSegs(goldPos,goldCol,0.98,1000)); // record-lot boundary on top
+    return grp;
   }
   /* plaza is a distinct WARM GOLD so it can never read as the cove's blue
      (s81 finding C — the reported "cove includes the plaza" was the flat-plane
@@ -461,9 +486,10 @@
      triangle is midpoint-subdivided and draped onto terrainHeight like the line
      overlays, so the fill hugs relief; a crisp boundary stroke marks the exact
      edges. The platted-region envelope (cls "survey") is boundary-only (its fill
-     blankets the town). The two predicate-defined BANDS (storeship-mud-band /
-     beach-band) have NO polygon ring — they follow the shoreline curve — so they
-     alone keep a light raster tint (the documented no-ring exception). */
+     blankets the town). s87: the RASTER BAND EXCEPTION IS GONE — storeship-mud-
+     band + beach-band now carry real shoreline-followed polygon rings (core/08
+     cadBandRibbons), and clipped parcels carry world rings, so EVERY parcel
+     draws through the one triangulated-polygon path (no samplePlaneOverlay). */
   function wbEarClip(ring){ // ring:[{x,z}] simple polygon → array of [i,j,k] index triples
     var n=ring.length; if(n<3) return [];
     var V=[]; for(var i=0;i<n;i++) V.push(i);
@@ -510,21 +536,29 @@
     _overlayDay = Math.floor(simDay);
     var parcels = window.__P1850.groundPlan.parcels;
     var grp = new THREE.Group(); grp.frustumCulled=false;
-    var fillPos=[], fillCol=[], strokePos=[], strokeCol=[], bands=[];
+    var fillPos=[], fillCol=[], strokePos=[], strokeCol=[];
+    /* s87: EVERY parcel is a polygon now — the raster band exception is gone.
+       Clipped parcels + the two shoreline bands carry world `rings`
+       (multi-piece); uv parcels (plaza/platted-region) materialize their ring
+       through the day-frame API. All drawn identically: triangulated draped
+       tint + a crisp exact-edge boundary stroke. */
     parcels.forEach(function(p){
       if(p.birth>simDay) return;
-      if(!p.poly){ if(p.contains || p.band) bands.push(p); return; } // predicate band — no ring
-      var ring = wbParcelWorldRing(p); if(!ring || ring.length<3) return;
+      var rings = p.rings ? p.rings : (p.poly ? [wbParcelWorldRing(p)] : null);
+      if(!rings) return;
       var rgb = CAD_PARCEL_COLS[p.cls]||[200,60,200], c={ r:rgb[0]/255, g:rgb[1]/255, b:rgb[2]/255 };
-      wbPushDrapedRun(strokePos, strokeCol, ring.concat([ring[0]]), c, 0.55, false, 9); // exact-edge boundary
-      if(p.cls==="survey") return;                          // platted-region: boundary only (fill blankets the town)
-      wbEarClip(ring).forEach(function(t){
-        var A=ring[t[0]], Bp=ring[t[1]], C=ring[t[2]];
-        var span=Math.max(Math.hypot(Bp.x-A.x,Bp.z-A.z), Math.hypot(C.x-Bp.x,C.z-Bp.z), Math.hypot(A.x-C.x,A.z-C.z));
-        var depth=Math.max(1, Math.min(5, Math.round(Math.log2(Math.max(span,1)/40)))); // drape resolution ~40 m cells
-        var before=fillPos.length;
-        wbPushDrapedTri(fillPos, A, Bp, C, 0.35, depth);
-        for(var q=0, added=(fillPos.length-before)/3; q<added; q++) fillCol.push(c.r,c.g,c.b);
+      rings.forEach(function(ring){
+        if(!ring || ring.length<3) return;
+        wbPushDrapedRun(strokePos, strokeCol, ring.concat([ring[0]]), c, 0.55, false, 9); // exact-edge boundary
+        if(p.cls==="survey") return;                        // platted-region: boundary only (fill blankets the town)
+        wbEarClip(ring).forEach(function(t){
+          var A=ring[t[0]], Bp=ring[t[1]], C=ring[t[2]];
+          var span=Math.max(Math.hypot(Bp.x-A.x,Bp.z-A.z), Math.hypot(C.x-Bp.x,C.z-Bp.z), Math.hypot(A.x-C.x,A.z-C.z));
+          var depth=Math.max(1, Math.min(5, Math.round(Math.log2(Math.max(span,1)/40)))); // drape resolution ~40 m cells
+          var before=fillPos.length;
+          wbPushDrapedTri(fillPos, A, Bp, C, 0.35, depth);
+          for(var q=0, added=(fillPos.length-before)/3; q<added; q++) fillCol.push(c.r,c.g,c.b);
+        });
       });
     });
     if(fillPos.length){
@@ -535,16 +569,6 @@
       fm.renderOrder=997; fm.frustumCulled=false; grp.add(fm);
     }
     if(strokePos.length) grp.add(wbLineSegs(strokePos, strokeCol, 0.95, 999));
-    if(bands.length){                                        // no-ring shoreline bands: light raster tint
-      var B0 = (typeof TOWN_BOX==="object" && TOWN_BOX) ? TOWN_BOX : VILLAGE_BOX, pad=900;
-      var box = { xMin:B0.xMin-pad, xMax:B0.xMax+pad+400, zMin:B0.zMin-pad, zMax:B0.zMax+pad };
-      grp.add(samplePlaneOverlay(box, 220, function(x,z){
-        for(var i=0;i<bands.length;i++){ var bp=bands[i];
-          if(groundPlanParcelContains(bp.name, x, z)){ var cc=CAD_PARCEL_COLS[bp.cls]||[200,60,200]; return [cc[0],cc[1],cc[2],80]; }
-        }
-        return null;
-      }));
-    }
     return grp;
   }
 

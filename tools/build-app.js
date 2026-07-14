@@ -57,6 +57,7 @@ const SRC = path.join(APP, "src");
    SPARSE (gaps where removed layers' chunks were) — assembleJS tolerates gaps and
    only rejects duplicates/mis-order (see below). */
 const FILES = [
+  "vendor/polybool.js",      // s87 — VENDORED polybooljs@1.2.2 (MIT), chunk 00: installs window.PolyBool BEFORE the app IIFE (foundation-reset §4b, the vendored-solved-problems policy; first consumer). Self-contained, zero-dep, deterministic.
   "core/00-boot.js",
   "core/01-geography.js",
   "core/02-scene.js",
