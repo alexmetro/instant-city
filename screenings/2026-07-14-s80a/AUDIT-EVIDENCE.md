@@ -29,6 +29,9 @@ terrain.luminance=PASS
 
 26 inherited audits (geodeticLock + 25) unchanged and green; +4 new cadastre audits, all green (26 → 30).
 
+**Live-verified on Pages** (https://alexmetro.github.io/instant-city/atelier.html): 30/30
+green at 1846-08-01, 1848-04-01, 1849-09-20; census blocks=66 lots=386 water=61 parcels=8.
+
 ### The four cadastre audits (details)
 - **placement.platClosure** — 45 standard blocks, 6 lots tile each exactly (0 closure failures, area conservation to 0.01 m²). 21 non-standard blocks flagged with counts (17 cove 2×2 water blocks, 4 bush→post 3×4 tall blocks where Sutter St is absent from the surveyed dataset), never failed.
 - **placement.lotDeterminism** — two derivations byte-identical; **rngConsumed = 0** (the seeded-dice counter RNG_CALL_COUNT does not move — the plat is a pure function of the spine).
@@ -38,8 +41,12 @@ terrain.luminance=PASS
 ## Cadastre census
 ```
 blocks 66 · lots 386 · water lots 61 · standard blocks 45 · non-standard 21 · parcels 8
-max lot deviation-from-50-vara-standard: 0.02% (the reprojected spine already
-  carries the surveyed spacing; lots divide it proportionally and close to 41.90 m)
+deviation-from-50-vara-standard (THE BLOCK BAROMETER):
+  STANDARD-block lots: 0.02-0.03% (the reprojected spine already carries the
+    surveyed spacing; lots divide it proportionally and close to 41.90 m)
+  overall max (stats.maxDevPct): 12.5% — a NON-STANDARD block lot (the bush→post
+    3×4 tall block where Sutter St is absent divides into ~47 m lots); expected,
+    these blocks are flagged non-standard, never failed.
 per era (birth):
   vioget-1839 : 15 blocks,  90 lots,   0 water,  0 non-standard  (the documented 3×5 original survey)
   ofarrell-1847: 49 blocks, 288 lots,  53 water, 19 non-standard  (grid + the 1847 beach-and-water cove lots)
