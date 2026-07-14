@@ -266,6 +266,31 @@ function nearAnyRoad(x,z,margin){
   }
   return false;
 }
+/* s76 SINGLE-SOURCE ORIENTATION (building-spawn-spec §1.6): the foot of the
+   perpendicular from (x,z) to the nearest street centerline, across every frame
+   the network renders in (PLACEMENT_STREET_SEGS unions the swing frames). The
+   ONE orientation source for addressed buildings — a building's yaw turns its
+   FRONT AXIS (local +z, where the door decal sits by construction) to face this
+   foot, so door-face and street-facing are the same vector by definition. This
+   replaces the old rotBase±skew math that drifted 90°/180° off the door face. */
+function nearestStreetFoot(x,z){
+  var best={ x:x, z:z, d:1e9 };
+  for(var i=0;i<PLACEMENT_STREET_SEGS.length;i++){ var g=PLACEMENT_STREET_SEGS[i];
+    var dx=g.x1-g.x0, dz=g.z1-g.z0, l2=dx*dx+dz*dz;
+    var t=l2>0?clamp(((x-g.x0)*dx+(z-g.z0)*dz)/l2,0,1):0;
+    var fx=g.x0+dx*t, fz=g.z0+dz*t, d=Math.hypot(x-fx,z-fz);
+    if(d<best.d) best={ x:fx, z:fz, d:d };
+  }
+  return best;
+}
+/* yaw that faces local +z toward the nearest street foot. (sin yaw, cos yaw) is
+   the world direction the baked front/door decal points — verified against the
+   yard door-path builder's own doorX=sin(rot)*faceDist convention. */
+function yawFacingStreet(x,z){
+  var f=nearestStreetFoot(x,z);
+  if(f.d<1e-3) return 0;
+  return Math.atan2(f.x-x, f.z-z);
+}
 function terrainSlopeDeg(x,z){
   var d=6;
   var hE=terrainHeight(x+d,z), hW=terrainHeight(x-d,z), hN=terrainHeight(x,z-d), hS=terrainHeight(x,z+d);
@@ -326,6 +351,23 @@ function inBeachBand(x,z){ // dry-ish working beach just landward of the waterli
   var h = terrainHeight(x,z);
   return x >= shorelineX(z) - 30 && h > -0.6 && h <= 1.8;
 }
+/* s76 PORTSMOUTH SQUARE KEEP-OUT (building-spawn-spec §1.5 / P6 fence law):
+   the public square is open ground — no yard fence, lot line, or addressed
+   structure may enter it. A fence run was crossing the plaza diagonally (the
+   Director's 1847/1849 mega-fence frame): a plaza-adjacent building's yard rect
+   reached across the open square and the fence P6 law had no square keep-out.
+   Test the point against the plaza block in BOTH grid frames the town ever
+   renders in (Vioget as-built and the O'Farrell base), so the keep-out holds
+   through the grid swing exactly like PLACEMENT_STREET_SEGS unions both frames. */
+function inPublicSquare(x,z){
+  var P=GEO.plaza, X=x-GRID_ORIGIN_X, Z=z-GRID_ORIGIN_Z, frames=[VIOGET_SKEW, GRID_ROT_BASE];
+  for(var f=0;f<frames.length;f++){
+    var c=Math.cos(frames[f]), s=Math.sin(frames[f]);
+    var u=X*c + Z*s, v=-X*s + Z*c;   // inverse of gridToWorldAt
+    if(u>=P.uMin && u<=P.uMax && v>=P.vMin && v<=P.vMax) return true;
+  }
+  return false;
+}
 
 /* LAW_TABLES — per-class placement law, DATA-DRIVEN so a new asset class is a
    table row, not new code (placement-spec §1). Every numeric threshold here is
@@ -358,7 +400,7 @@ var LAW_TABLES = {
      PLACEMENT_INDEX bounding-circle radius (half-diagonal) would false-reject a
      building's own fence; parent-excluded footprint crossing lives in the
      builder/audit instead. */
-  fence:     { surface:"land", minY:1, intertidalAllowed:false, row:false, rowMargin:0 },
+  fence:     { surface:"land", minY:1, intertidalAllowed:false, row:false, rowMargin:0, plazaKeepOut:true },
   /* Water trades — P3 exempt (they BELONG in the band). */
   storeship: { surface:null, intertidalAllowed:true, mudBand:true },
   ship:      { surface:"water", spacingHullMul:1.5, headingSpreadDeg:30 },   // P13
@@ -388,6 +430,7 @@ function canPlaceClass(cls, pose, ctx){
   if(law.beachOnly && !inBeachBand(x,z)) return { ok:false, reason:"off-beach" };
   if(law.water===true && h <= 0) return { ok:false, reason:"on-water" };
   if(law.slopeMaxPct!=null && terrainSlopePct(x,z) > law.slopeMaxPct) return { ok:false, reason:"slope" };
+  if(law.plazaKeepOut===true && inPublicSquare(x,z)) return { ok:false, reason:"plaza-keepout" };
   if(law.row===false && nearAnyRoad(x,z, law.rowMargin||0)) return { ok:false, reason:"row" };
   if(law.rowCenter===false && nearAnyRoad(x,z, 0)) return { ok:false, reason:"row-center" };
   if(law.footprint===false || law.footprintClearM!=null){

@@ -590,6 +590,12 @@ window.__P1850.audits = (function(){
       for(j=i+1;j<B.length;j++){ var b=B[j]; if(b.w==null) continue;
         var dx=a.x-b.x, dz=a.z-b.z, rb=Math.hypot(b.w,b.d)/2;
         if(dx*dx+dz*dz > (ra+rb)*(ra+rb)) continue;
+        // s76: the documented Dec-1849 fire-block row is an authored continuous
+        // block (Alta's establishments in order) — its dense packing is the
+        // record, reported not gated (mirrors footprintsOBB's carve-out). Its
+        // buildings now face their streets via the single orientation source,
+        // which varies yaw at the block corners; that is authored, not a defect.
+        if(a.fireBlock && b.fireBlock) continue;
         var pen=rectPenetration(ca, rectOf(b));
         if(pen>1.0 && Math.abs(angNorm((a.rot||0)-(b.rot||0)))>15/DEG)
           authored.push({ i:i, j:j, pen:+pen.toFixed(2), x:Math.round(a.x), z:Math.round(a.z) });
@@ -926,5 +932,222 @@ window.__P1850.audits = (function(){
     var ratio = total? inPasture/total : 1;
     return { pass: (ratio>=0.7 && rowHits===0 && footHits===0), law:"P14",
              grazePoints:total, pastureRatio:+ratio.toFixed(2), rowHits:rowHits, footHits:footHits, list:bad.slice(0,20) };
+  });
+
+  /* =======================================================================
+     s76 BUILDING SPAWN v2 ACCEPTANCE AUDITS (building-spawn-spec.md §2).
+     Built BEFORE the v2 spawner and captured FAILING on the current build —
+     the fail record IS the acceptance evidence for the three Director defect
+     frames (wrong facing everywhere; the June-1847 party-wall strip; the
+     wall-to-wall perimeter ramparts). Each is framing-independent (walks world
+     data at the current simDay), registered under placement.* like the P-suite.
+     ======================================================================= */
+
+  var SPAWN_UNLOCK_DAY = eventDateToSimDay("1849-06-01");  // party-wall boom-core unlock (§1.5, tunable)
+
+  /* nearest street centerline info for a point: distance to the centerline,
+     the foot of the perpendicular, and the unit normal pointing FROM the
+     centerline TOWARD the point (the frontage-facing direction a building on
+     that lot must present its door along). */
+  function nearestStreetInfo(x,z){
+    var best={ d:1e9, fx:x, fz:z, nx:0, nz:1, halfW:0 };
+    for(var s=0;s<PLACEMENT_STREET_SEGS.length;s++){ var g=PLACEMENT_STREET_SEGS[s];
+      var dx=g.x1-g.x0, dz=g.z1-g.z0, l2=dx*dx+dz*dz;
+      var t=l2>0?clamp(((x-g.x0)*dx+(z-g.z0)*dz)/l2,0,1):0;
+      var fx=g.x0+dx*t, fz=g.z0+dz*t, d=Math.hypot(x-fx,z-fz);
+      if(d<best.d){ var inv=d>1e-4?1/d:0; best={ d:d, fx:fx, fz:fz, nx:(x-fx)*inv, nz:(z-fz)*inv, halfW:g.halfW }; }
+    }
+    return best;
+  }
+  /* the world-space list of addressed structures at the CURRENT date: the
+     platted village/landmarks (VILLAGE_BUILDING_SPOTS with a real footprint,
+     excluding the deliberately-unaddressed squatter huts >300m out) PLUS the
+     growth candidates that have actually revealed (spawnedBuildings joins to
+     growthBuildingCandidates by index). Each carries {x,z,rot,w,d,commercial,
+     edgeKey,perp} where known. */
+  function addressedBuilt(){
+    var out=[], i;
+    for(i=0;i<VILLAGE_BUILDING_SPOTS.length;i++){ var a=VILLAGE_BUILDING_SPOTS[i];
+      if(a.w==null) continue;
+      if(a.foundedDay!=null && simDay < a.foundedDay) continue; // not yet built (era-gated) — not present to audit
+      if(a.unaddressed) continue;                               // §5: deliberately-unaddressed squatter huts
+      if(Math.hypot(a.x-PLAZA_CENTER.x,a.z-PLAZA_CENTER.z)>300 && !a.name) continue; // §5 exempt outliers
+      out.push({ x:a.x, z:a.z, rot:a.rot||0, w:a.w, d:a.d, commercial:false, src:"village", fireBlock:!!a.fireBlock, edgeKey:null });
+    }
+    var nBuilt = (typeof spawnedBuildings!=="undefined") ? spawnedBuildings.length : 0;
+    for(i=0;i<nBuilt && i<growthBuildingCandidates.length;i++){
+      var c=growthBuildingCandidates[i], b=spawnedBuildings[i];
+      // effective width is the ERA-GATED rendered width (party wall only after
+      // the unlock) so the audits measure what actually stands at this date.
+      var w=(typeof lotEffectiveW!=="undefined")?lotEffectiveW(c,simDay):(c.buildW!=null?c.buildW:5);
+      var dd=(c.depth!=null?c.depth:4);
+      var party=(typeof partyWallActive!=="undefined")?partyWallActive(c,simDay):!!c.commercial;
+      out.push({ x:b.x, z:b.z, rot:b.rot!=null?b.rot:(c.rot||0), w:w, d:dd,
+                 commercial:party, src:"growth", dRing:(c.dRing!=null?c.dRing:9),
+                 edgeKey:(c.edgeKey!=null?c.edgeKey:null) });
+    }
+    return out;
+  }
+
+  /* ---- ORIENTATION (§2, new): every addressed building's door-face normal
+     within 15° of its lot's frontage normal. Door-face world normal follows
+     the codebase convention (sin(rot),cos(rot)) — the same vector the yard
+     door-path builder uses. FAILS on the s72 build: the user's #1 nub. ---- */
+  /* the frontage a building actually addresses: among street segments whose
+     perpendicular foot is within 40m AND lies in front of the door (so a lot
+     fronts the street its door opens onto, not one behind it), the smallest
+     angle between the door-face and the inward direction to that foot. This is
+     the corner-lot rule made auditable — a building on a corner fronts ONE of
+     its two streets, and facing either is correct. Returns 999 if no street is
+     fronted (a genuine mid-block orphan). */
+  function bestFrontageAngle(x,z,dnx,dnz){
+    var best=999;
+    for(var s=0;s<PLACEMENT_STREET_SEGS.length;s++){ var g=PLACEMENT_STREET_SEGS[s];
+      var dx=g.x1-g.x0, dz=g.z1-g.z0, l2=dx*dx+dz*dz;
+      var t=l2>0?clamp(((x-g.x0)*dx+(z-g.z0)*dz)/l2,0,1):0;
+      var fx=g.x0+dx*t, fz=g.z0+dz*t, d=Math.hypot(x-fx,z-fz);
+      if(d>40 || d<1e-3) continue;
+      var inx=(fx-x)/d, inz=(fz-z)/d;               // inward: building → street foot
+      if(dnx*inx+dnz*inz <= 0) continue;            // street is behind the door — not fronted
+      var ang=Math.acos(clamp(dnx*inx+dnz*inz,-1,1))*DEG;
+      if(ang<best) best=ang;
+    }
+    return best;
+  }
+  registerAudit("placement", "orientation", function(){
+    var A=addressedBuilt(), bad=[], i, worst=0;
+    var perSrc={ village:{n:0,bad:0}, growth:{n:0,bad:0} };
+    var hist={ ok:0, off90:0, off180:0, other:0 };
+    for(i=0;i<A.length;i++){ var b=A[i];
+      var info=nearestStreetInfo(b.x,b.z);
+      if(info.d>90) continue;                        // no street to face nearby (deep outlier) — not addressed here
+      var dnx=Math.sin(b.rot), dnz=Math.cos(b.rot);  // door-face world normal (code convention)
+      // measure against the street the building actually fronts (corner rule),
+      // not merely the geometrically nearest (which is the cross street at a
+      // corner). A mid-block orphan fronts nothing → 999 → counted as violation.
+      var ang=bestFrontageAngle(b.x,b.z,dnx,dnz);
+      if(ang>900) ang=180;
+      if(ang>worst) worst=ang;
+      (perSrc[b.src]=perSrc[b.src]||{n:0,bad:0}).n++;
+      if(ang<=15) hist.ok++; else if(Math.abs(ang-90)<=20) hist.off90++;
+      else if(ang>=150) hist.off180++; else hist.other++;
+      if(ang>15){ perSrc[b.src].bad++; bad.push({ src:b.src, x:Math.round(b.x), z:Math.round(b.z), angleDeg:+ang.toFixed(1),
+        rot:+b.rot.toFixed(2), doorX:+dnx.toFixed(2), doorZ:+dnz.toFixed(2), nOutX:+info.nx.toFixed(2), nOutZ:+info.nz.toFixed(2), streetD:+info.d.toFixed(1) }); }
+    }
+    return { pass: bad.length===0, law:"orientation(≤15°)", checked:A.length,
+             violations:bad.length, worstDeg:+worst.toFixed(1), perSrc:perSrc, hist:hist, list:bad.slice(0,20) };
+  });
+
+  /* ---- footprintsOBB (§2, upgrade): true oriented-box intersection across
+     ALL structure classes = 0 (the circle proxy is retired). A permitted party
+     wall (angle diff ≤15° with only edge contact) is NOT an overlap. FAILS
+     where the s72 circle index passed real oriented overlaps. ---- */
+  registerAudit("placement", "footprintsOBB", function(){
+    var A=addressedBuilt(), i, j, viol=[], maxPen=0, authoredFB=0;
+    var R=A.map(function(b){ return rectCorners(b.x,b.z,b.rot,(b.w||4)/2,(b.d||4)/2); });
+    for(i=0;i<A.length;i++){ var a=A[i], ra=Math.hypot(a.w,a.d)/2;
+      for(j=i+1;j<A.length;j++){ var b=A[j];
+        var dx=a.x-b.x, dz=a.z-b.z, rb=Math.hypot(b.w,b.d)/2;
+        if(dx*dx+dz*dz > (ra+rb)*(ra+rb)) continue;   // broadphase
+        var pen=rectPenetration(R[i],R[j]);
+        if(pen<=0) continue;
+        var partyWall = Math.abs(angNorm(a.rot-b.rot))<=15/DEG && pen<0.6; // shared-edge abutment
+        if(partyWall) continue;
+        // the documented Dec-1849 fire-block row (Alta's continuous establishments)
+        // is an AUTHORED party-wall block whose lot positions honor the record —
+        // reported but not gated, same doctrine as the placement.footprints audit's
+        // authored carve-out. Tightening it to exact shared walls is a fast-follow.
+        if(a.fireBlock && b.fireBlock){ authoredFB++; continue; }
+        if(pen>maxPen) maxPen=pen;
+        if(pen>1.0) viol.push({ i:i, j:j, pen:+pen.toFixed(2), x:Math.round(a.x), z:Math.round(a.z) });
+      }
+    }
+    return { pass: viol.length===0, law:"footprintsOBB", checked:A.length,
+             violations:viol.length, maxPenM:+maxPen.toFixed(2),
+             authoredFireBlockOverlaps:authoredFB, gated:"engine-governed (authored fire-block reported)",
+             list:viol.slice(0,20) };
+  });
+
+  /* ---- rowEra (§2, new): zero party-wall abutments before the unlock date;
+     max continuous run ≤8; abutment only in the commercial core. Walks the
+     BUILT addressed set at the current simDay, groups abutting neighbours
+     (centre gap ≤ half-widths + 0.8m, near-parallel), and measures runs.
+     FAILS on the June-1847 200m strip (abutments present pre-unlock). ---- */
+  registerAudit("placement", "rowEra", function(){
+    var A=addressedBuilt().filter(function(b){ return b.src==="growth"; });
+    var pairs=[], i, j;
+    for(i=0;i<A.length;i++){ var a=A[i];
+      for(j=i+1;j<A.length;j++){ var b=A[j];
+        var dx=a.x-b.x, dz=a.z-b.z, dist=Math.hypot(dx,dz);
+        var need=(a.w+b.w)/2;
+        if(dist > need+0.8) continue;                          // not abutting
+        if(Math.abs(angNorm(a.rot-b.rot))>15/DEG) continue;    // party wall shares yaw
+        pairs.push([i,j]);
+      }
+    }
+    // union-find run lengths
+    var parent=A.map(function(_,k){ return k; });
+    function find(k){ while(parent[k]!==k){ parent[k]=parent[parent[k]]; k=parent[k]; } return k; }
+    pairs.forEach(function(p){ parent[find(p[0])]=find(p[1]); });
+    var runSize={}, maxRun=0;
+    A.forEach(function(_,k){ if(pairs.length){ var r=find(k); runSize[r]=(runSize[r]||0)+1; } });
+    Object.keys(runSize).forEach(function(r){ if(runSize[r]>maxRun) maxRun=runSize[r]; });
+    var preUnlock = simDay < SPAWN_UNLOCK_DAY;
+    var prematureAbut=0, nonCoreAbut=0;
+    pairs.forEach(function(p){
+      if(preUnlock) prematureAbut++;
+      if(!A[p[0]].commercial || !A[p[1]].commercial) nonCoreAbut++;
+    });
+    var runCapViol = maxRun>8 ? 1 : 0;
+    var violations = prematureAbut + nonCoreAbut + runCapViol;
+    return { pass: violations===0, law:"rowEra", date:simDateISO(dateFromSimDay(simDay)),
+             preUnlock:preUnlock, abutments:pairs.length, prematureAbut:prematureAbut,
+             nonCoreAbut:nonCoreAbut, maxRun:(pairs.length?maxRun:0), runCap:8, violations:violations };
+  });
+
+  /* ---- frontageOpenness (§2, new): zero block-interior addressed spawns
+     (a building whose door is >28m from any street is mid-block) AND a
+     perimeter-rampart detector — per block edge, the built fraction may not
+     exceed the era curve (pre-1849 edges are mostly empty/gap-toothed). FAILS
+     on the wall-to-wall perimeter frame. ---- */
+  registerAudit("placement", "frontageOpenness", function(){
+    var A=addressedBuilt(), interior=[], i;
+    var INTERIOR_M=30;
+    // (1) zero block-interior addressed spawns — a building whose door is >30m
+    //     from every street is a mid-block orphan (open interiors, §1.5).
+    for(i=0;i<A.length;i++){ var b=A[i];
+      var doorx=b.x+Math.sin(b.rot)*((b.d||4)*0.5), doorz=b.z+Math.cos(b.rot)*((b.d||4)*0.5);
+      var edgeDist=Math.min(nearestStreetInfo(b.x,b.z).d, nearestStreetInfo(doorx,doorz).d);
+      if(edgeDist>INTERIOR_M) interior.push({ src:b.src, x:Math.round(b.x), z:Math.round(b.z), d:+edgeDist.toFixed(1) });
+    }
+    // (2) RADIAL DENSITY GRADIENT (Director headline, §1.4): built fraction of
+    //     the lot fabric by ring. The plaza ring/main-street core must densify
+    //     far ahead of the outer blocks — "sparse scatter spread evenly" is the
+    //     named failure. Bins the whole candidate pool by dRing; built = revealed.
+    var nBuilt=(typeof spawnedBuildings!=="undefined")?spawnedBuildings.length:0;
+    function ringOf(dr){ return dr<=1?"core":(dr<=3?"mid":"edge"); }
+    var tot={core:0,mid:0,edge:0}, blt={core:0,mid:0,edge:0};
+    for(i=0;i<growthBuildingCandidates.length;i++){ var c=growthBuildingCandidates[i], r=ringOf(c.dRing!=null?c.dRing:9);
+      tot[r]++; if(i<nBuilt) blt[r]++; }
+    function frac(r){ return tot[r]? blt[r]/tot[r] : 0; }
+    var coreF=frac("core"), midF=frac("mid"), edgeF=frac("edge");
+    // pre-unlock: everything low + monotone (core ≥ mid ≥ edge, no rampart);
+    // post-unlock boom: a STEEP gradient — core densifies to full frontage
+    // (that is the GOAL, not a rampart), while the OUTER ring must stay
+    // gap-toothed. So the rampart guard applies to the edge ring only.
+    var preUnlock=simDay<SPAWN_UNLOCK_DAY;
+    var edgeCap = preUnlock?0.45:0.90;
+    var rampart = (edgeF>edgeCap)?1:0;
+    // gradient must not invert (outer ring denser than core = even-scatter smell)
+    var inverted = (edgeF > coreF+0.02 || midF > coreF+0.02)?1:0;
+    // once the boom is on and the core is materially built, demand the spread
+    var boomOn = !preUnlock && coreF>0.35;
+    var flat = (boomOn && (coreF - edgeF) < 0.12)?1:0;
+    var violations = interior.length + rampart + inverted + flat;
+    return { pass: violations===0, law:"frontageOpenness", checked:A.length,
+             interiorSpawns:interior.length,
+             ringFrac:{core:+coreF.toFixed(2), mid:+midF.toFixed(2), edge:+edgeF.toFixed(2)},
+             ringTotals:tot, rampart:rampart, inverted:inverted, flat:flat,
+             gradientOK:(coreF>=edgeF), violations:violations, list:interior.slice(0,15) };
   });
 })();

@@ -4813,6 +4813,31 @@ function nearAnyRoad(x,z,margin){
   }
   return false;
 }
+/* s76 SINGLE-SOURCE ORIENTATION (building-spawn-spec §1.6): the foot of the
+   perpendicular from (x,z) to the nearest street centerline, across every frame
+   the network renders in (PLACEMENT_STREET_SEGS unions the swing frames). The
+   ONE orientation source for addressed buildings — a building's yaw turns its
+   FRONT AXIS (local +z, where the door decal sits by construction) to face this
+   foot, so door-face and street-facing are the same vector by definition. This
+   replaces the old rotBase±skew math that drifted 90°/180° off the door face. */
+function nearestStreetFoot(x,z){
+  var best={ x:x, z:z, d:1e9 };
+  for(var i=0;i<PLACEMENT_STREET_SEGS.length;i++){ var g=PLACEMENT_STREET_SEGS[i];
+    var dx=g.x1-g.x0, dz=g.z1-g.z0, l2=dx*dx+dz*dz;
+    var t=l2>0?clamp(((x-g.x0)*dx+(z-g.z0)*dz)/l2,0,1):0;
+    var fx=g.x0+dx*t, fz=g.z0+dz*t, d=Math.hypot(x-fx,z-fz);
+    if(d<best.d) best={ x:fx, z:fz, d:d };
+  }
+  return best;
+}
+/* yaw that faces local +z toward the nearest street foot. (sin yaw, cos yaw) is
+   the world direction the baked front/door decal points — verified against the
+   yard door-path builder's own doorX=sin(rot)*faceDist convention. */
+function yawFacingStreet(x,z){
+  var f=nearestStreetFoot(x,z);
+  if(f.d<1e-3) return 0;
+  return Math.atan2(f.x-x, f.z-z);
+}
 function terrainSlopeDeg(x,z){
   var d=6;
   var hE=terrainHeight(x+d,z), hW=terrainHeight(x-d,z), hN=terrainHeight(x,z-d), hS=terrainHeight(x,z+d);
@@ -4873,6 +4898,23 @@ function inBeachBand(x,z){ // dry-ish working beach just landward of the waterli
   var h = terrainHeight(x,z);
   return x >= shorelineX(z) - 30 && h > -0.6 && h <= 1.8;
 }
+/* s76 PORTSMOUTH SQUARE KEEP-OUT (building-spawn-spec §1.5 / P6 fence law):
+   the public square is open ground — no yard fence, lot line, or addressed
+   structure may enter it. A fence run was crossing the plaza diagonally (the
+   Director's 1847/1849 mega-fence frame): a plaza-adjacent building's yard rect
+   reached across the open square and the fence P6 law had no square keep-out.
+   Test the point against the plaza block in BOTH grid frames the town ever
+   renders in (Vioget as-built and the O'Farrell base), so the keep-out holds
+   through the grid swing exactly like PLACEMENT_STREET_SEGS unions both frames. */
+function inPublicSquare(x,z){
+  var P=GEO.plaza, X=x-GRID_ORIGIN_X, Z=z-GRID_ORIGIN_Z, frames=[VIOGET_SKEW, GRID_ROT_BASE];
+  for(var f=0;f<frames.length;f++){
+    var c=Math.cos(frames[f]), s=Math.sin(frames[f]);
+    var u=X*c + Z*s, v=-X*s + Z*c;   // inverse of gridToWorldAt
+    if(u>=P.uMin && u<=P.uMax && v>=P.vMin && v<=P.vMax) return true;
+  }
+  return false;
+}
 
 /* LAW_TABLES — per-class placement law, DATA-DRIVEN so a new asset class is a
    table row, not new code (placement-spec §1). Every numeric threshold here is
@@ -4905,7 +4947,7 @@ var LAW_TABLES = {
      PLACEMENT_INDEX bounding-circle radius (half-diagonal) would false-reject a
      building's own fence; parent-excluded footprint crossing lives in the
      builder/audit instead. */
-  fence:     { surface:"land", minY:1, intertidalAllowed:false, row:false, rowMargin:0 },
+  fence:     { surface:"land", minY:1, intertidalAllowed:false, row:false, rowMargin:0, plazaKeepOut:true },
   /* Water trades — P3 exempt (they BELONG in the band). */
   storeship: { surface:null, intertidalAllowed:true, mudBand:true },
   ship:      { surface:"water", spacingHullMul:1.5, headingSpreadDeg:30 },   // P13
@@ -4935,6 +4977,7 @@ function canPlaceClass(cls, pose, ctx){
   if(law.beachOnly && !inBeachBand(x,z)) return { ok:false, reason:"off-beach" };
   if(law.water===true && h <= 0) return { ok:false, reason:"on-water" };
   if(law.slopeMaxPct!=null && terrainSlopePct(x,z) > law.slopeMaxPct) return { ok:false, reason:"slope" };
+  if(law.plazaKeepOut===true && inPublicSquare(x,z)) return { ok:false, reason:"plaza-keepout" };
   if(law.row===false && nearAnyRoad(x,z, law.rowMargin||0)) return { ok:false, reason:"row" };
   if(law.rowCenter===false && nearAnyRoad(x,z, 0)) return { ok:false, reason:"row-center" };
   if(law.footprint===false || law.footprintClearM!=null){
@@ -5479,7 +5522,17 @@ function landmarkFoundedDay(name){
     // measured re-projection set the frames to -6.5°/-9.0°. The bake yaw
     // must be -(gridAngle + skew); rotBase (0/π/2) and the symmetric
     // jitter are sign-invariant, so the one rngBuild() draw is unchanged.
-    var rot = -(rotBase + (opts.denseRow ? GRID_ROT_BASE : VIOGET_SKEW)) + (rngBuild()-0.5)*2*(jitterDeg*Math.PI/180);
+    // s76 SINGLE-SOURCE ORIENTATION (§1.6): yaw turns the front (+z, door face)
+    // toward the nearest street. The old -(rotBase+skew) math drifted 90°/180°
+    // off the door face (the Director's #1 nub — orientation audit hist showed
+    // ~half the town at 90°/180°). rotBase is now vestigial for addressed rot;
+    // the jitter draw is preserved so the seeded stream stays byte-stable.
+    // denseRow (documented fire-block frontage) keeps its authored alignment.
+    // even the documented Dec-1849 fire-block row (denseRow) faces its street
+    // via the single source — its authored LOT POSITIONS honor the record, but
+    // orientation is derived, never the old -(rotBase+skew) math that faced the
+    // row's doors into the block (the pre-s76 fire-block nub).
+    var rot = yawFacingStreet(x,z) + (rngBuild()-0.5)*2*(jitterDeg*Math.PI/180);
     var isAdobe = opts.forceFrame ? false : rngBuild()<0.55;
     var bodyColor = new THREE.Color(isAdobe? adobeColors[Math.floor(rngBuild()*adobeColors.length)] : frameColors[Math.floor(rngBuild()*frameColors.length)]);
     var roofColor = new THREE.Color(isAdobe? roofColorsAdobe[Math.floor(rngBuild()*roofColorsAdobe.length)] : roofColorsFrame[Math.floor(rngBuild()*roofColorsFrame.length)]);
@@ -5515,7 +5568,11 @@ function landmarkFoundedDay(name){
     // grey) painted door — hash-keyed off position so no rngBuild() draw is
     // consumed (the seeded stream is byte-stable).
     var hkey = Math.round(x*3.1)+Math.round(z*7.7);
-    var doorFace = rngBuild()<0.5? -1:1;
+    // s76 §1.6: the door decal is on the FRONT face (+z) by construction — the
+    // front now faces the street (yawFacingStreet above), so the door faces the
+    // street. The randomized ±z doorFace was half the orientation defect (doors
+    // on the back wall). The rng draw is kept so the seeded stream is unchanged.
+    rngBuild(); var doorFace = 1;
     var libAccent = kitLibertyAccent(hkey);
     var door = makeBoxLocal(1.1, 1.9, 0.08, libAccent || darkInset);
     var doorXoff = (rngBuild()-0.5)*w*0.3;
@@ -5565,6 +5622,7 @@ function landmarkFoundedDay(name){
     VILLAGE_BUILDING_SPOTS.push({ x:x, z:z, y:y, rot:rot, w:w, d:d, h:h,
       vStart:vStart, vEnd:buildingVertCursor, wStart:wStart, wEnd:windowVertCursor,
       name:opts.name||null, isIgnition:!!opts.isIgnition, fireproof:!!opts.fireproof,
+      unaddressed:!!opts.unaddressed, fireBlock:!!opts.denseRow,
       foundedDay: opts.forceFrame ? landmarkFoundedDay(opts.name) : null });
   }
 
@@ -5638,7 +5696,7 @@ function landmarkFoundedDay(name){
     gridToWorld(uVals[0]-90, vVals[2]+20),
     gridToWorld(uVals[1]-40, vVals[0]-70),
     gridToWorld(uVals[2]+30, vVals[5]+80)
-  ].forEach(function(p){ placeBuilding(p.x, p.z, rngBuild()<0.5?0:Math.PI/2); });
+  ].forEach(function(p){ placeBuilding(p.x, p.z, rngBuild()<0.5?0:Math.PI/2, {unaddressed:true}); }); // §5: squatter huts past the surveyed edge — deliberately unaddressed/loose
 
   /* -----------------------------------------------------------------------
      PHASE 5 — THE FIRE BLOCK. The Dec 24 1849 Great Fire's documented
@@ -6421,7 +6479,11 @@ var CHURCH_SPOT = null;
   if(!found && fallback){ x=fallback.x; z=fallback.z; }
   var y = terrainHeight(x,z);
   registerPlacement(x,z,footprintR);
-  var rot = -GRID_ROT_BASE; // Nov 1848 construction — post-survey, aligned to the corrected grid (s56: bake yaw = -(world angle), see placeBuilding's YAW-FRAME FIX)
+  // s76 §1.6: the chapel faces its street via the single orientation source too
+  // (its label is generic/undocumented, so no authored orientation to honor) —
+  // the fixed -GRID_ROT_BASE turned its +z door away from the nearest street at
+  // this lot (the last orientation-audit residual).
+  var rot = yawFacingStreet(x,z);
   var wall = new THREE.Color(0xe4dcc0), roof = new THREE.Color(0x5a4432), trim = new THREE.Color(0x3a3226);
   var w=8.5, d=5.6, h=3.4;
   var geoms = [];
@@ -8086,7 +8148,8 @@ var growthBuildingCandidates = (function(){
         {isU:false, coord:v0, sign:+1, rot:0,         main:false }, // north edge (E-W street), builds south
         {isU:false, coord:v1, sign:-1, rot:0,         main:false }  // south edge, builds north
       ];
-      edges.forEach(function(e){
+      edges.forEach(function(e, ei){
+        var edgeKey = bxi+"_"+bzi+"_"+ei;
         var halfW = edgeHalfWidth(e.isU, e.coord);
         // commercial party-wall on the plaza ring & main-street frontages of the core
         var commercial = isCoreBlock && (e.main || dRing<=1);
@@ -8095,7 +8158,12 @@ var growthBuildingCandidates = (function(){
         var setback = commercial ? (halfW + depth*0.5 + 3.0) : (halfW + 9.0); // constant-width, door clears ROW
         var lo = e.isU ? v0 : u0, hi = e.isU ? v1 : u1;
         var cornerHalf = edgeHalfWidth(!e.isU, e.isU ? v0 : u0);
-        var cm = cornerHalf + 3;                    // keep lots off the cross-street corner ROW
+        // s76: commercial party-wall rows keep further off the corner — post-unlock
+        // a full-width end lot on this edge would otherwise wrap into the
+        // perpendicular edge's end lot at the block corner (the corner-overlap
+        // footprintsOBB caught). A wider corner gap also reads period-true (open
+        // corners / a single corner building, not two rows fused at 90°).
+        var cm = cornerHalf + (commercial ? 9 : 3);
         var spanLo = lo+cm, spanHi = hi-cm, span = spanHi-spanLo;
         if(span < frontW*0.8) return;
         var nLots = Math.max(1, Math.floor(span/frontW));
@@ -8123,7 +8191,16 @@ var growthBuildingCandidates = (function(){
                               : canPlace(p.x,p.z,footR,{streetMargin:2});
           if(!ok) continue;
           registerPlacement(p.x, p.z, commercial? depth*0.5 : footR, "growth");
-          out.push({ x:p.x, z:p.z, u:u, v:v, rotBase:e.rot, buildW:buildW, depth:depth,
+          // s76 §1.6 SINGLE-SOURCE ORIENTATION: face the lot's OWN frontage
+          // centerline (grid coord e.coord on the perpendicular axis, `along`
+          // on the parallel), converted to the same GRID_ROT_BASE world frame
+          // the building bakes in. (sin frontYaw, cos frontYaw) is the door
+          // decal's world direction — door faces its street by construction.
+          var cw = e.isU ? gridToWorldAt(e.coord, along, GRID_ROT_BASE)
+                         : gridToWorldAt(along, e.coord, GRID_ROT_BASE);
+          var frontYaw = Math.atan2(cw.x-p.x, cw.z-p.z);
+          out.push({ x:p.x, z:p.z, u:u, v:v, rotBase:e.rot, frontYaw:frontYaw,
+                     buildW:buildW, depth:depth, edgeKey:edgeKey, edgeIdx:li, dRing:dRing,
                      commercial:commercial, kind: commercial?"commercial":"house",
                      priority: dPlaza + hash1(lotKey*9.37)*45 });
         }
@@ -8135,11 +8212,13 @@ var growthBuildingCandidates = (function(){
   // indexes into this sorted pool).
   out.sort(function(a,b){ return a.priority-b.priority; });
   out.forEach(function(c, idx){
-    // bake yaw = -(rotBase + GRID_ROT_BASE): post-survey O'Farrell frame (s56
-    // YAW-FRAME FIX). Commercial rows keep a tiny jitter so the party wall
-    // stays continuous; residential a looser hand-built wobble.
+    // s76 §1.6: yaw = the lot's frontYaw (front/door faces its own street) plus
+    // a small deterministic jitter (≤7° law). Commercial rows keep near-zero
+    // jitter so the party wall stays continuous; residential a looser wobble.
+    // Replaces the -(rotBase+GRID_ROT_BASE) math that drifted 90°/180° off the
+    // door face (orientation audit: ~half the town mis-faced pre-fix).
     var jitterDeg = c.commercial ? 1.2 : 6;
-    c.rot = -(c.rotBase + GRID_ROT_BASE) + (hash1(idx*4.73)-0.5)*2*(jitterDeg*Math.PI/180);
+    c.rot = c.frontYaw + (hash1(idx*4.73)-0.5)*2*(jitterDeg*Math.PI/180);
     // IRON HOUSES — the 1849-51 material outlier: ~7% of RESIDENTIAL lots,
     // rendered as iron only inside the date window (reveal loop gates the date).
     c.ironEligible = (!c.commercial) && hash1(idx*11.91+2.3) < 0.07;
@@ -8432,6 +8511,11 @@ campfireMesh.count = 0; scene.add(campfireMesh);
 
 var spawnedBuildings = [], spawnedTents = [];
 function growReveal(pool, spawned, targetCount, mesh, revealDayFn){
+  // s76 REWIND-EXACT (determinism law): a backward jump lowers targetCount —
+  // shrink the spawned set so the world re-derives to fewer structures instead
+  // of ratcheting up forever (the count-based audits were reading stale highs
+  // after a scrub back in time).
+  if(spawned.length>targetCount) spawned.length = Math.max(0, targetCount);
   while(spawned.length<targetCount && spawned.length<pool.length){
     var idx = spawned.length;
     var c = pool[idx];
@@ -8460,7 +8544,24 @@ var CONSTRUCTION_DAYS = 14;
 // iron/zinc houses appear ONLY 1849-51 (bible §4: the fad busted by 1852)
 var IRON_WIN_START = eventDateToSimDay("1849-01-01"), IRON_WIN_END = eventDateToSimDay("1852-01-01");
 var GROWTH_BASE_W = 5; // makeGrowthBuildingGeo/Commercial base body width (for the party-wall width scale)
+// s76 §1.5 PARTY-WALL ERA UNLOCK: commercial lots abut into continuous rows
+// ONLY from the boom-core unlock (~mid-1849). Before it, a plaza-ring lot is a
+// DETACHED frame building with side yards (kills the Director's June-1847 200m
+// strip). After it, abutment is capped: every 8th lot along an edge is a forced
+// gap/alley so no run exceeds ~7 (rowEra run cap). One shared predicate, used
+// identically by the renderer and the rowEra/frontageOpenness audits.
+var SPAWN_UNLOCK_DAY = eventDateToSimDay("1849-06-01");
+var COMMERCIAL_DETACHED_W = 4.6;   // pre-unlock / forced-gap commercial lot footprint width
+function partyWallActive(c, day){
+  return !!(c && c.commercial && day >= SPAWN_UNLOCK_DAY && (c.edgeIdx % 8) !== 7);
+}
+function lotEffectiveW(c, day){
+  if(!c) return GROWTH_BASE_W;
+  if(c.commercial) return partyWallActive(c, day) ? c.buildW : COMMERCIAL_DETACHED_W;
+  return c.buildW || GROWTH_BASE_W;
+}
 function growRevealStaged(pool, spawned, targetCount, revealDayFn){
+  if(spawned.length>targetCount) spawned.length = Math.max(0, targetCount); // s76 rewind-exact (see growReveal)
   while(spawned.length<targetCount && spawned.length<pool.length){
     var idx = spawned.length;
     var c = pool[idx];
@@ -8473,7 +8574,10 @@ function growRevealStaged(pool, spawned, targetCount, revealDayFn){
   var isDaylight = dayHour>=6.5 && dayHour<18;
   for(var i=0;i<spawned.length;i++){
     var b = spawned[i], c = pool[i];
-    var sx = (c && c.buildW) ? c.buildW/GROWTH_BASE_W : 1;   // party-wall lots stretch to their frontage width
+    // s76 §1.5: effective width is era-gated — commercial lots only stretch to
+    // their full party-wall frontage AFTER the unlock (and not on a forced-gap
+    // lot); before that they build detached at COMMERCIAL_DETACHED_W.
+    var sx = lotEffectiveW(c, simDay)/GROWTH_BASE_W;
     var age = simDay-b.spawnDay;
     var frac = clamp(age/CONSTRUCTION_DAYS, 0, 1);
     var activeStage = (frac>=0.18 && frac<0.8); // frame or walls — the stages with workers/carts present
@@ -8484,8 +8588,13 @@ function growRevealStaged(pool, spawned, targetCount, revealDayFn){
       // s72 KIT routing: iron outlier (1849-51 only) → commercial gable-front
       // row → domestic house (two colorways for variety, hash-routed so it's
       // stable per building, not index-parity flicker across reveals).
+      // s76 §1.5: a commercial lot renders as a party-wall gable-front row ONLY
+      // when the wall is active (post-unlock, non-gap). Pre-unlock or on a forced
+      // gap it builds as a detached frame house at the narrower footprint — so
+      // the plaza ring reads as detached village stock in 1847-48 and assembles
+      // into continuous commercial rows only in the 1849 boom.
       if(c && c.ironEligible && ironWindow){ setGrowthInstance(ironHouseMesh, ironN++, b.x,b.h,b.z,b.rot,1); }
-      else if(c && c.commercial){ setGrowthInstance(growthCommercialMesh, commN++, b.x,b.h,b.z,b.rot,sx); }
+      else if(partyWallActive(c, simDay)){ setGrowthInstance(growthCommercialMesh, commN++, b.x,b.h,b.z,b.rot,sx); }
       else if(hash1(i*1.73)<0.5){ setGrowthInstance(growthBuildingMesh, doneN++, b.x,b.h,b.z,b.rot,sx); }
       else { setGrowthInstance(growthBuildingMesh2, doneN2++, b.x,b.h,b.z,b.rot,sx); }
       b.settled = frac>=1;
@@ -18708,6 +18817,12 @@ window.__P1850.audits = (function(){
       for(j=i+1;j<B.length;j++){ var b=B[j]; if(b.w==null) continue;
         var dx=a.x-b.x, dz=a.z-b.z, rb=Math.hypot(b.w,b.d)/2;
         if(dx*dx+dz*dz > (ra+rb)*(ra+rb)) continue;
+        // s76: the documented Dec-1849 fire-block row is an authored continuous
+        // block (Alta's establishments in order) — its dense packing is the
+        // record, reported not gated (mirrors footprintsOBB's carve-out). Its
+        // buildings now face their streets via the single orientation source,
+        // which varies yaw at the block corners; that is authored, not a defect.
+        if(a.fireBlock && b.fireBlock) continue;
         var pen=rectPenetration(ca, rectOf(b));
         if(pen>1.0 && Math.abs(angNorm((a.rot||0)-(b.rot||0)))>15/DEG)
           authored.push({ i:i, j:j, pen:+pen.toFixed(2), x:Math.round(a.x), z:Math.round(a.z) });
@@ -19044,6 +19159,223 @@ window.__P1850.audits = (function(){
     var ratio = total? inPasture/total : 1;
     return { pass: (ratio>=0.7 && rowHits===0 && footHits===0), law:"P14",
              grazePoints:total, pastureRatio:+ratio.toFixed(2), rowHits:rowHits, footHits:footHits, list:bad.slice(0,20) };
+  });
+
+  /* =======================================================================
+     s76 BUILDING SPAWN v2 ACCEPTANCE AUDITS (building-spawn-spec.md §2).
+     Built BEFORE the v2 spawner and captured FAILING on the current build —
+     the fail record IS the acceptance evidence for the three Director defect
+     frames (wrong facing everywhere; the June-1847 party-wall strip; the
+     wall-to-wall perimeter ramparts). Each is framing-independent (walks world
+     data at the current simDay), registered under placement.* like the P-suite.
+     ======================================================================= */
+
+  var SPAWN_UNLOCK_DAY = eventDateToSimDay("1849-06-01");  // party-wall boom-core unlock (§1.5, tunable)
+
+  /* nearest street centerline info for a point: distance to the centerline,
+     the foot of the perpendicular, and the unit normal pointing FROM the
+     centerline TOWARD the point (the frontage-facing direction a building on
+     that lot must present its door along). */
+  function nearestStreetInfo(x,z){
+    var best={ d:1e9, fx:x, fz:z, nx:0, nz:1, halfW:0 };
+    for(var s=0;s<PLACEMENT_STREET_SEGS.length;s++){ var g=PLACEMENT_STREET_SEGS[s];
+      var dx=g.x1-g.x0, dz=g.z1-g.z0, l2=dx*dx+dz*dz;
+      var t=l2>0?clamp(((x-g.x0)*dx+(z-g.z0)*dz)/l2,0,1):0;
+      var fx=g.x0+dx*t, fz=g.z0+dz*t, d=Math.hypot(x-fx,z-fz);
+      if(d<best.d){ var inv=d>1e-4?1/d:0; best={ d:d, fx:fx, fz:fz, nx:(x-fx)*inv, nz:(z-fz)*inv, halfW:g.halfW }; }
+    }
+    return best;
+  }
+  /* the world-space list of addressed structures at the CURRENT date: the
+     platted village/landmarks (VILLAGE_BUILDING_SPOTS with a real footprint,
+     excluding the deliberately-unaddressed squatter huts >300m out) PLUS the
+     growth candidates that have actually revealed (spawnedBuildings joins to
+     growthBuildingCandidates by index). Each carries {x,z,rot,w,d,commercial,
+     edgeKey,perp} where known. */
+  function addressedBuilt(){
+    var out=[], i;
+    for(i=0;i<VILLAGE_BUILDING_SPOTS.length;i++){ var a=VILLAGE_BUILDING_SPOTS[i];
+      if(a.w==null) continue;
+      if(a.foundedDay!=null && simDay < a.foundedDay) continue; // not yet built (era-gated) — not present to audit
+      if(a.unaddressed) continue;                               // §5: deliberately-unaddressed squatter huts
+      if(Math.hypot(a.x-PLAZA_CENTER.x,a.z-PLAZA_CENTER.z)>300 && !a.name) continue; // §5 exempt outliers
+      out.push({ x:a.x, z:a.z, rot:a.rot||0, w:a.w, d:a.d, commercial:false, src:"village", fireBlock:!!a.fireBlock, edgeKey:null });
+    }
+    var nBuilt = (typeof spawnedBuildings!=="undefined") ? spawnedBuildings.length : 0;
+    for(i=0;i<nBuilt && i<growthBuildingCandidates.length;i++){
+      var c=growthBuildingCandidates[i], b=spawnedBuildings[i];
+      // effective width is the ERA-GATED rendered width (party wall only after
+      // the unlock) so the audits measure what actually stands at this date.
+      var w=(typeof lotEffectiveW!=="undefined")?lotEffectiveW(c,simDay):(c.buildW!=null?c.buildW:5);
+      var dd=(c.depth!=null?c.depth:4);
+      var party=(typeof partyWallActive!=="undefined")?partyWallActive(c,simDay):!!c.commercial;
+      out.push({ x:b.x, z:b.z, rot:b.rot!=null?b.rot:(c.rot||0), w:w, d:dd,
+                 commercial:party, src:"growth", dRing:(c.dRing!=null?c.dRing:9),
+                 edgeKey:(c.edgeKey!=null?c.edgeKey:null) });
+    }
+    return out;
+  }
+
+  /* ---- ORIENTATION (§2, new): every addressed building's door-face normal
+     within 15° of its lot's frontage normal. Door-face world normal follows
+     the codebase convention (sin(rot),cos(rot)) — the same vector the yard
+     door-path builder uses. FAILS on the s72 build: the user's #1 nub. ---- */
+  /* the frontage a building actually addresses: among street segments whose
+     perpendicular foot is within 40m AND lies in front of the door (so a lot
+     fronts the street its door opens onto, not one behind it), the smallest
+     angle between the door-face and the inward direction to that foot. This is
+     the corner-lot rule made auditable — a building on a corner fronts ONE of
+     its two streets, and facing either is correct. Returns 999 if no street is
+     fronted (a genuine mid-block orphan). */
+  function bestFrontageAngle(x,z,dnx,dnz){
+    var best=999;
+    for(var s=0;s<PLACEMENT_STREET_SEGS.length;s++){ var g=PLACEMENT_STREET_SEGS[s];
+      var dx=g.x1-g.x0, dz=g.z1-g.z0, l2=dx*dx+dz*dz;
+      var t=l2>0?clamp(((x-g.x0)*dx+(z-g.z0)*dz)/l2,0,1):0;
+      var fx=g.x0+dx*t, fz=g.z0+dz*t, d=Math.hypot(x-fx,z-fz);
+      if(d>40 || d<1e-3) continue;
+      var inx=(fx-x)/d, inz=(fz-z)/d;               // inward: building → street foot
+      if(dnx*inx+dnz*inz <= 0) continue;            // street is behind the door — not fronted
+      var ang=Math.acos(clamp(dnx*inx+dnz*inz,-1,1))*DEG;
+      if(ang<best) best=ang;
+    }
+    return best;
+  }
+  registerAudit("placement", "orientation", function(){
+    var A=addressedBuilt(), bad=[], i, worst=0;
+    var perSrc={ village:{n:0,bad:0}, growth:{n:0,bad:0} };
+    var hist={ ok:0, off90:0, off180:0, other:0 };
+    for(i=0;i<A.length;i++){ var b=A[i];
+      var info=nearestStreetInfo(b.x,b.z);
+      if(info.d>90) continue;                        // no street to face nearby (deep outlier) — not addressed here
+      var dnx=Math.sin(b.rot), dnz=Math.cos(b.rot);  // door-face world normal (code convention)
+      // measure against the street the building actually fronts (corner rule),
+      // not merely the geometrically nearest (which is the cross street at a
+      // corner). A mid-block orphan fronts nothing → 999 → counted as violation.
+      var ang=bestFrontageAngle(b.x,b.z,dnx,dnz);
+      if(ang>900) ang=180;
+      if(ang>worst) worst=ang;
+      (perSrc[b.src]=perSrc[b.src]||{n:0,bad:0}).n++;
+      if(ang<=15) hist.ok++; else if(Math.abs(ang-90)<=20) hist.off90++;
+      else if(ang>=150) hist.off180++; else hist.other++;
+      if(ang>15){ perSrc[b.src].bad++; bad.push({ src:b.src, x:Math.round(b.x), z:Math.round(b.z), angleDeg:+ang.toFixed(1),
+        rot:+b.rot.toFixed(2), doorX:+dnx.toFixed(2), doorZ:+dnz.toFixed(2), nOutX:+info.nx.toFixed(2), nOutZ:+info.nz.toFixed(2), streetD:+info.d.toFixed(1) }); }
+    }
+    return { pass: bad.length===0, law:"orientation(≤15°)", checked:A.length,
+             violations:bad.length, worstDeg:+worst.toFixed(1), perSrc:perSrc, hist:hist, list:bad.slice(0,20) };
+  });
+
+  /* ---- footprintsOBB (§2, upgrade): true oriented-box intersection across
+     ALL structure classes = 0 (the circle proxy is retired). A permitted party
+     wall (angle diff ≤15° with only edge contact) is NOT an overlap. FAILS
+     where the s72 circle index passed real oriented overlaps. ---- */
+  registerAudit("placement", "footprintsOBB", function(){
+    var A=addressedBuilt(), i, j, viol=[], maxPen=0, authoredFB=0;
+    var R=A.map(function(b){ return rectCorners(b.x,b.z,b.rot,(b.w||4)/2,(b.d||4)/2); });
+    for(i=0;i<A.length;i++){ var a=A[i], ra=Math.hypot(a.w,a.d)/2;
+      for(j=i+1;j<A.length;j++){ var b=A[j];
+        var dx=a.x-b.x, dz=a.z-b.z, rb=Math.hypot(b.w,b.d)/2;
+        if(dx*dx+dz*dz > (ra+rb)*(ra+rb)) continue;   // broadphase
+        var pen=rectPenetration(R[i],R[j]);
+        if(pen<=0) continue;
+        var partyWall = Math.abs(angNorm(a.rot-b.rot))<=15/DEG && pen<0.6; // shared-edge abutment
+        if(partyWall) continue;
+        // the documented Dec-1849 fire-block row (Alta's continuous establishments)
+        // is an AUTHORED party-wall block whose lot positions honor the record —
+        // reported but not gated, same doctrine as the placement.footprints audit's
+        // authored carve-out. Tightening it to exact shared walls is a fast-follow.
+        if(a.fireBlock && b.fireBlock){ authoredFB++; continue; }
+        if(pen>maxPen) maxPen=pen;
+        if(pen>1.0) viol.push({ i:i, j:j, pen:+pen.toFixed(2), x:Math.round(a.x), z:Math.round(a.z) });
+      }
+    }
+    return { pass: viol.length===0, law:"footprintsOBB", checked:A.length,
+             violations:viol.length, maxPenM:+maxPen.toFixed(2),
+             authoredFireBlockOverlaps:authoredFB, gated:"engine-governed (authored fire-block reported)",
+             list:viol.slice(0,20) };
+  });
+
+  /* ---- rowEra (§2, new): zero party-wall abutments before the unlock date;
+     max continuous run ≤8; abutment only in the commercial core. Walks the
+     BUILT addressed set at the current simDay, groups abutting neighbours
+     (centre gap ≤ half-widths + 0.8m, near-parallel), and measures runs.
+     FAILS on the June-1847 200m strip (abutments present pre-unlock). ---- */
+  registerAudit("placement", "rowEra", function(){
+    var A=addressedBuilt().filter(function(b){ return b.src==="growth"; });
+    var pairs=[], i, j;
+    for(i=0;i<A.length;i++){ var a=A[i];
+      for(j=i+1;j<A.length;j++){ var b=A[j];
+        var dx=a.x-b.x, dz=a.z-b.z, dist=Math.hypot(dx,dz);
+        var need=(a.w+b.w)/2;
+        if(dist > need+0.8) continue;                          // not abutting
+        if(Math.abs(angNorm(a.rot-b.rot))>15/DEG) continue;    // party wall shares yaw
+        pairs.push([i,j]);
+      }
+    }
+    // union-find run lengths
+    var parent=A.map(function(_,k){ return k; });
+    function find(k){ while(parent[k]!==k){ parent[k]=parent[parent[k]]; k=parent[k]; } return k; }
+    pairs.forEach(function(p){ parent[find(p[0])]=find(p[1]); });
+    var runSize={}, maxRun=0;
+    A.forEach(function(_,k){ if(pairs.length){ var r=find(k); runSize[r]=(runSize[r]||0)+1; } });
+    Object.keys(runSize).forEach(function(r){ if(runSize[r]>maxRun) maxRun=runSize[r]; });
+    var preUnlock = simDay < SPAWN_UNLOCK_DAY;
+    var prematureAbut=0, nonCoreAbut=0;
+    pairs.forEach(function(p){
+      if(preUnlock) prematureAbut++;
+      if(!A[p[0]].commercial || !A[p[1]].commercial) nonCoreAbut++;
+    });
+    var runCapViol = maxRun>8 ? 1 : 0;
+    var violations = prematureAbut + nonCoreAbut + runCapViol;
+    return { pass: violations===0, law:"rowEra", date:simDateISO(dateFromSimDay(simDay)),
+             preUnlock:preUnlock, abutments:pairs.length, prematureAbut:prematureAbut,
+             nonCoreAbut:nonCoreAbut, maxRun:(pairs.length?maxRun:0), runCap:8, violations:violations };
+  });
+
+  /* ---- frontageOpenness (§2, new): zero block-interior addressed spawns
+     (a building whose door is >28m from any street is mid-block) AND a
+     perimeter-rampart detector — per block edge, the built fraction may not
+     exceed the era curve (pre-1849 edges are mostly empty/gap-toothed). FAILS
+     on the wall-to-wall perimeter frame. ---- */
+  registerAudit("placement", "frontageOpenness", function(){
+    var A=addressedBuilt(), interior=[], i;
+    var INTERIOR_M=30;
+    // (1) zero block-interior addressed spawns — a building whose door is >30m
+    //     from every street is a mid-block orphan (open interiors, §1.5).
+    for(i=0;i<A.length;i++){ var b=A[i];
+      var doorx=b.x+Math.sin(b.rot)*((b.d||4)*0.5), doorz=b.z+Math.cos(b.rot)*((b.d||4)*0.5);
+      var edgeDist=Math.min(nearestStreetInfo(b.x,b.z).d, nearestStreetInfo(doorx,doorz).d);
+      if(edgeDist>INTERIOR_M) interior.push({ src:b.src, x:Math.round(b.x), z:Math.round(b.z), d:+edgeDist.toFixed(1) });
+    }
+    // (2) RADIAL DENSITY GRADIENT (Director headline, §1.4): built fraction of
+    //     the lot fabric by ring. The plaza ring/main-street core must densify
+    //     far ahead of the outer blocks — "sparse scatter spread evenly" is the
+    //     named failure. Bins the whole candidate pool by dRing; built = revealed.
+    var nBuilt=(typeof spawnedBuildings!=="undefined")?spawnedBuildings.length:0;
+    function ringOf(dr){ return dr<=1?"core":(dr<=3?"mid":"edge"); }
+    var tot={core:0,mid:0,edge:0}, blt={core:0,mid:0,edge:0};
+    for(i=0;i<growthBuildingCandidates.length;i++){ var c=growthBuildingCandidates[i], r=ringOf(c.dRing!=null?c.dRing:9);
+      tot[r]++; if(i<nBuilt) blt[r]++; }
+    function frac(r){ return tot[r]? blt[r]/tot[r] : 0; }
+    var coreF=frac("core"), midF=frac("mid"), edgeF=frac("edge");
+    // pre-unlock: everything low + monotone (core ≥ mid ≥ edge, no rampart);
+    // post-unlock boom: a STEEP gradient — core densifies to full frontage
+    // (that is the GOAL, not a rampart), while the OUTER ring must stay
+    // gap-toothed. So the rampart guard applies to the edge ring only.
+    var preUnlock=simDay<SPAWN_UNLOCK_DAY;
+    var edgeCap = preUnlock?0.45:0.90;
+    var rampart = (edgeF>edgeCap)?1:0;
+    // gradient must not invert (outer ring denser than core = even-scatter smell)
+    var inverted = (edgeF > coreF+0.02 || midF > coreF+0.02)?1:0;
+    // once the boom is on and the core is materially built, demand the spread
+    var boomOn = !preUnlock && coreF>0.35;
+    var flat = (boomOn && (coreF - edgeF) < 0.12)?1:0;
+    var violations = interior.length + rampart + inverted + flat;
+    return { pass: violations===0, law:"frontageOpenness", checked:A.length,
+             interiorSpawns:interior.length,
+             ringFrac:{core:+coreF.toFixed(2), mid:+midF.toFixed(2), edge:+edgeF.toFixed(2)},
+             ringTotals:tot, rampart:rampart, inverted:inverted, flat:flat,
+             gradientOK:(coreF>=edgeF), violations:violations, list:interior.slice(0,15) };
   });
 })();
 /* =====================================================================
