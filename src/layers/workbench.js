@@ -80,7 +80,7 @@
     muted: {},            // layerName -> true when hidden
     solo: null,           // layerName | null
     probe: false,
-    overlays: { spine:false, row:false, lots:false, parcels:false, keepout:false, zones:false, audits:false },
+    overlays: { spine:false, row:false, lots:false, parcels:false, framecmp:false, keepout:false, zones:false, audits:false },
     knobs: { sunMul:1, hemiMul:1, ambientMul:1, nightLift:0, detailAmp:null, doodadMul:1, streetAlphaMul:1 }
   };
   var WB_ORDER = ["terrain","ground-paint","zones-tint","buildings","doodads","people","ships","fauna","effects","labels"];
@@ -122,7 +122,7 @@
     // day). Row is static (both frames baked) so it is excluded.
     if(Math.floor(simDay)!==_overlayDay){
       _overlayDay = Math.floor(simDay);
-      ["spine","lots","parcels","keepout"].forEach(function(key){
+      ["spine","row","lots","parcels","keepout"].forEach(function(key){
         if(!WB.overlays[key]) return;
         if(overlayObjs[key]){ scene.remove(overlayObjs[key]); }
         overlayObjs[key] = buildOverlay(key);
@@ -240,7 +240,7 @@
      (walk keep-out · ecology zones · audit failures). Copy is Director-authored
      verbatim; each row is a name + a small legend line. ---- */
   el("div","wb-sec","RULE OVERLAYS");
-  var overlayObjs = { spine:null, row:null, lots:null, parcels:null, keepout:null, zones:null, audits:null };
+  var overlayObjs = { spine:null, row:null, lots:null, parcels:null, framecmp:null, keepout:null, zones:null, audits:null };
   var auditStatusEl = null, keepoutStatusEl = null;
 
   /* one toggle path: every overlay rebuilds fresh on enable (all are cheap
@@ -322,6 +322,8 @@
     r.cb.addEventListener("change", function(){ setOverlay(key, r.cb.checked); });
     return r;
   }
+  makeFlat("framecmp", "FRAME COMPARISON",
+    "Renders both survey frames for divergence inspection. Reference only — the ROW overlay above shows each street's single ACTIVE frame; this shows the full swing sweep the placement law reserves. cyan = base −9.0° · magenta = Vioget 1839.");
   var keepoutRow = makeFlat("keepout", "WALK KEEP-OUT",
     "Where walking is forbidden at the current date (red). Sources: water, placed footprints, registered keep-outs. Status line shows the live blocked-cell count — expect near-empty until blocking layers are admitted.");
   keepoutStatusEl = el("div","wb-ov-status","(toggle to sample the walk mask at this date)",flatWrap);
@@ -333,6 +335,7 @@
   function buildOverlay(key){
     if(key==="spine") return buildSpineOverlay();
     if(key==="row") return buildRowOverlay();
+    if(key==="framecmp") return buildFrameCompareOverlay();
     if(key==="keepout") return buildKeepoutOverlay();
     if(key==="zones") return buildZonesOverlay();
     if(key==="audits") return buildAuditOverlay();
@@ -351,14 +354,13 @@
          SUBDIVIDED plane whose every vertex is displaced to terrainHeight
          (was: one flat quad floating at y=60 — the source of the shear the
          user saw, where the cove tint appeared to slide over the plaza).
-     wbCurrentSkew() reproduces core's grid-swing frame (VIOGET −6.5° → base
-     −9.0°, eased across Feb–Aug 1847) with NO side effects, so the plat/spine
-     overlays sit in the SAME frame the streets paint in at every date. ---- */
+     FRAME LAW (s81 Director ruling): the workbench does ZERO frame math of
+     its own — lot world geometry comes from the cadastre's lotWorldQuad(lot,
+     day) (the swing is materialized inside core/08-cadastre), and street-
+     frame overlays read core's own CURRENT_STREET_SKEW after
+     updateGridSwing(). No local skew derivation exists in this file. ---- */
   var _overlayDay = null;
-  function wbCurrentSkew(){
-    var t = Math.max(0, Math.min(1, (simDay-OFARRELL_SWING_START)/(OFARRELL_SWING_END-OFARRELL_SWING_START)));
-    return VIOGET_SKEW + (GRID_ROT_BASE - VIOGET_SKEW)*t;
-  }
+  function wbStreetAngle(s){ return s.swings ? CURRENT_STREET_SKEW : GRID_ROT_BASE; } // core's live values only
   function wbPushDrapedRun(pos,col,pts,c,lift,dash,segLen){ // tessellate + drape a world polyline
     for(var s=0;s<pts.length-1;s++){
       var a=pts[s], b=pts[s+1], L=Math.hypot(b.x-a.x,b.z-a.z), n=Math.max(1,Math.round(L/segLen));
@@ -389,12 +391,13 @@
   var SPINE_GOLD=new THREE.Color(0xf2c14e), SPINE_WHITE=new THREE.Color(0xf3f5f7), SPINE_GREY=new THREE.Color(0x99a2aa);
   function buildSpineOverlay(){
     _overlayDay = Math.floor(simDay);
-    var solidPos=[], solidCol=[], dashPos=[], dashCol=[], skew=wbCurrentSkew();
+    updateGridSwing();                                 // core recomputes CURRENT_STREET_SKEW
+    var solidPos=[], solidCol=[], dashPos=[], dashCol=[];
     STREETS_RUNTIME.forEach(function(s){
       var active=null;
       for(var ci=0; ci<s.checkpoints.length; ci++){ if(s.checkpoints[ci].day<=simDay) active=s.checkpoints[ci]; }
       if(!active) return;                             // not surveyed/mentioned yet at this date
-      var angle = s.swings ? skew : GRID_ROT_BASE;    // same frame the paint uses
+      var angle = wbStreetAngle(s);                   // the exact frame the paint uses
       var wpts=[]; for(var pi=active.extent[0]; pi<=active.extent[1]; pi++) wpts.push(gridToWorldAt(s.polyline[pi].u, s.polyline[pi].v, angle));
       if(wpts.length<2) return;
       var c = (s.cls==="market") ? SPINE_GOLD : (s.cls.indexOf("main")===0 ? SPINE_WHITE : SPINE_GREY);
@@ -415,21 +418,19 @@
 
   /* ---- GROUND PLAN overlays (s80a, draped in s81) — lot boundaries + parcel
      tints, era-gated to simDay so scrubbing shows the plat being born at each
-     survey checkpoint. Lot edges are REPROJECTED through wbCurrentSkew() so the
-     fabric hugs the streets in the 1846 Vioget frame too (fixing the 2.5° shear
-     s81 measured at 1846-07). Reads the core cadastre only. ---- */
+     survey checkpoint. Lot world geometry comes ENTIRELY from the cadastre's
+     day-frame API (lotWorldQuad) — the frame fix lives in core/08, this
+     overlay merely draws what the API returns. ---- */
   var CAD_COL_WATER=new THREE.Color(0x3fd0e0), CAD_COL_CORNER=new THREE.Color(0xe8c24e),
       CAD_COL_STD=new THREE.Color(0xcbd6dd), CAD_COL_NONSTD=new THREE.Color(0xe07ac0);
   function buildLotOverlay(){
     _overlayDay = Math.floor(simDay);
-    var blocks = blocksAt(simDay), pos=[], col=[], skew=wbCurrentSkew();
+    var blocks = blocksAt(simDay), pos=[], col=[];
     blocks.forEach(function(b){
       b.lots.forEach(function(l){
         var c = l.water ? CAD_COL_WATER : (!b.standard ? CAD_COL_NONSTD : (l.corner ? CAD_COL_CORNER : CAD_COL_STD));
-        // reproject the lot's (u,v) bounds through the CURRENT painted frame
-        var sw=gridToWorldAt(l.u.lo,l.v.lo,skew), se=gridToWorldAt(l.u.hi,l.v.lo,skew),
-            ne=gridToWorldAt(l.u.hi,l.v.hi,skew), nw=gridToWorldAt(l.u.lo,l.v.hi,skew);
-        wbPushDrapedRun(pos,col,[sw,se,ne,nw,sw],c,0.5,false,9); // closed loop, draped
+        var q = lotWorldQuad(l, simDay).quad;          // day-frame world geometry from the cadastre
+        wbPushDrapedRun(pos,col,[q[0],q[1],q[2],q[3],q[0]],c,0.5,false,9); // closed loop, draped
       });
     });
     return wbLineSegs(pos,col,0.92,999);
@@ -457,7 +458,36 @@
   // point-in-parcel (mirrors core cadParcelContains via the exposed helpers)
   function cadParcelHit(p,x,z){ return groundPlanParcelContains(p.name, x, z); }
 
+  /* STREET RIGHTS-OF-WAY — ACTIVE FRAME ONLY (s81 Director ruling: frame-
+     mixing in the default view is a defect). Each street renders its corridor
+     in the ONE frame it paints in on the current date (core's live skew for
+     swinging streets, base for the rest). Colored by which frame that IS:
+     cyan when the street sits at base −9.0°, magenta while it sits in/near the
+     Vioget frame (pre/mid-swing). Both-frames-at-once is the separate FRAME
+     COMPARISON toggle below, default OFF. Full placement extent (the law
+     reserves the right-of-way from day one, deliberately). */
   function buildRowOverlay(){
+    updateGridSwing();
+    var pos=[], col=[], cB=new THREE.Color(0x35e0e8), cV=new THREE.Color(0xe855d0);
+    STREETS_RUNTIME.forEach(function(s){
+      var angle = wbStreetAngle(s), halfW = s.widthM/2;
+      var c = Math.abs(angle - GRID_ROT_BASE) < 1e-9 ? cB : cV;
+      var i1 = s.checkpoints.length ? s.checkpoints[s.checkpoints.length-1].extent[1] : s.polyline.length-1;
+      for(var i=0;i<i1;i++){
+        var a = gridToWorldAt(s.polyline[i].u,   s.polyline[i].v,   angle);
+        var b = gridToWorldAt(s.polyline[i+1].u, s.polyline[i+1].v, angle);
+        var dx=b.x-a.x, dz=b.z-a.z, len=Math.hypot(dx,dz)||1;
+        var nx=-dz/len*halfW, nz=dx/len*halfW;
+        wbPushDrapedRun(pos,col,[{x:a.x+nx,z:a.z+nz},{x:b.x+nx,z:b.z+nz}],c,0.4,false,8);
+        wbPushDrapedRun(pos,col,[{x:a.x-nx,z:a.z-nz},{x:b.x-nx,z:b.z-nz}],c,0.4,false,8);
+      }
+    });
+    return wbLineSegs(pos,col,0.9,999);
+  }
+  /* FRAME COMPARISON — the old both-frames view, now an explicit reference
+     tool (default OFF): every frame a street ever renders in, from the
+     placement union (swinging streets contribute Vioget AND base). */
+  function buildFrameCompareOverlay(){
     var pos=[], col=[], cB=new THREE.Color(0x35e0e8), cV=new THREE.Color(0xe855d0);
     PLACEMENT_STREET_SEGS.forEach(function(s){
       var dx=s.x1-s.x0, dz=s.z1-s.z0, len=Math.hypot(dx,dz)||1;
@@ -466,7 +496,7 @@
       wbPushDrapedRun(pos,col,[{x:s.x0+nx,z:s.z0+nz},{x:s.x1+nx,z:s.z1+nz}],c,0.4,false,8);
       wbPushDrapedRun(pos,col,[{x:s.x0-nx,z:s.z0-nz},{x:s.x1-nx,z:s.z1-nz}],c,0.4,false,8);
     });
-    return wbLineSegs(pos,col,0.9,999);
+    return wbLineSegs(pos,col,0.75,999);
   }
 
   /* draped tint plane: NxN tint canvas over `box`, mapped onto a SUBDIVIDED
@@ -774,6 +804,115 @@
      probe's readLuminance uses), then encode a PNG via a 2D canvas. Returns a
      data URL. Used to produce screening evidence when the host's screenshot
      path chokes on this heavy WebGL scene. */
+  /* NUMERIC ALIGNMENT PROOF (s81 Director intervention: geometry claims are
+     measured, never eyeballed). window.__wbMeasure runs two measurements at
+     the CURRENT date and returns median/p95/max tables:
+       paintVsSpine — perpendicular offset (m) between the painted band's
+         CENTER (alpha>=128 scan across the road) and the active-frame
+         centerline, at mid-run stations clear of junctions. Tolerance is set
+         by the paint canvas resolution (metersPerPixel reported).
+       lotVsRow — offset (m) between each block's lot-fabric edge (from
+         lotWorldQuad, the cadastre day-frame API) and the bounding street's
+         ROW boundary (centerline dist − halfW) at 3 stations per edge.
+         Expected ≈0: both derive from the same survey numbers.
+     Also counts mid-block lane paint bands crossing the lot fabric (lanes are
+     EXCLUDED from the plat lattice by spec — an EXPLAINED crossing, not a
+     defect). Dev-only, atelier-only. */
+  /* Correct-pixel alpha readback for the measurement: a continuous canvas
+     coordinate c lies inside pixel floor(c) — ground-paint's own audit helper
+     _gpAlphaAtWorld uses Math.round, a systematic −0.5 px (−2.08 m at this
+     canvas) shift in every probe. That readback defect is REPORTED (ground-
+     paint is signed-off; fixing it goes through its own gate) — the harness
+     measures with floor so it measures the PAINT, not the reader. */
+  function wbAlphaAt(x, z){
+    var p = gpPx(x, z), px = Math.floor(p.x), py = Math.floor(p.y);
+    if(px < 0 || py < 0 || px >= GP_W || py >= GP_H) return 0;
+    return _gpImage().data[(py * GP_W + px) * 4 + 3];
+  }
+  window.__wbMeasure = function(){
+    updateGridSwing();
+    function stats(arr){
+      if(!arr.length) return { n:0 };
+      var a = arr.slice().sort(function(x,y){ return x-y; });
+      function q(p){ return a[Math.min(a.length-1, Math.round(p*(a.length-1)))]; }
+      return { n:a.length, median:+q(0.5).toFixed(2), p95:+q(0.95).toFixed(2), max:+a[a.length-1].toFixed(2) };
+    }
+    var mpp = 1/GP_PXPM;
+    // (a) paint-band center vs active-frame centerline. Stations every ~40 m
+    // of arc length; band center = ALPHA-WEIGHTED centroid of the perpendicular
+    // scan (sub-pixel estimate across the antialiased stroke edges).
+    var offs = [], streetsProbed = 0;
+    STREETS_RUNTIME.forEach(function(s){
+      var rec = SPLAT_LAST_STATS && SPLAT_LAST_STATS.streets[s.id];
+      if(!rec || !rec.worldPoly || rec.state < 2) return;
+      var wp = rec.worldPoly, got = 0;
+      for(var i=0; i<wp.length-1; i++){
+        var a = wp[i], b = wp[i+1], L = Math.hypot(b.x-a.x, b.z-a.z); if(L < 6) continue;
+        var nx=-(b.z-a.z)/L, nz=(b.x-a.x)/L;
+        for(var d=20; d<L-10 && got<12; d+=40){
+          var mx=a.x+(b.x-a.x)*d/L, mz=a.z+(b.z-a.z)*d/L;
+          if(terrainHeight(mx,mz) <= 0.5) continue;                      // wet — never painted
+          if(_gpNearOtherStreet(mx, mz, s.id, s.widthM/2 + 6)) continue; // junction / parallel bleed
+          if(wbAlphaAt(mx,mz) < 128) continue;                           // not established paint here
+          var wSum=0, wOff=0;
+          for(var off=-(s.widthM/2+6); off<=s.widthM/2+6; off+=0.25){
+            var al=wbAlphaAt(mx+nx*off, mz+nz*off);
+            wSum += al; wOff += al*off;
+          }
+          if(wSum<=0) continue;
+          offs.push(Math.abs(wOff/wSum)); got++;
+        }
+      }
+      if(got) streetsProbed++;
+    });
+    // (b) lot-fabric edge vs ROW boundary (both from the same survey numbers)
+    var edgeOffs = [], blocksChecked = 0;
+    blocksAt(simDay).forEach(function(b){
+      blocksChecked++;
+      var edges = [
+        { id:b.edges.west,  pts:[[b.uLo, b.vLo+(b.vHi-b.vLo)*0.25],[b.uLo,(b.vLo+b.vHi)/2],[b.uLo, b.vLo+(b.vHi-b.vLo)*0.75]] },
+        { id:b.edges.east,  pts:[[b.uHi, b.vLo+(b.vHi-b.vLo)*0.25],[b.uHi,(b.vLo+b.vHi)/2],[b.uHi, b.vLo+(b.vHi-b.vLo)*0.75]] },
+        { id:b.edges.north, pts:[[b.uLo+(b.uHi-b.uLo)*0.25, b.vLo],[(b.uLo+b.uHi)/2, b.vLo],[b.uLo+(b.uHi-b.uLo)*0.75, b.vLo]] },
+        { id:b.edges.south, pts:[[b.uLo+(b.uHi-b.uLo)*0.25, b.vHi],[(b.uLo+b.uHi)/2, b.vHi],[b.uLo+(b.uHi-b.uLo)*0.75, b.vHi]] }
+      ];
+      edges.forEach(function(e){
+        var st = STREETS_RUNTIME_BY_ID[e.id]; if(!st) return;
+        var ang = wbStreetAngle(st), cl = [];
+        for(var pi=0; pi<st.polyline.length; pi++) cl.push(gridToWorldAt(st.polyline[pi].u, st.polyline[pi].v, ang));
+        e.pts.forEach(function(uv){
+          var w = gridToWorldAt(uv[0], uv[1], cadSkewAt(simDay)); // block edge point, cadastre day frame
+          var dmin = Infinity;
+          for(var i=0;i<cl.length-1;i++) dmin = Math.min(dmin, distToSegXZ(w.x, w.z, cl[i].x, cl[i].z, cl[i+1].x, cl[i+1].z));
+          edgeOffs.push(Math.abs(dmin - st.widthM/2));
+        });
+      });
+    });
+    // explained crossings: mid-block lanes (excluded from the lattice by spec)
+    var laneSegsInBlocks = 0, lanesInvolved = {};
+    STREETS_RUNTIME.forEach(function(s){
+      if(CAD_GRID_CLASSES[s.cls]) return; // lattice streets bound blocks, skip
+      for(var i=0;i<s.polyline.length-1;i++){
+        var mu=(s.polyline[i].u+s.polyline[i+1].u)/2, mv=(s.polyline[i].v+s.polyline[i+1].v)/2;
+        for(var bi=0; bi<GROUND_PLAN.blocks.length; bi++){ var b=GROUND_PLAN.blocks[bi];
+          if(mu>b.uLo && mu<b.uHi && mv>b.vLo && mv<b.vHi){ laneSegsInBlocks++; lanesInvolved[s.id]=1; break; }
+        }
+      }
+    });
+    return {
+      date: window.__P1850.date,
+      activeSkewDeg: +(CURRENT_STREET_SKEW*180/Math.PI).toFixed(3),
+      paintCanvasMetersPerPixel: +mpp.toFixed(2),
+      paintVsSpine: { measure:"paint-band center vs active-frame centerline (m, perpendicular)",
+                      tolerance:"±"+(mpp/2).toFixed(2)+" m (half canvas pixel) + stroke antialias",
+                      streets:streetsProbed, stats:stats(offs) },
+      lotVsRow:     { measure:"lot-fabric block edge vs ROW boundary (m)",
+                      tolerance:"≈0 expected (same survey numbers); street polyline wobble ≤1 m (CAD_EPS)",
+                      blocks:blocksChecked, stats:stats(edgeOffs) },
+      explainedLaneCrossings: { note:"mid-block lanes excluded from the plat lattice by spec — their paint legitimately crosses lot fabric",
+                                lanes:Object.keys(lanesInvolved), segmentsInsideBlocks:laneSegsInBlocks }
+    };
+  };
+
   window.__wbShot = function(){
     _wbRender(scene, camera);
     var gl = renderer.getContext(), w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;

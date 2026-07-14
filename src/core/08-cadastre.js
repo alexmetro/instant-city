@@ -141,7 +141,6 @@ function deriveGroundPlan(){
     for(var a=0;a<nU;a++) for(var b=0;b<nV;b++){
       var lu0=uLo+extU*a/nU, lu1=uLo+extU*(a+1)/nU, lv0=vLo+extV*b/nV, lv1=vLo+extV*(b+1)/nV;
       var wM=lu1-lu0, dM=lv1-lv0;
-      var c0=gridToWorld(lu0,lv0), c1=gridToWorld(lu1,lv1), c2=gridToWorld(lu1,lv0), c3=gridToWorld(lu0,lv1);
       var cu=(lu0+lu1)/2, cv=(lv0+lv1)/2, cw=gridToWorld(cu,cv);
       var water = cadIsWaterLot(cw.x, cw.z);
       if(water) waterN++;
@@ -150,8 +149,10 @@ function deriveGroundPlan(){
                   u:{ lo:lu0, hi:lu1 }, v:{ lo:lv0, hi:lv1 },
                   widthM:wM, depthM:dM, devW:devW, devD:devD, dev:Math.max(Math.abs(devW),Math.abs(devD)),
                   corner:(a===0||a===nU-1)&&(b===0||b===nV-1), water:water,
-                  // world quad (canonical -9.0 frame) for overlay/hit-test
-                  quad:[ {x:c0.x,z:c0.z}, {x:c2.x,z:c2.z}, {x:c1.x,z:c1.z}, {x:c3.x,z:c3.z} ],
+                  // canonical-frame centroid, used ONLY by the water-lot birth
+                  // classification above (a fixed property). NO baked world quad
+                  // is stored (s81 Director ruling) — world geometry comes from
+                  // lotWorldQuad(lot, day) so no consumer can grab a stale frame.
                   cx:cw.x, cz:cw.z };
       blk.lots.push(lot); lots.push(lot); byId[lot.id]=lot;
     }
@@ -162,6 +163,48 @@ function deriveGroundPlan(){
 }
 
 var GROUND_PLAN = deriveGroundPlan();
+
+/* =====================================================================
+   THE DAY FRAME (s81 Director ruling: the swing is materialized INSIDE the
+   cadastre, never in consumers). The plat is stored frame-agnostic in (u,v);
+   world geometry is produced AT QUERY TIME in the frame the streets render
+   in on the queried day — Vioget (−6.5°) before the O'Farrell swing, eased
+   to base (−9.0°) across Feb–Aug 1847, base after (the same law
+   updateGridSwing applies to the paint). Consumers (overlays, buildings
+   placement, anything future) call the API and do ZERO frame math of their
+   own — consumer-side frame math is the outlawed pre-s77 class. Derives
+   only from the canonical constants (VIOGET_SKEW / GRID_ROT_BASE /
+   GRID_ORIGIN_X/Z — the geodetic lock's own numbers) + the sim's swing
+   window. OFARRELL_SWING_START/END live in the sim chunk (module var
+   hoisting makes them visible here); guarded so a pre-init call degrades
+   to the resting base frame.
+   ===================================================================== */
+function cadSkewAt(day){
+  if(day == null) day = (typeof simDay === "number") ? simDay : 1e9;
+  if(typeof OFARRELL_SWING_START !== "number" || !isFinite(OFARRELL_SWING_START)) return GRID_ROT_BASE;
+  var t = Math.max(0, Math.min(1, (day - OFARRELL_SWING_START) / (OFARRELL_SWING_END - OFARRELL_SWING_START)));
+  return VIOGET_SKEW + (GRID_ROT_BASE - VIOGET_SKEW) * t;
+}
+/* Parameterized inverse of gridToWorldAt() — same canonical origin/angle
+   constants (geodetic lock: DERIVED from the one fit, never re-anchored).
+   worldToGrid() is exactly this at the resting base frame. */
+function cadWorldToGridAt(x, z, ang){
+  var lx = x - GRID_ORIGIN_X, lz = z - GRID_ORIGIN_Z;
+  var c = Math.cos(ang), s = Math.sin(ang);
+  return { u: lx*c + lz*s, v: -lx*s + lz*c };
+}
+/* Day-correct world geometry for a lot (or lot id): 4-corner quad
+   [SW,SE,NE,NW] + centroid in the queried day's frame. THE one way any
+   consumer obtains lot world geometry. */
+function lotWorldQuad(lotOrId, day){
+  var l = typeof lotOrId === "string" ? GROUND_PLAN.byId[lotOrId] : lotOrId;
+  if(!l) return null;
+  var a = cadSkewAt(day);
+  var sw = gridToWorldAt(l.u.lo, l.v.lo, a), se = gridToWorldAt(l.u.hi, l.v.lo, a),
+      ne = gridToWorldAt(l.u.hi, l.v.hi, a), nw = gridToWorldAt(l.u.lo, l.v.hi, a);
+  return { quad:[{x:sw.x,z:sw.z},{x:se.x,z:se.z},{x:ne.x,z:ne.z},{x:nw.x,z:nw.z}],
+           cx:(sw.x+ne.x)/2, cz:(sw.z+ne.z)/2, skew:a };
+}
 
 /* =====================================================================
    NAMED PARCELS — dated polygons (or predicates) carrying allowed-asset-class
@@ -242,10 +285,11 @@ function cadPointInPoly(pts, x, z){ // ray cast, points {x,z}
   }
   return inside;
 }
-function cadParcelContains(p, x, z){
+function cadParcelContains(p, x, z, day){
   if(p.contains) return p.contains(x,z);
   if(p.poly){
-    if(p.space==="uv"){ var g=worldToGrid(x,z); return cadPointInPoly(p.poly, g.u, g.v); }
+    // uv-space parcels invert through the DAY frame like the plat itself
+    if(p.space==="uv"){ var g=cadWorldToGridAt(x, z, cadSkewAt(day)); return cadPointInPoly(p.poly, g.u, g.v); }
     return cadPointInPoly(p.poly, x, z);
   }
   return false;
@@ -254,8 +298,11 @@ function cadParcelContains(p, x, z){
 /* =====================================================================
    THE API — the one interface every future admission consumes.
    ===================================================================== */
+/* Point queries invert through the DAY frame (cadSkewAt) — a click on a lot
+   corner at an 1846 date maps to the (u,v) the Vioget-frame streets bound,
+   not the resting base frame 2.5° away (~17 m at the grid edge). */
 function cadBlockAt(x, z, day){
-  var g = worldToGrid(x,z);
+  var g = cadWorldToGridAt(x, z, cadSkewAt(day));
   for(var i=0;i<GROUND_PLAN.blocks.length;i++){ var b=GROUND_PLAN.blocks[i];
     if(day!=null && b.birth>day) continue;
     if(g.u>=b.uLo && g.u<=b.uHi && g.v>=b.vLo && g.v<=b.vHi) return b;
@@ -264,7 +311,7 @@ function cadBlockAt(x, z, day){
 }
 function cadLotAt(x, z, day){
   var b = cadBlockAt(x,z,day); if(!b) return null;
-  var g = worldToGrid(x,z);
+  var g = cadWorldToGridAt(x, z, cadSkewAt(day));
   var a = Math.min(b.nU-1, Math.max(0, Math.floor((g.u-b.uLo)/b.extU*b.nU)));
   var c = Math.min(b.nV-1, Math.max(0, Math.floor((g.v-b.vLo)/b.extV*b.nV)));
   return b.lots[a*b.nV + c] || null;
@@ -293,7 +340,7 @@ function groundPlanAt(x, z, day){
   var b = cadBlockAt(x,z,day);
   if(b){ out.block = b.key; var lot = cadLotAt(x,z,day); out.platLot = lot ? lot.id : null; }
   for(var i=0;i<GROUND_PARCELS.length;i++){ var p=GROUND_PARCELS[i];
-    if((day==null || p.birth<=day) && cadParcelContains(p,x,z)) out.parcels.push(p.name);
+    if((day==null || p.birth<=day) && cadParcelContains(p,x,z,day)) out.parcels.push(p.name);
   }
   out.row = cadRowAt(x,z);
   out.band = groundPlanBand(x,z);
@@ -386,6 +433,42 @@ function groundPlanStats(){
     return { pass: bad.length===0 && mono, law:"platDates", violations:bad.length,
              era:{ "vioget(1846)":d1846, "ofarrell(1848-04)":d1848, "eddy(1849-09)":d1849 },
              monotone:mono, list:bad.slice(0,20) };
+  });
+
+  /* platFrame (s81 Director ruling) — the cadastre's day-frame world geometry
+     matches the streets' rendered frame NUMERICALLY: at 1846-07-01 (Vioget,
+     −6.5°) and 1848-04-01 (post-swing base, −9.0°), for EVERY block present,
+     the lot-edge azimuths (both axes, from lotWorldQuad at that day) equal the
+     bounding streets' rendered polyline azimuths within 0.2°. Also asserts the
+     day frame itself resolves to the correct constant at both dates. */
+  registerAudit("placement", "platFrame", function(){
+    function az(dx,dz){ var a = Math.atan2(dz,dx)*180/Math.PI; return ((a%180)+180)%180; }   // undirected line azimuth
+    function angDiff(a,b){ var d = Math.abs(a-b)%180; return Math.min(d, 180-d); }
+    function checkDay(day){
+      var skew = cadSkewAt(day), bad = [], maxDev = 0, checked = 0, B = blocksAt(day);
+      B.forEach(function(b){
+        var q = lotWorldQuad(b.lots[0], day).quad;
+        var pairs = [ ["north", az(q[1].x-q[0].x, q[1].z-q[0].z)],   // SW->SE edge vs the E-W street
+                      ["west",  az(q[3].x-q[0].x, q[3].z-q[0].z)] ]; // SW->NW edge vs the N-S street
+        pairs.forEach(function(p){
+          var st = STREETS_RUNTIME_BY_ID[b.edges[p[0]]]; if(!st) return;
+          var ang = st.swings ? skew : GRID_ROT_BASE;
+          var n = st.polyline.length;
+          var p0 = gridToWorldAt(st.polyline[0].u, st.polyline[0].v, ang);
+          var p1 = gridToWorldAt(st.polyline[n-1].u, st.polyline[n-1].v, ang);
+          var d = angDiff(p[1], az(p1.x-p0.x, p1.z-p0.z)); checked++;
+          if(d > maxDev) maxDev = d;
+          if(d > 0.2) bad.push({ block:b.key, edge:p[0], street:st.id, devDeg:+d.toFixed(3) });
+        });
+      });
+      return { skewDeg:+(skew*180/Math.PI).toFixed(3), blocks:B.length, edgesChecked:checked,
+               maxDevDeg:+maxDev.toFixed(4), violations:bad.length, list:bad.slice(0,10) };
+    }
+    var d1846 = checkDay(eventDateToSimDay("1846-07-01"));
+    var d1848 = checkDay(eventDateToSimDay("1848-04-01"));
+    var framesRight = Math.abs(d1846.skewDeg - VIOGET_SKEW_DEG) < 0.01 && Math.abs(d1848.skewDeg - GRID_ROT_BASE_DEG) < 0.01;
+    return { pass: d1846.violations===0 && d1848.violations===0 && framesRight, law:"platFrame",
+             framesResolve:framesRight, "vioget-1846":d1846, "base-1848":d1848 };
   });
 
   /* parcelIntegrity — (1) every polygon parcel is a closed ring (>=3 pts);
