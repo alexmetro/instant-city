@@ -7643,7 +7643,7 @@ function updateHud(alt){
   var WB_LAYERS = WB_ORDER.filter(function(n){ return !!__P1850_LAYER_VIS[n]; });
   WB.knobs.detailAmp = window.__P1850 ? +window.__P1850.detailAmp : 1;
   var WB_KNOB_DEFAULTS = JSON.parse(JSON.stringify(WB.knobs));
-  var WB_DOODAD_CELL_BASE = DOODAD_CELL;
+  var WB_DOODAD_CELL_BASE = (typeof DOODAD_CELL !== "undefined") ? DOODAD_CELL : null; /* FOUNDATION: awaiting admission of doodads — knob inert until then */
 
   function wbLayerOn(name){ return WB.solo ? name===WB.solo : !WB.muted[name]; }
   function applyVis(){
@@ -8072,8 +8072,8 @@ function updateHud(alt){
   function applyKnob(key, v){
     WB.knobs[key] = v;
     if(key==="detailAmp"){ window.__P1850.detailAmp = v; }
-    else if(key==="doodadMul"){ DOODAD_CELL = WB_DOODAD_CELL_BASE/Math.sqrt(Math.max(v,0.01)); _doodadBuilt = false; }
-    else if(key==="streetAlphaMul"){ [splatWorldMesh, splatTownMesh, splatCloseMesh].forEach(function(m){ m.material.opacity = v; }); }
+    else if(key==="doodadMul"){ if(WB_DOODAD_CELL_BASE!=null){ DOODAD_CELL = WB_DOODAD_CELL_BASE/Math.sqrt(Math.max(v,0.01)); _doodadBuilt = false; } } /* FOUNDATION: inert until doodads admission */
+    else if(key==="streetAlphaMul"){ var wbSplats=[typeof splatWorldMesh!=="undefined"?splatWorldMesh:null, typeof splatTownMesh!=="undefined"?splatTownMesh:null, typeof splatCloseMesh!=="undefined"?splatCloseMesh:null]; wbSplats.forEach(function(m){ if(m) m.material.opacity = v; }); } /* FOUNDATION: uniform renderer has one mesh; town/close return with the road-art admission */
     // sun/hemi/ambient/nightLift are applied in wbFrame each frame
     knobEls[key].val.textContent = (+v).toFixed(2);
   }
