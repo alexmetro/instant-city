@@ -2394,8 +2394,29 @@ function groundPlanStats(){
       if(inBeachBand(x,z)!==refBeach(x,z)) disagree++;
       if(inPublicSquare(x,z)!==refPlaza(x,z)) disagree++;
     }
-    return { pass: openRings.length===0 && disagree===0, law:"parcelIntegrity",
-             parcels:GROUND_PARCELS.length, openRings:openRings, sampledPoints:side*side*3, predicateDisagreements:disagree };
+    // (3) INLAND-NOT-IN-WATER (s81 finding C — "cove includes the plaza"): the
+    // plaza centroid and known town-interior points must NOT fall inside any
+    // water-class parcel (the cove), and the plaza centroid MUST be inside its
+    // OWN parcel (portsmouth-square is a distinct parcel, tinted distinctly).
+    // Guards the inland-point-in-cove class of polygon defect.
+    var pc = PLAZA_CENTER;
+    var inlandProbes = [
+      { n:"plaza-centroid", x:pc.x,     z:pc.z },
+      { n:"plaza-west",     x:pc.x-80,  z:pc.z },
+      { n:"plaza-north",    x:pc.x,     z:pc.z-120 },
+      { n:"town-interior",  x:pc.x-40,  z:pc.z+90 },
+      { n:"town-west",      x:pc.x-160, z:pc.z+40 }
+    ];
+    var waterParcels = GROUND_PARCELS.filter(function(p){ return p.cls==="water"; });
+    var inlandInWater = [];
+    inlandProbes.forEach(function(pt){
+      waterParcels.forEach(function(wp){ if(cadParcelContains(wp, pt.x, pt.z)) inlandInWater.push(pt.n+" in "+wp.name); });
+    });
+    var plazaParcel = GROUND_PARCELS_BY_NAME["portsmouth-square"];
+    var plazaSelf = !!(plazaParcel && cadParcelContains(plazaParcel, pc.x, pc.z));
+    return { pass: openRings.length===0 && disagree===0 && inlandInWater.length===0 && plazaSelf, law:"parcelIntegrity",
+             parcels:GROUND_PARCELS.length, openRings:openRings, sampledPoints:side*side*3, predicateDisagreements:disagree,
+             inlandPointsInWater:inlandInWater, plazaCentroidInOwnParcel:plazaSelf };
   });
 })();
 /* =====================================================================

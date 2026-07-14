@@ -39,7 +39,17 @@
     "#wb-panel .wb-row input[type=checkbox]{ margin:0; accent-color:#5aa0c8; }",
     "#wb-panel .wb-row.off .wb-lname{ color:#5b6066; text-decoration:line-through; }",
     "#wb-panel .wb-lname{ flex:1; cursor:default; }",
-    "#wb-panel .wb-ov .wb-lname{ font-size:10px; color:#a9aeb5; }",
+    "#wb-panel .wb-ov .wb-lname{ font-size:10px; color:#a9aeb5; letter-spacing:0.3px; }",
+    "#wb-panel .wb-ov-legend{ font-size:9px; line-height:1.35; color:#6f757c; margin:0 0 5px 22px; }",
+    "#wb-panel .wb-ov-group{ margin:6px 0 4px; border:1px solid #2a2e34; border-radius:4px; padding:4px 6px 5px; background:rgba(255,255,255,0.015); }",
+    "#wb-panel .wb-ov-parent-name{ font-weight:bold; color:#cdb98f; font-size:10px; letter-spacing:0.5px; }",
+    "#wb-panel .wb-ov-grouphdr{ font-size:9px; line-height:1.35; color:#7c828a; margin:1px 0 4px 22px; font-style:italic; }",
+    "#wb-panel .wb-ov-groupbody{ border-left:2px solid #2f343b; margin-left:6px; padding-left:6px; }",
+    "#wb-panel .wb-ov-child .wb-lname{ color:#b8bdc4; }",
+    "#wb-panel .wb-ov-flat{ margin-top:4px; }",
+    "#wb-panel .wb-ov-status{ font-size:9px; line-height:1.35; color:#8fa77b; margin:-2px 0 6px 22px; }",
+    "#wb-panel .wb-select{ flex:1; background:#1d2126; color:#c9cdd2; border:1px solid #3d4249; border-radius:3px;",
+    "  font:10px Consolas,monospace; padding:2px 4px; }",
     "#wb-panel .wb-solo{ background:#1d2126; color:#6b7178; border:1px solid #33373d;",
     "  border-radius:3px; font-size:10px; line-height:1; padding:2px 5px; cursor:pointer; }",
     "#wb-panel .wb-solo.on{ color:#ffd75e; border-color:#ffd75e; }",
@@ -70,7 +80,7 @@
     muted: {},            // layerName -> true when hidden
     solo: null,           // layerName | null
     probe: false,
-    overlays: { row:false, keepout:false, zones:false, audits:false, lots:false, parcels:false },
+    overlays: { spine:false, row:false, lots:false, parcels:false, keepout:false, zones:false, audits:false },
     knobs: { sunMul:1, hemiMul:1, ambientMul:1, nightLift:0, detailAmp:null, doodadMul:1, streetAlphaMul:1 }
   };
   var WB_ORDER = ["terrain","ground-paint","zones-tint","buildings","doodads","people","ships","fauna","effects","labels"];
@@ -105,11 +115,14 @@
       var v = L._base * WB.knobs[L.key] + (L.night ? WB.knobs.nightLift*nf : 0);
       L.o.intensity = v; L._set = v;
     });
-    // GROUND PLAN era-scrub (s80a): rebuild the date-gated lot/parcel overlays
-    // when the timeline day moves, so scrubbing shows the plat being born at
-    // the survey checkpoints (cheap 2D/line redraw, once per integer day).
-    if((WB.overlays.lots || WB.overlays.parcels) && Math.floor(simDay)!==_lotOverlayDay){
-      ["lots","parcels"].forEach(function(key){
+    // GROUND PLAN era-scrub (s80a): rebuild every date-gated overlay when the
+    // timeline day moves, so scrubbing shows the survey spine / plat / parcels
+    // being born at the checkpoints AND the lot/spine fabric easing with the
+    // 1847 O'Farrell grid-swing frame (cheap 2D/line redraw, once per integer
+    // day). Row is static (both frames baked) so it is excluded.
+    if(Math.floor(simDay)!==_overlayDay){
+      _overlayDay = Math.floor(simDay);
+      ["spine","lots","parcels","keepout"].forEach(function(key){
         if(!WB.overlays[key]) return;
         if(overlayObjs[key]){ scene.remove(overlayObjs[key]); }
         overlayObjs[key] = buildOverlay(key);
@@ -156,37 +169,169 @@
     });
   }
 
-  /* ---- 3. RULE OVERLAYS ---- */
+  /* ---- 2b. TERRAIN VIEW (Director addendum #3) — diagnostic material MODES
+     that override the terrain mesh material ONLY: geometry untouched, water
+     untouched, fully reversible (NORMAL restores), nothing persists. The
+     terrain layer currently fuses geometry + skin in one mesh; these modes let
+     the landform be read apart from its paint (the dune field is in the
+     heightfield but illegible under textured noon light — CLAY is the answer).
+     Materials are dev-only closures (atelier), built lazily on first use. ---- */
+  el("div","wb-sec","TERRAIN VIEW  (material override · geometry untouched)");
+  /* diagnostic tints are per-VERTEX colours on a light geometry that SHARES
+     the terrain's position/index buffers (no heavy clone) + an unlit
+     MeshBasicMaterial — robust across renderers (a raw ShaderMaterial rendered
+     wrong on this r128/WebGL2 build). Colours computed once from height +
+     normal.y (terrain is unrotated, so object up = world up). */
+  var wbClayMat=null, wbWireMat=null, wbDiagMat=null, wbWireMesh=null;
+  var wbDiagGeo=null, wbSlopeColors=null, wbElevColors=null;
+  function wbHypso(e){                                   // elevation → hypsometric rgb, quantized to 10 m bands
+    var t = Math.max(0, Math.min(1, (Math.floor(e/10)*10)/120)), u;
+    if(t<0.5){ u=t*2;      return [0.30+0.45*u, 0.55+0.13*u, 0.32+0.10*u]; }
+    u=(t-0.5)*2;           return [0.75+0.11*u, 0.68+0.13*u, 0.42+0.33*u];
+  }
+  function wbSlopeCol(ny){                               // normal.y → green(flat)…red(45%+ grade)
+    ny=Math.max(0,Math.min(1,ny)); var t=Math.max(0,Math.min(1, Math.tan(Math.acos(ny))/0.45)), u;
+    if(t<0.5){ u=t*2;      return [0.20+0.70*u, 0.72+0.10*u, 0.28-0.12*u]; }
+    u=(t-0.5)*2;           return [0.90-0.05*u, 0.82-0.66*u, 0.16-0.04*u];
+  }
+  function wbEnsureTerrainMats(){
+    if(wbClayMat) return;
+    wbClayMat = new THREE.MeshPhongMaterial({ color:0x9d9184, flatShading:true, specular:0x000000, shininess:0 }); // neutral warm grey clay
+    wbWireMat = new THREE.MeshBasicMaterial({ color:0x20242a, wireframe:true, transparent:true, opacity:0.22, depthWrite:false });
+    wbDiagMat = new THREE.MeshBasicMaterial({ vertexColors:true });
+    var pos=terrainGeo.attributes.position, nrm=terrainGeo.attributes.normal, n=pos.count;
+    wbSlopeColors=new Float32Array(n*3); wbElevColors=new Float32Array(n*3);
+    for(var i=0;i<n;i++){
+      var ec=wbHypso(pos.getY(i)); wbElevColors[i*3]=ec[0]; wbElevColors[i*3+1]=ec[1]; wbElevColors[i*3+2]=ec[2];
+      var sc=wbSlopeCol(nrm?nrm.getY(i):1); wbSlopeColors[i*3]=sc[0]; wbSlopeColors[i*3+1]=sc[1]; wbSlopeColors[i*3+2]=sc[2];
+    }
+    wbDiagGeo=new THREE.BufferGeometry();
+    wbDiagGeo.setAttribute("position", pos);            // SHARE — no copy
+    if(terrainGeo.index) wbDiagGeo.setIndex(terrainGeo.index);
+    wbDiagGeo.setAttribute("color", new THREE.BufferAttribute(wbElevColors,3));
+    wbDiagGeo.computeBoundingSphere();
+  }
+  function wbDiag(colors){ wbDiagGeo.setAttribute("color", new THREE.BufferAttribute(colors,3)); terrainMesh.geometry=wbDiagGeo; terrainMesh.material=wbDiagMat; }
+  function setTerrainMode(mode){
+    wbEnsureTerrainMats();
+    if(wbWireMesh){ scene.remove(wbWireMesh); wbWireMesh=null; } // shared geo — remove only, never dispose
+    if(mode==="clay"){ terrainMesh.geometry=terrainGeo; terrainMesh.material = wbClayMat; }
+    else if(mode==="slope"){ wbDiag(wbSlopeColors); }
+    else if(mode==="elev"){ wbDiag(wbElevColors); }
+    else if(mode==="wire"){ terrainMesh.geometry=terrainGeo; terrainMesh.material = wbClayMat;
+      wbWireMesh = new THREE.Mesh(terrainGeo, wbWireMat); wbWireMesh.renderOrder = 2; wbWireMesh.frustumCulled = false; scene.add(wbWireMesh); }
+    else { terrainMesh.geometry=terrainGeo; terrainMesh.material = terrainMat; } // NORMAL — restore the original skin + geometry
+  }
+  var tvRow = el("div","wb-row");
+  el("span","wb-klabel","mode",tvRow);
+  var tvSel = document.createElement("select"); tvSel.className = "wb-select";
+  [["normal","NORMAL (skin)"],["clay","CLAY (matte landform)"],["slope","SLOPE (green→red, 0–45%+)"],
+   ["elev","ELEVATION BANDS (~10 m)"],["wire","WIREFRAME over clay"]].forEach(function(o){
+    var op=document.createElement("option"); op.value=o[0]; op.textContent=o[1]; tvSel.appendChild(op);
+  });
+  tvRow.appendChild(tvSel);
+  tvSel.addEventListener("change", function(){ setTerrainMode(tvSel.value); });
+  el("div","wb-ov-legend","SLOPE: green flat → red 45%+ grade · ELEVATION: hypsometric ramp 0–120 m, contour every 10 m · water surface unchanged in every mode.");
+  el("div","wb-ov-status","geometry/skin structural split scheduled for the terrain fidelity admission.").style.color="#7c828a";
+
+  /* ---- 3. RULE OVERLAYS — a HIERARCHY (Director addendum): THE GROUND PLAN
+     survey-spine family (spine centerlines · rights-of-way · plat lots · named
+     parcels) under one tri-state master, then the flat law/diagnostic rows
+     (walk keep-out · ecology zones · audit failures). Copy is Director-authored
+     verbatim; each row is a name + a small legend line. ---- */
   el("div","wb-sec","RULE OVERLAYS");
-  var overlayObjs = { row:null, keepout:null, zones:null, audits:null, lots:null, parcels:null };
-  var overlayDefs = [
-    { key:"row",     label:"street rights-of-way (constant class widths; cyan=base frame, magenta=Vioget)" },
-    { key:"keepout", label:"walkBlockedAt keep-out mask (red = blocked, sampled at current date)" },
-    { key:"zones",   label:"ecology zones (zoneAt tint over the whole domain)" },
-    { key:"audits",  label:"audit failures (runs audits.runAll(), red markers at violation coords)" },
-    { key:"lots",    label:"GROUND PLAN — plat lots (era-gated: scrub the timeline to watch the plat be born · cyan=water lot, gold=corner, magenta=non-standard block)" },
-    { key:"parcels", label:"GROUND PLAN — named parcel tints (plaza · cove · mud/beach bands · camp · mission · presidio)" }
-  ];
-  var auditStatusEl = null;
-  overlayDefs.forEach(function(def){
-    var row = el("div","wb-row wb-ov");
+  var overlayObjs = { spine:null, row:null, lots:null, parcels:null, keepout:null, zones:null, audits:null };
+  var auditStatusEl = null, keepoutStatusEl = null;
+
+  /* one toggle path: every overlay rebuilds fresh on enable (all are cheap
+     line/2D redraws, several are date-gated) and detaches on disable. */
+  function setOverlay(key, on){
+    WB.overlays[key] = on;
+    if(on){
+      if(overlayObjs[key]){ scene.remove(overlayObjs[key]); }
+      overlayObjs[key] = buildOverlay(key);
+      if(overlayObjs[key]) scene.add(overlayObjs[key]);
+    } else if(overlayObjs[key]){
+      scene.remove(overlayObjs[key]); overlayObjs[key] = null;
+    }
+  }
+  function overlayRow(parent, key, cls, title, legend){
+    var row = el("div","wb-row wb-ov"+(cls?" "+cls:""), null, parent);
     var cb = document.createElement("input"); cb.type="checkbox"; row.appendChild(cb);
-    el("span","wb-lname",def.label,row);
-    cb.addEventListener("change", function(){
-      WB.overlays[def.key] = cb.checked;
-      if(cb.checked){
-        if(def.key==="keepout" || def.key==="audits" || def.key==="lots" || def.key==="parcels" || !overlayObjs[def.key]){ // rebuild date-dependent overlays fresh
-          if(overlayObjs[def.key]){ scene.remove(overlayObjs[def.key]); }
-          overlayObjs[def.key] = buildOverlay(def.key);
-        }
-        if(overlayObjs[def.key]) scene.add(overlayObjs[def.key]);
-      } else if(overlayObjs[def.key]){
-        scene.remove(overlayObjs[def.key]);
-      }
+    var name = el("span","wb-lname",title,row);
+    var leg = el("div","wb-ov-legend",legend,parent); // legend under the row
+    return { row:row, cb:cb, name:name, legend:leg };
+  }
+
+  /* --- PARENT GROUP: the survey spine (tri-state master) --- */
+  var groupWrap = el("div","wb-ov-group");
+  var groupHeadRow = el("div","wb-row wb-ov-parent", null, groupWrap);
+  var groupCb = document.createElement("input"); groupCb.type="checkbox"; groupHeadRow.appendChild(groupCb);
+  el("span","wb-lname wb-ov-parent-name","THE GROUND PLAN — the survey spine",groupHeadRow);
+  el("div","wb-ov-grouphdr","Roads, lots, and zones are one dated system — toggle the family or break out a member.",groupWrap);
+  var groupBody = el("div","wb-ov-groupbody",null,groupWrap);
+
+  var SPINE_CHILDREN = ["spine","row","lots","parcels"];
+  var childCbs = {};
+  var groupEverUsed = false;
+  var groupLast = { spine:false, row:false, lots:false, parcels:false };
+  function syncGroupCheckbox(){
+    var on = 0; SPINE_CHILDREN.forEach(function(k){ if(WB.overlays[k]) on++; });
+    groupCb.checked = on > 0;
+    groupCb.indeterminate = on > 0 && on < SPINE_CHILDREN.length;
+  }
+  function makeChild(key, title, legend){
+    var r = overlayRow(groupBody, key, "wb-ov-child", title, legend);
+    childCbs[key] = r.cb;
+    r.cb.addEventListener("change", function(){
+      setOverlay(key, r.cb.checked);
+      if(r.cb.checked) groupEverUsed = true;
+      syncGroupCheckbox();
     });
+    return r;
+  }
+  makeChild("spine",  "MASTER SPINE — centerlines",
+    "The canonical centerlines (the survey data itself, era-gated). Inviolate: every road system derives from these lines. gold = Market-class · white = main · grey = cross/lane · dashed = platted-unbuilt");
+  makeChild("row",    "STREET RIGHTS-OF-WAY",
+    "Legal street corridors: each street's constant surveyed width centered on its master centerline. Paint and placement law both derive from these. cyan = base −9.0° frame · magenta = Vioget 1839 frame");
+  makeChild("lots",   "PLAT LOTS",
+    "The dated cadastre: blocks and 50-vara lots born at their survey checkpoints; scrub the timeline to watch the plat appear. gold = corner lot · cyan = water lot (1847 beach-and-water auction) · magenta = non-standard block. Pattern-derived; numbered-plat anchoring pending.");
+  makeChild("parcels","NAMED PARCELS",
+    "Named ground parcels carrying allowed-asset-class law (plaza · cove · mud/beach bands · camp · mission · presidio). One zone truth: placement reads these.");
+
+  groupCb.addEventListener("change", function(){
+    var want = groupCb.checked;
+    groupCb.indeterminate = false;
+    if(want){
+      var anyRemembered = SPINE_CHILDREN.some(function(k){ return groupLast[k]; });
+      SPINE_CHILDREN.forEach(function(k){
+        var on = (groupEverUsed && anyRemembered) ? groupLast[k] : true; // first use / nothing remembered = all four
+        childCbs[k].checked = on; setOverlay(k, on);
+      });
+      groupEverUsed = true;
+    } else {
+      SPINE_CHILDREN.forEach(function(k){ groupLast[k] = WB.overlays[k]; childCbs[k].checked = false; setOverlay(k, false); }); // snapshot then hide all
+    }
+    syncGroupCheckbox();
   });
 
+  /* --- FLAT ROWS: law + diagnostics (not the spine family) --- */
+  var flatWrap = el("div","wb-ov-flat");
+  function makeFlat(key, title, legend){
+    var r = overlayRow(flatWrap, key, null, title, legend);
+    r.cb.addEventListener("change", function(){ setOverlay(key, r.cb.checked); });
+    return r;
+  }
+  var keepoutRow = makeFlat("keepout", "WALK KEEP-OUT",
+    "Where walking is forbidden at the current date (red). Sources: water, placed footprints, registered keep-outs. Status line shows the live blocked-cell count — expect near-empty until blocking layers are admitted.");
+  keepoutStatusEl = el("div","wb-ov-status","(toggle to sample the walk mask at this date)",flatWrap);
+  makeFlat("zones", "ECOLOGY ZONES",
+    "The zoneAt classification tinted over the domain: which ground class governs placement and vegetation at each point. Hydrology reconciliation pending — creek network incomplete.");
+  makeFlat("audits", "AUDIT FAILURES",
+    "Runs the full audit suite at the current date; a red marker at every violation coordinate. An empty overlay is the goal state.");
+
   function buildOverlay(key){
+    if(key==="spine") return buildSpineOverlay();
     if(key==="row") return buildRowOverlay();
     if(key==="keepout") return buildKeepoutOverlay();
     if(key==="zones") return buildZonesOverlay();
@@ -196,43 +341,106 @@
     return null;
   }
 
-  /* ---- GROUND PLAN overlays (s80a) — draped lot boundaries + parcel tints,
-     era-gated to simDay so scrubbing the timeline shows the plat being born at
-     each survey checkpoint (1846 Vioget region only → 1847 O'Farrell fabric +
-     cove water lots → 1849 Eddy extension). Rebuilt whenever the date moves
-     (see wbFrame's watcher below). Reads the core cadastre only. ---- */
-  var CAD_COL_WATER=new THREE.Color(0x3fd0e0), CAD_COL_CORNER=new THREE.Color(0xe8c24e),
-      CAD_COL_STD=new THREE.Color(0xcbd6dd), CAD_COL_NONSTD=new THREE.Color(0xe07ac0);
-  var _lotOverlayDay = null;
-  function buildLotOverlay(){
-    _lotOverlayDay = Math.floor(simDay);
-    var blocks = blocksAt(simDay), pos=[], col=[], SUB=5;
-    function edge(a,b,c){
-      for(var k=0;k<SUB;k++){
-        var x0=a.x+(b.x-a.x)*k/SUB, z0=a.z+(b.z-a.z)*k/SUB;
-        var x1=a.x+(b.x-a.x)*(k+1)/SUB, z1=a.z+(b.z-a.z)*(k+1)/SUB;
-        pos.push(x0, terrainHeight(x0,z0)+0.5, z0,  x1, terrainHeight(x1,z1)+0.5, z1);
+  /* ---- SHARED OVERLAY DRAPING (s81 — the user's #1 finding: overlays must
+     follow terrain like the road canvas, not float on a flat screen-plane).
+     Two drape paths, both mirroring ground-paint's model:
+       • LINES (spine / ROW / lot edges): each run is tessellated into short
+         sub-segments and each vertex sampled onto terrainHeight+lift, so the
+         line hugs relief on slopes instead of chording over valleys/humps.
+       • TINTS (parcels / keep-out / zones): the tint canvas is draped on a
+         SUBDIVIDED plane whose every vertex is displaced to terrainHeight
+         (was: one flat quad floating at y=60 — the source of the shear the
+         user saw, where the cove tint appeared to slide over the plaza).
+     wbCurrentSkew() reproduces core's grid-swing frame (VIOGET −6.5° → base
+     −9.0°, eased across Feb–Aug 1847) with NO side effects, so the plat/spine
+     overlays sit in the SAME frame the streets paint in at every date. ---- */
+  var _overlayDay = null;
+  function wbCurrentSkew(){
+    var t = Math.max(0, Math.min(1, (simDay-OFARRELL_SWING_START)/(OFARRELL_SWING_END-OFARRELL_SWING_START)));
+    return VIOGET_SKEW + (GRID_ROT_BASE - VIOGET_SKEW)*t;
+  }
+  function wbPushDrapedRun(pos,col,pts,c,lift,dash,segLen){ // tessellate + drape a world polyline
+    for(var s=0;s<pts.length-1;s++){
+      var a=pts[s], b=pts[s+1], L=Math.hypot(b.x-a.x,b.z-a.z), n=Math.max(1,Math.round(L/segLen));
+      for(var k=0;k<n;k++){
+        if(dash && (k%2===1)) continue; // skip alternate sub-segments = dashed line
+        var t0=k/n, t1=(k+1)/n;
+        var x0=a.x+(b.x-a.x)*t0, z0=a.z+(b.z-a.z)*t0, x1=a.x+(b.x-a.x)*t1, z1=a.z+(b.z-a.z)*t1;
+        pos.push(x0, terrainHeight(x0,z0)+lift, z0,  x1, terrainHeight(x1,z1)+lift, z1);
         col.push(c.r,c.g,c.b, c.r,c.g,c.b);
       }
     }
-    blocks.forEach(function(b){
-      b.lots.forEach(function(l){
-        var c = l.water ? CAD_COL_WATER : (!b.standard ? CAD_COL_NONSTD : (l.corner ? CAD_COL_CORNER : CAD_COL_STD));
-        var q=l.quad; // [SW,SE,NE,NW] world corners
-        edge(q[0],q[1],c); edge(q[1],q[2],c); edge(q[2],q[3],c); edge(q[3],q[0],c);
-      });
-    });
+  }
+  function wbLineSegs(pos,col,opacity,order){
     var g=new THREE.BufferGeometry();
     g.setAttribute("position", new THREE.Float32BufferAttribute(pos,3));
     g.setAttribute("color", new THREE.Float32BufferAttribute(col,3));
-    var m=new THREE.LineSegments(g, new THREE.LineBasicMaterial({ vertexColors:true, transparent:true, opacity:0.92, depthTest:false }));
-    m.renderOrder=999; m.frustumCulled=false;
+    var m=new THREE.LineSegments(g, new THREE.LineBasicMaterial({ vertexColors:true, transparent:true, opacity:opacity, depthTest:false }));
+    m.renderOrder = order||999; m.frustumCulled=false;
     return m;
   }
-  var CAD_PARCEL_COLS = { plaza:[120,200,255], water:[70,150,200], mud:[130,90,70], beach:[210,190,120],
+
+  /* MASTER SPINE (Director addendum) — the canonical STREETS_RUNTIME centerlines
+     themselves, era-gated to the active checkpoint extent, draped, colored by
+     class (gold=Market · white=main · grey=cross/lane) and DASHED where the
+     road is only platted-unbuilt (roadPieceState st<=1). The spine is core DATA
+     with no render layer of its own; this makes the dataset directly inspectable
+     under the derived paint. Rendered in each street's own painted frame. */
+  var SPINE_GOLD=new THREE.Color(0xf2c14e), SPINE_WHITE=new THREE.Color(0xf3f5f7), SPINE_GREY=new THREE.Color(0x99a2aa);
+  function buildSpineOverlay(){
+    _overlayDay = Math.floor(simDay);
+    var solidPos=[], solidCol=[], dashPos=[], dashCol=[], skew=wbCurrentSkew();
+    STREETS_RUNTIME.forEach(function(s){
+      var active=null;
+      for(var ci=0; ci<s.checkpoints.length; ci++){ if(s.checkpoints[ci].day<=simDay) active=s.checkpoints[ci]; }
+      if(!active) return;                             // not surveyed/mentioned yet at this date
+      var angle = s.swings ? skew : GRID_ROT_BASE;    // same frame the paint uses
+      var wpts=[]; for(var pi=active.extent[0]; pi<=active.extent[1]; pi++) wpts.push(gridToWorldAt(s.polyline[pi].u, s.polyline[pi].v, angle));
+      if(wpts.length<2) return;
+      var c = (s.cls==="market") ? SPINE_GOLD : (s.cls.indexOf("main")===0 ? SPINE_WHITE : SPINE_GREY);
+      var viogetFloor = (s.surveyedDay!=null && s.surveyedDay<=0);
+      for(var k=0;k<wpts.length-1;k++){
+        var a=wpts[k], b=wpts[k+1], mx=(a.x+b.x)/2, mz=(a.z+b.z)/2;
+        var st = (typeof roadPieceState==="function") ? roadPieceState(s, mx, mz, simDay, viogetFloor).st : 2;
+        var dash = st<=1;                             // platted-unbuilt / ghost line = dashed
+        wbPushDrapedRun(dash?dashPos:solidPos, dash?dashCol:solidCol, [a,b], c, 0.8, dash, 9);
+      }
+    });
+    var grp = new THREE.Group();
+    grp.add(wbLineSegs(solidPos, solidCol, 0.96, 1000));
+    grp.add(wbLineSegs(dashPos,  dashCol,  0.6,  1000));
+    grp.frustumCulled=false;
+    return grp;
+  }
+
+  /* ---- GROUND PLAN overlays (s80a, draped in s81) — lot boundaries + parcel
+     tints, era-gated to simDay so scrubbing shows the plat being born at each
+     survey checkpoint. Lot edges are REPROJECTED through wbCurrentSkew() so the
+     fabric hugs the streets in the 1846 Vioget frame too (fixing the 2.5° shear
+     s81 measured at 1846-07). Reads the core cadastre only. ---- */
+  var CAD_COL_WATER=new THREE.Color(0x3fd0e0), CAD_COL_CORNER=new THREE.Color(0xe8c24e),
+      CAD_COL_STD=new THREE.Color(0xcbd6dd), CAD_COL_NONSTD=new THREE.Color(0xe07ac0);
+  function buildLotOverlay(){
+    _overlayDay = Math.floor(simDay);
+    var blocks = blocksAt(simDay), pos=[], col=[], skew=wbCurrentSkew();
+    blocks.forEach(function(b){
+      b.lots.forEach(function(l){
+        var c = l.water ? CAD_COL_WATER : (!b.standard ? CAD_COL_NONSTD : (l.corner ? CAD_COL_CORNER : CAD_COL_STD));
+        // reproject the lot's (u,v) bounds through the CURRENT painted frame
+        var sw=gridToWorldAt(l.u.lo,l.v.lo,skew), se=gridToWorldAt(l.u.hi,l.v.lo,skew),
+            ne=gridToWorldAt(l.u.hi,l.v.hi,skew), nw=gridToWorldAt(l.u.lo,l.v.hi,skew);
+        wbPushDrapedRun(pos,col,[sw,se,ne,nw,sw],c,0.5,false,9); // closed loop, draped
+      });
+    });
+    return wbLineSegs(pos,col,0.92,999);
+  }
+  /* plaza is a distinct WARM GOLD so it can never read as the cove's blue
+     (s81 finding C — the reported "cove includes the plaza" was the flat-plane
+     shear PLUS two near-identical blues; geometry is correct, see the audit). */
+  var CAD_PARCEL_COLS = { plaza:[242,206,88], water:[70,150,200], mud:[130,90,70], beach:[210,190,120],
     camp:[220,140,70], mission:[180,120,200], presidio:[110,170,90], survey:[90,110,130] };
   function buildParcelOverlay(){
-    _lotOverlayDay = Math.floor(simDay);
+    _overlayDay = Math.floor(simDay);
     var B = (typeof TOWN_BOX==="object" && TOWN_BOX) ? TOWN_BOX : VILLAGE_BOX, pad=900;
     var box = { xMin:B.xMin-pad, xMax:B.xMax+pad+400, zMin:B.zMin-pad, zMax:B.zMax+pad };
     var parcels = window.__P1850.groundPlan.parcels;
@@ -240,7 +448,7 @@
       for(var i=0;i<parcels.length;i++){ var p=parcels[i];
         if(p.name==="survey") continue; // boundary only — skip its fill (it blankets the town)
         if((p.birth<=simDay) && window.__P1850.groundPlan.parcelByName(p.name) && cadParcelHit(p,x,z)){
-          var c=CAD_PARCEL_COLS[p.cls]||[200,60,200]; return [c[0],c[1],c[2],90];
+          var c=CAD_PARCEL_COLS[p.cls]||[200,60,200]; return [c[0],c[1],c[2],95];
         }
       }
       return null;
@@ -255,19 +463,14 @@
       var dx=s.x1-s.x0, dz=s.z1-s.z0, len=Math.hypot(dx,dz)||1;
       var nx=-dz/len*s.halfW, nz=dx/len*s.halfW;
       var c = s.frame==="vioget" ? cV : cB;
-      [[s.x0+nx,s.z0+nz,s.x1+nx,s.z1+nz],[s.x0-nx,s.z0-nz,s.x1-nx,s.z1-nz]].forEach(function(L){
-        pos.push(L[0], terrainHeight(L[0],L[1])+0.4, L[1],  L[2], terrainHeight(L[2],L[3])+0.4, L[3]);
-        col.push(c.r,c.g,c.b, c.r,c.g,c.b);
-      });
+      wbPushDrapedRun(pos,col,[{x:s.x0+nx,z:s.z0+nz},{x:s.x1+nx,z:s.z1+nz}],c,0.4,false,8);
+      wbPushDrapedRun(pos,col,[{x:s.x0-nx,z:s.z0-nz},{x:s.x1-nx,z:s.z1-nz}],c,0.4,false,8);
     });
-    var g = new THREE.BufferGeometry();
-    g.setAttribute("position", new THREE.Float32BufferAttribute(pos,3));
-    g.setAttribute("color", new THREE.Float32BufferAttribute(col,3));
-    var m = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ vertexColors:true, transparent:true, opacity:0.9, depthTest:false }));
-    m.renderOrder = 999; m.frustumCulled = false;
-    return m;
+    return wbLineSegs(pos,col,0.9,999);
   }
 
+  /* draped tint plane: NxN tint canvas over `box`, mapped onto a SUBDIVIDED
+     grid whose vertices are displaced to terrainHeight (was a flat y=60 quad). */
   function samplePlaneOverlay(box, N, sampleFn){
     var cv = document.createElement("canvas"); cv.width = cv.height = N;
     var ctx = cv.getContext("2d"), img = ctx.createImageData(N,N);
@@ -279,20 +482,41 @@
     }
     ctx.putImageData(img,0,0);
     var tex = new THREE.CanvasTexture(cv); tex.magFilter = THREE.NearestFilter;
-    var g = new THREE.PlaneGeometry(box.xMax-box.xMin, box.zMax-box.zMin); g.rotateX(-Math.PI/2);
+    var W = box.xMax-box.xMin, H = box.zMax-box.zMin;
+    var seg = Math.max(24, Math.min(190, Math.round(Math.max(W,H)/14)));       // ~14 m cells, capped
+    var segX = Math.max(8, Math.round(seg*W/Math.max(W,H))), segZ = Math.max(8, Math.round(seg*H/Math.max(W,H)));
+    var g = new THREE.PlaneGeometry(W, H, segX, segZ); g.rotateX(-Math.PI/2);
+    var p = g.attributes.position, cx=(box.xMin+box.xMax)/2, cz=(box.zMin+box.zMax)/2;
+    for(var vi=0; vi<p.count; vi++){ p.setY(vi, terrainHeight(p.getX(vi)+cx, p.getZ(vi)+cz)+0.3); }
+    p.needsUpdate = true;
     var mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ map:tex, transparent:true, depthTest:false, depthWrite:false }));
-    mesh.position.set((box.xMin+box.xMax)/2, 60, (box.zMin+box.zMax)/2);
+    mesh.position.set(cx, 0, cz);
     mesh.renderOrder = 998; mesh.frustumCulled = false;
     return mesh;
   }
 
   function buildKeepoutOverlay(){
     var B = (typeof TOWN_BOX==="object" && TOWN_BOX) ? TOWN_BOX : VILLAGE_BOX;
-    var pad = 120;
+    var pad = 120, N = 200, blocked = 0, total = 0;
     var box = { xMin:B.xMin-pad, xMax:B.xMax+pad, zMin:B.zMin-pad, zMax:B.zMax+pad };
-    return samplePlaneOverlay(box, 200, function(x,z){
-      return walkBlockedAt(x,z,simDay) ? [255,44,44,150] : null;
+    var mesh = samplePlaneOverlay(box, N, function(x,z){
+      total++;
+      if(walkBlockedAt(x,z,simDay)){ blocked++; return [255,44,44,150]; }
+      return null;
     });
+    // HONEST EMPTY-STATE (s81 finding B): walkBlockedAt only blocks placed
+    // footprints/keep-outs (water/steep-slope live in the A* pathfinder, not
+    // this point query), and every footprint source is an empty stub on the
+    // foundation — so the mask is legitimately empty. Say so rather than render
+    // nothing silently.
+    if(keepoutStatusEl){
+      var iso = (window.__P1850 && window.__P1850.date) || "";
+      keepoutStatusEl.textContent = blocked===0
+        ? ("0 blocked cells at "+iso+" — no blocking layers admitted yet (buildings / fences / tents pending)")
+        : (blocked+" of "+total+" sampled cells blocked at "+iso);
+      keepoutStatusEl.style.color = blocked===0 ? "#8fa77b" : "#e0a06a";
+    }
+    return mesh;
   }
 
   var WB_ZONE_NAMES = { 0:"none / town core", 1:"dune", 2:"scrub / chaparral", 3:"grassland", 4:"oak woodland", 5:"marsh / reeds", 6:"mudflat" };
@@ -541,7 +765,26 @@
     if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(payload).then(function(){ done(true); }, function(){ done(false); });
     else done(false);
   });
+  el("div","wb-foot", "Overlays inspect the LAW and DATA; the Layers list above shows admitted RENDERERS — the spine has no renderer of its own by design (ground-paint derives from it).");
   el("div","wb-foot", WB_LAYERS.length+" layers registered · atelier.html only (never in the release build) · nothing persists");
+
+  /* DEV CAPTURE (s81) — the atelier is dev-only, so a framebuffer grab lives
+     here (not the release): render synchronously and read the whole drawing
+     buffer BEFORE the browser composites/clears it (same trick the provenance
+     probe's readLuminance uses), then encode a PNG via a 2D canvas. Returns a
+     data URL. Used to produce screening evidence when the host's screenshot
+     path chokes on this heavy WebGL scene. */
+  window.__wbShot = function(){
+    _wbRender(scene, camera);
+    var gl = renderer.getContext(), w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
+    var buf = new Uint8Array(w*h*4);
+    gl.readPixels(0,0,w,h,gl.RGBA,gl.UNSIGNED_BYTE,buf);
+    var cv = document.createElement("canvas"); cv.width=w; cv.height=h;
+    var ctx = cv.getContext("2d"), img = ctx.createImageData(w,h);
+    for(var y=0;y<h;y++){ var srow=(h-1-y)*w*4, drow=y*w*4; for(var xi=0;xi<w*4;xi++) img.data[drow+xi]=buf[srow+xi]; }
+    ctx.putImageData(img,0,0);
+    return cv.toDataURL("image/png");
+  };
 
   applyVis();
   console.log("[workbench] THE ATELIER armed — "+WB_LAYERS.length+" layer visibility registrations: "+WB_LAYERS.join(", "));
