@@ -775,39 +775,75 @@ function _scrRoadRun(t, run){
   }
   var seed = run.seed, j, a, b, dx, dz, len, dk;
   if(partial){
-    /* S3 PARTIAL FILL (s75 retune — road-master-spec §9b "S3 DEVELOPING:
-       widened worn track... width grows toward class width, ruts appear,
-       edges still ragged"). The old full-width `partialWash` base stroke
-       painted a SOLID edge-to-edge worn surface — an S4 "full worn surface"
-       read arriving at S3 (the "too wide too quickly" defect). Replaced with
-       a BROKEN, CENTRE-WEIGHTED worn track: a patchy central wash (~half the
-       ROW) plus broken wheel/foot lanes fanning outward, ground still showing
-       at the margins and between the lanes. Constant width intact — only the
-       FILL is partial; S4 remains the only full-ROW surface. fill:true. */
-    var washW = coreW*0.52, washCol = _mixCol(base, _parseSplatCol(ROAD_COLS.partialWash), 0.42);
-    var wd = 0, wrun = [];
+    /* S3 PARTIAL FILL (s75b ORGANIC REWORK — Director/user finding on
+       38ed7a8: the first s75 pass gated a full-length constant-width wash
+       with a ~209m-wavelength sine (hard 50-80m gaps, long crisp-edged
+       rectangles = "detached planks") and added coreW-PROPORTIONAL band
+       strips (0.22*coreW wide at ±0.24*coreW — up to 4.6m slabs floating
+       5m off the line; splatOffsetPolyline at bends angled them off-axis:
+       the "leftover casing fragments" and the angled slab off Clay).
+       Grammar now per road-master §2/§4: the worn zone HUGS the centerline
+       CONTINUOUSLY with varying intensity — wear THINS, it never switches
+       off. Inside it, broken worn wheel/foot lanes at ABSOLUTE gauge (s62
+       rut law — never proportional, never beside the street). Constant
+       width intact: only FILL varies; S4 stays the one full-ROW surface. */
+    var washW = coreW*0.50;
+    var washC = _parseSplatCol(_mixCol(base, _parseSplatCol(ROAD_COLS.partialWash), 0.42));
+    /* the wash is ONE FILLED POLYGON with per-node noise-modulated halfwidth:
+       the edge wiggles continuously (±1-2m transition, §2) — per-segment
+       strokes were tried first and their width jumps read as terraced steps
+       at the 30-40m framing. Two noise octaves (~17m + ~41m) + per-node dice,
+       FLOORED — wear thins, never off. */
+    var wd = 0, hwArr = [], nxArr = [], nzArr = [];
     for(var wk=0;wk<nodes.length;wk++){
       if(wk>0) wd += Math.hypot(nodes[wk].x-nodes[wk-1].x, nodes[wk].z-nodes[wk-1].z);
-      var wv = 0.5+0.5*Math.sin(wd*0.03+seed*19.0) + (_strokeN(seed, 800+wk*2)-0.5)*0.5;
-      if(wv > 0.42) wrun.push(nodes[wk]);
-      if((wv <= 0.42 || wk===nodes.length-1) && wrun.length){
-        if(wrun.length>=2) _scrStroke(ctx, t.pxFn, t.pxLenFn, wrun, washW, washCol, "butt");
-        wrun = [];
-      }
+      var pA2 = nodes[Math.max(0,wk-1)], pB2 = nodes[Math.min(nodes.length-1,wk+1)];
+      var ddx2 = pB2.x-pA2.x, ddz2 = pB2.z-pA2.z, dl2 = Math.hypot(ddx2,ddz2)||1;
+      nxArr.push(-ddz2/dl2); nzArr.push(ddx2/dl2);
+      var wv = 0.5 + 0.28*Math.sin(wd*0.37+seed*19.0) + 0.22*Math.sin(wd*0.152+seed*57.0)
+             + (_strokeN(seed, 800+wk*2)-0.5)*0.34;
+      wv = Math.max(0.22, Math.min(1, wv));
+      var hw = washW*0.5*(0.55 + 0.45*wv) + (_strokeN(seed, 860+wk*3)-0.5)*0.5; // micro edge rag
+      if(wk===0 || wk===nodes.length-1) hw *= 0.45;        // tapered ends
+      else if(wk===1 || wk===nodes.length-2) hw *= 0.75;
+      hwArr.push(Math.max(0.6, hw));
     }
-    var bandDefs = [ {off:-0.24, w:0.22, ph:0.0}, {off:0.0, w:0.18, ph:2.2}, {off:0.24, w:0.22, ph:4.1} ];
-    for(var bi=0;bi<bandDefs.length;bi++){
-      var bd = bandDefs[bi];
-      var line = splatOffsetPolyline(nodes, coreW*bd.off);
+    var poly = [];
+    for(wk=0;wk<nodes.length;wk++) poly.push({ x:nodes[wk].x+nxArr[wk]*hwArr[wk], z:nodes[wk].z+nzArr[wk]*hwArr[wk] });
+    for(wk=nodes.length-1;wk>=0;wk--) poly.push({ x:nodes[wk].x-nxArr[wk]*hwArr[wk], z:nodes[wk].z-nzArr[wk]*hwArr[wk] });
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = _jitterCol(washC, 0.97+(_strokeN(seed,871)-0.5)*0.05);
+    ctx.beginPath();
+    var pp0 = t.pxFn(poly[0].x, poly[0].z);
+    ctx.moveTo(pp0.x, pp0.y); _scrGrow(pp0, 2);
+    for(var pv=1;pv<poly.length;pv++){ var ppv = t.pxFn(poly[pv].x, poly[pv].z); ctx.lineTo(ppv.x, ppv.y); _scrGrow(ppv, 2); }
+    ctx.closePath(); ctx.fill();
+    // interior mottle: soft darker/lighter tone patches ALONG the track so the
+    // fill reads worn-in, not vector-drawn (short strokes well inside the wash)
+    for(wk=0;wk<nodes.length-2;wk+=2){
+      var mh = _strokeN(seed, 880+wk);
+      if(mh<0.35) continue;
+      var mOff = (_strokeN(seed, 890+wk)-0.5)*washW*0.3; // stays inside the thinnest wash sections
+      var mline = [ {x:nodes[wk].x+nxArr[wk]*mOff, z:nodes[wk].z+nzArr[wk]*mOff},
+                    {x:nodes[wk+2].x+nxArr[wk+2]*mOff, z:nodes[wk+2].z+nzArr[wk+2]*mOff} ];
+      _scrStroke(ctx, t.pxFn, t.pxLenFn, mline, 0.9+mh*1.6, _jitterCol(washC, mh<0.62?0.93:1.05), "round");
+    }
+    // broken worn wheel/foot lanes INSIDE the wash — absolute gauge (s62 rut
+    // law), short dashes (~20m wavelength), per-dash width/tone jitter, round
+    // caps (interior wear marks, not road ends — no rectangle read)
+    var laneOff = Math.min(1.5, coreW*0.10); // inside the wash even at its thinnest (min hw ~0.32*washW)
+    var laneDefs = [ {o:-laneOff, ph:0.0}, {o:laneOff, ph:2.6} ];
+    for(var li2=0;li2<laneDefs.length;li2++){
+      var line = splatOffsetPolyline(nodes, laneDefs[li2].o);
       var d = 0, runPts = [];
       for(var k=0;k<line.length;k++){
         if(k>0) d += Math.hypot(line[k].x-line[k-1].x, line[k].z-line[k-1].z);
-        var v = 0.5+0.5*Math.sin(d*0.055+bd.ph+seed*31.0) + (_strokeN(seed, 900+k*2+bi)-0.5)*0.6;
-        if(v > 0.42) runPts.push(line[k]);
-        if((v <= 0.42 || k===line.length-1) && runPts.length){
+        var v = 0.5+0.5*Math.sin(d*0.31+laneDefs[li2].ph+seed*31.0) + (_strokeN(seed, 900+k*2+li2*7)-0.5)*0.6;
+        if(v > 0.48) runPts.push(line[k]);
+        if((v <= 0.48 || k===line.length-1) && runPts.length){
           if(runPts.length>=2){
-            dk = 1 + (_strokeN(seed, 950+k+bi*7)-0.5)*0.10;
-            _scrStroke(ctx, t.pxFn, t.pxLenFn, runPts, coreW*bd.w, _jitterCol(base, dk), "butt");
+            dk = 0.92 + (_strokeN(seed, 950+k+li2*7)-0.5)*0.08;
+            _scrStroke(ctx, t.pxFn, t.pxLenFn, runPts, 0.9+_strokeN(seed, 970+k)*0.5, _jitterCol(base, dk), "round");
           }
           runPts = [];
         }
@@ -834,7 +870,10 @@ function _scrRoadRun(t, run){
        Wide streets get two travel lanes; the ruts stay thin and broken. */
     var rutCol = _mixCol(_parseSplatCol(ROAD_COLS.rut), base, 0.5);
     var rutOff = 0.78, rutW = 0.4;
-    var lanes = coreW>=9 ? [-coreW*0.18, coreW*0.18] : [0];
+    // s75b: on a PARTIAL (S3) surface the ruts hug the worn centre track —
+    // the ±0.18*coreW twin lanes are an S4 full-surface feature and poked
+    // outside the partial wash (thin stray lines beside the street)
+    var lanes = (!partial && coreW>=9) ? [-coreW*0.18, coreW*0.18] : [0];
     for(var li=0; li<lanes.length; li++){
       var laneC = lanes[li];
       [rutOff,-rutOff].forEach(function(off, side){
@@ -2280,6 +2319,74 @@ registerAudit("ground-paint", "fillPacing", function(){
     out.byState["S"+st] = { n:arr.length, medBandFrac:m, ceil:ceil==null?"n/a (full by law)":ceil };
     if(ceil!=null && m > ceil){ out.pass = false; out.violations.push({ state:"S"+st, medBandFrac:m, ceil:ceil }); }
   });
+  return out;
+});
+
+/* s75b FILL-SHAPE thresholds (road-master §2/§4 organic grammar). Calibrated
+   against 38ed7a8 at 1848-04-02 (the user's defect frame): the mechanical-slab
+   rendering measured centre-gap 15m (Kearny) and lateral-centroid p90 of
+   1.9-3.9m (offset band strips reading as detached/beside-the-street slabs);
+   the organic rework measures gap ~0m and p90 well under the ceilings.
+   fill:true tunables. */
+var FILL_SHAPE_GAP_MAX = 12;   // max meters of NO paint within ±2m of the centerline inside an S3 stretch (wear thins, never switches off)
+var FILL_SHAPE_CEN_P90 = function(w){ return Math.max(1.6, 0.11*w); }; // p90 |band centroid| ceiling (m)
+registerAudit("ground-paint", "fillShape", function(){
+  /* SHAPE of the S3 partial fill — two teeth:
+     (a) LONGITUDINAL CONTINUITY: walking a contiguous S3 stretch at 3m steps,
+         the painted band (alpha>=35) within ±2m of the master centerline may
+         never vanish for more than FILL_SHAPE_GAP_MAX consecutive meters —
+         hard gaps read as detached planks (§2: wear thins, doesn't switch off);
+     (b) LATERAL CENTREDNESS: the alpha-weighted lateral centroid of the
+         painted band inside the S3 design envelope must hug the centerline
+         (p90 |centroid| <= ceiling) — nothing paints BESIDE the street (the
+         offset-slab artifact class). Junction/plaza-adjacent stations are
+         skipped and reset the gap counter (a crossing street's paint is
+         legal there). */
+  updateGridSwing();
+  var out = { pass:true, date:simDateISO(dateFromSimDay(simDay)), streets:{}, violations:[] };
+  if(!SPLAT_LAST_STATS){ return { pass:false, error:"no splat stats — paint never ran" }; }
+  STREETS_RUNTIME.forEach(function(s){
+    var rec = SPLAT_LAST_STATS.streets[s.id];
+    if(!rec || !rec.pieces || rec.pieces.length<3) return;
+    var half = s.widthM/2, pcs = rec.pieces;
+    var cents = [], maxGap = 0, gap = 0, nsta = 0;
+    for(var i=0;i<pcs.length-1;i++){
+      var a = pcs[i], b = pcs[i+1];
+      if(a.st!==3 || b.st!==3){ gap = 0; continue; } // only inside contiguous S3 stretches
+      var segL = Math.hypot(b.x-a.x, b.z-a.z); if(segL<1) continue;
+      var tx = (b.x-a.x)/segL, tz = (b.z-a.z)/segL, nx = -tz, nz = tx;
+      for(var d=0; d<segL; d+=3){
+        var sx = a.x+tx*d, sz = a.z+tz*d;
+        if(_gpNearOtherStreet(sx, sz, s.id, half+4)){ gap = 0; continue; } // junction — legal crossing paint
+        if(_gpNearPlaza(sx, sz, 14)){ gap = 0; continue; }
+        var tier = _gpOwnerTier(sx, sz); if(!tier){ gap = 0; continue; }
+        nsta++;
+        /* centroid window = the S3 fill's DESIGN ENVELOPE (±0.35W): wash
+           half-width tops out at ~0.27W and lanes at <=2.2m, while legal
+           non-S3 paint sits at the ROW edge (door/desire paths clip 1m
+           inside ±0.5W; apron spots survive only outside the wash) — the
+           window keeps the tooth on offset S3 fill (the old defect bands at
+           ±0.24W land inside it) without tripping on neighbours' legal paint. */
+        var cwin = s.widthM*0.35;
+        var sum = 0, wsum = 0, centreOn = false;
+        for(var off=-half; off<=half; off+=0.4){
+          var al = _gpAlphaAt(tier, sx+nx*off, sz+nz*off);
+          if(al>=35){ if(Math.abs(off)<=cwin){ sum += al*off; wsum += al; } if(Math.abs(off)<=2) centreOn = true; }
+        }
+        if(wsum>0) cents.push(Math.abs(sum/wsum));
+        if(centreOn){ if(gap>maxGap) maxGap = gap; gap = 0; } else gap += 3;
+      }
+      if(gap>maxGap) maxGap = gap;
+    }
+    if(nsta<6) return; // too little S3 run to judge
+    cents.sort(function(x,y){ return x-y; });
+    var p90 = cents.length ? +cents[Math.floor(cents.length*0.9)].toFixed(2) : null;
+    var ceil = +FILL_SHAPE_CEN_P90(s.widthM).toFixed(2);
+    out.streets[s.id] = { stations:nsta, maxGapM:maxGap, cenP90:p90, cenCeil:ceil };
+    if(maxGap > FILL_SHAPE_GAP_MAX) out.violations.push({ id:s.id, kind:"centre-gap", gapM:maxGap, max:FILL_SHAPE_GAP_MAX });
+    if(p90!=null && p90 > ceil) out.violations.push({ id:s.id, kind:"lateral-offset", cenP90:p90, ceil:ceil });
+  });
+  if(out.violations.length) out.pass = false;
   return out;
 });
 
