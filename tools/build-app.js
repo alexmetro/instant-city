@@ -46,28 +46,29 @@ const SRC = path.join(APP, "src");
 /* Declared assembly inputs (layers-spec.md inventory). Order here is the
    DECLARED layer order (core plumbing first, then draw-order slots 1..13);
    the byte order of the output is governed by the global chunk numbers. */
+/* s79 THE FOUNDATION CUT (foundation-reset.md §2): the assembly is stripped
+   to the substrate. Removed layers (buildings, doodads, people, ships, fauna,
+   effects, director, zones-tint, labels-inspect + the legacy splat ground-paint)
+   are gone from this list; their sources are deleted on this branch (the `legacy`
+   branch preserves every byte). ground-paint is a REWRITE (fresh minimal uniform
+   renderer — foundation-reset §3, admission #1). Removed layers re-enter one at a
+   time through the admission gate (foundation-reset §3-§4), each re-adding its
+   file here. Because whole layers are now absent, the global chunk numbers are
+   SPARSE (gaps where removed layers' chunks were) — assembleJS tolerates gaps and
+   only rejects duplicates/mis-order (see below). */
 const FILES = [
   "core/00-boot.js",
   "core/01-geography.js",
   "core/02-scene.js",
   "core/03-sim.js",
   "core/04-roads.js",
-  "core/05-routing.js",
+  "core/05-routing.js",      // core plumbing (walkBlockedAt/graph) — kept, its removed-layer obstacle inputs stubbed empty
   "core/06-debug.js",
   "core/07-main.js",
-  "layers/terrain.js",       // slot 1
-  "layers/ground-paint.js",  // slot 2
-  "layers/zones-tint.js",    // slot 3
-  "layers/buildings.js",     // slot 4
-  "layers/doodads.js",       // slot 5
-  "layers/people.js",        // slot 6
-  "layers/ships.js",         // slot 7
-  "layers/fauna.js",         // slot 8
-  "layers/effects.js",       // slot 9
-  "layers/labels-inspect.js",// slot 10
-  "layers/camera-input.js",  // slot 11
-  "layers/director.js",      // slot 12
-  "layers/ui-chrome.js"      // slot 13
+  "layers/terrain.js",       // slot 1  — KEPT (s78 1846 baseline)
+  "layers/ground-paint.js",  // slot 2  — REWRITE (minimal uniform roads, admission #1)
+  "layers/camera-input.js",  // slot 11 — KEPT (camera rig + pointer/keys + speed pill; the app must be navigable)
+  "layers/ui-chrome.js"      // slot 13 — KEPT (HUD/timeline/menu/clock chrome + ticker + paper)
 ];
 
 /* THE ATELIER (layers-spec.md slot 15, 2026-07-13): the dev workbench is a
@@ -114,9 +115,18 @@ function assembleJS(files, spliceBeforeLastFrom) {
     if (f === spliceBeforeLastFrom) extras.push(...chunks); else all.push(...chunks);
   }
   all.sort((a, b) => a.seq - b.seq);
-  all.forEach((c, i) => {
-    if (c.seq !== i + 1) throw new Error("chunk sequence broken at " + c.seq + " (" + c.file + ") — expected " + (i + 1));
-  });
+  /* s79 FOUNDATION CUT: the chunk numbers are now SPARSE (removed layers left
+     gaps in the global sequence). Byte-stability + original execution order are
+     still guaranteed by the ascending sort; we no longer require 1..N contiguity
+     (that invariant assumed every layer was present). We DO still reject the two
+     real hazards the old check caught: a DUPLICATE number (two chunks claiming the
+     same slot → nondeterministic order) — reorders are impossible under a stable
+     sort of distinct integers. When a removed layer is re-admitted it simply
+     re-adds its file + its (still-unique) chunk numbers, closing its own gap. */
+  for (let i = 1; i < all.length; i++) {
+    if (all[i].seq === all[i - 1].seq)
+      throw new Error("duplicate chunk number " + all[i].seq + " (" + all[i].file + " and " + all[i - 1].file + ")");
+  }
   extras.sort((a, b) => a.seq - b.seq);
   const seq = extras.length ? all.slice(0, -1).concat(extras, all.slice(-1)) : all;
   return { js: seq.map(c => c.body.join("\n")).join("\n"), chunkCount: seq.length };

@@ -973,7 +973,7 @@
    Identical semantics to the built index.html (one classic script, one
    IIFE, original chunk order). Requires an http server (fetch). */
 (function(){
-  var FILES = ["core/00-boot.js","core/01-geography.js","core/02-scene.js","core/03-sim.js","core/04-roads.js","core/05-routing.js","core/06-debug.js","core/07-main.js","layers/terrain.js","layers/ground-paint.js","layers/zones-tint.js","layers/buildings.js","layers/doodads.js","layers/people.js","layers/ships.js","layers/fauna.js","layers/effects.js","layers/labels-inspect.js","layers/camera-input.js","layers/director.js","layers/ui-chrome.js"];
+  var FILES = ["core/00-boot.js","core/01-geography.js","core/02-scene.js","core/03-sim.js","core/04-roads.js","core/05-routing.js","core/06-debug.js","core/07-main.js","layers/terrain.js","layers/ground-paint.js","layers/camera-input.js","layers/ui-chrome.js"];
   var RE = /^\/\* @P1850-CHUNK (\d+) — (.*) \*\/$/;
   Promise.all(FILES.map(function(f){
     return fetch('src/'+f).then(function(r){ if(!r.ok) throw new Error('fetch failed: src/'+f); return r.text(); });

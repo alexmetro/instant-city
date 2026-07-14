@@ -191,3 +191,94 @@ function registerLayerVisibility(name, setVisibleFn){ __P1850_LAYER_VIS[name] = 
    declarations hoist module-wide, so the earlier position is behavior-safe. */
 function escapeHTML(s){ return (s||"").replace(/[&<>]/g, function(c){ return c==="&"?"&amp;":(c==="<"?"&lt;":"&gt;"); }); }
 function cap(s){ return s.charAt(0).toUpperCase()+s.slice(1); }
+
+/* =====================================================================
+   FOUNDATION STUBS (s79 THE FOUNDATION CUT — foundation-reset.md §2).
+   The substrate keeps core + terrain + ground-plan + ground-paint + chrome;
+   the higher layers (buildings, doodads, people, ships, fauna, effects,
+   director, zones-tint, labels-inspect) are OUT until each passes its
+   admission gate (foundation-reset §3-§4). Those removed layers used to
+   DEFINE the symbols below, which a handful of KEPT files still reference at
+   the interface (the render loop, the road-lifecycle use counter, the walk
+   mask, the debug/inspect API, kept event handlers). Rather than leave
+   dangling references, we stub them HONESTLY here — empty collections and
+   no-op / passthrough functions — placed in the module prologue so they exist
+   before any consumer runs (function declarations hoist module-wide, so even
+   terrain's init-time tagInspect() resolves). This whole block is REMOVABLE:
+   as each layer is admitted it re-defines its own symbols (a later
+   declaration wins) and the matching stub line is deleted at the door.
+   Each stub names the layer whose admission retires it.
+   ===================================================================== */
+/* buildings — placement inputs the road-lifecycle counter, walk mask, and
+   placement audits iterate (empty ⇒ zero contributors, audits pass vacuously) */
+var VILLAGE_BUILDING_SPOTS = [];      // FOUNDATION: awaiting admission of buildings
+var growthBuildingCandidates = [];    // FOUNDATION: awaiting admission of buildings
+var tentCandidates = [];              // FOUNDATION: awaiting admission of buildings
+var spawnedBuildings = [];            // FOUNDATION: awaiting admission of buildings
+var spawnedTents = [];                // FOUNDATION: awaiting admission of buildings
+var tentMesh = { count: 0 };          // FOUNDATION: awaiting admission of buildings (debug getter reads .count)
+var PLACEMENT_SIGNS = [];             // FOUNDATION: awaiting admission of buildings (placement.signs audit registry)
+function dayForBuildingIndex(){ return 1e9; } // FOUNDATION: awaiting admission of buildings (never revealed)
+function dayForTentIndex(){ return 1e9; }      // FOUNDATION: awaiting admission of buildings
+/* doodads — placement scatter the placement audits check clearance against;
+   scatterMeshes is the far-LOD registry terrain drops its natural-feature
+   meshes (tule marsh, sea lions, waterfowl, deer) into (they still scene.add) */
+var PLACEMENT_TREES = [];             // FOUNDATION: awaiting admission of doodads
+var PLACEMENT_STATIC_PROPS = [];      // FOUNDATION: awaiting admission of doodads
+var scatterMeshes = [];               // FOUNDATION: awaiting admission of doodads (terrain pushes natural-feature meshes here)
+/* people — home spots + roster slots + the life-stream reshuffle + camp gate */
+var HOME_BUILDING_SPOTS = [];         // FOUNDATION: awaiting admission of people
+var ALL_PEOPLE_SLOTS = [];            // FOUNDATION: awaiting admission of people
+var HAPPY_VALLEY_REVEAL_DAY = eventDateToSimDay("1849-08-01"); // FOUNDATION: awaiting admission of people (Happy Valley camp corridor gate)
+function reshuffleLifeStream(){}      // FOUNDATION: awaiting admission of people
+/* ships — the documented/fill visit lists the debug API + provenance toggle read */
+var shipVisits = [];                  // FOUNDATION: awaiting admission of ships
+var fillShipVisits = [];              // FOUNDATION: awaiting admission of ships
+var STORESHIP_INFO = [];              // FOUNDATION: awaiting admission of ships (placement.storeshipMud audit input)
+/* fauna — terrain's natural-fauna meshes (sea lion/waterfowl/deer) share the
+   fauna sway shader's time uniform; static (value stays 0) until fauna returns */
+var faunaTimeUniform = { value: 0 };  // FOUNDATION: awaiting admission of fauna
+var MISSION_GRAZE_PTS = [];           // FOUNDATION: awaiting admission of fauna (placement.fauna graze-point input)
+var PRESIDIO_GRAZE_PTS = [];          // FOUNDATION: awaiting admission of fauna
+var PASTURE_MISSION = { x:0, z:0 };   // FOUNDATION: awaiting admission of fauna (pasture centre — unused while graze lists are empty)
+var PASTURE_PRESIDIO = { x:0, z:0 };  // FOUNDATION: awaiting admission of fauna
+/* labels-inspect — the inspect/selection system + its pick/close/mode state */
+var INSPECT_MESHES = [];              // FOUNDATION: awaiting admission of labels-inspect
+var LOC_POINTS = [];                  // FOUNDATION: awaiting admission of labels-inspect
+var provenanceOnly = false;           // FOUNDATION: awaiting admission of labels-inspect
+var followedSlot = null;              // FOUNDATION: awaiting admission of labels-inspect (people-follow target)
+var followedDocumented = null;        // FOUNDATION: awaiting admission of labels-inspect
+function tagInspect(){}               // FOUNDATION: awaiting admission of labels-inspect (terrain tags its natural features)
+function trySelectAtScreenXY(){ return null; } // FOUNDATION: awaiting admission of labels-inspect (nothing selectable yet)
+function closeInspect(){}             // FOUNDATION: awaiting admission of labels-inspect
+function phoneChromeActive(){ return false; }  // FOUNDATION: awaiting admission of labels-inspect
+/* the __P1850._sel dispatch table (core/06-debug) references these EAGERLY at
+   the object literal — no-op each until the inspect panel returns */
+function openPersonInspectorForSlot(){}       // FOUNDATION: awaiting admission of labels-inspect
+function openPersonInspectorForDocumented(){} // FOUNDATION: awaiting admission of labels-inspect
+function openShipInspector(){}                // FOUNDATION: awaiting admission of labels-inspect
+function openBuildingInspector(){}            // FOUNDATION: awaiting admission of labels-inspect
+function openGrowthBuildingInspector(){}      // FOUNDATION: awaiting admission of labels-inspect
+function openTentInspector(){}                // FOUNDATION: awaiting admission of labels-inspect
+function openStreetInspector(){}              // FOUNDATION: awaiting admission of labels-inspect
+function openZoneInspector(){}                // FOUNDATION: awaiting admission of labels-inspect
+function openSpeciesInspector(){}             // FOUNDATION: awaiting admission of labels-inspect
+function openPlaceInspector(){}               // FOUNDATION: awaiting admission of labels-inspect
+/* zones-tint — the district zone list the debug _selData getter + any zone
+   probe read (empty ⇒ no districts to tint or inspect yet) */
+var DISTRICT_ZONES = [];              // FOUNDATION: awaiting admission of zones-tint
+/* director — watch-mode + beat state the debug getter + ui-chrome endWatch read */
+var WATCH = { on: false };            // FOUNDATION: awaiting admission of director
+var DIRECTOR = { autoSlot:null, savedSpeed:null, beat:null, pending:[], suspendUntil:0, nextPickAt:0, beatStart:0 }; // FOUNDATION: awaiting admission of director
+var INTEREST = { slotCool:{}, siteCool:{}, typeCool:{}, nameCool:{}, hourSpent:{}, log:[] }; // FOUNDATION: awaiting admission of director (debug interest getter)
+/* effects — day/night + weather + fire + ghost state that kept core/handlers touch.
+   Lighting is now STATIC NOON (owned by core/02-scene here); these keep the
+   sim-clock + menu wiring inert until the effects layer restores the cycle. */
+var WET_OVERRIDE = null;              // FOUNDATION: awaiting admission of effects (debug wet override)
+var ghostVisible = false;             // FOUNDATION: awaiting admission of effects (altitude ghost overlay)
+function fireClockStep(step){ return step; }   // FOUNDATION: awaiting admission of effects (no fire-day sub-stepping)
+function refreshLightState(){}        // FOUNDATION: awaiting admission of effects (noon is static; no relight on jump)
+function updateWetTint(){}            // FOUNDATION: awaiting admission of effects (ground stays dry)
+function setGhost(){}                 // FOUNDATION: awaiting admission of effects
+function skipToSunriseSunset(){}      // FOUNDATION: awaiting admission of effects (T-key sun skip)
+function setProvenanceOnly(){}        // FOUNDATION: awaiting admission of labels-inspect (provenance filter)

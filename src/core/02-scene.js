@@ -20,6 +20,49 @@ var camera = new THREE.PerspectiveCamera(52, window.innerWidth/window.innerHeigh
 
 scene.fog = new THREE.Fog(0xa89b7c, 800, 4200); // s62 earth palette: haze is earthy-atmospheric, not parchment (was 0xcfc2a0 — the far-ground white wash)
 
+/* =====================================================================
+   SKY DOME + STATIC NOON LIGHT RIG (s79 THE FOUNDATION CUT).
+   Relocated verbatim-in-spirit from the effects layer (which owned the
+   sky + the whole day/night cycle). The foundation holds a SINGLE static
+   NOON state — the values updateDayNight() computed at timeOfDay=0.5
+   (sunHeight=+1, dayT=1): sun at (0,850,260) i=0.72, hemi 0.30, ambient
+   0.09, sky zenith 0x3d72a8 / horizon 0xf3dfb0, fog 0xa89b7c (already the
+   scene.fog color above). This is deliberately static — the foundation
+   screens under the NOON protocol at every date. When the EFFECTS layer is
+   admitted it reclaims the sky/lights and restores the moving sun; delete
+   this block at that door (the lights are named sun/hemi/ambient exactly as
+   effects expects, and camera-input already drives scene.fog.near/far and
+   terrain already colours the water uniforms, so nothing else moves).
+   Earth Palette Law (terrain audit): these are the exact endpoints s62
+   tuned so flat noon ground sums to ~1.03x (rendered value ≈ albedo).
+   ===================================================================== */
+var SKY_R = 24000;
+var skyGeo = new THREE.SphereGeometry(SKY_R, 24, 16);
+var skyColors = new Float32Array(skyGeo.attributes.position.count*3);
+skyGeo.setAttribute("color", new THREE.BufferAttribute(skyColors,3));
+var skyMat = new THREE.MeshBasicMaterial({ vertexColors:true, side:THREE.BackSide, fog:false, depthWrite:false });
+var sky = new THREE.Mesh(skyGeo, skyMat);
+scene.add(sky);
+function paintSky(zenith, horizon){
+  var pos = skyGeo.attributes.position, col = skyGeo.attributes.color;
+  for(var i=0;i<pos.count;i++){
+    var y = pos.getY(i)/SKY_R;
+    var t = smoothstep(-0.05, 0.55, y);
+    var c = horizon.clone().lerp(zenith, t);
+    col.setXYZ(i, c.r, c.g, c.b);
+  }
+  col.needsUpdate = true;
+}
+paintSky(new THREE.Color(0x3d72a8), new THREE.Color(0xf3dfb0)); // static NOON sky (day zenith/horizon)
+
+var sun = new THREE.DirectionalLight(0xfff1d0, 0.72);
+sun.position.set(0, 850, 260); // NOON: updateDayNight()'s sunAz*900, max(sunHeight,-0.15)*700+150, 260 at timeOfDay=0.5
+scene.add(sun);
+var hemi = new THREE.HemisphereLight(0x9fb4d8, 0x6b5a3e, 0.30);
+scene.add(hemi);
+var ambient = new THREE.AmbientLight(0xffffff, 0.09);
+scene.add(ambient);
+
 /* @P1850-CHUNK 05 — geometry/merge + shared scatter helpers */
 /* =====================================================================
    GEOMETRY / MERGE HELPERS  (no BufferGeometryUtils dependency — manual)
@@ -71,6 +114,27 @@ function mergeGeoms(list){
   merged.computeVertexNormals();
   return merged;
 }
+/* mergeGeomsParts — merge with per-vertex aPart/aLimb attributes. Relocated
+   from the people layer (s79 THE FOUNDATION CUT): the people limb-shader was
+   its main consumer, but TERRAIN's natural-fauna meshes (sea lion, waterfowl,
+   deer) also build through it, so it stays as a core geometry helper. The
+   extra attributes are harmless on terrain's plain vertex-colour material;
+   l/v default to 0 for callers (like terrain) that don't tag limbs. */
+function mergeGeomsParts(parts){ // parts: [{g:geometry, p:partId, l:limbId, v:pivotY}] — colors pre-baked
+  var merged = mergeGeoms(parts.map(function(p){ return p.g; }));
+  var n = merged.attributes.position.count;
+  var arr = new Float32Array(n), limb = new Float32Array(n*2);
+  var off=0;
+  parts.forEach(function(p){
+    var c = p.g.attributes.position.count;
+    for(var i=0;i<c;i++){ arr[off+i]=p.p; limb[(off+i)*2]=p.l||0; limb[(off+i)*2+1]=p.v||0; }
+    off+=c;
+  });
+  merged.setAttribute("aPart", new THREE.BufferAttribute(arr,1));
+  merged.setAttribute("aLimb", new THREE.BufferAttribute(limb,2));
+  return merged;
+}
+var _UP = new THREE.Vector3(0,1,0); // shared up-axis (relocated to core with THE FOUNDATION CUT — terrain's fauna builders + future layers rotate about it)
 
 /* =====================================================================
    SCATTER HELPERS — shared seeded rejection-sampler + InstancedMesh
