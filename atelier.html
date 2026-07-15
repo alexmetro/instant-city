@@ -970,6 +970,7 @@
 <script src="streets-geometry.js?v=s88"></script> <!-- ?v: cache-buster — bumped s88 (SoMa street re-spacing: true 200x300-vara Hundred Vara blocks + Howard/Mission) so a cached old bake can never pair with a new index.html -->
 <script src="plat-lots-known.js?v=s86"></script> <!-- s86: digitized survey lot registry (68 records, window.PLAT_LOTS_KNOWN), consumed by core/08 cadApplyRecord -->
 <script src="landmark-reservations.js?v=s94"></script> <!-- s94: landmark reservations (14 anchored + 1 documented-unanchorable, window.LANDMARK_RESERVATIONS), consumed by core/08 cadApplyReservations + rendered by layers/buildings.js -->
+<script src="building-types.js?v=s96"></script> <!-- s96: BUILDING TYPES catalog (39 fill types + rough era-weight table, window.BUILDING_TYPES + window.BUILDING_TYPE_ERA_WEIGHTS), consumed by the Part-B FILL ENGINE in layers/buildings.js -->
 <script>
 /* =====================================================================
    src/vendor/ — VENDORED SOLVED-PROBLEM (foundation-reset.md §4b, the
@@ -8161,6 +8162,591 @@ setTimeout(function(){
   if(typeof window !== "undefined" && window.__P1850){
     window.__P1850.landmarksAt = function(day){ return deriveLandmarkSet(day == null ? simDay : day); };
     window.__P1850.landmarkCount = function(day){ return deriveLandmarkSet(day == null ? simDay : day).length; };
+  }
+}, 0);
+
+/* =====================================================================
+   ================  PART B — THE FILL ENGINE v1 (s96)  ================
+   The DOCUMENTED 1847 census village (a deliberately BOUNDED first increment
+   of the anonymous/simulated fill). Proves the fill pipeline end-to-end:
+   catalog draw (window.BUILDING_TYPES) -> era-mix -> canPlace on born
+   residential-band + commercial-core ground -> census audit against the
+   bible's HARD 1847-04 anchor -> Option-B placeholder render through the
+   C0->C4 construction ramp. A modest ramp through 1848 under the same rules;
+   it STOPS at the 1848 village (the 1849 tent explosion is a later sprint,
+   post-1848 census is INFORMATIONAL/non-gating).
+
+   THE TWO-TRACK LAW (fill-density-model §0): fill READS the cadastre/catalog;
+   it never moves a lot/reservation and never overlaps a landmark. Determinism:
+   a DEDICATED seeded stream (cyrb128/sfc32 keyed "p1850-fill-"+seed) that never
+   touches rngBuild/RNG_CALL_COUNT; the master roster is built ONCE (pure, cached)
+   and deriveFillSet(day) is a pure filter over it — same seed+date ⇒ byte-
+   identical, rewind-exact. Fill is NEVER registered into PLACEMENT_INDEX (that
+   would mutate a shared global per-rebuild and break rewind) — inter-fill
+   overlap is checked against a LOCAL occupancy list at master-build time; the
+   51 landmark footprints ARE in PLACEMENT_INDEX (lmRegisterOccupancy) so
+   canPlace already keeps fill off reserved landmark ground.
+
+   HARD DEFERRALS (do NOT build here — later sprints): subdivision / lot-
+   splitting (Knob B), the 1849 tent EXPLOSION (swale-scatter thousands),
+   lifecycle transitions (burn/teardown/ruins/rebuild/rename), multistory /
+   rear-court / made-land / party-wall. v1 places WHOLE, DETACHED buildings on
+   born fifty-vara zone ground, gap-toothed, oriented to ONE street frontage.
+   ===================================================================== */
+
+/* ---- RELEASE DEFAULT: fill volumes ON, matching the landmark default. ---- */
+var FILL_ON_AT_RELEASE = true;
+
+/* THE CATALOG (baked window.BUILDING_TYPES + era-weight table, from
+   data/building-types.json via app/building-types.js). Fill CONSUMES it. */
+var FILL_TYPES  = (typeof window !== "undefined" && window.BUILDING_TYPES) ? window.BUILDING_TYPES : [];
+var FILL_ERA_W  = (typeof window !== "undefined" && window.BUILDING_TYPE_ERA_WEIGHTS) ? window.BUILDING_TYPE_ERA_WEIGHTS : {};
+var FILL_FT_M   = 0.3048;   // catalog footprints are in FEET (per its meta.units); convert to metres.
+
+/* THE TUNABLES (fill:true — a later Atelier knob pass reads these). */
+var FILL_CAP_ISO      = "1848-04-01";  // v1 caps the count at the 1848 village (post-1848 informational)
+var FILL_SLOT_STEP_M  = 12;            // frontage-slot sampling interval along a block edge
+var FILL_SETBACK_M    = 2.2;           // building set back from the frontage curb, into the block
+var FILL_EDGE_CAP     = 0.55;          // per-block-edge built-fraction cap (gap-toothed; no ramparts)
+var FILL_GAP_M        = 3.0;           // side-yard gap booked against a block edge between neighbours
+var FILL_LOOKAHEAD    = 8;             // # of not-yet-counted buildings shown mid-construction (appear-in)
+var FILL_STORY_H_M    = 3.1;           // placeholder storey height (neutral massing; not final art)
+
+/* Only these subtypes are COUNTED census structures (dwellings + shops + civic
+   halls + the counted lodging/commercial tiers). Yard ancillaries (sheds,
+   open stalls) are NOT part of the 79-building 1847 census and v1 does not
+   place them. */
+var FILL_COUNTED_SUBTYPES = { "small-home":1, "medium-home":1, "large-home":1, "shop":1, "store":1,
+  "saloon":1, "tavern":1, "office":1, "market":1, "warehouse":1, "manufactory":1, "tent":1 };
+
+/* Census MATERIAL bucket for a catalog type (the bible's 1847 mix is shanty /
+   frame / adobe). adobe->adobe; frame/iron (prefab is a frame-kit stand-in)->
+   frame; scrap/canvas/canvas-over-frame/open-frame -> the improvised "shanty"
+   low tier. Drives BOTH the eraMix audit and the zone class below. */
+function fillCensusCat(t){
+  var m = t.material;
+  if(m === "adobe") return "adobe";
+  if(m === "frame" || m === "iron") return "frame";
+  return "shanty";
+}
+/* The zone class a fill building presents to the cadZoneGate (canPlace). The
+   census bucket doubles as the zone class: shanty/adobe are residential-band
+   only (the commercial front is never tent/adobe ground — CAD_ZONE_TABLE);
+   frame places in BOTH residential-band and commercial-core. So an adobe/shanty
+   rank naturally skips commercial-core slots and lands on residential ground. */
+function fillZoneClass(t){ return fillCensusCat(t); }
+
+/* eventDateToSimDay of the catalog's [start,end] era window (memoized). */
+var _fillEraCache = {};
+function fillEraValid(t, day){
+  if(!t.era || t.era.length < 2) return true;
+  var c = _fillEraCache[t.code];
+  if(!c){ c = { a: eventDateToSimDay(t.era[0]), b: eventDateToSimDay(t.era[1]) }; _fillEraCache[t.code] = c; }
+  return day >= c.a - 1e-6 && day <= c.b + 1e-6;
+}
+function fillWeight(code, snapKey){
+  var s = FILL_ERA_W[snapKey]; if(!s || !s[code]) return 0;
+  return s[code].weight || 0;
+}
+
+/* =====================================================================
+   THE CENSUS CURVE (fill + landmarks TOTAL). The 1847-04 anchor is the bible's
+   HARD documented survey (79 total: 22 shanty / 31 frame / 26 adobe); 1846-07
+   is the documented "~50 buildings" village; 1848-04 is REASONED (fill:true) —
+   the 1847 per-capita ratio (79 / pop~487) carried onto the pop curve's ~804 at
+   1848-04 ⇒ ~130. v1 HOLDS 130 past the cap (does NOT chase the 1849 thousands).
+   ONE curve read by BOTH the spawner and the census audit (measurement law). ===== */
+var _fillCensusCurve = null;
+function fillCensusCurve(){
+  if(_fillCensusCurve) return _fillCensusCurve;
+  _fillCensusCurve = [
+    { day: eventDateToSimDay("1846-07-01"), n: 50 },   // documented ~50 (Swasey/Bosqui + demographics)
+    { day: eventDateToSimDay("1847-04-01"), n: 79 },   // HARD ANCHOR (FoundSF survey, 28/39/33)
+    { day: eventDateToSimDay("1848-04-01"), n: 130 }   // reasoned: 1847 per-capita x pop(1848-04); fill:true
+  ];
+  return _fillCensusCurve;
+}
+function fillTargetTotal(day){
+  var C = fillCensusCurve();
+  if(day <= C[0].day) return C[0].n;
+  for(var i = 1; i < C.length; i++){
+    if(day <= C[i].day) return lerp(C[i-1].n, C[i].n, (day - C[i-1].day) / (C[i].day - C[i-1].day));
+  }
+  return C[C.length-1].n;                               // cap at the 1848 village
+}
+/* fill count owed at a date = the census total minus the landmarks already
+   standing (landmarks COUNT toward the 79). Clamped to what the master could
+   actually place (a short master ⇒ the census audit reads under target, by
+   design — starvation is surfaced, never hidden). */
+function fillCountAt(day){
+  var raw = Math.round(fillTargetTotal(day)) - reservationsAt(day).length;
+  var cap = FILL_MASTER ? FILL_MASTER.length : 1e9;
+  return clamp(raw, 0, cap);
+}
+
+/* =====================================================================
+   THE TRANCHE MIX. Only the 1847-04 tranche is audited (eraMix ±8% of
+   28/39/33). Post-1847 additions (the 1848 ramp) skew frame (frame construction
+   accelerating; adobe residential construction essentially stops after 1848 —
+   bible §1a; shanty persists as a diminishing low tier) — directional, not
+   audited. Category is assigned by a DETERMINISTIC largest-remainder walk so the
+   tranche proportions are hit exactly (never left to the rough weights). ===== */
+var FILL_MIX_1847 = { shanty: 0.28, frame: 0.39, adobe: 0.33 };
+var FILL_MIX_1848 = { shanty: 0.15, frame: 0.75, adobe: 0.10 };
+/* pick the category most behind its quota (streaming largest-remainder). */
+function fillPickCat(mix, counts){
+  var placed = counts.shanty + counts.frame + counts.adobe;
+  var best = null, bestDeficit = -Infinity, cats = ["shanty", "frame", "adobe"];
+  for(var i = 0; i < cats.length; i++){
+    var c = cats[i], want = mix[c] * (placed + 1), deficit = want - counts[c];
+    if(deficit > bestDeficit){ bestDeficit = deficit; best = c; }
+  }
+  return best;
+}
+/* seeded weighted draw of a concrete code within a census category, era-valid at
+   `day`, from the 1847-04 weight column (within-category variety only). */
+function fillPickCode(cat, day, rng){
+  var pool = [], tot = 0;
+  for(var i = 0; i < FILL_TYPES.length; i++){
+    var t = FILL_TYPES[i];
+    if(t.isGapMarker) continue;
+    if(!FILL_COUNTED_SUBTYPES[t.subtype]) continue;
+    if(fillCensusCat(t) !== cat) continue;
+    if(!fillEraValid(t, day)) continue;
+    var w = fillWeight(t.code, "1847-04");
+    if(w <= 0) w = 0.5;                                  // era-valid but zero-weighted at 1847 snapshot: a faint floor so later-era frame variety can still draw
+    pool.push({ t: t, w: w }); tot += w;
+  }
+  if(!pool.length) return null;
+  var r = rng() * tot, acc = 0;
+  for(var k = 0; k < pool.length; k++){ acc += pool[k].w; if(r <= acc) return pool[k].t; }
+  return pool[pool.length-1].t;
+}
+
+/* =====================================================================
+   FRONTAGE SLOTS — candidate build spots along born FIFTY-VARA block edges (the
+   Hundred Vara / SoMa fabric is deferred with the 1849 camp). Each slot faces
+   ONE street (the block edge's outward normal — the §1.6 corner rule by
+   construction, never a diagonal), set back from the curb into the block. The
+   slot's `day` is the block birth (a slot cannot pre-date its ground). ===== */
+function fillUnit(x, z){ var l = Math.hypot(x, z) || 1; return { x: x / l, z: z / l }; }
+function fillFrontageSlots(capDay){
+  var slots = [], FR = ["west", "east", "north", "south"];
+  var B = (typeof GROUND_PLAN !== "undefined") ? GROUND_PLAN.blocks : [];
+  for(var bi = 0; bi < B.length; bi++){
+    var b = B[bi];
+    if(b.publicReserve) continue;                        // the plaza common — keep out
+    if(b.district !== "fifty-vara") continue;            // Hundred Vara/SoMa deferred
+    if(b.birth > capDay) continue;                       // not yet surveyed by the cap
+    for(var fi = 0; fi < FR.length; fi++){
+      var frontage = FR[fi];
+      var e = cadFrontageEdgeUV(b, frontage); if(!e) continue;
+      var w0 = gridToWorldAt(e.p0.u, e.p0.v, GRID_ROT_BASE);
+      var w1 = gridToWorldAt(e.p1.u, e.p1.v, GRID_ROT_BASE);
+      var pin = gridToWorldAt(e.p0.u + e.inU, e.p0.v + e.inV, GRID_ROT_BASE);   // a step inward
+      var inward = fillUnit(pin.x - w0.x, pin.z - w0.z);
+      var edgeLen = Math.hypot(w1.x - w0.x, w1.z - w0.z);
+      var tang = fillUnit(w1.x - w0.x, w1.z - w0.z);      // along the edge
+      var out = { x: -inward.x, z: -inward.z };           // outward street normal
+      var n = Math.max(1, Math.round(edgeLen / FILL_SLOT_STEP_M));
+      for(var si = 0; si < n; si++){
+        var fFrac = (si + 0.5) / n;                       // sub-interval midpoint along the edge
+        var ex = w0.x + tang.x * edgeLen * fFrac, ez = w0.z + tang.z * edgeLen * fFrac;
+        slots.push({ block: b.key, edgeId: b.key + "|" + frontage, edgeLen: edgeLen, day: b.birth,
+                     ex: ex, ez: ez, tx: tang.x, tz: tang.z, inx: inward.x, inz: inward.z,
+                     outx: out.x, outz: out.z, yaw: Math.atan2(out.x, out.z),
+                     cx: ex + inward.x * 12, cz: ez + inward.z * 12 /* ordering probe point, ~into the block */ });
+      }
+    }
+  }
+  return slots;
+}
+
+/* =====================================================================
+   THE MASTER ROSTER — built ONCE (pure, cached, dedicated seeded stream). Slots
+   ordered plaza-ward (demand realistic: the core fills first, thinning outward)
+   with a small seeded jitter; greedily placed WHOLE + DETACHED under the per-edge
+   built-fraction cap (gap-toothed) + canPlace (zone/terrain/slope/ROW/overlap-vs-
+   landmarks) + a local inter-fill overlap check. Each accepted building carries a
+   census category (tranche mix) and a construction appearDay. ===== */
+var FILL_MASTER = null;
+function fillOverlapsLocal(placed, x, z, r){
+  for(var i = 0; i < placed.length; i++){
+    var p = placed[i], dx = x - p.x, dz = z - p.z, md = r + p.r;
+    if(dx*dx + dz*dz < md*md) return true;
+  }
+  return false;
+}
+function buildFillMaster(){
+  if(FILL_MASTER) return FILL_MASTER;
+  var seedStrLocal = "p1850-fill-" + (typeof seedStr !== "undefined" ? seedStr : "1846");
+  var sd = cyrb128(seedStrLocal), rng = sfc32(sd[0], sd[1], sd[2], sd[3]);   // DEDICATED stream — never rngBuild
+  var capDay  = eventDateToSimDay(FILL_CAP_ISO);
+  var d1847   = eventDateToSimDay("1847-04-01");
+  var need    = Math.max(0, Math.round(fillTargetTotal(capDay)) - reservationsAt(capDay).length);
+  var N1847   = Math.max(0, Math.round(fillTargetTotal(d1847)) - reservationsAt(d1847).length);
+
+  var slots = fillFrontageSlots(capDay);
+  for(var s = 0; s < slots.length; s++){
+    slots[s].order = Math.hypot(slots[s].cx - PLAZA_CENTER.x, slots[s].cz - PLAZA_CENTER.z) + (rng() - 0.5) * 10;
+  }
+  slots.sort(function(a, b){ return a.order - b.order; });
+
+  var master = [], placed = [], edgeBuilt = {}, counts = { shanty: 0, frame: 0, adobe: 0 };
+  for(var si = 0; si < slots.length && master.length < need; si++){
+    var slot = slots[si];
+    var rank = master.length;
+    var mix  = rank < N1847 ? FILL_MIX_1847 : FILL_MIX_1848;
+    var cat  = fillPickCat(mix, counts);
+    var t    = fillPickCode(cat, slot.day, rng);
+    if(!t){ continue; }                                  // no era-valid type in this category — try next slot (rank unchanged)
+    var wM = t.footprint.w * FILL_FT_M, dM = t.footprint.d * FILL_FT_M;
+    // per-edge built-fraction cap (gap-toothed; no ramparts)
+    var built = edgeBuilt[slot.edgeId] || 0;
+    if((built + wM) / slot.edgeLen > FILL_EDGE_CAP) continue;
+    // pose: centre set back from the curb by (depth/2 + setback), small seeded
+    // along-edge jitter within the slot for irregular spacing
+    var jitter = (rng() - 0.5) * Math.min(FILL_SLOT_STEP_M * 0.5, slot.edgeLen * 0.15);
+    var setIn  = FILL_SETBACK_M + dM / 2;
+    var cx = slot.ex + slot.tx * jitter + slot.inx * setIn;
+    var cz = slot.ez + slot.tz * jitter + slot.inz * setIn;
+    var rBound = Math.hypot(wM, dM) / 2;
+    // canPlace: zone gate (residential-band/commercial-core per class) + terrain
+    // + slope + ROW + overlap vs PLACEMENT_INDEX (the 51 landmark footprints live
+    // there, so reserved landmark ground is respected here).
+    var cp = canPlace("structure", { x: cx, z: cz, yaw: slot.yaw, footprint: rBound },
+                      { day: slot.day, zoneClass: fillZoneClass(t) });
+    if(!cp.ok) continue;
+    if(fillOverlapsLocal(placed, cx, cz, rBound)) continue;   // detached vs other fill
+    // accept
+    counts[cat]++;
+    edgeBuilt[slot.edgeId] = built + wM + FILL_GAP_M;
+    placed.push({ x: cx, z: cz, r: rBound });
+    master.push({ code: t.code, cat: cat, material: t.material, subtype: t.subtype,
+                  cx: cx, cz: cz, w: wM, d: dM, yaw: slot.yaw, nx: slot.outx, nz: slot.outz,
+                  storyRange: t.storyRange || [1, 1], edgeId: slot.edgeId, edgeLen: slot.edgeLen,
+                  rank: rank, appearDay: capDay });
+  }
+  fillAssignAppearDays(master, capDay);
+  FILL_MASTER = master;
+  if(typeof console !== "undefined") console.log("[verify] fill master:", master.length, "of", need, "owed placed (fifty-vara born ground).");
+  return FILL_MASTER;
+}
+/* appearDay per rank (plaza order == appear order): the day the raw fill-owed
+   count first exceeds the rank. Monotonic (running max) so the shown prefix
+   property holds and construction ramps are stable; rewind-exact. */
+function fillAssignAppearDays(master, capDay){
+  var d = eventDateToSimDay("1846-01-01"), prev = d, k = 0;
+  for(; d <= capDay + 0.5 && k < master.length; d += 2){
+    var fc = Math.round(fillTargetTotal(d)) - reservationsAt(d).length;
+    while(k < fc && k < master.length){ var ad = Math.max(d, prev); master[k].appearDay = ad; prev = ad; k++; }
+  }
+  for(; k < master.length; k++){ master[k].appearDay = capDay; }
+}
+
+/* Construction lead by material (fill:true; Taylor: canvas "as if by magic in a
+   single night", frame days-to-weeks, adobe slower mass work). */
+function fillLeadDays(e){
+  switch(e.material){
+    case "canvas": case "canvas-over-frame": return 2;
+    case "scrap": return 10;
+    case "adobe": return 60;
+    case "iron":  return 14;
+    default:      return 21;                              // frame
+  }
+}
+/* C0->C4 state + height fraction at `day` (reuses the s94a ramp shape). Complete
+   (C4) at/after appearDay; absent before the lead window opens. */
+function fillStateAt(e, day){
+  var lead = fillLeadDays(e), start = e.appearDay - lead;
+  if(day >= e.appearDay) return { state: 4, hFrac: 1, active: true };
+  if(day < start)        return { state: 0, hFrac: 0, active: false };
+  var arc = lead > 0 ? clamp((day - start) / lead, 0, 1) : 1;
+  var state = arc < 0.15 ? 1 : (arc < 0.5 ? 2 : (arc < 0.85 ? 3 : 4));
+  var hFrac = state === 1 ? 0 : (state === 2 ? 0.45 : (state === 3 ? 0.8 : 1.0));
+  return { state: state, hFrac: hFrac, active: true };
+}
+
+/* =====================================================================
+   THE DERIVED SET (pure function of `day`) — the ONE source read by BOTH the
+   renderer and every fill audit. The first fillCountAt(day) ranks are the
+   COUNTED census set (complete, C4 by construction of appearDay); a small
+   look-ahead of not-yet-counted ranks currently mid-construction is shown at
+   C1..C3 so nothing pops in. Zero dice — a filter over the cached master. ===== */
+function deriveFillSet(day){
+  var master = buildFillMaster();
+  var fc = fillCountAt(day);
+  var out = [];
+  for(var i = 0; i < master.length; i++){
+    var e = master[i], counted = (i < fc);
+    var st = fillStateAt(e, day);
+    if(!counted){
+      if(i >= fc + FILL_LOOKAHEAD) break;                // ranks are plaza/appear-ordered — nothing further is active
+      if(!st.active || st.state >= 4) continue;          // only show the genuinely-under-construction look-ahead
+    }
+    out.push({ code: e.code, cat: e.cat, material: e.material, subtype: e.subtype,
+               cx: e.cx, cz: e.cz, w: e.w, d: e.d, yaw: e.yaw, nx: e.nx, nz: e.nz,
+               storyRange: e.storyRange, edgeId: e.edgeId, edgeLen: e.edgeLen, rank: e.rank,
+               appearDay: e.appearDay, state: st.state, hFrac: st.hFrac, counted: counted });
+  }
+  return out;
+}
+
+/* =====================================================================
+   THE RENDERER — Option-B neutral placeholder volumes (the same material world
+   as the landmarks: a light-grey box + flat roof cap + high-contrast front
+   stripe/arrow), sized from the catalog footprint + a placeholder storey height,
+   arriving through the C0->C4 ramp. Tagged by code. No new art. ===== */
+var FILL_GROUP = new THREE.Group(); FILL_GROUP.frustumCulled = false; FILL_GROUP.visible = FILL_ON_AT_RELEASE; scene.add(FILL_GROUP);
+var _fillLastDay = null;
+var FILL_INSET = 0.4;
+var FILL_TINT = { shanty: 0xb4ad9f, frame: 0x9ea19c, adobe: 0xb8b2a4 };   // a hair off neutral, matching LM_TINT voice
+function fillBuildMesh(e){
+  var y = terrainHeight(e.cx, e.cz);
+  var w = Math.max(e.w - FILL_INSET, 1.0), d = Math.max(e.d - FILL_INSET, 1.0);
+  var parts = [];
+  // C1..C4 site pad
+  var pad = makeBoxLocal(w, 0.25, d, new THREE.Color(LM_PLACEHOLDER.pad));
+  bake(pad, new THREE.Vector3(e.cx, y, e.cz), e.yaw);
+  parts.push(pad);
+  // ground arrow (front/entrance aid) — smaller than the landmark's
+  var az0 = d / 2 + 0.3, aLen = Math.max(1.4, Math.min(w * 0.6, 2.8)), aHW = Math.max(0.6, Math.min(w * 0.3, 1.2));
+  var arrow = lmTriLocal(-aHW, az0, aHW, az0, 0, az0 + aLen, 0.12, new THREE.Color(LM_PLACEHOLDER.marker));
+  lmBakeAt(arrow, 0, 0, 0, e.yaw, e.cx, y, e.cz);
+  parts.push(arrow);
+  if(e.state >= 2){
+    var storeys = (e.storyRange && e.storyRange[1]) ? e.storyRange[1] : 1;
+    var full = Math.max(storeys * FILL_STORY_H_M, 2.4);
+    var h = Math.max(full * e.hFrac, 0.7);
+    var body = makeBoxLocal(w, h, d, new THREE.Color(FILL_TINT[e.cat] || LM_PLACEHOLDER.body));
+    bake(body, new THREE.Vector3(e.cx, y + 0.23, e.cz), e.yaw);
+    parts.push(body);
+    var roof = makeBoxLocal(w + 0.15, 0.22, d + 0.15, new THREE.Color(LM_PLACEHOLDER.roof));
+    bake(roof, new THREE.Vector3(e.cx, y + 0.23 + h, e.cz), e.yaw);
+    parts.push(roof);
+    // front-face stripe (the corner-rule proof — on the +z face BY CONSTRUCTION)
+    var stripeH = Math.max(h * 0.9, 0.6);
+    var stripe = makeBoxLocal(Math.min(0.7, w * 0.4), stripeH, 0.15, new THREE.Color(LM_PLACEHOLDER.marker));
+    lmBakeAt(stripe, 0, 0.23, d / 2 - 0.02, e.yaw, e.cx, y, e.cz);
+    parts.push(stripe);
+  }
+  var mesh = new THREE.Mesh(mergeGeoms(parts), LM_MAT);
+  mesh.frustumCulled = false;
+  mesh.userData.fillCode = e.code;
+  mesh.userData.fillRank = e.rank;
+  return mesh;
+}
+function fillClear(){
+  for(var i = FILL_GROUP.children.length - 1; i >= 0; i--){
+    var o = FILL_GROUP.children[i]; FILL_GROUP.remove(o); if(o.geometry) o.geometry.dispose();
+  }
+}
+function rebuildFill(){
+  fillClear();
+  var set = deriveFillSet(simDay);
+  for(var i = 0; i < set.length; i++) FILL_GROUP.add(fillBuildMesh(set[i]));
+  _fillLastDay = Math.floor(simDay);
+}
+function updateFill(){
+  if(!FILL_GROUP.visible){ return; }
+  if(Math.floor(simDay) !== _fillLastDay) rebuildFill();
+}
+rebuildFill();
+
+/* per-frame hook — compose after the landmark wrap (same pattern; both run each
+   frame, neither touches core/07-main's frozen loop). */
+var _fillPrevRender = renderer.render.bind(renderer);
+renderer.render = function(s, c){
+  try { updateFill(); } catch(e){ if(!updateFill._warned){ console.warn("[buildings.fill] update failed", e); updateFill._warned = true; } }
+  _fillPrevRender(s, c);
+};
+registerLayerVisibility("buildings-fill", function(v){ FILL_GROUP.visible = v; if(v){ _fillLastDay = null; updateFill(); } });
+
+/* =====================================================================
+   THE FILL AUDITS (new __P1850_AUDITS.buildings.fill*). Each is a framing-
+   independent pure function that SAMPLES ITS OWN dates (the harness runs runAll
+   at the canonical noons; the census/mix gates live at 1847-04 & 1848-04, so the
+   audits reach for them directly). The 51 landmark audits are untouched. ===== */
+(function registerFillAudits(){
+  var EPS_FRAC = 0.05;                                    // census tolerance (±5%)
+  var MIX_TOL  = 0.08;                                    // eraMix tolerance (±8%)
+
+  /* OBB quad [SW,SE,NE,NW] from a fill entry's centre/size/yaw. depth axis =
+     the frontage normal (sin yaw, cos yaw); width axis = its perpendicular. */
+  function fillQuad(e){
+    var nx = Math.sin(e.yaw), nz = Math.cos(e.yaw);       // depth (into block) axis
+    var tx = nz, tz = -nx;                                // width (along frontage) axis
+    var hw = e.w / 2, hd = e.d / 2;
+    function P(sw, sd){ return { x: e.cx + tx*sw + nx*sd, z: e.cz + tz*sw + nz*sd }; }
+    return [ P(-hw, -hd), P(hw, -hd), P(hw, hd), P(-hw, hd) ];
+  }
+  function penetration(A, B){                             // SAT overlap in metres, 0 if separated
+    var polys = [A, B], best = 1e9, p, i, k;
+    for(p = 0; p < 2; p++){ var poly = polys[p];
+      for(i = 0; i < 4; i++){ var a = poly[i], b = poly[(i+1)%4];
+        var ax = -(b.z - a.z), az = (b.x - a.x), l = Math.hypot(ax, az) || 1; ax /= l; az /= l;
+        var minA = 1e9, maxA = -1e9, minB = 1e9, maxB = -1e9;
+        for(k = 0; k < 4; k++){
+          var dA = A[k].x*ax + A[k].z*az; if(dA < minA) minA = dA; if(dA > maxA) maxA = dA;
+          var dB = B[k].x*ax + B[k].z*az; if(dB < minB) minB = dB; if(dB > maxB) maxB = dB;
+        }
+        var ov = Math.min(maxA, maxB) - Math.max(minA, minB);
+        if(ov <= 0.05) return 0;
+        if(ov < best) best = ov;
+      }
+    }
+    return best;
+  }
+  function pointInQuad(q, x, z){
+    var sign = 0;
+    for(var i = 0; i < 4; i++){ var a = q[i], b = q[(i+1)%4];
+      var cr = (b.x-a.x)*(z-a.z) - (b.z-a.z)*(x-a.x);
+      if(cr !== 0){ var s = cr > 0 ? 1 : -1; if(sign === 0) sign = s; else if(s !== sign) return false; }
+    }
+    return true;
+  }
+  function segsIntersect(a, b, c, d){
+    function o(p, q, r){ return (q.x-p.x)*(r.z-p.z) - (q.z-p.z)*(r.x-p.x); }
+    var o1 = o(a,b,c), o2 = o(a,b,d), o3 = o(c,d,a), o4 = o(c,d,b);
+    return ((o1 > 0) !== (o2 > 0)) && ((o3 > 0) !== (o4 > 0));
+  }
+  function segCrossesQuad(q, seg){
+    var P0 = { x: seg.x0, z: seg.z0 }, P1 = { x: seg.x1, z: seg.z1 };
+    if(pointInQuad(q, P0.x, P0.z) || pointInQuad(q, P1.x, P1.z)) return true;
+    for(var i = 0; i < 4; i++) if(segsIntersect(P0, P1, q[i], q[(i+1)%4])) return true;
+    return false;
+  }
+  function landmarkQuadsAt(day){
+    return deriveLandmarkSet(day).map(function(L){
+      return fillQuad({ cx: L.cx, cz: L.cz, w: L.w, d: L.d, yaw: L.yaw });
+    });
+  }
+
+  /* ---- fillCensus — total structures (fill + landmarks) within ±5% of the
+     documented target at 1847-04 & 1848-04 (GATING); 1849 reported informational
+     (non-gating — the tent explosion is a deferred sprint). ---- */
+  registerAudit("buildings", "fillCensus", function(){
+    var checks = [ { iso: "1847-04-01", gating: true }, { iso: "1848-04-01", gating: true },
+                   { iso: "1849-09-15", gating: false }, { iso: "1849-12-20", gating: false } ];
+    var rows = [], pass = true;
+    checks.forEach(function(c){
+      var day = eventDateToSimDay(c.iso);
+      var target = Math.round(fillTargetTotal(day));
+      var lm = reservationsAt(day).length;
+      var fill = deriveFillSet(day).filter(function(e){ return e.counted; }).length;
+      var total = fill + lm, dev = target > 0 ? Math.abs(total - target) / target : 0;
+      var ok = dev <= EPS_FRAC;
+      rows.push({ date: c.iso, target: target, landmarks: lm, fill: fill, total: total,
+                  devPct: +(dev*100).toFixed(2), gating: c.gating, informational: !c.gating, ok: ok });
+      if(c.gating && !ok) pass = false;
+    });
+    return { pass: pass, tolerancePct: EPS_FRAC*100, checks: rows };
+  });
+
+  /* ---- fillEraMix — the fill CLASS mix (shanty/frame/adobe) within ±8% of
+     28/39/33 at 1847-04. ---- */
+  registerAudit("buildings", "fillEraMix", function(){
+    var day = eventDateToSimDay("1847-04-01");
+    var set = deriveFillSet(day).filter(function(e){ return e.counted; });
+    var n = set.length, c = { shanty: 0, frame: 0, adobe: 0 };
+    set.forEach(function(e){ c[e.cat] = (c[e.cat] || 0) + 1; });
+    var target = FILL_MIX_1847, cats = ["shanty", "frame", "adobe"], viol = [], rows = {};
+    var pass = n > 0;
+    cats.forEach(function(k){
+      var frac = n > 0 ? c[k] / n : 0, dev = Math.abs(frac - target[k]);
+      rows[k] = { count: c[k], frac: +frac.toFixed(3), target: target[k], devPct: +(dev*100).toFixed(2) };
+      if(dev > MIX_TOL){ pass = false; viol.push({ cat: k, frac: +frac.toFixed(3), target: target[k] }); }
+    });
+    return { pass: pass, n: n, tolerancePct: MIX_TOL*100, mix: rows, violations: viol };
+  });
+
+  /* ---- fillFootprintsOBB — fill footprints are DETACHED: 0 pairwise OBB
+     overlap, 0 overlap vs the 51 landmark footprints, 0 crossing any ROW
+     centerline. Sampled at the gate dates + the canonical noons. ---- */
+  registerAudit("buildings", "fillFootprintsOBB", function(){
+    var days = ["1847-04-01", "1848-04-01", "1849-09-15", "1849-12-20"].map(eventDateToSimDay);
+    var segs = (typeof PLACEMENT_STREET_SEGS !== "undefined") ? PLACEMENT_STREET_SEGS : [];
+    var pairViol = 0, lmViol = 0, rowViol = 0, maxPair = 0, sample = [], perDay = [];
+    days.forEach(function(day){
+      var set = deriveFillSet(day), quads = set.map(fillQuad);
+      var lmq = landmarkQuadsAt(day), i, j;
+      var dPair = 0, dLm = 0, dRow = 0;
+      for(i = 0; i < quads.length; i++){
+        for(j = i + 1; j < quads.length; j++){
+          var pen = penetration(quads[i], quads[j]);
+          if(pen > maxPair) maxPair = pen;
+          if(pen > 0.05){ dPair++; if(sample.length < 6) sample.push({ day: +day.toFixed(0), a: set[i].code, b: set[j].code, pen: +pen.toFixed(3) }); }
+        }
+        for(j = 0; j < lmq.length; j++) if(penetration(quads[i], lmq[j]) > 0.05){ dLm++; if(sample.length < 6) sample.push({ day: +day.toFixed(0), fill: set[i].code, vsLandmark: true }); }
+        var cx = set[i].cx, cz = set[i].cz;
+        for(j = 0; j < segs.length; j++){
+          var mx = (segs[j].x0 + segs[j].x1)/2, mz = (segs[j].z0 + segs[j].z1)/2;
+          if(Math.hypot(mx - cx, mz - cz) > 90) continue;
+          if(segCrossesQuad(quads[i], segs[j])){ dRow++; if(sample.length < 6) sample.push({ day: +day.toFixed(0), fill: set[i].code, row: segs[j].id }); break; }
+        }
+      }
+      pairViol += dPair; lmViol += dLm; rowViol += dRow;
+      perDay.push({ date: +day.toFixed(0), fill: set.length, pairOverlaps: dPair, vsLandmark: dLm, rowCrossings: dRow });
+    });
+    return { pass: pairViol === 0 && lmViol === 0 && rowViol === 0,
+             pairOverlaps: pairViol, vsLandmark: lmViol, rowCrossings: rowViol,
+             maxPairOverlapM: +maxPair.toFixed(3), perDay: perDay, sample: sample.slice(0, 6) };
+  });
+
+  /* ---- fillFrontageOpenness — no block-perimeter ramparts: per block edge the
+     built fraction (sum of fill widths / edge length) stays under the era cap,
+     so the 1847-48 village reads gap-toothed, not wall-packed. ---- */
+  registerAudit("buildings", "fillFrontageOpenness", function(){
+    var days = ["1847-04-01", "1848-04-01"].map(eventDateToSimDay);
+    var over = [], maxFrac = 0, rows = [];
+    days.forEach(function(day){
+      var set = deriveFillSet(day), byEdge = {};
+      set.forEach(function(e){
+        var g = byEdge[e.edgeId] || (byEdge[e.edgeId] = { built: 0, len: e.edgeLen });
+        g.built += e.w;
+      });
+      var edges = 0, worst = 0;
+      Object.keys(byEdge).forEach(function(id){
+        var g = byEdge[id], frac = g.len > 0 ? g.built / g.len : 0; edges++;
+        if(frac > maxFrac) maxFrac = frac;
+        if(frac > worst) worst = frac;
+        if(frac > FILL_EDGE_CAP + 1e-6) over.push({ date: +day.toFixed(0), edge: id, frac: +frac.toFixed(3) });
+      });
+      rows.push({ date: +day.toFixed(0), edgesBuilt: edges, worstEdgeFrac: +worst.toFixed(3) });
+    });
+    return { pass: over.length === 0, capFrac: FILL_EDGE_CAP, maxEdgeFrac: +maxFrac.toFixed(3),
+             overCap: over.slice(0, 8), perDay: rows };
+  });
+
+  /* ---- fillDeterminism — same day twice ⇒ identical fill set; rewind A->B->A
+     exact. The master is a cached pure product of a dedicated seeded stream, so
+     this holds by construction; the audit PROVES it at the fingerprint. ---- */
+  registerAudit("buildings", "fillDeterminism", function(){
+    function fp(day){
+      return deriveFillSet(day).map(function(e){
+        return e.code + "|" + e.cx.toFixed(3) + "|" + e.cz.toFixed(3) + "|" + e.state + "|" + e.hFrac.toFixed(3) + "|" + e.yaw.toFixed(5) + "|" + (e.counted ? 1 : 0);
+      }).join("\n");
+    }
+    var A = eventDateToSimDay("1847-04-01"), B = eventDateToSimDay("1848-04-01");
+    var a1 = fp(A), a2 = fp(A), bJump = fp(B), aBack = fp(A);
+    var sameDay = (a1 === a2), rewind = (a1 === aBack);
+    return { pass: sameDay && rewind, sameDayIdentical: sameDay, rewindExact: rewind,
+             countA: a1.split("\n").filter(Boolean).length, countB: bJump.split("\n").filter(Boolean).length };
+  });
+})();
+
+/* driving hooks for the verify harness / Atelier — the derived fill set + a
+   numbers table, exposed over the pure derive (zero new geometry). */
+setTimeout(function(){
+  if(typeof window !== "undefined" && window.__P1850){
+    window.__P1850.fillAt = function(day){ return deriveFillSet(day == null ? simDay : day); };
+    window.__P1850.fillCount = function(day){ return deriveFillSet(day == null ? simDay : day).filter(function(e){ return e.counted; }).length; };
+    window.__P1850.fillMasterSize = function(){ return buildFillMaster().length; };
+    window.__P1850.fillCensus = function(iso){
+      var day = eventDateToSimDay(iso);
+      var lm = reservationsAt(day).length, fill = window.__P1850.fillCount(day);
+      return { date: iso, target: Math.round(fillTargetTotal(day)), landmarks: lm, fill: fill, total: fill + lm };
+    };
   }
 }, 0);
 /* =========================================================================
