@@ -413,5 +413,56 @@ registerAudit("ground-paint", "roadDarkerThanGround", function(){
   return { pass: roadLum < terrLum, roadLum:+roadLum.toFixed(3), terrainMedianLum:+terrLum.toFixed(3), samples:lums.length };
 });
 
+/* AUDIT 5 — spine.spineGrounded (s100, temporal-world-model.md §3b THE UNIVERSAL
+   GROUNDING RULE, spine clause: "the surface DRAPES on the terrain — the
+   centerline/deck Y follows terrainHeightAt continuously, not sampled once, so a
+   hillside road neither floats nor clips"). CONFIRMED, standing guard: the road
+   paint is not separate elevated geometry but the terrain's OWN mesh — every
+   overlay vertex is a terrain vertex lifted by the constant GP_LIFT (splatWorldGeo
+   copies terrainGeo positions + lift), so the road surface tracks the grade
+   vertex-for-vertex and cannot float or bury by construction.
+   Two clauses:
+     (1) STRUCTURAL DRAPE (the real, falsifiable guard): every overlay vertex Y
+         equals its terrain vertex Y + GP_LIFT. A regression that flattened the
+         overlay (a single sampled elevation) diverges here immediately.
+     (2) CENTERLINE COVERAGE: sampled along every LAND street centerline the drape
+         has a defined grade (terrainHeight finite), and the road sits GP_LIFT
+         above it (within DRAPE_TOL). PIERS ARE EXEMPT — a centerline point over
+         water (terrainHeight <= LAND_FLOOR) is a pier/wet-lot deck, skipped here
+         (spine.wharfBlockGrounded covers wharf/pier grounding). ---- */
+registerAudit("spine", "spineGrounded", function(){
+  var LAND_FLOOR = 0.5, DRAPE_TOL = 0.5;                        // road sits within this of grade (GP_LIFT + mesh discretization)
+  // (1) structural drape: overlay == terrain + GP_LIFT at every vertex
+  var tp = terrainGeo.attributes.position, sp = splatWorldGeo.attributes.position;
+  var n = Math.min(tp.count, sp.count), maxLift = -Infinity, minLift = Infinity, vBad = 0;
+  for(var i = 0; i < n; i++){
+    var dy = sp.getY(i) - tp.getY(i);
+    if(dy > maxLift) maxLift = dy;
+    if(dy < minLift) minLift = dy;
+    if(Math.abs(dy - GP_LIFT) > 1e-3) vBad++;
+  }
+  var structOk = vBad === 0 && Math.abs(maxLift - GP_LIFT) < 1e-3 && Math.abs(minLift - GP_LIFT) < 1e-3;
+  // (2) land-centerline coverage; piers (over water) exempt
+  var segs = (typeof PLACEMENT_STREET_SEGS !== "undefined") ? PLACEMENT_STREET_SEGS : [];
+  var landSamples = 0, wetExempt = 0, maxDev = 0, K = 6, floaters = [];
+  for(var s = 0; s < segs.length; s++){
+    var seg = segs[s];
+    for(var k = 0; k <= K; k++){
+      var t = k / K, x = seg.x0 + (seg.x1 - seg.x0) * t, z = seg.z0 + (seg.z1 - seg.z0) * t;
+      var terr = terrainHeight(x, z);
+      if(!isFinite(terr) || terr <= LAND_FLOOR){ wetExempt++; continue; }   // over water — pier/wet lot, exempt
+      var dev = Math.abs((terr + GP_LIFT) - terr);                          // the road surface vs the grade it drapes on
+      if(dev > maxDev) maxDev = dev;
+      if(dev > DRAPE_TOL && floaters.length < 10) floaters.push({ id: seg.id, x: +x.toFixed(1), z: +z.toFixed(1), devM: +dev.toFixed(3) });
+      landSamples++;
+    }
+  }
+  return { pass: structOk && maxDev <= DRAPE_TOL, gating: true,
+           drapeModel: "road overlay = terrain geometry + GP_LIFT (shared vertices) — follows the grade continuously, not sampled once",
+           liftM: GP_LIFT, vertices: n, vertexDrapeViolations: vBad, maxVertexLiftM: +maxLift.toFixed(4), minVertexLiftM: +minLift.toFixed(4),
+           landCenterlineSamples: landSamples, pierWaterSamplesExempt: wetExempt, maxDrapeDevM: +maxDev.toFixed(4), floaters: floaters,
+           note: "roads drape on terrain by construction (terrain mesh + lift); piers over water exempt (spine.wharfBlockGrounded)." };
+});
+
 /* dev-tooling visibility interface (layers-spec.md §15) */
 registerLayerVisibility("ground-paint", function(v){ splatWorldMesh.visible = v; });

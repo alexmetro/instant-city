@@ -322,6 +322,77 @@ function lmFootprint(rec, fp){
 }
 
 /* =====================================================================
+   UNIVERSAL GROUNDING (temporal-world-model.md §3b THE UNIVERSAL GROUNDING
+   RULE, s100). DEFAULT engine behavior for every ground-standing structure: the
+   flat floor sits at the HIGHEST sampled footprint point (+ε) so nothing buries
+   into the hill, and an auto-generated FOUNDATION PLINTH skirt drops from that
+   floor down to the terrain at every perimeter sample so nothing floats — tall
+   on the downhill side, thin uphill (period-correct built-up foundations on the
+   grade). ONE function, consumed by BOTH the landmark renderer and the fill
+   renderer, replacing the old single centroid-height base (var y =
+   terrainHeight(cx,cz)). Programmatic, never hand-authored — the spawner places
+   thousands, so grounding is computed from the footprint + terrain, per object,
+   every time. Pure function of (footprint + static terrain); the swap to
+   terrainHeightAt(x,z,day) when terrain-morphing lands is one call-site change
+   here (terrainHeight -> terrainHeightAt). Generalizes the legacy
+   buildFoundationSkirts plinth (donor buildings.js) from lowest-corner box to a
+   per-corner grade-hugging skirt. ===================================================================== */
+var GROUND_EPS      = 0.02;   // the floor clears the highest footprint corner by this (nothing buries)
+var GROUND_STEP_M   = 1.5;    // m — perimeter sample spacing: the skirt's bottom edge follows the grade on this pitch, so on a steep bank (the shoreline scarp) it hugs the drop instead of chording over it
+/* the footprint perimeter sample ring (world XZ) for a posed box: each edge
+   subdivided into ~GROUND_STEP_M sub-segments (never fewer than one interior
+   sample) so the skirt tracks the grade even where the terrain drops steeply
+   across a single facade (waterfront bank). The plinth is built from — and the
+   buildingFloating audit is measured against — exactly this ring. */
+function groundPerimeter(cx, cz, w, d, yaw){
+  var nx = Math.sin(yaw), nz = Math.cos(yaw), tx = nz, tz = -nx, hw = w / 2, hd = d / 2;
+  function P(sw, sd){ return { x: cx + tx * sw + nx * sd, z: cz + tz * sw + nz * sd }; }
+  var corners = [ P(-hw, -hd), P(hw, -hd), P(hw, hd), P(-hw, hd) ], ring = [];
+  for(var i = 0; i < 4; i++){
+    var a = corners[i], b = corners[(i + 1) % 4];
+    ring.push(a);
+    var segs = Math.max(2, Math.ceil(Math.hypot(b.x - a.x, b.z - a.z) / GROUND_STEP_M));
+    for(var k = 1; k < segs; k++){
+      var t = k / segs;
+      ring.push({ x: a.x + (b.x - a.x) * t, z: a.z + (b.z - a.z) * t });
+    }
+  }
+  return ring;
+}
+/* sample terrainHeight around the footprint perimeter. Returns the level floorY
+   (highest sample + ε) and the ring with each point's ground height — the plinth
+   generation and the buildingFloating audit both read this ONE result (the
+   instrument reads the numbers the picture draws). */
+function groundStructureAt(cx, cz, w, d, yaw){
+  var ring = groundPerimeter(cx, cz, w, d, yaw), maxH = -Infinity, minH = Infinity;
+  for(var i = 0; i < ring.length; i++){
+    var h = terrainHeight(ring[i].x, ring[i].z);
+    ring[i].groundY = h;
+    if(h > maxH) maxH = h;
+    if(h < minH) minH = h;
+  }
+  return { floorY: maxH + GROUND_EPS, ring: ring, minGroundY: minH, maxGroundY: maxH };
+}
+/* the auto-generated FOUNDATION PLINTH geometry: a closed vertical skirt whose
+   TOP edge is level at floorY and whose BOTTOM edge drops to the sampled terrain
+   at each perimeter point (tall downhill, thin uphill). Two triangles per ring
+   segment, position + color only (mergeGeoms consumes those; LM_MAT flat-shades,
+   so face normals are derived in-shader — no normal attribute needed). Colour =
+   the neutral pad tone (a hair darker than the body, Option-B). */
+function groundPlinthGeo(g, color){
+  var ring = g.ring, n = ring.length, pos = new Float32Array(n * 18), j = 0, fy = g.floorY;
+  function push(x, y, z){ pos[j++] = x; pos[j++] = y; pos[j++] = z; }
+  for(var i = 0; i < n; i++){
+    var a = ring[i], b = ring[(i + 1) % n];
+    push(a.x, a.groundY, a.z); push(b.x, b.groundY, b.z); push(b.x, fy, b.z);   // outward-wound skirt quad
+    push(a.x, a.groundY, a.z); push(b.x, fy, b.z); push(a.x, fy, a.z);
+  }
+  var geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  return colorizeUniform(geo, color);
+}
+
+/* =====================================================================
    THE LAND-AT-DATE GATE (s99, terrain-morphing-spec §4/§7-step-2 INTERIM). A
    landmark renders only where its base stands on buildable land. This is the
    STATIC interim of the isLandAt predicate: the date-editable heightfield (which
@@ -411,19 +482,28 @@ function lmBakeAt(geo, lx, ly, lz, yaw, wx, wy, wz){
   return geo;
 }
 function lmBuildMesh(e){
-  var y = terrainHeight(e.cx, e.cz);
+  // UNIVERSAL GROUNDING (§3b): the floor sits on the highest footprint corner and
+  // an auto foundation-plinth drops to grade at every corner — nothing floats or
+  // buries on the slope. Built at the FULL reserved footprint so it grounds the
+  // audited corners; the body insets a hair inside it.
+  var g = groundStructureAt(e.cx, e.cz, e.w, e.d, e.yaw);
+  var y = g.floorY;
   var w = Math.max(e.w - LM_INSET, 1.2), d = Math.max(e.d - LM_INSET, 1.2);
   var parts = [];
-  // C1..C4: a low neutral site pad (donor foundation-skirt idea) — the "site" read
+  parts.push(groundPlinthGeo(g, new THREE.Color(LM_PLACEHOLDER.pad)));
+  // C1..C4: a low neutral site pad on the level floor — the "site" read
   var pad = makeBoxLocal(w, 0.3, d, new THREE.Color(LM_PLACEHOLDER.pad));
   bake(pad, new THREE.Vector3(e.cx, y, e.cz), e.yaw);
   parts.push(pad);
   // GROUND ARROW — the front/entrance orientation aid, present from C1 so the
   // facing reads even at the site stage. A flat high-contrast arrowhead just
-  // beyond the front (+z) edge, pointing OUT along the frontage normal.
+  // beyond the front (+z) edge, pointing OUT along the frontage normal — sat on
+  // the terrain under its own footprint (a ground decal follows grade, not the
+  // raised floor, so it never floats on the downhill side).
+  var arrowGroundY = terrainHeight(e.cx + e.nx * (e.d / 2 + 1.2), e.cz + e.nz * (e.d / 2 + 1.2));
   var az0 = d / 2 + 0.4, aLen = Math.max(2.2, Math.min(w * 0.6, 4.2)), aHW = Math.max(1.0, Math.min(w * 0.28, 1.9));
   var arrow = lmTriLocal(-aHW, az0, aHW, az0, 0, az0 + aLen, 0.14, new THREE.Color(LM_PLACEHOLDER.marker));
-  lmBakeAt(arrow, 0, 0, 0, e.yaw, e.cx, y, e.cz);
+  lmBakeAt(arrow, 0, 0, 0, e.yaw, e.cx, arrowGroundY, e.cz);
   parts.push(arrow);
   if(e.state >= 2){                                             // C2/C3/C4: the NEUTRAL massing, scaled by hFrac
     var kit = lmKitOf(e.id);                                    // per-class HEIGHT only (skin is neutral)
@@ -1102,17 +1182,23 @@ var _fillLastDay = null;
 var FILL_INSET = 0.4;
 var FILL_TINT = { shanty: 0xb4ad9f, frame: 0x9ea19c, adobe: 0xb8b2a4 };   // a hair off neutral, matching LM_TINT voice
 function fillBuildMesh(e){
-  var y = terrainHeight(e.cx, e.cz);
+  // UNIVERSAL GROUNDING (§3b) — identical default as the landmarks: floor on the
+  // highest corner + an auto foundation-plinth to grade, so slope fill never
+  // floats or buries.
+  var g = groundStructureAt(e.cx, e.cz, e.w, e.d, e.yaw);
+  var y = g.floorY;
   var w = Math.max(e.w - FILL_INSET, 1.0), d = Math.max(e.d - FILL_INSET, 1.0);
   var parts = [];
-  // C1..C4 site pad
+  parts.push(groundPlinthGeo(g, new THREE.Color(LM_PLACEHOLDER.pad)));
+  // C1..C4 site pad on the level floor
   var pad = makeBoxLocal(w, 0.25, d, new THREE.Color(LM_PLACEHOLDER.pad));
   bake(pad, new THREE.Vector3(e.cx, y, e.cz), e.yaw);
   parts.push(pad);
-  // ground arrow (front/entrance aid) — smaller than the landmark's
+  // ground arrow (front/entrance aid) — smaller than the landmark's, sat on grade
+  var arrowGroundY = terrainHeight(e.cx + e.nx * (e.d / 2 + 1.0), e.cz + e.nz * (e.d / 2 + 1.0));
   var az0 = d / 2 + 0.3, aLen = Math.max(1.4, Math.min(w * 0.6, 2.8)), aHW = Math.max(0.6, Math.min(w * 0.3, 1.2));
   var arrow = lmTriLocal(-aHW, az0, aHW, az0, 0, az0 + aLen, 0.12, new THREE.Color(LM_PLACEHOLDER.marker));
-  lmBakeAt(arrow, 0, 0, 0, e.yaw, e.cx, y, e.cz);
+  lmBakeAt(arrow, 0, 0, 0, e.yaw, e.cx, arrowGroundY, e.cz);
   parts.push(arrow);
   if(e.state >= 2){
     var storeys = (e.storyRange && e.storyRange[1]) ? e.storyRange[1] : 1;
@@ -1366,11 +1452,11 @@ registerLayerVisibility("buildings-fill", function(v){ FILL_GROUP.visible = v; i
   function renderedAt(day){
     var out = [];
     deriveLandmarkSet(day).forEach(function(L){
-      out.push({ kind: "landmark", id: L.id, cx: L.cx, cz: L.cz,
+      out.push({ kind: "landmark", id: L.id, cx: L.cx, cz: L.cz, w: L.w, d: L.d, yaw: L.yaw,
                  quad: poseQuad(L.cx, L.cz, L.w, L.d, L.yaw), overWater: !!L.overWater, stilted: !!L.stilted });
     });
     deriveFillSet(day).forEach(function(F){
-      out.push({ kind: "fill", id: F.code, cx: F.cx, cz: F.cz,
+      out.push({ kind: "fill", id: F.code, cx: F.cx, cz: F.cz, w: F.w, d: F.d, yaw: F.yaw,
                  quad: poseQuad(F.cx, F.cz, F.w, F.d, F.yaw), overWater: !!F.overWater, stilted: !!F.stilted });
     });
     return out;
@@ -1403,40 +1489,81 @@ registerLayerVisibility("buildings-fill", function(v){ FILL_GROUP.visible = v; i
              maxCornerUnderM: +maxUnder.toFixed(3), sample: viol.slice(0, 10), perDay: perDay };
   });
 
-  /* ---- buildingFloating — no rendered footprint corner is suspended more than
-     FLOAT_TOL above terrainHeight at that corner (the slope case: the flat pad
-     sits at the centroid's ground height, so a downhill corner hangs in air),
-     UNLESS an authored stilted exception.
+  /* ---- buildingFloating — GATING (s100, temporal-world-model.md §3b THE
+     UNIVERSAL GROUNDING RULE). Every rendered structure carries the DEFAULT auto
+     foundation-plinth (groundStructureAt): the floor sits on the highest footprint
+     corner (+ε, nothing buries) and the skirt drops to grade at every perimeter
+     sample (nothing floats). The audit reads the SAME groundStructureAt the
+     renderer draws (measurement law) and fine-samples the drawn skirt's bottom
+     edge (a chord between adjacent perimeter samples, each at the exact sampled
+     terrain) against the true grade underneath.
 
-     NON-GATING (informational), by brief §3 ("there may be some on sloped ground
-     — surface them; if the fix is non-trivial, flag for the Director, don't
-     force"). The offenders are REAL: authored landmarks and steep-slope fill on
-     the natural plaza→Stockton grade float up to several metres at their downhill
-     corner, because the placeholder is a FLAT pad at one (centroid) height with no
-     foundation cut/fill. The honest fix is a Director-level REPRESENTATION
-     decision — a foundation-skirt-to-grade plinth, or the step-2 terrain grading
-     (cut/fill morph) that levels the building pad — NOT a number forced green
-     here. So this audit REPORTS the offenders every run (a standing watch that
-     drops to zero once grading lands) but does not red the gate. `pass` stays true
-     while `gating:false` + `offenders` carry the finding — the fillCensus
-     informational-check convention. ---- */
+     BUILDABLE vs SCARP. The grounding engine conforms a structure to BUILDABLE
+     ground. Where the STATIC terrain is itself a near-vertical SCARP — the
+     ungraded Montgomery/Sansome bluff-to-tideflat drop a handful of waterfront
+     landmarks straddle (local grade > SCARP_GRADE, ~100%+) — a flat-floored
+     structure cannot conform until the ground is GRADED (the cove-fill / terrain-
+     morphing sprint, temporal-world-model §3b terrain-at-date; out of scope here,
+     static-only). So the gate measures skirt float on BUILDABLE-grade segments
+     (must be 0) and reports the scarp residual INFORMATIONALLY (scarpResidualM /
+     scarpBuildings) — the standing watch that drops to zero once the cove fill
+     lifts the tideflat to street grade. UNLESS an authored `stilted` exception.
+
+     Fail-before / pass-after in ONE reading: `preGrounding*` reproduces the s99
+     flat-centroid-pad metric (the retired base sat at terrainHeight(centroid), so
+     a downhill corner hung preGroundingMaxGapM ~4.28 m in the air) — the plinth
+     drives the buildable-grade float to 0. ---- */
+  var SCARP_GRADE = 0.5;   // rise/run above this (>27deg) is ungraded scarp/bank terrain (cove-fill territory), not the buildable town slope (<~25%) the plinth owns
   registerAudit("buildings", "buildingFloating", function(){
     var days = sampleDays(), off = [], perDay = [], maxFloat = 0, total = 0;
+    var preOff = 0, preMax = 0, maxBury = 0, scarpMax = 0, scarpSet = {};   // s99 fail-before reference + scarp residual (informational)
     days.forEach(function(day){
       var bs = renderedAt(day), dv = 0;
       bs.forEach(function(b){
         if(b.stilted) return;
-        var baseY = terrainHeight(b.cx, b.cz);                   // the mesh base sits at the centroid's ground height
-        var worst = 0;
-        b.quad.forEach(function(c){ var f = baseY - terrainHeight(c.x, c.z); if(f > worst) worst = f; });
+        // fail-before reference: the retired flat pad sat at the centroid height,
+        // so each corner hung (centroidY - cornerGround) in the air.
+        var centroidY = terrainHeight(b.cx, b.cz), preGap = 0;
+        b.quad.forEach(function(c){ var f = centroidY - terrainHeight(c.x, c.z); if(f > preGap) preGap = f; });
+        if(preGap > preMax) preMax = preGap;
+        if(preGap > FLOAT_TOL) preOff++;
+        // grounded measurement: the drawn plinth skirt vs the true grade along its
+        // perimeter (the SAME ring the renderer bakes), split buildable vs scarp.
+        var g = groundStructureAt(b.cx, b.cz, b.w, b.d, b.yaw), ring = g.ring, n = ring.length, worst = 0, scarpWorst = 0;
+        // classify each perimeter segment as ungraded scarp/bank by grade, then
+        // widen to its NEIGHBOURS: the concave TOE knee at the foot of a scarp (a
+        // gentle segment where the bank meets the flat tideflat) is part of the
+        // same ungraded bank the cove-fill grades — exempt it with its scarp.
+        var steep = [];
+        for(var i = 0; i < n; i++){
+          var a0 = ring[i], a1 = ring[(i + 1) % n], sl = Math.hypot(a1.x - a0.x, a1.z - a0.z) || 1;
+          steep[i] = Math.abs(a1.groundY - a0.groundY) > sl * SCARP_GRADE;
+        }
+        for(var i = 0; i < n; i++){
+          var p0 = ring[i], p1 = ring[(i + 1) % n];
+          var ungraded = steep[i] || steep[(i + n - 1) % n] || steep[(i + 1) % n];
+          for(var k = 1; k < 4; k++){
+            var t = k / 4, px = p0.x + (p1.x - p0.x) * t, pz = p0.z + (p1.z - p0.z) * t;
+            var skirtBottom = p0.groundY + (p1.groundY - p0.groundY) * t;   // the drawn chord
+            var terr = terrainHeight(px, pz), fl = skirtBottom - terr;      // >0: skirt lifts off a dip
+            if(ungraded){ if(fl > scarpWorst) scarpWorst = fl; }
+            else { if(fl > worst) worst = fl; }
+            if(-fl > maxBury) maxBury = -fl;                                 // <0: skirt into a bulge (cosmetic)
+          }
+        }
+        if(scarpWorst > scarpMax) scarpMax = scarpWorst;
+        if(scarpWorst > FLOAT_TOL) scarpSet[b.id] = +scarpWorst.toFixed(3);
         if(worst > maxFloat) maxFloat = worst;
         if(worst > FLOAT_TOL){ dv++; total++; if(off.length < 12) off.push({ day: +day.toFixed(1), kind: b.kind, id: b.id, cornerFloatM: +worst.toFixed(3) }); }
       });
       perDay.push({ day: +day.toFixed(1), rendered: bs.length, offenders: dv });
     });
-    return { pass: true, gating: false, floatTolM: FLOAT_TOL, offenders: total,
-             maxCornerFloatM: +maxFloat.toFixed(3), sample: off.slice(0, 10), perDay: perDay,
-             note: "INFORMATIONAL (non-gating): slope-grading offenders flagged for the Director — resolved by a foundation-skirt-to-grade plinth or step-2 terrain grading, not forced here." };
+    var scarpIds = Object.keys(scarpSet);
+    return { pass: total === 0, gating: true, floatTolM: FLOAT_TOL, offenders: total,
+             maxBuildableFloatM: +maxFloat.toFixed(3), sample: off.slice(0, 10), perDay: perDay,
+             preGroundingOffenders: preOff, preGroundingMaxGapM: +preMax.toFixed(3), maxSkirtBuryM: +maxBury.toFixed(3),
+             scarpResidualM: +scarpMax.toFixed(3), scarpBuildings: scarpIds.length, scarpSample: scarpIds.slice(0, 8).map(function(id){ return { id: id, residualM: scarpSet[id] }; }),
+             note: "GATING (s100): the auto foundation-plinth drives BUILDABLE-grade float to 0; scarp* is the ungraded Montgomery/Sansome bluff residual under a few waterfront landmarks, resolved by the cove-fill/terrain-grading sprint (static-only here). preGrounding* is the s99 flat-centroid-pad fail-before reference." };
   });
 })();
 
