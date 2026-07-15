@@ -971,7 +971,7 @@
   }
   function wbCoordStateAt(x, z, day){
     var gp = groundPlanAt(x, z, day);
-    return { land:wbIsLandAt(x, z, day), block:gp.block, lot:gp.platLot, zone:gp.zone, row:gp.row,
+    return { land:wbIsLandAt(x, z, day), block:gp.block, lot:gp.platLot, zone:gp.zone, row:(gp.row?gp.row.id:null),
              parcels:(gp.parcels||[]).slice().sort().join(","), reservation:gp.reservation,
              pier:(typeof pierAt === "function") ? pierAt(x, z, day) : null, bld:wbBuildingAt(x, z, day) };
   }
