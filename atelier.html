@@ -14447,7 +14447,7 @@ function updateHud(alt){
     "#wb-panel .wb-audit-status.ok{ color:#7ee2a0; }",
     "#wb-panel .wb-audit-status.bad{ color:#ff7a6e; }",
     "#wb-panel .wb-foot{ margin-top:10px; color:#5b6066; font-size:9px; border-top:1px solid #2a2e34; padding-top:6px; }",
-    "body.wb-probe #c{ cursor:crosshair; }",
+    "body.wb-probe #c, body.wb-tl #c{ cursor:crosshair; }",
     "body.dev-labels-off .wlbl, body.dev-labels-off .street-label, body.dev-labels-off .biz-glyph{ display:none !important; }"
   ].join("\n");
   document.head.appendChild(wbStyle);
@@ -14458,6 +14458,7 @@ function updateHud(alt){
     solo: null,           // layerName | null
     probe: false,
     overlays: { spine:false, row:false, lots:false, parcels:false, wharf:false, keepout:false, zones:false, audits:false },
+    tl: false,            // coordinate timeline inspector armed
     knobs: { sunMul:1, hemiMul:1, ambientMul:1, nightLift:0, detailAmp:null, doodadMul:1, streetAlphaMul:1 }
   };
   var WB_ORDER = ["terrain","ground-paint","zones-tint","buildings","wharves","doodads","people","ships","fauna","effects","labels"];
@@ -15224,6 +15225,124 @@ function updateHud(alt){
       + (failed.length ? " — "+failed.map(function(r){ return r.layer+"."+r.audit; }).join(", ")+" · "+markerCount+" markers" : " — ALL GREEN");
     auditStatusEl.className = "wb-audit-status " + (res.pass ? "ok" : "bad");
   }
+
+  /* =====================================================================
+     s101 THE COORDINATE TIMELINE INSPECTOR — the first DEBUG-VIZ-FIRST tool:
+     SEE a coordinate's timeline. A PURE READ of the existing date-parameterized
+     world (no dice, no new world state, static terrain). The land/buildable
+     overlay, grounding viz, and terrain-morph framework are DEFERRED to land WITH
+     the morphing engine they visualize (s102/s103) — debug-viz-first PER SYSTEM.
+     ===================================================================== */
+
+  /* THE isLandAt SEAM (temporal-world-model.md §2/§7). STATIC interim impl:
+     land <=> terrainHeight > the bay waterline (y=0). The inspector's land/water
+     read routes through this ONE helper, so when the date-editable heightfield
+     lands (s103) the cove FILLS by swapping this single call-site to
+     terrainHeightAt(x,z,day) — nothing else changes. The `day` argument is
+     accepted now (ignored) so the signature is already correct. */
+  var WB_WATERLINE_Y = 0.0;
+  function wbIsLandAt(x, z, day){ return terrainHeight(x, z) > WB_WATERLINE_Y; }
+
+  /* oriented-footprint hit test (same width/depth axis convention as the buildings
+     layer's poseQuad): is (x,z) inside a building's drawn box. */
+  function wbInBox(x, z, cx, cz, w, d, yaw){
+    var nx = Math.sin(yaw), nz = Math.cos(yaw), tx = nz, tz = -nx, dx = x-cx, dz = z-cz;
+    return Math.abs(dx*tx+dz*tz) <= w/2+0.2 && Math.abs(dx*nx+dz*nz) <= d/2+0.2;
+  }
+
+  /* THE COORDINATE TIMELINE INSPECTOR. Click any world point
+     → raycast to the ground → read that coordinate's STATE across the sim window
+     and render the SEQUENCE OF STATE CHANGES (unchanged spans collapsed). The
+     literal picture of "a coordinate is a timeline": water/land, block/lot, zone,
+     ROW, parcels, reservation, pier, and building, each at date. Pure reads. */
+  function wbBuildingAt(x, z, day){
+    try{
+      if(typeof deriveLandmarkSet === "function"){ var L = deriveLandmarkSet(day);
+        for(var i = 0; i < L.length; i++){ var e = L[i]; if(wbInBox(x, z, e.cx, e.cz, e.w, e.d, e.yaw)) return "landmark "+(e.name||e.id)+" ["+e.state+"]"; } }
+      if(typeof deriveFillSet === "function"){ var F = deriveFillSet(day);
+        for(var j = 0; j < F.length; j++){ var f = F[j]; if(wbInBox(x, z, f.cx, f.cz, f.w, f.d, f.yaw)) return "fill "+f.code+" ["+f.state+"]"; } }
+    }catch(e){}
+    return null;
+  }
+  function wbCoordStateAt(x, z, day){
+    var gp = groundPlanAt(x, z, day);
+    return { land:wbIsLandAt(x, z, day), block:gp.block, lot:gp.platLot, zone:gp.zone, row:gp.row,
+             parcels:(gp.parcels||[]).slice().sort().join(","), reservation:gp.reservation,
+             pier:(typeof pierAt === "function") ? pierAt(x, z, day) : null, bld:wbBuildingAt(x, z, day) };
+  }
+  function wbStateSig(s){
+    return [s.land?"L":"W", s.block||"-", s.lot||"-", s.zone||"-", s.row||"-", s.parcels||"-", s.reservation||"-", s.pier||"-", s.bld||"-"].join("|");
+  }
+  function wbStateDesc(s){
+    var p = [];
+    p.push(s.land ? "land" : "WATER");
+    if(s.pier) p.push("pier "+s.pier);
+    if(s.lot) p.push("lot "+s.lot); else if(s.block) p.push("block "+s.block); else p.push("unplatted");
+    if(s.zone) p.push("zone "+s.zone);
+    if(s.row) p.push("ROW "+s.row);
+    if(s.parcels) p.push("["+s.parcels+"]");
+    if(s.reservation) p.push("reserved "+s.reservation);
+    if(s.bld) p.push("building: "+s.bld);
+    return p.join(" · ");
+  }
+  /* the sampled dates: monthly boundaries across [0, SIM_END_DAY] PLUS the exact
+     event days (block births, reservation built/burned, pier build-out, street
+     survey checkpoints) so a transition reports on its true date, not the coarse
+     month boundary. Deterministic, clamped to the sim window, sorted, deduped. */
+  function wbTimelineDays(){
+    var set = {};
+    function add(d){ if(d == null || !isFinite(d)) return; d = Math.max(0, Math.min(SIM_END_DAY, Math.round(d))); set[d] = 1; }
+    var d0 = dateFromSimDay(0), y = d0.getUTCFullYear(), m = d0.getUTCMonth();
+    for(var k = 0; k < 72; k++){ var day = (Date.UTC(y, m+k, 1) - SIM_START_MS)/86400000; if(day > SIM_END_DAY) break; add(day); }
+    add(0); add(SIM_END_DAY);
+    try{ (GROUND_PLAN.blocks||[]).forEach(function(b){ add(b.birth); }); }catch(e){}
+    try{ (typeof GROUND_RESERVATIONS !== "undefined" ? GROUND_RESERVATIONS : []).forEach(function(r){ add(r.built); add(r.burned); }); }catch(e){}
+    try{ (typeof PIERS_RUNTIME !== "undefined" ? PIERS_RUNTIME : []).forEach(function(p){ add(p.birthDay); (p.checkpoints||[]).forEach(function(c){ add(c.day); }); }); }catch(e){}
+    try{ (typeof STREETS_RUNTIME !== "undefined" ? STREETS_RUNTIME : []).forEach(function(s){ (s.checkpoints||[]).forEach(function(c){ add(c.day); }); add(s.surveyedDay); }); }catch(e){}
+    return Object.keys(set).map(Number).sort(function(a, b){ return a-b; });
+  }
+  var wbTlMarkerObj = null;
+  function wbClearTlMarker(){ if(wbTlMarkerObj){ scene.remove(wbTlMarkerObj); wbTlMarkerObj = null; } }
+  function wbSetTlMarker(x, z){
+    wbClearTlMarker();
+    var g = new THREE.ConeGeometry(3, 18, 8); g.translate(0, 9, 0);
+    var m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color:0xffd75e, depthTest:false, transparent:true, opacity:0.95 }));
+    m.position.set(x, terrainHeight(x, z), z); m.renderOrder = 2000; m.frustumCulled = false;
+    wbTlMarkerObj = m; scene.add(m);
+  }
+  el("div","wb-sec","TEMPORAL DEBUG-VIZ  (s101 — see the timeline)");
+  var tlActions = el("div","wb-actions");
+  var tlBtn = el("button","wb-btn","timeline: OFF — click to arm", tlActions);
+  var tlClearBtn = el("button","wb-btn","clear pin", tlActions);
+  var tlOut = el("div","wb-probe-out","(arm, then click any world point to read its state across 1846–1849)");
+  tlBtn.addEventListener("click", function(){
+    WB.tl = !WB.tl;
+    tlBtn.textContent = WB.tl ? "timeline: ON — click the world" : "timeline: OFF — click to arm";
+    tlBtn.classList.toggle("on", WB.tl);
+    document.body.classList.toggle("wb-tl", WB.tl);
+  });
+  tlClearBtn.addEventListener("click", function(){ wbClearTlMarker(); tlOut.textContent = "(pin cleared)"; });
+  function wbTlLine(k, v){ var d = document.createElement("div"); d.className = "wb-pl"; d.innerHTML = "<b>"+k+"</b> "+v; tlOut.appendChild(d); }
+  function wbRunTimeline(px, py){
+    var p = groundPointFromScreen(px, py);
+    tlOut.textContent = "";
+    if(!p){ wbTlLine("timeline", "no ground under that click (sky)"); return; }
+    wbSetTlMarker(p.x, p.z);
+    var days = wbTimelineDays(), spans = [], prevSig = null;
+    for(var i = 0; i < days.length; i++){
+      var s = wbCoordStateAt(p.x, p.z, days[i]), sig = wbStateSig(s);
+      if(sig !== prevSig){ spans.push({ day:days[i], state:s }); prevSig = sig; }
+    }
+    wbTlLine("point", p.x.toFixed(1)+", "+p.z.toFixed(1)+" · terrain "+terrainHeight(p.x, p.z).toFixed(2)+"m · "
+      + spans.length+" state span"+(spans.length===1?"":"s")+" over the sim window ("+days.length+" dates sampled)");
+    spans.forEach(function(sp){ wbTlLine(dateFromSimDay(sp.day).toISOString().slice(0, 7), wbStateDesc(sp.state)); });
+    wbTlLine("note", "static terrain (s101): land/water is fixed until terrain-morphing (s102/s103). This inspector reads the same date-parameterized queries the engine drives, so water→land→pier→building transitions appear here automatically as those systems land.");
+  }
+  canvas.addEventListener("click", function(ev){
+    if(!WB.tl) return;
+    ev.stopImmediatePropagation(); ev.preventDefault();
+    wbRunTimeline(ev.clientX, ev.clientY);
+  }, true);
 
   /* ---- 2. PROVENANCE PROBE ---- */
   el("div","wb-sec","PROVENANCE PROBE");
