@@ -969,6 +969,7 @@
 <script src="catalog-activities.js"></script>
 <script src="streets-geometry.js?v=s88"></script> <!-- ?v: cache-buster — bumped s88 (SoMa street re-spacing: true 200x300-vara Hundred Vara blocks + Howard/Mission) so a cached old bake can never pair with a new index.html -->
 <script src="plat-lots-known.js?v=s86"></script> <!-- s86: digitized survey lot registry (68 records, window.PLAT_LOTS_KNOWN), consumed by core/08 cadApplyRecord -->
+<script src="landmark-reservations.js?v=s91"></script> <!-- s91: landmark reservations (10 anchored + 5 documented-unanchorable, window.LANDMARK_RESERVATIONS), consumed by core/08 cadApplyReservations -->
 <script>
 /* =====================================================================
    src/vendor/ — VENDORED SOLVED-PROBLEM (foundation-reset.md §4b, the
@@ -4400,7 +4401,8 @@ function groundPlanParcelContains(name, x, z){
 /* THE query — what is this ground at this date. */
 function groundPlanAt(x, z, day){
   var out = { block:null, platLot:null, plot:null /* RESERVED for building plots (§1.3 3b) */,
-              parcels:[], row:null, band:null };
+              parcels:[], row:null, band:null, zone:null /* s91: governing land-use zone */,
+              reservation:null /* s91: landmark reservation footprint, if any */ };
   var b = cadBlockAt(x,z,day);
   if(b){ out.block = b.key; var lot = cadLotAt(x,z,day); out.platLot = lot ? lot.id : null; }
   for(var i=0;i<GROUND_PARCELS.length;i++){ var p=GROUND_PARCELS[i];
@@ -4408,6 +4410,8 @@ function groundPlanAt(x, z, day){
   }
   out.row = cadRowAt(x,z);
   out.band = groundPlanBand(x,z);
+  var Z = cadZoneAt(x,z,day); out.zone = Z ? Z.id : null;      // s91: WHERE-per-class law
+  var rv = reservationAt(x,z,day); out.reservation = rv ? rv.landmarkId : null;
   return out;
 }
 /* Targeted accessors. */
@@ -4495,6 +4499,234 @@ function groundPlanStats(){
            parcels:GROUND_PARCELS.length, maxDevPct:+(maxDev*100).toFixed(3), perEra:per,
            perDistrict:perDistrict, record:rec };
 }
+
+/* =====================================================================
+   s91 — ZONE LAW (building-spawn-spec §1 ZONES stage; placement-spec P3/P13
+   "zone logic given ONE home"). The era-keyed ZONE TABLE: every land-use zone
+   the buildings admission will spawn into, each carrying allowedClasses[] +
+   densityTier + an era interval + a spatial test. This is the LAW layer over
+   the parcels: the named parcels (GROUND_PARCELS) are the GEOMETRY (render
+   tints + folded predicates); the zone table is the WHERE-per-class placement
+   grammar canPlace consults. Zones REUSE the parcel predicates where a parcel
+   already draws the ground (plaza, cove, bands, camp, mission, presidio) and
+   ADD the three the parcels never modeled: commercial-core (era-grown from the
+   plaza + downtown blocks), residential-band (the rest of the platted fabric),
+   and waterfront-working (the pier corridors + the working shore bands).
+
+   PRECEDENCE = array order. cadZoneAt() returns the FIRST exclusive zone whose
+   test contains the point (the GOVERNING zone) — so every point has exactly ONE
+   governing zone and two zones can never render a contradictory exclusive claim
+   (proven by placement.zoneLaw). Zero dice, pure in (x,z,day) — same
+   determinism law as the plat. densityTier is carried for the buildings
+   admission (party-wall permission / fill density) and reported; not yet
+   enforced here. ===================================================================== */
+/* Commercial-core reach GROWS OUTWARD by era checkpoint (building-spawn-spec
+   §1: "plaza ring + main-street frontages, growing outward by era"). Radius in
+   world metres from the plaza centre; a downtown (fifty-vara) block is
+   commercial when its centroid sits within reach at the queried date. Tunables
+   (fill:true): 1846 village = the plaza ring; 1847 O'Farrell reaches the near
+   blocks; mid-1848 grows toward the water; the spring-1849 boom carries the
+   core to the Montgomery waterfront. */
+var CAD_COMM_R = [
+  { day:CAD_DAY_ALWAYS,                        r:120 },   // pre-survey village: plaza ring (City Hotel / Custom House / Portsmouth House cluster)
+  { day:ERA_MAP_SIMDAY["ofarrell-1847"],       r:230 },   // 396 — O'Farrell survey: the near downtown blocks
+  { day:eventDateToSimDay("1848-07-01"),       r:340 },   // grows toward the cove along Clay/Washington
+  { day:eventDateToSimDay("1849-04-01"),       r:470 }    // the boom: gambling row + the full core to the Montgomery waterfront
+];
+function cadCommercialRadiusAt(day){
+  if(day==null) return CAD_COMM_R[CAD_COMM_R.length-1].r;   // null day ⇒ fully grown (most-restrictive footprint)
+  var r=CAD_COMM_R[0].r;
+  for(var i=0;i<CAD_COMM_R.length;i++) if(day>=CAD_COMM_R[i].day) r=CAD_COMM_R[i].r;
+  return r;
+}
+/* A block is in the commercial core when it is a downtown (cardinal fifty-vara)
+   block, not the plaza reserve, whose centroid is within the era's reach of the
+   plaza. Centroid world position is memoized on the block (single canonical
+   frame; does not enter the determinism fingerprint). */
+function cadBlockCommercial(b, day){
+  if(!b || b.publicReserve || b.district!=="fifty-vara") return false;
+  if(b.cxWorld==null){ var w=gridToWorldAt((b.uLo+b.uHi)/2,(b.vLo+b.vHi)/2,GRID_ROT_BASE); b.cxWorld=w.x; b.czWorld=w.z; }
+  return Math.hypot(b.cxWorld-PLAZA_CENTER.x, b.czWorld-PLAZA_CENTER.z) <= cadCommercialRadiusAt(day);
+}
+/* THE ZONE TABLE — precedence-ordered. Each: { id, allowedClasses, densityTier,
+   birth, exclusive, note, contains(x,z,day) }. exclusive zones claim the ground;
+   a point outside every zone is LOOSE GROUND (only the unaddressed / scatter /
+   fauna classes place there — building classes need zoned ground). */
+var CAD_ZONE_TABLE = [
+  { id:"plaza", densityTier:"none", birth:CAD_DAY_ALWAYS, exclusive:true,
+    note:"the Portsmouth Square common — civic/promenade only; the Custom House + School House are the documented civic exceptions ON it (reservations, not fill).",
+    allowedClasses:["civic","promenade","fountain","well","monument","landmark-civic"],
+    contains:function(x,z,day){ return groundPlanParcelContains("portsmouth-square",x,z); } },
+  { id:"waterfront-working", densityTier:"working", birth:CAD_DAY_ALWAYS, exclusive:true,
+    note:"the pier corridors + the working shore (storeship mud band + beach band) — wharves, warehouses, storeships, flotsam.",
+    allowedClasses:["wharf","wharf-shed","warehouse","storeship","beached-boat","flotsam","boat","crate","commercial","landmark-commerce"],
+    contains:function(x,z,day){ return (typeof pierAt==="function" && pierAt(x,z,day)!=null) || cadIntertidalContains(x,z) || cadBeachContains(x,z); } },
+  { id:"cove-water", densityTier:"none", birth:CAD_DAY_ALWAYS, exclusive:true,
+    note:"open Yerba Buena Cove seaward of the working shore — the anchorage: ships + moorings + storeships.",
+    allowedClasses:["ship","storeship","mooring","boat","wharf"],
+    contains:function(x,z,day){ return groundPlanParcelContains("yerba-buena-cove",x,z); } },
+  { id:"commercial-core", densityTier:"dense", birth:CAD_DAY_ALWAYS, exclusive:true,
+    note:"plaza ring + downtown frontages, era-grown outward to the waterfront by the boom. Commercial/civic + addressed building tiers; NO tents/shanties (the commercial front is not tent ground at any era).",
+    allowedClasses:["commercial","civic","hotel","gambling-hall","store","warehouse","frame","kit-house","iron-house","brick","sign","landmark-civic","landmark-commerce"],
+    contains:function(x,z,day){ return cadBlockCommercial(cadBlockAt(x,z,day), day); } },
+  { id:"camp", densityTier:"loose", birth:eventDateToSimDay("1849-08-01"), exclusive:true,
+    note:"Happy Valley / SoMa tent settlement (born 1849) — tents, shanties, encampment structures, yard outbuildings.",
+    allowedClasses:["tent","shanty","encampment","outbuilding"],
+    contains:function(x,z,day){ return groundPlanParcelContains("happy-valley-camp",x,z); } },
+  { id:"mission-cluster", densityTier:"sparse", birth:CAD_DAY_ALWAYS, exclusive:true,
+    note:"Mission Dolores ground — mission/adobe/civic/garden + the odd frame or wayfarer's tent.",
+    allowedClasses:["mission","adobe","civic","garden","tent","frame"],
+    contains:function(x,z,day){ return groundPlanParcelContains("mission-cluster",x,z); } },
+  { id:"presidio", densityTier:"sparse", birth:CAD_DAY_ALWAYS, exclusive:true,
+    note:"the Presidio military reserve — military/civic/adobe.",
+    allowedClasses:["military","civic","adobe"],
+    contains:function(x,z,day){ return groundPlanParcelContains("presidio",x,z); } },
+  { id:"residential-band", densityTier:"medium", birth:CAD_DAY_ALWAYS, exclusive:true,
+    note:"the rest of the platted fabric (fifty- + hundred-vara blocks) beyond the commercial core — dwellings, frame/adobe/kit houses, plus early tents/shanties before the core reaches them.",
+    allowedClasses:["frame","kit-house","adobe","brick","dwelling","outbuilding","store","civic","tent","shanty"],
+    contains:function(x,z,day){ var b=cadBlockAt(x,z,day); return !!b && !b.publicReserve && !cadBlockCommercial(b,day); } }
+];
+var CAD_ZONE_BY_ID = {}; CAD_ZONE_TABLE.forEach(function(z){ CAD_ZONE_BY_ID[z.id]=z; });
+/* Classes any zone governs (SELECTIVE — placement-spec doctrine: law is a
+   floor, not blanket bureaucracy). A class not named by any zone AND not in the
+   loose set is zone-agnostic (the LAW_TABLES row alone governs it). */
+var CAD_LOOSE_ALLOWED = { tent:1, shanty:1, encampment:1, outbuilding:1, scatter:1, prop:1, tree:1, flotsam:1, fauna:1, fence:1, sign:1, boat:1, "beached-boat":1 };
+var CAD_ZONE_RELEVANT = (function(){ var s={}; CAD_ZONE_TABLE.forEach(function(z){ z.allowedClasses.forEach(function(c){ s[c]=1; }); }); Object.keys(CAD_LOOSE_ALLOWED).forEach(function(c){ s[c]=1; }); return s; })();
+/* THE governing zone at a point/date — first exclusive zone (by precedence)
+   whose test contains it AND that is born by `day`. null ⇒ loose ground. */
+function cadZoneAt(x, z, day){
+  for(var i=0;i<CAD_ZONE_TABLE.length;i++){ var Z=CAD_ZONE_TABLE[i];
+    if(day!=null && Z.birth!=null && Z.birth>day) continue;
+    if(Z.contains(x,z,day)) return Z;
+  }
+  return null;
+}
+/* THE zone gate (building-spawn-spec §1: "the zone gate adds WHERE per class").
+   {ok, reason, zone}. Zone-agnostic classes pass untouched; loose ground admits
+   only the unaddressed/scatter/fauna set; otherwise the governing zone's
+   allowedClasses decide. */
+function cadZoneGate(cls, x, z, day){
+  if(!CAD_ZONE_RELEVANT[cls]) return { ok:true, reason:"zone-agnostic", zone:null };
+  var Z = cadZoneAt(x,z,day);
+  if(!Z) return CAD_LOOSE_ALLOWED[cls] ? { ok:true, reason:"loose-ground", zone:null }
+                                       : { ok:false, reason:"loose-ground-forbids:"+cls, zone:null };
+  for(var i=0;i<Z.allowedClasses.length;i++) if(Z.allowedClasses[i]===cls || Z.allowedClasses[i]==="*") return { ok:true, reason:"zone:"+Z.id, zone:Z.id };
+  return { ok:false, reason:"zone:"+Z.id+"-forbids:"+cls, zone:Z.id };
+}
+/* Public accessors. */
+function landUseZoneAt(x,z,day){ var Z=cadZoneAt(x,z,day==null?SIM_DAY_FALLBACK():day); return Z?Z.id:null; }
+function zoneAllows(cls,x,z,day){ return cadZoneGate(cls,x,z,day).ok; }
+function SIM_DAY_FALLBACK(){ return (typeof simDay==="number") ? simDay : null; }
+
+/* =====================================================================
+   s91 — LANDMARK RESERVATIONS (building-spawn-spec §1: "the record wins" —
+   reserved ground spawns THE landmark, never fill). window.LANDMARK_RESERVATIONS
+   (baked from data/landmark-reservations.json) is joined to the live plan: each
+   reservation resolves to a world footprint on a documented block+frontage (or
+   ON the plaza common for the civic exceptions), gated by its built/burned dates.
+   A reservation whose block is absent at its built date is surfaced as
+   `unresolved` (never forced); the honest unanchorable list lives in the sidecar
+   _meta. PURE (data join over the fixed plat, zero dice). ===================== */
+function cadFrontageEdgeUV(b, frontage){
+  // returns { p0:{u,v}, p1:{u,v}, inU, inV } — the edge's two block-corner uv
+  // points (p0 = smaller coordinate) and the inward unit (into the block).
+  switch(frontage){
+    case "west":  return { p0:{u:b.uLo,v:b.vLo}, p1:{u:b.uLo,v:b.vHi}, inU:1,  inV:0 };
+    case "east":  return { p0:{u:b.uHi,v:b.vLo}, p1:{u:b.uHi,v:b.vHi}, inU:-1, inV:0 };
+    case "north": return { p0:{u:b.uLo,v:b.vLo}, p1:{u:b.uHi,v:b.vLo}, inU:0,  inV:1 };
+    case "south": return { p0:{u:b.uLo,v:b.vHi}, p1:{u:b.uHi,v:b.vHi}, inU:0,  inV:-1 };
+  }
+  return null;
+}
+/* Resolve a reservation to { uvRect, quad(world), cx, cz } at `day`, or null if
+   its block is absent / not yet born. uvRect is axis-aligned in (u,v) for the
+   same-block overlap audit; quad is day-frame world for render/probe. */
+function resolveReservationFootprint(res, day){
+  var a=res.anchor, blk;
+  if(a.kind==="plaza-exception"){
+    blk = CAD_PLAZA_BLOCK; if(!blk) return null;
+    if(day!=null && blk.birth>day) return null;
+    var wM=a.widthM||24, dM=a.depthM||16, uLo,uHi,vLo,vHi;
+    // corner of the plaza block: N=small v, S=large v, W=small u, E=large u
+    var west=(a.corner==="NW"||a.corner==="SW"), north=(a.corner==="NW"||a.corner==="NE");
+    uLo = west ? blk.uLo : blk.uHi-wM; uHi = west ? blk.uLo+wM : blk.uHi;
+    vLo = north? blk.vLo : blk.vHi-dM; vHi = north? blk.vLo+dM : blk.vHi;
+    return cadUVRectToFootprint(uLo,uHi,vLo,vHi,day,blk.key);
+  }
+  // block-frontage
+  var byBlock = cadReservationBlockIndex(); blk = byBlock[a.block];
+  if(!blk) return null;
+  if(day!=null && blk.birth>day) return null;
+  var e = cadFrontageEdgeUV(blk, a.frontage); if(!e) return null;
+  var f0=a.frontFrac0!=null?a.frontFrac0:0, f1=a.frontFrac1!=null?a.frontFrac1:1, dM=a.depthM||20;
+  // sub-interval along the edge
+  var au0=e.p0.u+(e.p1.u-e.p0.u)*f0, av0=e.p0.v+(e.p1.v-e.p0.v)*f0;
+  var au1=e.p0.u+(e.p1.u-e.p0.u)*f1, av1=e.p0.v+(e.p1.v-e.p0.v)*f1;
+  var uLo=Math.min(au0,au1), uHi=Math.max(au0,au1), vLo=Math.min(av0,av1), vHi=Math.max(av0,av1);
+  if(e.inU!==0){ if(e.inU>0) uHi=uLo+dM; else uLo=uHi-dM; }   // frontage is a vertical (u) edge → depth runs in u
+  else         { if(e.inV>0) vHi=vLo+dM; else vLo=vHi-dM; }   // horizontal (v) edge → depth runs in v
+  return cadUVRectToFootprint(uLo,uHi,vLo,vHi,day,blk.key);
+}
+function cadUVRectToFootprint(uLo,uHi,vLo,vHi,day,blockKey){
+  var ang=cadSkewAt(day);
+  var sw=gridToWorldAt(uLo,vLo,ang), se=gridToWorldAt(uHi,vLo,ang), ne=gridToWorldAt(uHi,vHi,ang), nw=gridToWorldAt(uLo,vHi,ang);
+  return { uvRect:{ uLo:uLo,uHi:uHi,vLo:vLo,vHi:vHi }, block:blockKey,
+           quad:[{x:sw.x,z:sw.z},{x:se.x,z:se.z},{x:ne.x,z:ne.z},{x:nw.x,z:nw.z}],
+           cx:(sw.x+ne.x)/2, cz:(sw.z+ne.z)/2 };
+}
+var _cadResBlockIndex=null;
+function cadReservationBlockIndex(){
+  if(_cadResBlockIndex) return _cadResBlockIndex;
+  _cadResBlockIndex={}; GROUND_PLAN.blocks.forEach(function(b){ _cadResBlockIndex[b.key]=b; });
+  return _cadResBlockIndex;
+}
+var GROUND_RESERVATIONS = [];
+var GROUND_RESERVATION_STATS = { registryLoaded:false, reservations:0, anchored:0, unresolved:[], unanchorableDocumented:0, plazaExceptions:0, overlaps:[] };
+function cadApplyReservations(){
+  var REG=(typeof window!=="undefined" && window.LANDMARK_RESERVATIONS) ? window.LANDMARK_RESERVATIONS : null;
+  GROUND_RESERVATIONS=[]; GROUND_RESERVATION_STATS={ registryLoaded:!!REG, reservations:0, anchored:0, unresolved:[], unanchorableDocumented:0, plazaExceptions:0, overlaps:[] };
+  if(!REG || !REG.reservations) return;
+  GROUND_RESERVATION_STATS.unanchorableDocumented = (REG._meta && REG._meta.unanchorable ? REG._meta.unanchorable.length : 0);
+  REG.reservations.forEach(function(res){
+    GROUND_RESERVATION_STATS.reservations++;
+    var built = res.dates && res.dates.built ? eventDateToSimDay(res.dates.built) : CAD_DAY_ALWAYS;
+    var burned = res.dates && res.dates.burned ? eventDateToSimDay(res.dates.burned) : null;
+    // resolve at the built date (the fabric it anchors to must exist then)
+    var fp = resolveReservationFootprint(res, built);
+    var rec = { landmarkId:res.landmarkId, name:res.name, dossier:res.dossier||null,
+                anchor:res.anchor, kind:res.anchor.kind, block:res.anchor.block||(res.anchor.kind==="plaza-exception"?(CAD_PLAZA_BLOCK?CAD_PLAZA_BLOCK.key:null):null),
+                built:built, burned:burned, confidence:res.confidence||null, source:res.source||null,
+                note:(res.dates&&res.dates.note)||null, resolved:!!fp, footprint:fp };
+    if(fp){ GROUND_RESERVATION_STATS.anchored++; if(res.anchor.kind==="plaza-exception") GROUND_RESERVATION_STATS.plazaExceptions++; }
+    else   GROUND_RESERVATION_STATS.unresolved.push({ landmarkId:res.landmarkId, block:res.anchor.block||res.anchor.kind, reason:"block-absent-at-built-date" });
+    GROUND_RESERVATIONS.push(rec);
+  });
+  // same-block ground conflict census (documented succession — burned+rebuilt at
+  // the same spot — is NOT a conflict; only live-overlapping DISTINCT landmarks are)
+  for(var i=0;i<GROUND_RESERVATIONS.length;i++) for(var j=i+1;j<GROUND_RESERVATIONS.length;j++){
+    var A=GROUND_RESERVATIONS[i], B=GROUND_RESERVATIONS[j];
+    if(!A.resolved||!B.resolved) continue;
+    if(A.block!==B.block) continue;                        // different blocks can't share ground
+    var ra=A.footprint.uvRect, rb=B.footprint.uvRect;
+    var overlap = ra.uLo<rb.uHi-1e-6 && rb.uLo<ra.uHi-1e-6 && ra.vLo<rb.vHi-1e-6 && rb.vLo<ra.vHi-1e-6;
+    if(overlap) GROUND_RESERVATION_STATS.overlaps.push({ a:A.landmarkId, b:B.landmarkId, block:A.block });
+  }
+}
+cadApplyReservations();
+/* Point query — which reservation footprint (if any) a point sits on at `day`
+   (built ≤ day, and before burned when a burn date is in-window). */
+function reservationAt(x,z,day){
+  for(var i=0;i<GROUND_RESERVATIONS.length;i++){ var r=GROUND_RESERVATIONS[i];
+    if(!r.resolved) continue;
+    if(day!=null){ if(r.built>day) continue; if(r.burned!=null && day>=r.burned) continue; }
+    if(cadPointInPoly(r.footprint.quad, x, z)) return r;
+  }
+  return null;
+}
+function reservationsAt(day){
+  return GROUND_RESERVATIONS.filter(function(r){ return r.resolved && (day==null || (r.built<=day && (r.burned==null || day<r.burned))); });
+}
+function reservationById(id){ for(var i=0;i<GROUND_RESERVATIONS.length;i++) if(GROUND_RESERVATIONS[i].landmarkId===id) return GROUND_RESERVATIONS[i]; return null; }
 
 /* =====================================================================
    AUDITS (the gate) — registered under placement.* (core-owned). Framing-
@@ -4845,6 +5077,136 @@ function groundPlanStats(){
              dimensionFlags:R.dimFlags.length, dimFlagList:R.dimFlags.slice(0,12),
              sample:recordLots.slice(0,6).map(function(l){ return { id:l.id, lotNumber:l.lotNumber, district:l.district, source:l.recordSource,
                owners:(l.owners?l.owners.map(function(o){return o.dateOrInterval+" "+o.name;}):null) }; }) };
+  });
+
+  /* zoneLaw (s91 — ZONE LAW EXPANSION). Proves the era-keyed zone table is a
+     complete, non-contradictory placement grammar:
+       (1) STRUCTURE — every zone is closed + classed: non-empty allowedClasses,
+           a contains() test, a densityTier.
+       (2) COVERAGE — over a fixed town+cove lattice, every point that is on a
+           platted block OR inside a named parcel has a GOVERNING zone (no zoned
+           ground falls through unclassed). Reported: the per-zone histogram.
+       (3) NO CONTRADICTORY EXCLUSIVE CLAIMS — at each sample the governing zone
+           is unique by construction (first exclusive match); the audit confirms
+           it equals the first containing zone at every point and reports how many
+           points are claimed by >1 zone (precedence-resolved overlaps, e.g. a
+           bayfront block edge in both waterfront-working and a downtown block).
+       (4) THE GATE FIRES — synthetic canPlace probes at self-located points:
+           a commercial building in the camp zone REJECTS; a tent in the boom-era
+           commercial core REJECTS; commercial in the core ACCEPTS; a tent in camp
+           ACCEPTS; a storeship on the mud band ACCEPTS; commercial on open cove
+           REJECTS. Every probe expectation must hold. Deterministic; no dice. */
+  registerAudit("placement", "zoneLaw", function(){
+    var day = eventDateToSimDay("1849-09-01");           // boom era: commercial core at full reach
+    // (1) structure
+    var structBad=[];
+    CAD_ZONE_TABLE.forEach(function(Z){
+      if(!Z.allowedClasses || !Z.allowedClasses.length) structBad.push(Z.id+":no-classes");
+      if(typeof Z.contains!=="function") structBad.push(Z.id+":no-test");
+      if(!Z.densityTier) structBad.push(Z.id+":no-density");
+    });
+    // (2)+(3) coverage + overlap over a fixed lattice
+    var pc=PLAZA_CENTER, x0=pc.x-700, x1=pc.x+1400, z0=pc.z-700, z1=pc.z+1100, side=48;
+    var hist={}, uncovered=[], multiZone=0, governedMismatch=0, checked=0;
+    for(var gi=0; gi<side; gi++) for(var gj=0; gj<side; gj++){
+      var x=x0+(gi+0.5)/side*(x1-x0), z=z0+(gj+0.5)/side*(z1-z0);
+      // "should be zoned" = on a platted block or inside any named parcel (excluding the survey envelope, which is a bbox not a claim)
+      var onBlock = cadBlockAt(x,z,day)!=null;
+      var inParcel=false; for(var pi=0;pi<GROUND_PARCELS.length;pi++){ var p=GROUND_PARCELS[pi]; if(p.cls==="survey") continue; if((p.birth<=day)&&cadParcelContains(p,x,z,day)){ inParcel=true; break; } }
+      var shouldZone = onBlock || inParcel;
+      // governing zone + all containing zones (for the overlap/contradiction check)
+      var gov=null, containing=[];
+      for(var zi=0; zi<CAD_ZONE_TABLE.length; zi++){ var Z=CAD_ZONE_TABLE[zi]; if(Z.birth!=null&&Z.birth>day) continue;
+        if(Z.contains(x,z,day)){ containing.push(Z.id); if(!gov) gov=Z.id; } }
+      if(containing.length>1) multiZone++;
+      if(gov && gov!==containing[0]) governedMismatch++;   // must be identical by construction
+      checked++;
+      if(shouldZone){ if(!gov){ if(uncovered.length<20) uncovered.push({ x:+x.toFixed(0), z:+z.toFixed(0), onBlock:onBlock, inParcel:inParcel }); }
+                      else hist[gov]=(hist[gov]||0)+1; }
+      else if(gov) hist[gov]=(hist[gov]||0)+1;             // zoned beyond the platted region is fine (bands/camp/etc.)
+    }
+    // (4) gate probes — self-locate representative points on the lattice
+    function findPoint(pred){ for(var gi=0; gi<side; gi++) for(var gj=0; gj<side; gj++){ var x=x0+(gi+0.5)/side*(x1-x0), z=z0+(gj+0.5)/side*(z1-z0); if(pred(x,z)) return {x:x,z:z}; } return null; }
+    var pCamp = findPoint(function(x,z){ return landUseZoneAt(x,z,eventDateToSimDay("1849-09-01"))==="camp"; });
+    var pCore = findPoint(function(x,z){ return landUseZoneAt(x,z,day)==="commercial-core"; });
+    var pMud  = findPoint(function(x,z){ return landUseZoneAt(x,z,day)==="waterfront-working" && cadIntertidalContains(x,z); });
+    var pCove = findPoint(function(x,z){ return landUseZoneAt(x,z,day)==="cove-water"; });
+    var probes=[], probeFail=0;
+    var bday=eventDateToSimDay("1849-09-01");
+    /* REJECTION probes go through the full canPlace() (the real placement path,
+       the brief's explicit ask: "canPlace zone-gate fires ... a commercial
+       building in the camp zone = rejected"). The zone gate runs FIRST, so a
+       zone-illegal class rejects with a zone reason regardless of slope/terrain. */
+    function probeReject(name, cls, pt){
+      if(!pt){ probes.push({ probe:name, located:false }); probeFail++; return; }
+      var g=canPlace(cls, { x:pt.x, z:pt.z }, { day:bday });
+      var ok = (g.ok===false) && /^zone:/.test(g.reason);   // rejected BY THE ZONE GATE, not another law
+      if(!ok) probeFail++;
+      probes.push({ probe:name, path:"canPlace", located:true, cls:cls, zone:landUseZoneAt(pt.x,pt.z,bday), gotOk:g.ok, reason:g.reason, pass:ok });
+    }
+    /* ACCEPTANCE probes test the ZONE GATE decision directly (cadZoneGate),
+       isolating zone law from the positional laws (slope/terrain/overlap) that
+       other audits already prove — a camp/mud point may legitimately be sloped
+       or wet, which is not a zoning fact. */
+    function probeAdmit(name, cls, pt){
+      if(!pt){ probes.push({ probe:name, located:false }); probeFail++; return; }
+      var g=cadZoneGate(cls, pt.x, pt.z, bday);
+      var ok=(g.ok===true); if(!ok) probeFail++;
+      probes.push({ probe:name, path:"cadZoneGate", located:true, cls:cls, zone:g.zone, gotOk:g.ok, reason:g.reason, pass:ok });
+    }
+    probeReject("commercial-in-camp",        "commercial", pCamp);
+    probeReject("tent-in-commercial-core",   "tent",       pCore);
+    probeReject("commercial-on-open-cove",   "commercial", pCove);
+    probeAdmit ("commercial-in-core",        "commercial", pCore);
+    probeAdmit ("tent-in-camp",              "tent",       pCamp);
+    probeAdmit ("storeship-on-mud",          "storeship",  pMud);
+
+    var pass = structBad.length===0 && uncovered.length===0 && governedMismatch===0 && probeFail===0;
+    return { pass:pass, law:"zoneLaw", zones:CAD_ZONE_TABLE.length,
+             structureViolations:structBad,
+             coverage:{ sampled:checked, uncoveredZonedGround:uncovered.length, uncoveredList:uncovered, histogram:hist },
+             overlap:{ multiZonePoints:multiZone, governingUniqueMismatches:governedMismatch },
+             gate:{ failures:probeFail, probes:probes },
+             table:CAD_ZONE_TABLE.map(function(Z){ return { id:Z.id, density:Z.densityTier, birth:(Z.birth<=CAD_DAY_ALWAYS?"always":Z.birth), classes:Z.allowedClasses.length }; }),
+             commercialReach:CAD_COMM_R.map(function(s){ return { day:(s.day<=CAD_DAY_ALWAYS?"always":s.day), radiusM:s.r }; }) };
+  });
+
+  /* reservations (s91 — LANDMARK RESERVATIONS). Proves the record got its
+     ground honestly:
+       (1) every anchored reservation RESOLVES — its block exists at the built
+           date and the footprint materialized (unresolved ones are surfaced,
+           never forced; the documented-unanchorable list lives in the sidecar).
+       (2) NO TWO reservations claim the same ground (same-block uv-rect overlap
+           = 0) — documented burned→rebuild succession is same-id, not a conflict.
+       (3) the Custom House sits ON the plaza block (the publicReserve civic
+           exception, encoded explicitly as a plaza-exception anchor).
+       (4) accounting closes: anchored + unresolved = reservations; the sidecar's
+           documented-unanchorable count is reported.
+     Registry absent ⇒ documented no-op pass. Deterministic; no dice. */
+  registerAudit("placement", "reservations", function(){
+    var S=GROUND_RESERVATION_STATS;
+    if(!S.registryLoaded) return { pass:true, law:"reservations", registryLoaded:false, note:"landmark-reservations sidecar not loaded" };
+    var accounted = (S.anchored + S.unresolved.length) === S.reservations;
+    var noOverlap = S.overlaps.length===0;
+    // Custom House ON the plaza block, resolved, plaza-exception
+    var ch = reservationById("custom-house");
+    var customOnPlaza = !!(ch && ch.resolved && ch.kind==="plaza-exception" && CAD_PLAZA_BLOCK && ch.block===CAD_PLAZA_BLOCK.key);
+    // every plaza-exception reservation actually lands inside the plaza block uv bounds
+    var plazaExcOk=true, plazaExcList=[];
+    GROUND_RESERVATIONS.forEach(function(r){ if(r.kind!=="plaza-exception"||!r.resolved) return;
+      var q=r.footprint.uvRect, pb=CAD_PLAZA_BLOCK;
+      var inside = pb && q.uLo>=pb.uLo-1e-6 && q.uHi<=pb.uHi+1e-6 && q.vLo>=pb.vLo-1e-6 && q.vHi<=pb.vHi+1e-6;
+      plazaExcList.push({ id:r.landmarkId, insidePlazaBlock:!!inside }); if(!inside) plazaExcOk=false;
+    });
+    var pass = accounted && noOverlap && customOnPlaza && plazaExcOk && S.unresolved.length===0;
+    return { pass:pass, law:"reservations", registryLoaded:true,
+             reservations:S.reservations, anchored:S.anchored, unresolved:S.unresolved.length, unresolvedList:S.unresolved,
+             accountingCloses:accounted, unanchorableDocumented:S.unanchorableDocumented,
+             sameGroundOverlaps:S.overlaps.length, overlapList:S.overlaps,
+             customHouseOnPlazaBlock:customOnPlaza, plazaExceptions:S.plazaExceptions, plazaExceptionsInsideBlock:plazaExcOk, plazaExceptionList:plazaExcList,
+             list:GROUND_RESERVATIONS.map(function(r){ return { id:r.landmarkId, name:r.name, kind:r.kind, block:r.block,
+               built:(r.built<=CAD_DAY_ALWAYS?"pre-sim":r.built), burned:r.burned, confidence:r.confidence, resolved:r.resolved,
+               cx:r.footprint?+r.footprint.cx.toFixed(0):null, cz:r.footprint?+r.footprint.cz.toFixed(0):null }; }) };
   });
 })();
 
@@ -6720,8 +7082,21 @@ var LAW_TABLES = {
 function canPlaceClass(cls, pose, ctx){
   ctx = ctx||{}; pose = pose||{};
   var law = LAW_TABLES[cls];
-  if(!law) return { ok:true, reason:"no-law:"+cls };   // unknown class: engine imposes nothing
-  var x = pose.x, z = pose.z, h = terrainHeight(x,z);
+  var x = pose.x, z = pose.z;
+  /* ZONE GATE (s91 — building-spawn-spec §1: "the zone gate adds WHERE per
+     class"). The cadastre's era-keyed zone table decides whether this class may
+     stand on THIS ground at ctx.day. Runs regardless of a LAW_TABLES row (a
+     zoning-only class like "commercial"/"frame" has no positional law row but is
+     still zone-gated). ctx.zoneClass lets the buildings admission pass a
+     fine-grained building class (e.g. "commercial") while the broad LAW_TABLES
+     cls stays "structure"; absent, the cls itself is used. Zone-agnostic classes
+     pass untouched (SELECTIVE law). */
+  if(typeof cadZoneGate==="function"){
+    var zg = cadZoneGate(ctx.zoneClass||cls, x, z, ctx.day!=null?ctx.day:(typeof simDay==="number"?simDay:null));
+    if(!zg.ok) return zg;
+  }
+  if(!law) return { ok:true, reason:"no-law:"+cls };   // unknown class: engine imposes nothing beyond the zone gate
+  var h = terrainHeight(x,z);
   if(law.surface==="land" && h <= (law.minY!=null?law.minY:0.5)) return { ok:false, reason:"not-on-land" };
   if(law.surface==="water" && h > -0.5) return { ok:false, reason:"not-in-water" };
   if(law.intertidalAllowed===false && inIntertidalBand(x,z)) return { ok:false, reason:"intertidal" };
@@ -8039,7 +8414,8 @@ var LBL_BANDS = {
   place:   function(a){ return _rDown(a, 3600, 6600); },                // civic/landmark places: persist, fade only very high
   street:  function(a){ return _rDown(a, 560, 880); },                  // fade in at the street band
   lotNum:  function(a){ return _rDown(a, 180, 270); },                  // fade in at the lot band
-  lotOwn:  function(a){ return _rDown(a, 96, 158); }                    // owner: closer still
+  lotOwn:  function(a){ return _rDown(a, 96, 158); },                   // owner: closer still
+  landmark:function(a){ return _rDown(a, 360, 560); }                   // s91: reservation names — read earlier (higher) than lot numbers
 };
 
 /* ====================================================================
@@ -8127,6 +8503,18 @@ function rebuildLabels(){
         }
       });
     });
+    /* s91 — LANDMARK RESERVATION NAMES join the LOTS sublayer, civic/commerce
+       voice (warm gold small-caps). The record's ground gets its name flat on
+       the reserved footprint; era-gated (built ≤ day, before any in-window burn)
+       so the Dec 24 1849 Great Fire cluster fades as you scrub past the fire. */
+    if(typeof reservationsAt==="function"){
+      reservationsAt(day).forEach(function(r){
+        if(!r.footprint) return;
+        var cx=r.footprint.cx, cz=r.footprint.cz;
+        if(terrainHeight(cx,cz) <= 0.3) return;               // don't float a name over water
+        _lblAdd(_lblGroundMesh(r.name, LBL_STYLE.civic, cx, cz, 8, _lblGrid.angle), LBL_BANDS.landmark, "lots", 34, 0, true);
+      });
+    }
   }
 
   _lblLastDay = Math.floor(simDay);
@@ -9730,7 +10118,15 @@ window.__P1850 = {
     get stats(){ return groundPlanStats(); },
     get blocks(){ return GROUND_PLAN.blocks; },
     get lots(){ return GROUND_PLAN.lots; },
-    get parcels(){ return GROUND_PARCELS; }
+    get parcels(){ return GROUND_PARCELS; },
+    /* s91 — ZONE LAW + LANDMARK RESERVATIONS */
+    zoneAt: function(x,z,day){ return landUseZoneAt(x,z,day==null?simDay:day); },      // governing land-use zone id
+    zoneGate: function(cls,x,z,day){ return cadZoneGate(cls,x,z,day==null?simDay:day); }, // {ok,reason,zone}
+    get zones(){ return CAD_ZONE_TABLE.map(function(Z){ return { id:Z.id, densityTier:Z.densityTier, birth:Z.birth, allowedClasses:Z.allowedClasses.slice() }; }); },
+    get reservations(){ return GROUND_RESERVATIONS; },
+    reservationAt: function(x,z,day){ var r=reservationAt(x,z,day==null?simDay:day); return r?r.landmarkId:null; },
+    reservationsAt: function(day){ return reservationsAt(day==null?simDay:day); },
+    get reservationStats(){ return GROUND_RESERVATION_STATS; }
   },
   get fauna(){
     return { hogs:hogMesh.count, hogTarget:hogTargetCount(simDay), gulls:gullMesh.count,
@@ -11524,7 +11920,7 @@ function updateHud(alt){
     // frame — there is one frame; only the date-gated birth/extent changes.
     if(Math.floor(simDay)!==_overlayDay){
       _overlayDay = Math.floor(simDay);
-      ["spine","row","lots","parcels","keepout"].forEach(function(key){
+      ["spine","row","lots","parcels","reservations","keepout","zonelaw"].forEach(function(key){
         if(!WB.overlays[key]) return;
         if(overlayObjs[key]){ scene.remove(overlayObjs[key]); }
         overlayObjs[key] = buildOverlay(key);
@@ -11692,7 +12088,7 @@ function updateHud(alt){
      (walk keep-out · ecology zones · audit failures). Copy is Director-authored
      verbatim; each row is a name + a small legend line. ---- */
   el("div","wb-sec","RULE OVERLAYS");
-  var overlayObjs = { spine:null, row:null, lots:null, parcels:null, keepout:null, zones:null, audits:null };
+  var overlayObjs = { spine:null, row:null, lots:null, parcels:null, reservations:null, keepout:null, zones:null, zonelaw:null, audits:null };
   var auditStatusEl = null, keepoutStatusEl = null;
 
   /* one toggle path: every overlay rebuilds fresh on enable (all are cheap
@@ -11723,10 +12119,10 @@ function updateHud(alt){
   el("div","wb-ov-grouphdr","Roads, lots, and zones are one dated system — toggle the family or break out a member.",groupWrap);
   var groupBody = el("div","wb-ov-groupbody",null,groupWrap);
 
-  var SPINE_CHILDREN = ["spine","row","lots","parcels"];
+  var SPINE_CHILDREN = ["spine","row","lots","parcels","reservations"];
   var childCbs = {};
   var groupEverUsed = false;
-  var groupLast = { spine:false, row:false, lots:false, parcels:false };
+  var groupLast = { spine:false, row:false, lots:false, parcels:false, reservations:false };
   function syncGroupCheckbox(){
     var on = 0; SPINE_CHILDREN.forEach(function(k){ if(WB.overlays[k]) on++; });
     groupCb.checked = on > 0;
@@ -11750,6 +12146,8 @@ function updateHud(alt){
     "The dated cadastre: blocks and 50-vara lots born at their survey checkpoints; scrub the timeline to watch the plat appear. white = lot lines · gold fill = record lot (number + owner via probe; ground labels arrive with the labels layer) · gold tick = corner lots marked at their corner point · cyan = water lot (1847 beach-and-water auction) · magenta = non-standard block. The plaza block is a public reserve — no lots.");
   makeChild("parcels","NAMED PARCELS",
     "Named ground parcels carrying allowed-asset-class law (plaza · cove · mud/beach bands · camp · mission · presidio). One zone truth: placement reads these. oxblood = public reserve (the plaza common) · blue = cove · brown/tan = mud/beach bands · orange = camp · violet = mission · green = presidio. s87: all parcels are polygons — land/water parcels clipped to the 1849 shore (happy-valley-camp hugs the coast), the two shoreline bands drawn as real triangulated tints (raster exception gone).");
+  makeChild("reservations","LANDMARK RESERVATIONS",
+    "s91: the record's reserved ground — documented landmarks the buildings admission will spawn (never fill). Each active (built≤date, pre-burn) reservation drawn as an amber footprint + a diamond glyph at its centre; the name is in the LOTS label sublayer, and the probe card shows dates + source. Plaza cluster: Custom House + School House sit ON the plaza common (the documented civic exception); Parker House / El Dorado / Dennison's / Bella Union ring the Square (burned in the Dec 24 1849 Great Fire — scrub past it to watch them drop out). 5 documented-unanchorable landmarks reserve nothing (honest gap).");
 
   groupCb.addEventListener("change", function(){
     var want = groupCb.checked;
@@ -11777,6 +12175,8 @@ function updateHud(alt){
   var keepoutRow = makeFlat("keepout", "WALK KEEP-OUT",
     "Where walking is forbidden at the current date (red). Sources: water, placed footprints, registered keep-outs. Status line shows the live blocked-cell count — expect near-empty until blocking layers are admitted.");
   keepoutStatusEl = el("div","wb-ov-status","(toggle to sample the walk mask at this date)",flatWrap);
+  makeFlat("zonelaw", "ZONE LAW (land-use)",
+    "s91: the governing LAND-USE zone tinted over the town + cove at the current date (cadZoneAt — the WHERE-per-class placement grammar canPlace reads). amber = commercial-core (plaza ring + downtown, GROWS outward by era — scrub 1846→1849 to watch it reach the waterfront) · slate = residential-band · brown = waterfront-working (piers + working shore) · blue = cove-water · oxblood = plaza · orange = camp (Happy Valley, born 1849) · violet = mission · green = presidio. Distinct from ECOLOGY ZONES (terrain/vegetation) below.");
   makeFlat("zones", "ECOLOGY ZONES",
     "The zoneAt classification tinted over the domain: which ground class governs placement and vegetation at each point. Hydrology reconciliation pending — creek network incomplete.");
   makeFlat("audits", "AUDIT FAILURES",
@@ -11787,9 +12187,11 @@ function updateHud(alt){
     if(key==="row") return buildRowOverlay();
     if(key==="keepout") return buildKeepoutOverlay();
     if(key==="zones") return buildZonesOverlay();
+    if(key==="zonelaw") return buildZoneLawOverlay();
     if(key==="audits") return buildAuditOverlay();
     if(key==="lots") return buildLotOverlay();
     if(key==="parcels") return buildParcelOverlay();
+    if(key==="reservations") return buildReservationOverlay();
     return null;
   }
 
@@ -12023,6 +12425,59 @@ function updateHud(alt){
       fm.renderOrder=997; fm.frustumCulled=false; grp.add(fm);
     }
     if(strokePos.length) grp.add(wbLineSegs(strokePos, strokeCol, 0.95, 999));
+    return grp;
+  }
+
+  /* s91 — ZONE LAW MAP: the governing land-use zone (cadZoneAt) tinted over the
+     town + cove at the current date. A draped tint plane like the ecology-zone
+     overlay, but keyed to the LAND-USE zone (WHERE-per-class placement grammar),
+     so the commercial core visibly grows outward across the era checkpoints. */
+  var WB_ZONELAW_COL = { "plaza":[150,45,45], "waterfront-working":[140,95,70], "cove-water":[70,150,200],
+    "commercial-core":[224,164,52], "camp":[232,112,60], "mission-cluster":[168,110,196],
+    "presidio":[110,170,90], "residential-band":[118,196,168] /* distinct sea-green: not the amber core, not the cove's saturated blue */ };
+  function buildZoneLawOverlay(){
+    _overlayDay = Math.floor(simDay);
+    var pc = (typeof PLAZA_CENTER==="object"&&PLAZA_CENTER) ? PLAZA_CENTER : {x:0,z:0};
+    var box = { xMin:pc.x-720, xMax:pc.x+1320, zMin:pc.z-760, zMax:pc.z+1240 };
+    var day = simDay;
+    return samplePlaneOverlay(box, 208, function(x,z){
+      var id = (typeof landUseZoneAt==="function") ? landUseZoneAt(x,z,day) : null;
+      if(!id) return null;
+      var c = WB_ZONELAW_COL[id] || [150,150,150];
+      return [c[0], c[1], c[2], 150];
+    });
+  }
+
+  /* s91 — LANDMARK RESERVATIONS: each reservation active at the current date
+     (built ≤ date, before any in-window burn) drawn as an amber footprint quad
+     (translucent fill + bold boundary) with a diamond glyph at its centre. The
+     record's ground, distinct from the pattern lots — reserved, never fill. */
+  function buildReservationOverlay(){
+    _overlayDay = Math.floor(simDay);
+    var grp = new THREE.Group(); grp.frustumCulled=false;
+    var live = (typeof reservationsAt==="function") ? reservationsAt(simDay) : [];
+    var strokePos=[], strokeCol=[], glyphPos=[], glyphCol=[], fillPos=[], fillCol=[];
+    var AMBER = new THREE.Color(0xffb347), FILL={ r:1.0, g:0.70, b:0.28 };
+    live.forEach(function(r){
+      if(!r.footprint) return;
+      var q = r.footprint.quad; if(!q || q.length<4) return;
+      var before=fillPos.length;
+      wbPushDrapedTri(fillPos, q[0],q[1],q[2], 0.42, 1);
+      wbPushDrapedTri(fillPos, q[0],q[2],q[3], 0.42, 1);
+      for(var f=0,added=(fillPos.length-before)/3; f<added; f++) fillCol.push(FILL.r,FILL.g,FILL.b);
+      wbPushDrapedRun(strokePos,strokeCol,[q[0],q[1],q[2],q[3],q[0]],AMBER,0.66,false,9);
+      var cx=r.footprint.cx, cz=r.footprint.cz, rr=4.0;
+      wbPushDrapedRun(glyphPos,glyphCol,[{x:cx-rr,z:cz},{x:cx,z:cz-rr},{x:cx+rr,z:cz},{x:cx,z:cz+rr},{x:cx-rr,z:cz}],AMBER,0.95,false,3);
+    });
+    if(fillPos.length){
+      var fg=new THREE.BufferGeometry();
+      fg.setAttribute("position", new THREE.Float32BufferAttribute(fillPos,3));
+      fg.setAttribute("color", new THREE.Float32BufferAttribute(fillCol,3));
+      var fm=new THREE.Mesh(fg, new THREE.MeshBasicMaterial({ vertexColors:true, transparent:true, opacity:0.30, depthTest:false, depthWrite:false, side:THREE.DoubleSide }));
+      fm.renderOrder=997; fm.frustumCulled=false; grp.add(fm);
+    }
+    if(strokePos.length) grp.add(wbLineSegs(strokePos, strokeCol, 0.98, 1001));
+    if(glyphPos.length)  grp.add(wbLineSegs(glyphPos,  glyphCol,  1.0,  1002));
     return grp;
   }
 
@@ -12295,6 +12750,25 @@ function updateHud(alt){
       }
       probeLine(probeOut, "parcels", gp.parcels.length ? gp.parcels.join(" · ") : "none");
       if(gp.band) probeLine(probeOut, "band", gp.band);
+      // s91: governing land-use zone (WHERE-per-class law) + allowed classes
+      if(gp.zone && typeof parcelByName==="function"){
+        var Zdef = (typeof CAD_ZONE_BY_ID!=="undefined") ? CAD_ZONE_BY_ID[gp.zone] : null;
+        probeLine(probeOut, "zone-law", "<b>"+gp.zone+"</b>"
+          + (Zdef ? " · density "+Zdef.densityTier+" · allows: "+Zdef.allowedClasses.join(", ") : ""));
+      } else if(!gp.zone){
+        probeLine(probeOut, "zone-law", "loose ground (outside every zone — only tents/shanties/scatter/fauna place here)");
+      }
+      // s91: landmark reservation card (name · dates · confidence · source)
+      if(gp.reservation && typeof reservationById==="function"){
+        var lm = reservationById(gp.reservation);
+        if(lm){
+          var bt = lm.built<=-1e8 ? "pre-sim" : simDateISO(dateFromSimDay(lm.built));
+          var arc = "built "+bt + (lm.burned!=null ? " · burned "+simDateISO(dateFromSimDay(lm.burned)) : "");
+          probeLine(probeOut, "LANDMARK", "<b>"+lm.name+"</b> ("+lm.dossier+") · "+arc + " · confidence "+lm.confidence);
+          if(lm.note)   probeLine(probeOut, "landmark-note", String(lm.note).slice(0,140));
+          if(lm.source) probeLine(probeOut, "landmark-source", String(lm.source).slice(0,140));
+        }
+      }
     }catch(e){ probeLine(probeOut, "ground-plan", "(cadastre error: "+e.message+")"); }
     probeLine(probeOut, "buildings", bld || "no footprint here");
     probeLine(probeOut, "doodads", dd || "no doodad within 2.5m");

@@ -350,7 +350,15 @@ window.__P1850 = {
     get stats(){ return groundPlanStats(); },
     get blocks(){ return GROUND_PLAN.blocks; },
     get lots(){ return GROUND_PLAN.lots; },
-    get parcels(){ return GROUND_PARCELS; }
+    get parcels(){ return GROUND_PARCELS; },
+    /* s91 — ZONE LAW + LANDMARK RESERVATIONS */
+    zoneAt: function(x,z,day){ return landUseZoneAt(x,z,day==null?simDay:day); },      // governing land-use zone id
+    zoneGate: function(cls,x,z,day){ return cadZoneGate(cls,x,z,day==null?simDay:day); }, // {ok,reason,zone}
+    get zones(){ return CAD_ZONE_TABLE.map(function(Z){ return { id:Z.id, densityTier:Z.densityTier, birth:Z.birth, allowedClasses:Z.allowedClasses.slice() }; }); },
+    get reservations(){ return GROUND_RESERVATIONS; },
+    reservationAt: function(x,z,day){ var r=reservationAt(x,z,day==null?simDay:day); return r?r.landmarkId:null; },
+    reservationsAt: function(day){ return reservationsAt(day==null?simDay:day); },
+    get reservationStats(){ return GROUND_RESERVATION_STATS; }
   },
   get fauna(){
     return { hogs:hogMesh.count, hogTarget:hogTargetCount(simDay), gulls:gullMesh.count,

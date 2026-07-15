@@ -464,8 +464,21 @@ var LAW_TABLES = {
 function canPlaceClass(cls, pose, ctx){
   ctx = ctx||{}; pose = pose||{};
   var law = LAW_TABLES[cls];
-  if(!law) return { ok:true, reason:"no-law:"+cls };   // unknown class: engine imposes nothing
-  var x = pose.x, z = pose.z, h = terrainHeight(x,z);
+  var x = pose.x, z = pose.z;
+  /* ZONE GATE (s91 — building-spawn-spec §1: "the zone gate adds WHERE per
+     class"). The cadastre's era-keyed zone table decides whether this class may
+     stand on THIS ground at ctx.day. Runs regardless of a LAW_TABLES row (a
+     zoning-only class like "commercial"/"frame" has no positional law row but is
+     still zone-gated). ctx.zoneClass lets the buildings admission pass a
+     fine-grained building class (e.g. "commercial") while the broad LAW_TABLES
+     cls stays "structure"; absent, the cls itself is used. Zone-agnostic classes
+     pass untouched (SELECTIVE law). */
+  if(typeof cadZoneGate==="function"){
+    var zg = cadZoneGate(ctx.zoneClass||cls, x, z, ctx.day!=null?ctx.day:(typeof simDay==="number"?simDay:null));
+    if(!zg.ok) return zg;
+  }
+  if(!law) return { ok:true, reason:"no-law:"+cls };   // unknown class: engine imposes nothing beyond the zone gate
+  var h = terrainHeight(x,z);
   if(law.surface==="land" && h <= (law.minY!=null?law.minY:0.5)) return { ok:false, reason:"not-on-land" };
   if(law.surface==="water" && h > -0.5) return { ok:false, reason:"not-in-water" };
   if(law.intertidalAllowed===false && inIntertidalBand(x,z)) return { ok:false, reason:"intertidal" };

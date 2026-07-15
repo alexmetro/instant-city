@@ -236,7 +236,8 @@ var LBL_BANDS = {
   place:   function(a){ return _rDown(a, 3600, 6600); },                // civic/landmark places: persist, fade only very high
   street:  function(a){ return _rDown(a, 560, 880); },                  // fade in at the street band
   lotNum:  function(a){ return _rDown(a, 180, 270); },                  // fade in at the lot band
-  lotOwn:  function(a){ return _rDown(a, 96, 158); }                    // owner: closer still
+  lotOwn:  function(a){ return _rDown(a, 96, 158); },                   // owner: closer still
+  landmark:function(a){ return _rDown(a, 360, 560); }                   // s91: reservation names — read earlier (higher) than lot numbers
 };
 
 /* ====================================================================
@@ -324,6 +325,18 @@ function rebuildLabels(){
         }
       });
     });
+    /* s91 — LANDMARK RESERVATION NAMES join the LOTS sublayer, civic/commerce
+       voice (warm gold small-caps). The record's ground gets its name flat on
+       the reserved footprint; era-gated (built ≤ day, before any in-window burn)
+       so the Dec 24 1849 Great Fire cluster fades as you scrub past the fire. */
+    if(typeof reservationsAt==="function"){
+      reservationsAt(day).forEach(function(r){
+        if(!r.footprint) return;
+        var cx=r.footprint.cx, cz=r.footprint.cz;
+        if(terrainHeight(cx,cz) <= 0.3) return;               // don't float a name over water
+        _lblAdd(_lblGroundMesh(r.name, LBL_STYLE.civic, cx, cz, 8, _lblGrid.angle), LBL_BANDS.landmark, "lots", 34, 0, true);
+      });
+    }
   }
 
   _lblLastDay = Math.floor(simDay);

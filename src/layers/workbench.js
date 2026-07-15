@@ -124,7 +124,7 @@
     // frame — there is one frame; only the date-gated birth/extent changes.
     if(Math.floor(simDay)!==_overlayDay){
       _overlayDay = Math.floor(simDay);
-      ["spine","row","lots","parcels","keepout"].forEach(function(key){
+      ["spine","row","lots","parcels","reservations","keepout","zonelaw"].forEach(function(key){
         if(!WB.overlays[key]) return;
         if(overlayObjs[key]){ scene.remove(overlayObjs[key]); }
         overlayObjs[key] = buildOverlay(key);
@@ -292,7 +292,7 @@
      (walk keep-out · ecology zones · audit failures). Copy is Director-authored
      verbatim; each row is a name + a small legend line. ---- */
   el("div","wb-sec","RULE OVERLAYS");
-  var overlayObjs = { spine:null, row:null, lots:null, parcels:null, keepout:null, zones:null, audits:null };
+  var overlayObjs = { spine:null, row:null, lots:null, parcels:null, reservations:null, keepout:null, zones:null, zonelaw:null, audits:null };
   var auditStatusEl = null, keepoutStatusEl = null;
 
   /* one toggle path: every overlay rebuilds fresh on enable (all are cheap
@@ -323,10 +323,10 @@
   el("div","wb-ov-grouphdr","Roads, lots, and zones are one dated system — toggle the family or break out a member.",groupWrap);
   var groupBody = el("div","wb-ov-groupbody",null,groupWrap);
 
-  var SPINE_CHILDREN = ["spine","row","lots","parcels"];
+  var SPINE_CHILDREN = ["spine","row","lots","parcels","reservations"];
   var childCbs = {};
   var groupEverUsed = false;
-  var groupLast = { spine:false, row:false, lots:false, parcels:false };
+  var groupLast = { spine:false, row:false, lots:false, parcels:false, reservations:false };
   function syncGroupCheckbox(){
     var on = 0; SPINE_CHILDREN.forEach(function(k){ if(WB.overlays[k]) on++; });
     groupCb.checked = on > 0;
@@ -350,6 +350,8 @@
     "The dated cadastre: blocks and 50-vara lots born at their survey checkpoints; scrub the timeline to watch the plat appear. white = lot lines · gold fill = record lot (number + owner via probe; ground labels arrive with the labels layer) · gold tick = corner lots marked at their corner point · cyan = water lot (1847 beach-and-water auction) · magenta = non-standard block. The plaza block is a public reserve — no lots.");
   makeChild("parcels","NAMED PARCELS",
     "Named ground parcels carrying allowed-asset-class law (plaza · cove · mud/beach bands · camp · mission · presidio). One zone truth: placement reads these. oxblood = public reserve (the plaza common) · blue = cove · brown/tan = mud/beach bands · orange = camp · violet = mission · green = presidio. s87: all parcels are polygons — land/water parcels clipped to the 1849 shore (happy-valley-camp hugs the coast), the two shoreline bands drawn as real triangulated tints (raster exception gone).");
+  makeChild("reservations","LANDMARK RESERVATIONS",
+    "s91: the record's reserved ground — documented landmarks the buildings admission will spawn (never fill). Each active (built≤date, pre-burn) reservation drawn as an amber footprint + a diamond glyph at its centre; the name is in the LOTS label sublayer, and the probe card shows dates + source. Plaza cluster: Custom House + School House sit ON the plaza common (the documented civic exception); Parker House / El Dorado / Dennison's / Bella Union ring the Square (burned in the Dec 24 1849 Great Fire — scrub past it to watch them drop out). 5 documented-unanchorable landmarks reserve nothing (honest gap).");
 
   groupCb.addEventListener("change", function(){
     var want = groupCb.checked;
@@ -377,6 +379,8 @@
   var keepoutRow = makeFlat("keepout", "WALK KEEP-OUT",
     "Where walking is forbidden at the current date (red). Sources: water, placed footprints, registered keep-outs. Status line shows the live blocked-cell count — expect near-empty until blocking layers are admitted.");
   keepoutStatusEl = el("div","wb-ov-status","(toggle to sample the walk mask at this date)",flatWrap);
+  makeFlat("zonelaw", "ZONE LAW (land-use)",
+    "s91: the governing LAND-USE zone tinted over the town + cove at the current date (cadZoneAt — the WHERE-per-class placement grammar canPlace reads). amber = commercial-core (plaza ring + downtown, GROWS outward by era — scrub 1846→1849 to watch it reach the waterfront) · slate = residential-band · brown = waterfront-working (piers + working shore) · blue = cove-water · oxblood = plaza · orange = camp (Happy Valley, born 1849) · violet = mission · green = presidio. Distinct from ECOLOGY ZONES (terrain/vegetation) below.");
   makeFlat("zones", "ECOLOGY ZONES",
     "The zoneAt classification tinted over the domain: which ground class governs placement and vegetation at each point. Hydrology reconciliation pending — creek network incomplete.");
   makeFlat("audits", "AUDIT FAILURES",
@@ -387,9 +391,11 @@
     if(key==="row") return buildRowOverlay();
     if(key==="keepout") return buildKeepoutOverlay();
     if(key==="zones") return buildZonesOverlay();
+    if(key==="zonelaw") return buildZoneLawOverlay();
     if(key==="audits") return buildAuditOverlay();
     if(key==="lots") return buildLotOverlay();
     if(key==="parcels") return buildParcelOverlay();
+    if(key==="reservations") return buildReservationOverlay();
     return null;
   }
 
@@ -623,6 +629,59 @@
       fm.renderOrder=997; fm.frustumCulled=false; grp.add(fm);
     }
     if(strokePos.length) grp.add(wbLineSegs(strokePos, strokeCol, 0.95, 999));
+    return grp;
+  }
+
+  /* s91 — ZONE LAW MAP: the governing land-use zone (cadZoneAt) tinted over the
+     town + cove at the current date. A draped tint plane like the ecology-zone
+     overlay, but keyed to the LAND-USE zone (WHERE-per-class placement grammar),
+     so the commercial core visibly grows outward across the era checkpoints. */
+  var WB_ZONELAW_COL = { "plaza":[150,45,45], "waterfront-working":[140,95,70], "cove-water":[70,150,200],
+    "commercial-core":[224,164,52], "camp":[232,112,60], "mission-cluster":[168,110,196],
+    "presidio":[110,170,90], "residential-band":[118,196,168] /* distinct sea-green: not the amber core, not the cove's saturated blue */ };
+  function buildZoneLawOverlay(){
+    _overlayDay = Math.floor(simDay);
+    var pc = (typeof PLAZA_CENTER==="object"&&PLAZA_CENTER) ? PLAZA_CENTER : {x:0,z:0};
+    var box = { xMin:pc.x-720, xMax:pc.x+1320, zMin:pc.z-760, zMax:pc.z+1240 };
+    var day = simDay;
+    return samplePlaneOverlay(box, 208, function(x,z){
+      var id = (typeof landUseZoneAt==="function") ? landUseZoneAt(x,z,day) : null;
+      if(!id) return null;
+      var c = WB_ZONELAW_COL[id] || [150,150,150];
+      return [c[0], c[1], c[2], 150];
+    });
+  }
+
+  /* s91 — LANDMARK RESERVATIONS: each reservation active at the current date
+     (built ≤ date, before any in-window burn) drawn as an amber footprint quad
+     (translucent fill + bold boundary) with a diamond glyph at its centre. The
+     record's ground, distinct from the pattern lots — reserved, never fill. */
+  function buildReservationOverlay(){
+    _overlayDay = Math.floor(simDay);
+    var grp = new THREE.Group(); grp.frustumCulled=false;
+    var live = (typeof reservationsAt==="function") ? reservationsAt(simDay) : [];
+    var strokePos=[], strokeCol=[], glyphPos=[], glyphCol=[], fillPos=[], fillCol=[];
+    var AMBER = new THREE.Color(0xffb347), FILL={ r:1.0, g:0.70, b:0.28 };
+    live.forEach(function(r){
+      if(!r.footprint) return;
+      var q = r.footprint.quad; if(!q || q.length<4) return;
+      var before=fillPos.length;
+      wbPushDrapedTri(fillPos, q[0],q[1],q[2], 0.42, 1);
+      wbPushDrapedTri(fillPos, q[0],q[2],q[3], 0.42, 1);
+      for(var f=0,added=(fillPos.length-before)/3; f<added; f++) fillCol.push(FILL.r,FILL.g,FILL.b);
+      wbPushDrapedRun(strokePos,strokeCol,[q[0],q[1],q[2],q[3],q[0]],AMBER,0.66,false,9);
+      var cx=r.footprint.cx, cz=r.footprint.cz, rr=4.0;
+      wbPushDrapedRun(glyphPos,glyphCol,[{x:cx-rr,z:cz},{x:cx,z:cz-rr},{x:cx+rr,z:cz},{x:cx,z:cz+rr},{x:cx-rr,z:cz}],AMBER,0.95,false,3);
+    });
+    if(fillPos.length){
+      var fg=new THREE.BufferGeometry();
+      fg.setAttribute("position", new THREE.Float32BufferAttribute(fillPos,3));
+      fg.setAttribute("color", new THREE.Float32BufferAttribute(fillCol,3));
+      var fm=new THREE.Mesh(fg, new THREE.MeshBasicMaterial({ vertexColors:true, transparent:true, opacity:0.30, depthTest:false, depthWrite:false, side:THREE.DoubleSide }));
+      fm.renderOrder=997; fm.frustumCulled=false; grp.add(fm);
+    }
+    if(strokePos.length) grp.add(wbLineSegs(strokePos, strokeCol, 0.98, 1001));
+    if(glyphPos.length)  grp.add(wbLineSegs(glyphPos,  glyphCol,  1.0,  1002));
     return grp;
   }
 
@@ -895,6 +954,25 @@
       }
       probeLine(probeOut, "parcels", gp.parcels.length ? gp.parcels.join(" · ") : "none");
       if(gp.band) probeLine(probeOut, "band", gp.band);
+      // s91: governing land-use zone (WHERE-per-class law) + allowed classes
+      if(gp.zone && typeof parcelByName==="function"){
+        var Zdef = (typeof CAD_ZONE_BY_ID!=="undefined") ? CAD_ZONE_BY_ID[gp.zone] : null;
+        probeLine(probeOut, "zone-law", "<b>"+gp.zone+"</b>"
+          + (Zdef ? " · density "+Zdef.densityTier+" · allows: "+Zdef.allowedClasses.join(", ") : ""));
+      } else if(!gp.zone){
+        probeLine(probeOut, "zone-law", "loose ground (outside every zone — only tents/shanties/scatter/fauna place here)");
+      }
+      // s91: landmark reservation card (name · dates · confidence · source)
+      if(gp.reservation && typeof reservationById==="function"){
+        var lm = reservationById(gp.reservation);
+        if(lm){
+          var bt = lm.built<=-1e8 ? "pre-sim" : simDateISO(dateFromSimDay(lm.built));
+          var arc = "built "+bt + (lm.burned!=null ? " · burned "+simDateISO(dateFromSimDay(lm.burned)) : "");
+          probeLine(probeOut, "LANDMARK", "<b>"+lm.name+"</b> ("+lm.dossier+") · "+arc + " · confidence "+lm.confidence);
+          if(lm.note)   probeLine(probeOut, "landmark-note", String(lm.note).slice(0,140));
+          if(lm.source) probeLine(probeOut, "landmark-source", String(lm.source).slice(0,140));
+        }
+      }
     }catch(e){ probeLine(probeOut, "ground-plan", "(cadastre error: "+e.message+")"); }
     probeLine(probeOut, "buildings", bld || "no footprint here");
     probeLine(probeOut, "doodads", dd || "no doodad within 2.5m");
