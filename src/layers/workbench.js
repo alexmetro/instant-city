@@ -80,10 +80,10 @@
     muted: {},            // layerName -> true when hidden
     solo: null,           // layerName | null
     probe: false,
-    overlays: { spine:false, row:false, lots:false, parcels:false, keepout:false, zones:false, audits:false },
+    overlays: { spine:false, row:false, lots:false, parcels:false, wharf:false, keepout:false, zones:false, audits:false },
     knobs: { sunMul:1, hemiMul:1, ambientMul:1, nightLift:0, detailAmp:null, doodadMul:1, streetAlphaMul:1 }
   };
-  var WB_ORDER = ["terrain","ground-paint","zones-tint","buildings","doodads","people","ships","fauna","effects","labels"];
+  var WB_ORDER = ["terrain","ground-paint","zones-tint","buildings","wharves","doodads","people","ships","fauna","effects","labels"];
   // labels is presented as its own tri-state FAMILY below (parent + 3 sublayers),
   // not a flat mute row — exclude it here so it is not doubled.
   var WB_LAYERS = WB_ORDER.filter(function(n){ return !!__P1850_LAYER_VIS[n] && n!=="labels"; });
@@ -124,7 +124,7 @@
     // frame — there is one frame; only the date-gated birth/extent changes.
     if(Math.floor(simDay)!==_overlayDay){
       _overlayDay = Math.floor(simDay);
-      ["spine","row","lots","parcels","reservations","keepout","zonelaw"].forEach(function(key){
+      ["spine","row","lots","parcels","reservations","wharf","keepout","zonelaw"].forEach(function(key){
         if(!WB.overlays[key]) return;
         if(overlayObjs[key]){ scene.remove(overlayObjs[key]); }
         overlayObjs[key] = buildOverlay(key);
@@ -292,7 +292,7 @@
      (walk keep-out · ecology zones · audit failures). Copy is Director-authored
      verbatim; each row is a name + a small legend line. ---- */
   el("div","wb-sec","RULE OVERLAYS");
-  var overlayObjs = { spine:null, row:null, lots:null, parcels:null, reservations:null, keepout:null, zones:null, zonelaw:null, audits:null };
+  var overlayObjs = { spine:null, row:null, lots:null, parcels:null, reservations:null, wharf:null, keepout:null, zones:null, zonelaw:null, audits:null };
   var auditStatusEl = null, keepoutStatusEl = null;
 
   /* one toggle path: every overlay rebuilds fresh on enable (all are cheap
@@ -379,6 +379,8 @@
   var keepoutRow = makeFlat("keepout", "WALK KEEP-OUT",
     "Where walking is forbidden at the current date (red). Sources: water, placed footprints, registered keep-outs. Status line shows the live blocked-cell count — expect near-empty until blocking layers are admitted.");
   keepoutStatusEl = el("div","wb-ov-status","(toggle to sample the walk mask at this date)",flatWrap);
+  makeFlat("wharf", "WHARVES (alignments + distances)",
+    "s98: the AUTHORED wharf network as clear LINES — centerlines (PIERS_RUNTIME, era-gated to the active extent) + the deck-extent outline (pierDeckQuad), draped at deck height above the cove so they read against the cyan water-lot grid the corridor spans (the future-fill footprint — what the cove eventually becomes land). 100-ft distance ticks along each centerline + a cross at the bay end give the length read. gold = centerline · white = deck outline · cyan ticks = 100-ft stations. Scrub 1848→1849 to watch Central Wharf reach 300→800 ft. Only Broadway (1847) + Central (1849) are in-window; the 1850 city wharves appear past the sim end.");
   makeFlat("zonelaw", "ZONE LAW (land-use)",
     "s91: the governing LAND-USE zone tinted over the town + cove at the current date (cadZoneAt — the WHERE-per-class placement grammar canPlace reads). amber = commercial-core (plaza ring + downtown, GROWS outward by era — scrub 1846→1849 to watch it reach the waterfront) · slate = residential-band · brown = waterfront-working (piers + working shore) · blue = cove-water · oxblood = plaza · orange = camp (Happy Valley, born 1849) · violet = mission · green = presidio. Distinct from ECOLOGY ZONES (terrain/vegetation) below.");
   makeFlat("zones", "ECOLOGY ZONES",
@@ -396,6 +398,7 @@
     if(key==="lots") return buildLotOverlay();
     if(key==="parcels") return buildParcelOverlay();
     if(key==="reservations") return buildReservationOverlay();
+    if(key==="wharf") return buildWharfOverlay();
     return null;
   }
 
@@ -469,6 +472,50 @@
     grp.add(wbLineSegs(dashPos,  dashCol,  0.6,  1000));
     grp.frustumCulled=false;
     return grp;
+  }
+
+  /* WHARVES (s98 7a — the wharf DEBUG OVERLAY) — the AUTHORED wharf network as
+     clear LINES: centerlines (pierEdgesAt, era-gated to the active extent) + the
+     deck-extent outline (pierDeckQuad) + 100-ft distance ticks + a bay-end cross.
+     Drawn at a FIXED deck height (NOT draped on terrain — the corridor is over
+     water; terrain there is the seabed, below the waterline) so the lines read
+     ABOVE the cove against the cyan water-lot grid the wharf corridor spans (the
+     future-fill footprint). Reads the cadastre's own day-frame deck geometry —
+     zero frame math here (same single-frame law as every overlay). */
+  var WHARF_OVL_GOLD=new THREE.Color(0xf2c14e), WHARF_OVL_WHITE=new THREE.Color(0xf3f5f7), WHARF_OVL_TICK=new THREE.Color(0x3fd0e0);
+  function buildWharfOverlay(){
+    _overlayDay = Math.floor(simDay);
+    var yOvl = (typeof WHARF_DECK_Y!=="undefined" ? WHARF_DECK_Y : 2.0) + 0.6;   // just above the deck top, over the water
+    var FT_M = 0.3048, TICK_FT = 100, TICK_M = TICK_FT*FT_M;
+    var pos=[], col=[];
+    function seg(a, b, c){ pos.push(a.x, yOvl, a.z, b.x, yOvl, b.z); col.push(c.r,c.g,c.b, c.r,c.g,c.b); }
+    var piers = (typeof piersAt==="function") ? piersAt(simDay) : [];
+    piers.forEach(function(p){
+      var e = pierEdgesAt(p, simDay);
+      if(!e || !e.active || e.centerline.length<2) return;                       // not yet decked at this date
+      var cl = e.centerline;
+      for(var k=0;k<cl.length-1;k++) seg(cl[k], cl[k+1], WHARF_OVL_GOLD);         // centerline (gold)
+      var q = e.deckQuad;                                                         // deck-extent outline (white loop)
+      for(var m=0;m<q.length;m++) seg(q[m], q[(m+1)%q.length], WHARF_OVL_WHITE);
+      // 100-ft distance ticks along the centerline (perpendicular cyan marks)
+      var acc=0, hw=Math.max(p.widthM*0.9, 6);
+      for(var s2=0;s2<cl.length-1;s2++){
+        var a=cl[s2], b=cl[s2+1], dx=b.x-a.x, dz=b.z-a.z, L=Math.hypot(dx,dz)||1, ux=dx/L, uz=dz/L, nx=-uz, nz=ux;
+        var next=Math.ceil((acc+1e-6)/TICK_M)*TICK_M;
+        while(next<=acc+L+1e-6){
+          var t=(next-acc)/L, mx=a.x+dx*t, mz=a.z+dz*t;
+          seg({x:mx+nx*hw, z:mz+nz*hw}, {x:mx-nx*hw, z:mz-nz*hw}, WHARF_OVL_TICK);
+          next+=TICK_M;
+        }
+        acc+=L;
+      }
+      // bay-end cross (the reach terminus — reads the built distance at a glance)
+      var o=e.outerEnd, r=Math.max(p.widthM, 8);
+      seg({x:o.x-r,z:o.z}, {x:o.x+r,z:o.z}, WHARF_OVL_TICK);
+      seg({x:o.x,z:o.z-r}, {x:o.x,z:o.z+r}, WHARF_OVL_TICK);
+    });
+    if(!pos.length) return null;
+    return wbLineSegs(pos, col, 0.98, 1001);
   }
 
   /* ---- GROUND PLAN overlays (s80a, draped in s81) — lot boundaries + parcel

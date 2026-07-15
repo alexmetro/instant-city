@@ -8980,6 +8980,261 @@ setTimeout(function(){
     };
   }
 }, 0);
+
+/* ---- RELEASE DEFAULT: wharf blocks ON in the release build (they are authored
+   structures, shown like the landmark volumes). The atelier toggle overrides at
+   runtime (dev only). ---- */
+var WHARF_ON_AT_RELEASE = true;
+
+/* =====================================================================
+   THE PLACEHOLDER PALETTE (Option-B discipline, buildings.js LM_PLACEHOLDER).
+   One neutral material world — a light COOL grey deck over a darker cool-grey
+   substructure — deliberately a hair off the buildings' (warmer) neutral so a
+   wharf reads as NOT a building at a glance. No grain, no timber art: that is
+   the deferred per-wharf graphics program (spec §7 forward). ===== */
+var WHARF_DECK_COL = new THREE.Color(0x9aa2a4);   // deck top — cool neutral grey (buildings body is warmer 0x9ea19c)
+var WHARF_WALL_COL = new THREE.Color(0x7d8587);   // substructure walls — a shade darker, still neutral
+
+/* GEOMETRY CONSTANTS (fill:true — period-plausible deck freeboard). The mean
+   waterline sits at y=0 (the bay water plane; tide sweeps ±0.35 m, terrain.js
+   TIDE). The deck is a FLAT horizontal surface at WHARF_DECK_Y above the
+   waterline (~2 m, inside the 1.5–2.5 m brief band), auto-RAISED per-wharf to
+   clear the highest ground under it (WHARF_DECK_CLEARANCE) so a wharf whose
+   landward end meets high beach/bank still shows its deck above the surface. The
+   block base drops WHARF_FOOTING below the sampled seabed so the prism is
+   unambiguously GROUNDED on the water's floor.
+
+   SEABED SOURCE = sampleTerrainGrid (the RAW baked 1846 bathymetry), NOT
+   terrainHeight: terrainHeight blends a walkable village PAD up over the near-
+   shore band (its own WATERLINE-FIX comment calls that a fiction the real
+   shoreline overrides), which would put a wharf's landward floor metres in the
+   air. The wharf's seabed is the true cove floor the raw bake carries — the same
+   underwater relief the storeships sit in. */
+var WHARF_WATER_Y        = 0.0;
+var WHARF_DECK_FREEBOARD = 2.0;                                  // flat deck height above mean waterline (m)
+var WHARF_DECK_Y         = WHARF_WATER_Y + WHARF_DECK_FREEBOARD; // baseline world y of the deck surface (raised per-wharf if the ground is higher)
+var WHARF_DECK_CLEARANCE = 0.6;                                  // min deck clearance over the highest seabed vertex under a wharf
+var WHARF_FOOTING        = 0.4;                                  // base sinks this far below the seabed (grounded)
+function wharfSeabed(x, z){ return sampleTerrainGrid(x, z); }    // raw bathymetry = the water's floor
+
+/* =====================================================================
+   THE DERIVED SET (pure function of `day`) — the ONE source read by BOTH the
+   renderer and every audit (measurement law: the instrument reads the numbers
+   the picture draws). For each pier with an ACTIVE deck at `day`, the block is
+   the deck ring (pierEdgesAt: centreline ± width/2, the cadastre's own geometry)
+   raised to WHARF_DECK_Y and dropped to the sampled seabed at every deck vertex.
+   Piers still reaching (no decked checkpoint) or not yet born are absent — the
+   block appears and lengthens exactly with the authored checkpoints. ZERO dice.
+   ===================================================================== */
+function deriveWharfSet(day){
+  var out = [];
+  var piers = (typeof PIERS_RUNTIME !== "undefined") ? PIERS_RUNTIME : [];
+  for(var i = 0; i < piers.length; i++){
+    var p = piers[i];
+    var active = pierActiveCheckpoint(p, day);                  // null ⇒ absent/reaching (no deck yet)
+    if(!active) continue;
+    var e = pierEdgesAt(p, day);
+    if(!e || !e.active || !e.leftEdge.length || !e.rightEdge.length) continue;
+    var L = e.leftEdge, R = e.rightEdge, n = L.length;
+    // per-vertex seabed (the raw cove floor under the deck) — for the base + the
+    // flat deck height (raised to clear the highest floor vertex).
+    var seabedL = new Array(n), seabedR = new Array(n), minSeabed = Infinity, maxSeabed = -Infinity;
+    for(var k = 0; k < n; k++){
+      var sL = wharfSeabed(L[k].x, L[k].z), sR = wharfSeabed(R[k].x, R[k].z);
+      seabedL[k] = sL; seabedR[k] = sR;
+      minSeabed = Math.min(minSeabed, sL, sR); maxSeabed = Math.max(maxSeabed, sL, sR);
+    }
+    var topY = Math.max(WHARF_DECK_Y, maxSeabed + WHARF_DECK_CLEARANCE);   // flat deck, above water and above any ground under it
+    var baseL = new Array(n), baseR = new Array(n);
+    for(var m2 = 0; m2 < n; m2++){ baseL[m2] = seabedL[m2] - WHARF_FOOTING; baseR[m2] = seabedR[m2] - WHARF_FOOTING; }
+    out.push({ id: p.id, lengthFt: e.lengthFt, extent: active.extent,
+               leftEdge: L, rightEdge: R, seabedL: seabedL, seabedR: seabedR, baseL: baseL, baseR: baseR,
+               topY: topY, minSeabed: minSeabed, maxSeabed: maxSeabed, overWater: minSeabed < WHARF_WATER_Y,
+               outerEnd: e.outerEnd, innerEnd: e.innerEnd });
+  }
+  out.sort(function(a, b){ return a.id < b.id ? -1 : (a.id > b.id ? 1 : 0); }); // stable order (determinism fingerprint)
+  return out;
+}
+
+/* =====================================================================
+   THE RENDERER. WHARF_GROUP holds one Mesh per active wharf, rebuilt when the
+   integer sim day changes (labels'/buildings' _lastDay pattern). Between
+   rebuilds the set is static — a wharf lengthens only at a checkpoint, which is
+   an integer-day threshold. Flat-shaded double-sided material so the hand-built
+   prism lights correctly from any winding without a normal pass. ===== */
+var WHARF_GROUP = new THREE.Group(); WHARF_GROUP.frustumCulled = false; WHARF_GROUP.visible = WHARF_ON_AT_RELEASE; scene.add(WHARF_GROUP);
+var WHARF_MAT = new THREE.MeshPhongMaterial({ vertexColors: true, flatShading: true, side: THREE.DoubleSide, specular: 0x000000, shininess: 0 });
+var _wharfLastDay = null;
+
+/* push one triangle (3 verts) with a uniform colour into the position/colour
+   arrays. flatShading derives the face normal, so no normal attribute is fed. */
+function wharfPushTri(pos, col, a, b, c, color){
+  pos.push(a[0],a[1],a[2], b[0],b[1],b[2], c[0],c[1],c[2]);
+  for(var i = 0; i < 3; i++) col.push(color.r, color.g, color.b);
+}
+function wharfBuildMesh(e){
+  var L = e.leftEdge, R = e.rightEdge, bL = e.baseL, bR = e.baseR, n = L.length, top = e.topY;
+  var pos = [], col = [];
+  // TOP DECK CAP — a quad strip between the left and right deck edges at deck y.
+  for(var k = 0; k < n - 1; k++){
+    var l0 = [L[k].x, top, L[k].z],   l1 = [L[k+1].x, top, L[k+1].z];
+    var r0 = [R[k].x, top, R[k].z],   r1 = [R[k+1].x, top, R[k+1].z];
+    wharfPushTri(pos, col, l0, l1, r1, WHARF_DECK_COL);
+    wharfPushTri(pos, col, l0, r1, r0, WHARF_DECK_COL);
+  }
+  // SIDE WALLS — walk the closed deck perimeter (left edge out, right edge back);
+  // each segment is a wall from the sampled seabed base up to the deck. The two
+  // end caps (outer bay end, inner shore end) fall out of the ring automatically.
+  var ring = [], baseY = [];
+  for(var a = 0; a < n; a++){ ring.push(L[a]); baseY.push(bL[a]); }
+  for(var b = n - 1; b >= 0; b--){ ring.push(R[b]); baseY.push(bR[b]); }
+  for(var i = 0; i < ring.length; i++){
+    var j = (i + 1) % ring.length;
+    var p = ring[i], q = ring[j], py = baseY[i], qy = baseY[j];
+    var pB = [p.x, py, p.z], qB = [q.x, qy, q.z], qT = [q.x, top, q.z], pT = [p.x, top, p.z];
+    wharfPushTri(pos, col, pB, qB, qT, WHARF_WALL_COL);
+    wharfPushTri(pos, col, pB, qT, pT, WHARF_WALL_COL);
+  }
+  var geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute("color",    new THREE.Float32BufferAttribute(col, 3));
+  var mesh = new THREE.Mesh(geo, WHARF_MAT);
+  mesh.frustumCulled = false;
+  mesh.userData.wharfId = e.id;
+  mesh.userData.lengthFt = e.lengthFt;
+  return mesh;
+}
+function wharfClear(){
+  for(var i = WHARF_GROUP.children.length - 1; i >= 0; i--){
+    var o = WHARF_GROUP.children[i]; WHARF_GROUP.remove(o); if(o.geometry) o.geometry.dispose();
+  }
+}
+function rebuildWharves(){
+  wharfClear();
+  var set = deriveWharfSet(simDay);
+  for(var i = 0; i < set.length; i++) WHARF_GROUP.add(wharfBuildMesh(set[i]));
+  _wharfLastDay = Math.floor(simDay);
+}
+function updateWharves(){
+  if(!WHARF_GROUP.visible){ return; }
+  if(Math.floor(simDay) !== _wharfLastDay) rebuildWharves();
+}
+rebuildWharves();
+
+/* per-frame hook — mirror buildings/labels' renderer.render wrap. Composes with
+   the other layer wraps (each calls its predecessor). Do NOT touch core/07-main's
+   frozen render loop. */
+var _wharfPrevRender = renderer.render.bind(renderer);
+renderer.render = function(s, c){
+  try { updateWharves(); } catch(e){ if(!updateWharves._warned){ console.warn("[wharves] update failed", e); updateWharves._warned = true; } }
+  _wharfPrevRender(s, c);
+};
+
+/* dev-tooling interface (layers-spec §15) — the atelier's layer toggle. */
+registerLayerVisibility("wharves", function(v){ WHARF_GROUP.visible = v; if(v){ _wharfLastDay = null; updateWharves(); } });
+
+/* =====================================================================
+   THE s98 AUDITS (acceptance-gate discipline). Registered under
+   __P1850_AUDITS.spine.* alongside the s97 pier family; each is a
+   FRAMING-INDEPENDENT pure function of the derived set / pier data (never the
+   camera), returning { pass, ...detail }. When no wharf has an active deck at
+   `day` (e.g. 1846, before Broadway) they pass with wharves:0 and a note — an
+   honest absence, not an audit-level skip. ===================================================================== */
+(function registerWharfAudits(){
+  function livePiers(){ return (typeof PIERS_RUNTIME !== "undefined") ? PIERS_RUNTIME : []; }
+
+  /* spine.wharfBlockExtent — the 3D block's seaward extent EQUALS the active
+     checkpoint at the current date (matches spine.pierBuildoutMonotonic). The
+     block is built from pierEdgesAt at the active extent, so its lengthFt and its
+     outer-end deck vertex must equal pierActiveCheckpoint's — proving the block
+     BUILDS OUT with the authored checkpoints (Broadway 180 ft from 1847; Central
+     reaching → 300 ft @ 1849-08-31 → 800 ft @ fall-1849). */
+  registerAudit("spine", "wharfBlockExtent", function(){
+    var out = { pass: true, wharves: 0, violations: [], detail: [] };
+    var set = deriveWharfSet(simDay), byId = {}; set.forEach(function(e){ byId[e.id] = e; });
+    livePiers().forEach(function(p){
+      var active = pierActiveCheckpoint(p, simDay), e = byId[p.id];
+      if(!active){ if(e) out.violations.push({ id: p.id, reason: "block-present-but-no-checkpoint" }); return; }
+      out.wharves++;
+      var d = { id: p.id, activeLengthFt: active.lengthFt };
+      if(!e){ out.violations.push({ id: p.id, reason: "checkpoint-active-but-no-block" }); out.detail.push(d); return; }
+      if(e.lengthFt !== active.lengthFt) out.violations.push({ id: p.id, reason: "block-length-mismatch", block: e.lengthFt, active: active.lengthFt });
+      if(e.extent[1] !== active.extent[1]) out.violations.push({ id: p.id, reason: "block-extent-mismatch", block: e.extent, active: active.extent });
+      // the block's outer deck vertex is the active extent's outer polyline vertex (canonical frame)
+      var outer = gridToWorld(p.polyline[active.extent[1]].u, p.polyline[active.extent[1]].v);
+      var dOuter = Math.hypot(e.outerEnd.x - outer.x, e.outerEnd.z - outer.z);
+      d.outerEndErr_m = +dOuter.toFixed(4); d.blockLengthFt = e.lengthFt;
+      if(dOuter > 0.05) out.violations.push({ id: p.id, reason: "block-outer-end-off-extent", errM: d.outerEndErr_m });
+      out.detail.push(d);
+    });
+    out.pass = out.violations.length === 0;
+    if(!out.wharves && !out.violations.length) out.note = "no wharf has an active deck at this date";
+    return out;
+  });
+
+  /* spine.wharfBlockGrounded — the block is a solid prism resting on the water's
+     floor with a deck above the surface: (1) its base is at or below the sampled
+     seabed at EVERY deck vertex (grounded, not floating); (2) its flat deck top
+     clears the high-tide waterline (visible above water); (3) the deck clears the
+     highest seabed vertex under it (not buried in the bank); (4) the prism is
+     non-degenerate (top strictly above base everywhere). `overWater` is reported
+     per wharf — a documented-inland authored wharf (Broadway, per the pre-existing
+     pier polyline) still grounds correctly on the bank; the honest gap is flagged
+     in the report, not fixed by this REPRESENTATION sprint. */
+  registerAudit("spine", "wharfBlockGrounded", function(){
+    var out = { pass: true, wharves: 0, overWater: 0, violations: [], detail: [] };
+    var TIDE_HIGH = 0.35;                                        // terrain.js TIDE.amp — deck must clear the highest waterline
+    var set = deriveWharfSet(simDay);
+    set.forEach(function(e){
+      out.wharves++; if(e.overWater) out.overWater++;
+      var d = { id: e.id, topY: +e.topY.toFixed(2), minSeabed_m: +e.minSeabed.toFixed(2), maxSeabed_m: +e.maxSeabed.toFixed(2), overWater: e.overWater };
+      // (1) base at every vertex is at or below the seabed (base = seabed - footing)
+      var maxBaseAboveSeabed = 0, minSlab = Infinity;
+      for(var k = 0; k < e.leftEdge.length; k++){
+        maxBaseAboveSeabed = Math.max(maxBaseAboveSeabed, e.baseL[k] - e.seabedL[k], e.baseR[k] - e.seabedR[k]);
+        minSlab = Math.min(minSlab, e.topY - e.baseL[k], e.topY - e.baseR[k]);
+      }
+      d.maxBaseAboveSeabed_m = +maxBaseAboveSeabed.toFixed(4); d.minSlab_m = +minSlab.toFixed(3);
+      if(maxBaseAboveSeabed > 1e-6) out.violations.push({ id: e.id, reason: "base-above-seabed", m: d.maxBaseAboveSeabed_m });
+      // (2) deck top clears the high-tide waterline (visible above water)
+      if(e.topY <= TIDE_HIGH) out.violations.push({ id: e.id, reason: "deck-below-waterline", topY: d.topY, tideHigh: TIDE_HIGH });
+      // (3) deck clears the highest seabed vertex under the block (not buried)
+      if(e.topY <= e.maxSeabed) out.violations.push({ id: e.id, reason: "deck-below-ground", topY: d.topY, maxSeabed: d.maxSeabed_m });
+      // (4) non-degenerate solid (top strictly above base everywhere)
+      if(minSlab <= 0) out.violations.push({ id: e.id, reason: "degenerate-prism", minSlab: d.minSlab_m });
+      out.detail.push(d);
+    });
+    out.pass = out.violations.length === 0;
+    if(!out.wharves) out.note = "no wharf has an active deck at this date";
+    return out;
+  });
+
+  /* spine.wharfBlockDeterminism — the block geometry is a pure function of (day +
+     pier data + the one −9.0° frame): two derives at one day are byte-identical,
+     and A→B→A rewinds exact. Zero dice / clock / stale frame, so exact by
+     construction (companion to buildings.reservationDeterminism). */
+  registerAudit("spine", "wharfBlockDeterminism", function(){
+    function fp(day){
+      return deriveWharfSet(day).map(function(e){
+        return e.id + "|" + e.lengthFt + "|" + e.topY.toFixed(4) + "|" + e.minSeabed.toFixed(4) + "|" +
+               e.maxSeabed.toFixed(4) + "|" + e.outerEnd.x.toFixed(4) + "|" + e.outerEnd.z.toFixed(4);
+      }).join("\n");
+    }
+    var A = eventDateToSimDay("1849-09-15"), B = eventDateToSimDay("1849-12-20");
+    var a1 = fp(A), a2 = fp(A), bJump = fp(B), aBack = fp(A);
+    var sameDayIdentical = (a1 === a2), rewindExact = (a1 === aBack);
+    return { pass: sameDayIdentical && rewindExact, sameDayIdentical: sameDayIdentical, rewindExact: rewindExact,
+             countA: a1.split("\n").filter(Boolean).length, countB: bJump.split("\n").filter(Boolean).length };
+  });
+})();
+
+/* driving hook for the verify harness — expose the derived set (mirrors
+   buildings' landmarksAt attach). ZERO new geometry. */
+setTimeout(function(){
+  if(typeof window !== "undefined" && window.__P1850){
+    window.__P1850.wharvesAt = function(day){ return deriveWharfSet(day == null ? simDay : day); };
+  }
+}, 0);
 /* =========================================================================
    PHASE 2 — "THE CLOCK"
    Simulation time, ships arriving/departing on their true documented dates,

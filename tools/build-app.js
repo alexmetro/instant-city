@@ -72,6 +72,7 @@ const FILES = [
   "layers/terrain.js",       // slot 1  — KEPT (s78 1846 baseline)
   "layers/ground-paint.js",  // slot 2  — REWRITE (minimal uniform roads, admission #1)
   "layers/buildings.js",     // slot 3  — NEW (s94a admission PART A): THE LANDMARK REGISTRY renderer + construction states C0->C4 (chunk 16); Part B (procedural fill) is a later sprint
+  "layers/wharves.js",       // slot 3b — NEW (s98 WHARF REPRESENTATION 7b): the 3D placeholder blocks — seabed→deck prism at the active extent (chunk 17)
   "layers/labels.js",        // slot 12 — NEW (s90 admission): lot ground-text · street names · zones & landmarks (chunk 40)
   "layers/camera-input.js",  // slot 11 — KEPT (camera rig + pointer/keys + speed pill; the app must be navigable)
   "layers/ui-chrome.js"      // slot 13 — KEPT (HUD/timeline/menu/clock chrome + ticker + paper)
