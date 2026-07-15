@@ -38,27 +38,48 @@
      stylesheet carries zero workbench bytes) ---------------- */
   var wbStyle = document.createElement("style");
   wbStyle.textContent = [
-    "#wb-panel{ position:fixed; left:8px; top:8px; bottom:8px; width:264px; z-index:99999;",
-    "  overflow-y:auto; background:rgba(13,14,16,0.93); color:#c9cdd2; border:1px solid #33373d;",
-    "  border-radius:6px; padding:10px 10px 14px; font:11px/1.5 Consolas,Menlo,monospace;",
+    "#wb-panel{ position:fixed; left:8px; top:8px; bottom:8px; width:272px; z-index:99999;",
+    "  overflow-y:auto; background:rgba(13,14,16,0.94); color:#c9cdd2; border:1px solid #33373d;",
+    "  border-radius:6px; padding:8px 9px 10px; font:11px/1.45 Consolas,Menlo,monospace;",
     "  box-shadow:0 4px 18px rgba(0,0,0,0.5); }",
-    "#wb-panel .wb-title{ font-weight:bold; letter-spacing:1.5px; color:#e8e3d5; font-size:12px; margin-bottom:2px; }",
+    "#wb-panel .wb-title{ font-weight:bold; letter-spacing:1.5px; color:#e8e3d5; font-size:12px; margin-bottom:6px; }",
     "#wb-panel .wb-sub{ font-weight:normal; letter-spacing:0; color:#7c828a; font-size:10px; }",
-    "#wb-panel .wb-sec{ margin:10px 0 4px; padding-top:6px; border-top:1px solid #2a2e34;",
-    "  color:#8fa7bd; font-size:10px; letter-spacing:1px; }",
+    "#wb-panel .wb-section{ border-top:1px solid #23272d; }",
+    "#wb-panel .wb-section:first-of-type{ border-top:none; }",
+    "#wb-panel .wb-sechdr{ display:flex; align-items:center; gap:6px; cursor:pointer; padding:6px 1px 5px; user-select:none; }",
+    "#wb-panel .wb-sechdr:hover{ background:rgba(255,255,255,0.025); }",
+    "#wb-panel .wb-caret{ color:#5b6066; font-size:8px; width:8px; text-align:center; transition:transform 0.12s; }",
+    "#wb-panel .wb-section.collapsed .wb-caret{ transform:rotate(-90deg); }",
+    "#wb-panel .wb-sectitle{ flex:1; color:#8fa7bd; font-size:10px; letter-spacing:1px; font-weight:bold; }",
+    "#wb-panel .wb-section.active .wb-sectitle{ color:#cdd8e2; }",
+    "#wb-panel .wb-secdot{ width:6px; height:6px; border-radius:50%; background:#7ee2a0; opacity:0; box-shadow:0 0 5px #7ee2a0; flex:none; }",
+    "#wb-panel .wb-section.active .wb-secdot{ opacity:1; }",
+    "#wb-panel .wb-secbody{ padding:0 0 5px; }",
+    "#wb-panel .wb-section.collapsed .wb-secbody{ display:none; }",
+    "#wb-panel .wb-info{ font:9px/12px Consolas,monospace; color:#6f757c; border:1px solid #3a3f46; border-radius:50%;",
+    "  width:13px; height:13px; text-align:center; cursor:pointer; flex:none; }",
+    "#wb-panel .wb-info:hover{ color:#c9cdd2; border-color:#5f676f; }",
+    "#wb-panel .wb-info.on{ color:#ffd75e; border-color:#ffd75e; }",
+    "#wb-panel .wb-secdesc{ display:none; font-size:9px; line-height:1.4; color:#7c828a; margin:1px 0 5px;",
+    "  padding:4px 6px; background:rgba(255,255,255,0.02); border-left:2px solid #3a3f46; border-radius:2px; }",
+    "#wb-panel .wb-secdesc.show{ display:block; }",
     "#wb-panel .wb-row{ display:flex; align-items:center; gap:6px; padding:1px 0; }",
     "#wb-panel .wb-row input[type=checkbox]{ margin:0; accent-color:#5aa0c8; }",
     "#wb-panel .wb-row.off .wb-lname{ color:#5b6066; text-decoration:line-through; }",
     "#wb-panel .wb-lname{ flex:1; cursor:default; }",
     "#wb-panel .wb-ov .wb-lname{ font-size:10px; color:#a9aeb5; letter-spacing:0.3px; }",
-    "#wb-panel .wb-ov-legend{ font-size:9px; line-height:1.35; color:#6f757c; margin:0 0 5px 22px; }",
-    "#wb-panel .wb-ov-group{ margin:6px 0 4px; border:1px solid #2a2e34; border-radius:4px; padding:4px 6px 5px; background:rgba(255,255,255,0.015); }",
+    "#wb-panel .wb-row.active{ background:rgba(255,215,94,0.06); border-radius:2px; }",
+    "#wb-panel .wb-row.active .wb-lname{ color:#e6d9a8; }",
+    "#wb-panel .wb-ov-legend{ display:none; font-size:9px; line-height:1.35; color:#6f757c; margin:0 0 4px 22px; }",
+    "#wb-panel .wb-ov-legend.show{ display:block; }",
+    "#wb-panel .wb-ov-group{ margin:5px 0 4px; border:1px solid #2a2e34; border-radius:4px; padding:3px 6px 4px; background:rgba(255,255,255,0.015); }",
     "#wb-panel .wb-ov-parent-name{ font-weight:bold; color:#cdb98f; font-size:10px; letter-spacing:0.5px; }",
-    "#wb-panel .wb-ov-grouphdr{ font-size:9px; line-height:1.35; color:#7c828a; margin:1px 0 4px 22px; font-style:italic; }",
+    "#wb-panel .wb-ov-grouphdr{ display:none; font-size:9px; line-height:1.35; color:#7c828a; margin:1px 0 4px 22px; font-style:italic; }",
+    "#wb-panel .wb-ov-grouphdr.show{ display:block; }",
     "#wb-panel .wb-ov-groupbody{ border-left:2px solid #2f343b; margin-left:6px; padding-left:6px; }",
     "#wb-panel .wb-ov-child .wb-lname{ color:#b8bdc4; }",
     "#wb-panel .wb-ov-flat{ margin-top:4px; }",
-    "#wb-panel .wb-ov-status{ font-size:9px; line-height:1.35; color:#8fa77b; margin:-2px 0 6px 22px; }",
+    "#wb-panel .wb-ov-status{ font-size:9px; line-height:1.35; color:#8fa77b; margin:-1px 0 5px 22px; }",
     "#wb-panel .wb-select{ flex:1; background:#1d2126; color:#c9cdd2; border:1px solid #3d4249; border-radius:3px;",
     "  font:10px Consolas,monospace; padding:2px 4px; }",
     "#wb-panel .wb-solo{ background:#1d2126; color:#6b7178; border:1px solid #33373d;",
@@ -68,19 +89,20 @@
     "  font:11px Consolas,monospace; padding:4px 8px; cursor:pointer; margin:3px 4px 3px 0; }",
     "#wb-panel .wb-btn.on{ color:#7ee2a0; border-color:#7ee2a0; }",
     "#wb-panel .wb-probe-out{ background:#101215; border:1px solid #2a2e34; border-radius:4px;",
-    "  padding:6px; margin-top:4px; min-height:30px; max-height:220px; overflow-y:auto;",
+    "  padding:6px; margin-top:4px; min-height:26px; max-height:230px; overflow-y:auto;",
     "  font-size:10px; color:#aeb4bb; word-break:break-word; }",
+    "#wb-panel .wb-probe-out.live{ border-color:#ffd75e; box-shadow:0 0 0 1px rgba(255,215,94,0.25); background:#14140f; }",
     "#wb-panel .wb-pl{ margin-bottom:3px; }",
     "#wb-panel .wb-pl b{ color:#8fa7bd; }",
     "#wb-panel .wb-knob{ display:flex; align-items:center; gap:5px; padding:1px 0; }",
     "#wb-panel .wb-klabel{ flex:1; font-size:10px; color:#a9aeb5; }",
     "#wb-panel .wb-knob input[type=range]{ width:86px; accent-color:#5aa0c8; }",
     "#wb-panel .wb-kval{ font-style:normal; color:#e8e3d5; width:32px; text-align:right; }",
-    "#wb-panel .wb-actions{ margin-top:8px; }",
+    "#wb-panel .wb-actions{ margin-top:6px; }",
     "#wb-panel .wb-audit-status{ margin-top:4px; font-size:10px; color:#8a9098; }",
     "#wb-panel .wb-audit-status.ok{ color:#7ee2a0; }",
     "#wb-panel .wb-audit-status.bad{ color:#ff7a6e; }",
-    "#wb-panel .wb-foot{ margin-top:10px; color:#5b6066; font-size:9px; border-top:1px solid #2a2e34; padding-top:6px; }",
+    "#wb-panel .wb-foot{ margin-top:8px; color:#5b6066; font-size:9px; border-top:1px solid #2a2e34; padding-top:6px; }",
     "body.wb-probe #c, body.wb-tl #c{ cursor:crosshair; }",
     "body.dev-labels-off .wlbl, body.dev-labels-off .street-label, body.dev-labels-off .biz-glyph{ display:none !important; }"
   ].join("\n");
@@ -150,18 +172,51 @@
   var panel = document.createElement("div");
   panel.id = "wb-panel";
   document.body.appendChild(panel);
+  /* curBody is the container new elements flow into. It is the panel until a
+     section opens, then that section's body — so every section-building block
+     below keeps using the plain el() calls it always used, and its output lands
+     inside the right collapsible section without threading a parent argument
+     through each call. */
+  var curBody = panel;
   function el(tag, cls, txt, parent){
     var e = document.createElement(tag);
     if(cls) e.className = cls;
     if(txt!=null) e.textContent = txt;
-    (parent||panel).appendChild(e);
+    (parent||curBody).appendChild(e);
     return e;
   }
-  var title = el("div","wb-title","THE ATELIER");
+  var title = el("div","wb-title","THE ATELIER", panel);
   el("span","wb-sub"," dev workbench — nothing here persists", title);
 
+  /* A SECTION is a titled, collapsible group: a header row (caret · title ·
+     active dot · optional ? that reveals a description) over a body. Opening a
+     section points curBody at its body. This is the scannability spine — the
+     rail reads as a list of section titles + their controls, with the prose
+     tucked behind the ? and the whole body collapsible from the header. */
+  var wbSections = {};
+  function beginSection(id, titleText, opts){
+    opts = opts || {};
+    var wrap = el("section","wb-section", null, panel);
+    var hdr = el("div","wb-sechdr", null, wrap);
+    el("span","wb-caret","▾", hdr);
+    el("span","wb-sectitle", titleText, hdr);
+    el("span","wb-secdot", null, hdr);
+    var body = el("div","wb-secbody", null, wrap);
+    if(opts.desc){
+      var desc = el("div","wb-secdesc", opts.desc, body);
+      var q = el("span","wb-info","?", hdr);
+      q.title = "show/hide description";
+      q.addEventListener("click", function(ev){ ev.stopPropagation(); desc.classList.toggle("show"); q.classList.toggle("on"); });
+    }
+    hdr.addEventListener("click", function(){ wrap.classList.toggle("collapsed"); });
+    curBody = body;
+    wbSections[id] = { wrap:wrap, body:body };
+    return wbSections[id];
+  }
+  function markSectionActive(id, on){ if(wbSections[id]) wbSections[id].wrap.classList.toggle("active", !!on); }
+
   /* ---- 1. LAYER PANEL ---- */
-  el("div","wb-sec","LAYERS  (☐ mute · ◉ solo · alt-click row = solo)");
+  beginSection("layers","LAYERS", { desc:"Mute a render layer with its checkbox, or solo one with the ◉ button (alt-click a row name = solo). Muted layers are re-asserted OFF every frame." });
   var rowEls = {};
   WB_LAYERS.forEach(function(name){
     var row = el("div","wb-row");
@@ -181,6 +236,7 @@
       r.solo.classList.toggle("on", WB.solo===n);
       r.row.classList.toggle("off", !wbLayerOn(n));
     });
+    markSectionActive("layers", !!WB.solo || WB_LAYERS.some(function(n){ return WB.muted[n]; }));
   }
 
   /* ---- 1c. LABELS FAMILY (s90) — the labels render-layer's category sublayers
@@ -190,13 +246,15 @@
      registry (__P1850_LAYER_VIS.labels). Present only when the labels layer is
      assembled in this build. ---- */
   if(typeof __P1850_LAYER_VIS.labels === "function" && typeof labelsSetSublayer === "function"){
-    el("div","wb-sec","LABELS  (world text · §11 — tri-state family)");
+    beginSection("labels","LABELS", { desc:"The labels render-layer's category sublayers as a tri-state family (parent LABELS → LOTS / STREETS / ZONES & LANDMARKS). §11 zoom bands: regions own the high view; streets then lots fade in on descent." });
     var lblParentVisible = true;                    // the registry parent (LABELS layer present)
     var lblGroupWrap = el("div","wb-ov-group");
     var lblHeadRow = el("div","wb-row wb-ov-parent", null, lblGroupWrap);
     var lblParentCb = document.createElement("input"); lblParentCb.type="checkbox"; lblHeadRow.appendChild(lblParentCb);
     el("span","wb-lname wb-ov-parent-name","LABELS — floating haloed world text",lblHeadRow);
-    el("div","wb-ov-grouphdr","Lot ground-text · street names · zones & landmarks. §11 zoom bands: regions own the high view, streets then lots fade in on descent.",lblGroupWrap);
+    var lblGroupHdr = el("div","wb-ov-grouphdr","Lot ground-text · street names · zones & landmarks. §11 zoom bands: regions own the high view, streets then lots fade in on descent.",lblGroupWrap);
+    (function(){ var q = el("span","wb-info","?", lblHeadRow); q.title="show/hide group note";
+      q.addEventListener("click", function(ev){ ev.stopPropagation(); lblGroupHdr.classList.toggle("show"); q.classList.toggle("on"); }); })();
     var lblBody = el("div","wb-ov-groupbody",null,lblGroupWrap);
     var LBL_CHILDREN = [
       ["lots",    "LOTS — record lot number + owner (flat ground text, polylabel anchor)"],
@@ -240,7 +298,7 @@
      the landform be read apart from its paint (the dune field is in the
      heightfield but illegible under textured noon light — CLAY is the answer).
      Materials are dev-only closures (atelier), built lazily on first use. ---- */
-  el("div","wb-sec","TERRAIN VIEW  (material override · geometry untouched)");
+  beginSection("terrain","TERRAIN VIEW", { desc:"Diagnostic material MODES override the terrain mesh material only (geometry, water and skin untouched; NORMAL restores). SLOPE: green flat → red 45%+ grade. ELEVATION: hypsometric ramp 0–120 m, contour every 10 m. Water surface unchanged in every mode. The geometry/skin structural split is scheduled for the terrain fidelity admission." });
   /* diagnostic tints are per-VERTEX colours on a light geometry that SHARES
      the terrain's position/index buffers (no heavy clone) + an unlit
      MeshBasicMaterial — robust across renderers (a raw ShaderMaterial rendered
@@ -294,18 +352,22 @@
     var op=document.createElement("option"); op.value=o[0]; op.textContent=o[1]; tvSel.appendChild(op);
   });
   tvRow.appendChild(tvSel);
-  tvSel.addEventListener("change", function(){ setTerrainMode(tvSel.value); });
-  el("div","wb-ov-legend","SLOPE: green flat → red 45%+ grade · ELEVATION: hypsometric ramp 0–120 m, contour every 10 m · water surface unchanged in every mode.");
-  el("div","wb-ov-status","geometry/skin structural split scheduled for the terrain fidelity admission.").style.color="#7c828a";
+  tvSel.addEventListener("change", function(){ setTerrainMode(tvSel.value); markSectionActive("terrain", tvSel.value!=="normal"); });
 
   /* ---- 3. RULE OVERLAYS — a HIERARCHY (Director addendum): THE GROUND PLAN
      survey-spine family (spine centerlines · rights-of-way · plat lots · named
      parcels) under one tri-state master, then the flat law/diagnostic rows
      (walk keep-out · ecology zones · audit failures). Copy is Director-authored
      verbatim; each row is a name + a small legend line. ---- */
-  el("div","wb-sec","RULE OVERLAYS");
+  beginSection("overlays","RULE OVERLAYS", { desc:"Overlays inspect the LAW and DATA behind the render — the survey spine, rights-of-way, plat lots, parcels, landmark reservations, walk keep-out mask, zones, and live audit failures. Each row's ? reveals its legend; active overlays are highlighted." });
   var overlayObjs = { spine:null, row:null, lots:null, parcels:null, reservations:null, wharf:null, keepout:null, zones:null, zonelaw:null, audits:null };
+  var overlayRowEls = {};
   var auditStatusEl = null, keepoutStatusEl = null;
+
+  function refreshOverlayActive(){
+    Object.keys(overlayRowEls).forEach(function(k){ overlayRowEls[k].row.classList.toggle("active", !!WB.overlays[k]); });
+    markSectionActive("overlays", Object.keys(WB.overlays).some(function(k){ return WB.overlays[k]; }));
+  }
 
   /* one toggle path: every overlay rebuilds fresh on enable (all are cheap
      line/2D redraws, several are date-gated) and detaches on disable. */
@@ -318,12 +380,17 @@
     } else if(overlayObjs[key]){
       scene.remove(overlayObjs[key]); overlayObjs[key] = null;
     }
+    refreshOverlayActive();
   }
   function overlayRow(parent, key, cls, title, legend){
     var row = el("div","wb-row wb-ov"+(cls?" "+cls:""), null, parent);
     var cb = document.createElement("input"); cb.type="checkbox"; row.appendChild(cb);
     var name = el("span","wb-lname",title,row);
-    var leg = el("div","wb-ov-legend",legend,parent); // legend under the row
+    var leg = el("div","wb-ov-legend",legend,parent); // legend under the row, revealed by the row ?
+    if(legend){
+      var q = el("span","wb-info","?", row); q.title = "show/hide legend";
+      q.addEventListener("click", function(ev){ ev.stopPropagation(); leg.classList.toggle("show"); q.classList.toggle("on"); });
+    }
     return { row:row, cb:cb, name:name, legend:leg };
   }
 
@@ -332,7 +399,9 @@
   var groupHeadRow = el("div","wb-row wb-ov-parent", null, groupWrap);
   var groupCb = document.createElement("input"); groupCb.type="checkbox"; groupHeadRow.appendChild(groupCb);
   el("span","wb-lname wb-ov-parent-name","THE GROUND PLAN — the survey spine",groupHeadRow);
-  el("div","wb-ov-grouphdr","Roads, lots, and zones are one dated system — toggle the family or break out a member.",groupWrap);
+  var groupHdr = el("div","wb-ov-grouphdr","Roads, lots, and zones are one dated system — toggle the family or break out a member.",groupWrap);
+  (function(){ var q = el("span","wb-info","?", groupHeadRow); q.title="show/hide group note";
+    q.addEventListener("click", function(ev){ ev.stopPropagation(); groupHdr.classList.toggle("show"); q.classList.toggle("on"); }); })();
   var groupBody = el("div","wb-ov-groupbody",null,groupWrap);
 
   var SPINE_CHILDREN = ["spine","row","lots","parcels","reservations"];
@@ -347,6 +416,7 @@
   function makeChild(key, title, legend){
     var r = overlayRow(groupBody, key, "wb-ov-child", title, legend);
     childCbs[key] = r.cb;
+    overlayRowEls[key] = r;
     r.cb.addEventListener("change", function(){
       setOverlay(key, r.cb.checked);
       if(r.cb.checked) groupEverUsed = true;
@@ -385,6 +455,7 @@
   var flatWrap = el("div","wb-ov-flat");
   function makeFlat(key, title, legend){
     var r = overlayRow(flatWrap, key, null, title, legend);
+    overlayRowEls[key] = r;
     r.cb.addEventListener("change", function(){ setOverlay(key, r.cb.checked); });
     return r;
   }
@@ -944,7 +1015,7 @@
     m.position.set(x, terrainHeight(x, z), z); m.renderOrder = 2000; m.frustumCulled = false;
     wbTlMarkerObj = m; scene.add(m);
   }
-  el("div","wb-sec","TEMPORAL DEBUG-VIZ  (s101 — see the timeline)");
+  beginSection("s101","TEMPORAL DEBUG-VIZ", { desc:"The coordinate timeline inspector (debug-viz-first, s101). Arm, then click any world point to read its state — water/land, block/lot, zone, ROW, parcels, reservation, pier, building — across the 1846–1849 window, unchanged spans collapsed. Pure reads of the date-parameterized world; static terrain until terrain-morphing (s102/s103)." });
   var tlActions = el("div","wb-actions");
   var tlBtn = el("button","wb-btn","timeline: OFF — click to arm", tlActions);
   var tlClearBtn = el("button","wb-btn","clear pin", tlActions);
@@ -954,13 +1025,15 @@
     tlBtn.textContent = WB.tl ? "timeline: ON — click the world" : "timeline: OFF — click to arm";
     tlBtn.classList.toggle("on", WB.tl);
     document.body.classList.toggle("wb-tl", WB.tl);
+    markSectionActive("s101", WB.tl);
   });
-  tlClearBtn.addEventListener("click", function(){ wbClearTlMarker(); tlOut.textContent = "(pin cleared)"; });
+  tlClearBtn.addEventListener("click", function(){ wbClearTlMarker(); tlOut.textContent = "(pin cleared)"; tlOut.classList.remove("live"); });
   function wbTlLine(k, v){ var d = document.createElement("div"); d.className = "wb-pl"; d.innerHTML = "<b>"+k+"</b> "+v; tlOut.appendChild(d); }
   function wbRunTimeline(px, py){
     var p = groundPointFromScreen(px, py);
     tlOut.textContent = "";
-    if(!p){ wbTlLine("timeline", "no ground under that click (sky)"); return; }
+    if(!p){ wbTlLine("timeline", "no ground under that click (sky)"); tlOut.classList.remove("live"); return; }
+    tlOut.classList.add("live");
     wbSetTlMarker(p.x, p.z);
     var days = wbTimelineDays(), spans = [], prevSig = null;
     for(var i = 0; i < days.length; i++){
@@ -979,7 +1052,7 @@
   }, true);
 
   /* ---- 2. PROVENANCE PROBE ---- */
-  el("div","wb-sec","PROVENANCE PROBE");
+  beginSection("probe","PROVENANCE PROBE", { desc:"Arm, then click any world point for a full provenance card at the current date — terrain, ground-paint, cadastre lot/block/parcel/zone-law, landmark reservation, buildings, doodads, people, walk mask, and the real pick hit." });
   var probeBtn = el("button","wb-btn","probe: OFF — click to arm");
   var probeOut = el("div","wb-probe-out","(arm, then click any world point)");
   probeBtn.addEventListener("click", function(){
@@ -987,6 +1060,7 @@
     probeBtn.textContent = WB.probe ? "probe: ON — click the world" : "probe: OFF — click to arm";
     probeBtn.classList.toggle("on", WB.probe);
     document.body.classList.toggle("wb-probe", WB.probe);
+    markSectionActive("probe", WB.probe);
   });
 
   function groundPointFromScreen(px,py){
@@ -1068,7 +1142,8 @@
     var lumInfo = readLuminance(px,py); // read BEFORE the pick re-renders anything
     var p = groundPointFromScreen(px,py);
     probeOut.textContent = "";
-    if(!p){ probeLine(probeOut,"probe","no ground under that click (sky)"); return; }
+    if(!p){ probeLine(probeOut,"probe","no ground under that click (sky)"); probeOut.classList.remove("live"); return; }
+    probeOut.classList.add("live");
     var x=p.x, z=p.z, h=terrainHeight(x,z), zn=zoneAt(x,z);
     var st = nearestStreet(x,z);
     var townA=null, closeA=null;
@@ -1175,7 +1250,7 @@
   }, true);
 
   /* ---- 4. TUNING KNOBS ---- */
-  el("div","wb-sec","TUNING KNOBS  (live · reload resets)");
+  beginSection("knobs","TUNING KNOBS", { desc:"Live lighting and detail multipliers layered over whatever the sim wrote this frame. Nothing persists — reload resets every knob to its default." });
   var knobDefs = [
     { key:"sunMul",        label:"sun intensity ×",     min:0, max:2.5, step:0.05 },
     { key:"hemiMul",       label:"hemi intensity ×",    min:0, max:2.5, step:0.05 },
@@ -1193,6 +1268,7 @@
     else if(key==="streetAlphaMul"){ var wbSplats=[typeof splatWorldMesh!=="undefined"?splatWorldMesh:null, typeof splatTownMesh!=="undefined"?splatTownMesh:null, typeof splatCloseMesh!=="undefined"?splatCloseMesh:null]; wbSplats.forEach(function(m){ if(m) m.material.opacity = v; }); } /* FOUNDATION: uniform renderer has one mesh; town/close return with the road-art admission */
     // sun/hemi/ambient/nightLift are applied in wbFrame each frame
     knobEls[key].val.textContent = (+v).toFixed(2);
+    markSectionActive("knobs", Object.keys(WB.knobs).some(function(k){ return Math.abs(WB.knobs[k]-WB_KNOB_DEFAULTS[k])>1e-9; }));
   }
   knobDefs.forEach(function(d){
     var row = el("div","wb-knob");
@@ -1206,6 +1282,7 @@
   });
 
   /* ---- actions ---- */
+  beginSection("actions","AUDITS & EXPORT");
   var actions = el("div","wb-actions");
   var auditBtn = el("button","wb-btn","run audits",actions);
   var copyBtn = el("button","wb-btn","COPY SETTINGS",actions);
@@ -1224,8 +1301,15 @@
     if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(payload).then(function(){ done(true); }, function(){ done(false); });
     else done(false);
   });
+  curBody = panel;   // footer sits at the panel root, below every section
   el("div","wb-foot", "Overlays inspect the LAW and DATA; the Layers list above shows admitted RENDERERS — the spine has no renderer of its own by design (ground-paint derives from it).");
   el("div","wb-foot", WB_LAYERS.length+" layers registered · atelier.html only (never in the release build) · nothing persists");
+
+  /* SURFACE THE ACTIVE TOOLS: lift the two inspectors (timeline + probe) to the
+     top of the rail, right under the title, so a pinned readout is the first
+     thing seen instead of being buried beneath the overlay list. */
+  if(wbSections.s101 && wbSections.layers) panel.insertBefore(wbSections.s101.wrap, wbSections.layers.wrap);
+  if(wbSections.probe && wbSections.layers) panel.insertBefore(wbSections.probe.wrap, wbSections.layers.wrap);
 
   /* DEV CAPTURE (s81) — the atelier is dev-only, so a framebuffer grab lives
      here (not the release): render synchronously and read the whole drawing
