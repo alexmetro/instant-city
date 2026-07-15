@@ -5,7 +5,10 @@
  * 5 unanchorable landmarks documented in _meta.unanchorable (reserved nothing on a guess).
  * s94: PRESENCE-OVER-PRECISION re-anchor — 4 of the 5 unanchorable landmarks moved into
  * reservations[] with approximate:true best-effort placements (14 total); sam-brannan-store
- * remains the sole unanchorable entry (genuinely zero locational basis). */
+ * remains the sole unanchorable entry (genuinely zero locational basis).
+ * s95: LANDMARK IDENTIFICATION batch 1 — 37 new block-frontage anchors mined from
+ * data/places.jsonl's SF in-window candidate set (51 total). shades-tavern reconciled
+ * (Pacific & Stockton confirmed). See _meta.s95_batch1_pass and _meta.batch1_backlog. */
 window.LANDMARK_RESERVATIONS = {
   "_meta": {
     "title": "Landmark reservations — the record gets its ground (Zoning Project stage 3, s91)",
@@ -16,8 +19,7 @@ window.LANDMARK_RESERVATIONS = {
       "kind": "'block-frontage' (a documented block + which bounding street it fronts) | 'plaza-exception' (a civic building ON the Portsmouth Square common — the documented exception to the publicReserve zero-lots rule)",
       "block": "the live cadastre block key (B|west|east|north|south street-id edge key, deriveGroundPlan) — resolved to the plan at query time; a reservation whose block is absent at its built date is surfaced as unresolved, never forced",
       "frontage": "west|east|north|south — which uv edge of the block the facade sits on (west=smaller-u avenue edge, north=smaller-v street edge)",
-      "frontStreet": "the human street name(s) that edge carries. For plaza-exception (corner) anchors this is 'primary/secondary' (e.g. 'washington/dupont'); the FIRST street is the primary frontage the CORNER RULE (building-spawn-spec §1.6) faces — the corner faces ONE street, never the 45° diagonal.",
-      "facing": "OPTIONAL orientation override (building-spawn-spec §1.6, s94a). When a source documents the true frontage, set this to a bounding-street NAME (mapped to that block edge) or a cardinal edge word/letter (north|south|east|west | n|s|e|w). It WINS over the frontStreet default. An intercardinal bearing (NE|NW|SE|SW) is accepted but is a genuine diagonal and the orientationLandmark street-alignment clause will reject it unless it coincides with an edge — corners are expected to name a single street. Absent on every current reservation (all default to frontStreet's first street).",
+      "frontStreet": "the human street name that edge carries (documentation only)",
       "frontFrac0/frontFrac1": "the [0..1] sub-interval along that frontage edge the footprint occupies (0 = the edge's smaller-coordinate corner). Distinct intervals keep co-block landmarks off each other's ground.",
       "depthM": "footprint depth into the block from the frontage (m)",
       "widthM": "plaza-exception only: footprint width along the corner edge (m)",
@@ -38,7 +40,65 @@ window.LANDMARK_RESERVATIONS = {
       }
     ],
     "s94_reanchor_pass": "PRESENCE-OVER-PRECISION re-anchor (building-spawn-spec.md §1, user ruling 2026-07-14): 4 of the 5 previously-unanchorable landmarks (portsmouth-house, merchants-exchange, california-star-office, post-office) moved into reservations[] below with approximate:true, best-effort block/frontage placements reasoned from partial hints (dossier adjacency language, corpus cross-references, external Pike->Waverly Place verification), and honest confidence/source strings recording exactly what was guessed. sam-brannan-store remains unanchorable (genuinely zero locational basis, see above). Reuses only the existing block-frontage/plaza-exception anchor kinds — no new anchor kind invented.",
-    "out_of_scope_this_pass": "Storeships (Niantic, Euphemia, Apollo, General Harrison — ships-era, per the brief). Peripheral areas (Mission Dolores, Presidio, Telegraph Hill signal station, the 1847 windmill) are already named parcels or ships/terrain-era and are not building reservations in this plaza-cluster pass."
+    "out_of_scope_this_pass": "Storeships (Niantic, Euphemia, Apollo, General Harrison — ships-era, per the brief). Peripheral areas (Mission Dolores, Presidio, Telegraph Hill signal station, the 1847 windmill) are already named parcels or ships/terrain-era and are not building reservations in this plaza-cluster pass.",
+    "batch1_backlog": [
+      {
+        "name": "Finley, Johnson & Co.",
+        "kind": "store",
+        "mentions": 37,
+        "reason": "Address is literally 'Portsmouth House, Clay st.' — co-located with/tenant inside the existing portsmouth-house reservation, not a separate footprint. Needs a schema concept for co-located tenants (not present in block-frontage) before it can be anchored distinctly."
+      },
+      {
+        "name": "C. V. Gillespie's store",
+        "kind": "store",
+        "mentions": 9,
+        "reason": "Address 'Washington street, rear of U.S. Barracks' — same awkward rear-lot address already used (and flagged as schema-stretching) for the existing california-star-office reservation. Deferred rather than compounding a second awkward anchor at the same ambiguous rear-lot location."
+      },
+      {
+        "name": "Geltson & Co.",
+        "kind": "store",
+        "mentions": 32,
+        "reason": "DEFERRED (waterfront, per brief): 'Montgomery Street on the Beach' / 'on the Beach' — needs a water-lot anchor kind not yet built."
+      },
+      {
+        "name": "S. H. Williams & Co.",
+        "kind": "store",
+        "mentions": 21,
+        "reason": "DEFERRED (waterfront, per brief): 'foot of California st.' — needs a water-lot anchor kind not yet built."
+      },
+      {
+        "name": "Simmons, Hutchinson & Co.",
+        "kind": "store",
+        "mentions": 17,
+        "reason": "DEFERRED (waterfront, per brief): 'foot of Sacramento street' — needs a water-lot anchor kind not yet built."
+      },
+      {
+        "name": "Cooke, Baker & Co",
+        "kind": "store",
+        "mentions": 11,
+        "reason": "DEFERRED (waterfront, per brief): 'foot of Sacramento street' — needs a water-lot anchor kind not yet built."
+      },
+      {
+        "name": "PLUMMER, KEITH & CO.",
+        "kind": "store",
+        "mentions": 9,
+        "reason": "DEFERRED (waterfront, per brief): 'foot of Sacramento street' — needs a water-lot anchor kind not yet built."
+      },
+      {
+        "name": "Joseph Bawden & Co.",
+        "kind": "store",
+        "mentions": 9,
+        "reason": "DEFERRED (waterfront, per brief): 'Foot of Broadway, near the wharf' — needs a water-lot anchor kind not yet built."
+      },
+      {
+        "name": "E. Mickle & Co.",
+        "kind": "store",
+        "mentions": 18,
+        "reason": "DEFERRED (waterfront-adjacent, ambiguous): addresses mix 'Clay street' with 'Clay street wharf' and a cross-reference to Sherman & Ruckel's corner-Clay/Montgomery warehouse; not cleanly a land-lot address, deferred pending a clearer read."
+      }
+    ],
+    "s95_batch1_pass": "Batch 1 landmark identification (2026-07-14): 37 new block-frontage anchors added from data/places.jsonl's ~85-record SF in-window candidate set (kind in store/hotel/tavern/saloon/bank/newspaper_office/public_building/market/manufactory, mentions>=8, spine-street address). 51 source records fed the 37 anchors (14 merges of exact-duplicate/successor name variants of the same building). 16 records deduped against the existing 14 (same buildings under kind-classifier noise: Portsmouth House x4, California Star x4, Mellus & Howard x3, Alta California x2, City Hotel, Custom House, Merchants' Exchange). 1 dropped as a non-SF leak (S. Brannan & Co., 'corner of Front and J street' = Sacramento, the brief's known trap). 1 dropped as a false-positive address match ('L. W. Hastings law office', 'Upper California' matched the spine-street filter on the substring 'california' but is a region reference, not a street address). 9 moved to _meta.batch1_backlog (7 waterfront/foot-of-street deferrals per the brief, 2 co-located/schema-limited deferrals). The shades-tavern entry was reconciled (see its dates.note/source) — verdict: Pacific & Stockton confirmed, anchor unchanged, confidence raised C->B. All new frontFrac intervals were collision-checked against each other and the existing 14 by script (0 collisions across 28 touched block+frontage pairs). Constructed block keys not previously used by the existing 14 (roughly a dozen of the 37) are flagged per-entry as 'unresolved-if-absent' — the brief accepts this; the engine surfaces such reservations as unresolved rather than forcing them.",
+    "s95_fix_pass": "s95-fix collision + resolution pass (2026-07-14, Opus data-fix; DATA-only, no engine change). The s95 batch-1 registry failed buildings.footprintsOBB + placement.reservations on: (a) 5 same-block perpendicular-corner WORLD-SPACE footprint overlaps, (b) 1 mid-block ROW centerline crossing, (c) 6 entries the s95 pass believed sat on absent blocks. Fixes reposition ONLY s95 NEW entries — the plaza-cluster 14 (custom-house, school-house, city-hotel, parker-house, el-dorado, dennisons-exchange, bella-union, alta-california-office, howard-mellus-store, shades-tavern, portsmouth-house, merchants-exchange, california-star-office, post-office) are byte-unchanged. (a/b) On B|kearny|montgomery|washington|clay: Clay(south)-edge re-lay-out (starkey-janion-co, shelley-norris, leighton-swasey-co, jj-chauviteau-co) pulled east of el-dorados Kearny-depth projection; Montgomery(east)-edge re-lay-out (drings-store, jewett-melhado, burgoyne-co) clearing New-York-Stores NE corner, Sherman&Ruckels SE corner, and moving jewett-melhado off the portsmouth-street mid-block lane. That lane runs EAST-WEST at block-center v (confirmed by parker/el-dorado curb clips at v~=+/-3.05m); jewett was fixed by a frontFrac v-shift entirely south of the centerline, NOT by depth reduction (depth is perpendicular to this lane and would not clear it). On B|kearny|montgomery|clay|sacramento: ward-smith-ward-co-montgomery + wh-davis-store-montgomery shifted south along Montgomery to clear Howard&Melluss NE corner (ward-smith kept — 174 mentions). On B|kearny|montgomery|jackson|washington: schwerin-garbe-co shifted east along Washington to clear Colonnade Houses SW corner. (c) These were NOT absent blocks: grayson-guild-co, everett-co, mcdonald-reynolds-co, simmons-lilly-co, probst-smith-co carried block key ...|sacramento|california but the live cadastre street id is california-street — a key typo. Corrected to the canonical id; all 5 resolve on the existing (always-present) block (simmons-lilly-co frontFrac0 0.10->0.13 to clear everett-cos NW corner). californian-office-broadway-sansomes block B|sansome|battery|broadway|pacific exists but its surveyed birth (~1847-08-01) postdates the entrys built date 1847-05-22; built clamped to 1847-08-02 (first date the surveyed ground exists) and frontFrac shifted off the Broadway/Sansome NW corner shared with bingham-reynolds-bartlett-co. NET: 51/51 anchored, 0 unresolved, 0 footprint overlaps, 0 ROW intrusions — footprintsOBB + placement.reservations GREEN on both build targets across all 4 noon dates."
   },
   "reservations": [
     {
@@ -245,16 +305,25 @@ window.LANDMARK_RESERVATIONS = {
       },
       "dates": {
         "built": "1848-04-01",
-        "note": "'corner of Pacific and Stockton streets' (operative address from Apr 19 1848); second-tier but persistent tavern with attached bowling alleys, off the high-rent Square. Quadrant unstated — the townward (SE-of-intersection) block is taken."
+        "note": "'corner of Pacific and Stockton streets' (operative address from Apr 19 1848); second-tier but persistent tavern with attached bowling alleys, off the high-rent Square. Quadrant unstated — the townward (SE-of-intersection) block is taken. s95 RECONCILIATION: places.jsonl's raw addresses[] array lists 'corner of Pacific and Jackson streets' first, which could be misread as the corpus favoring Jackson over Stockton. Receipt-level review (20 dated receipts, place-tavern-shades-tavern) shows the Jackson citation is a SINGLE ad (C18480412, the tavern's very first notice) superseded exactly one week later (C18480419) by 'corner of Pacific and Stockton streets', which then recurs consistently through Dec 1848 (C18480517, C18481104, CSC18481223 'CORNER PACIFIC AND STOCLTON [STOCKTON] STS' — 7 total Stockton citations vs. 1 Jackson). VERDICT: Pacific & Stockton confirmed as the operative address (the Jackson citation reads as a one-off error in the first ad, corrected the next week); the existing anchor is NOT moved. A fifth address variant, 'corner of Pacific and Dupont streets', appears in the addresses[] array but not in the visible receipt sample (receiptsTruncated:true) and is not further corroborated."
       },
-      "confidence": "C",
-      "source": "dossier §3.6; corpus C18480419–CSC18481223. If the Pacific/Stockton block is absent at the built date it is surfaced as unresolved, not forced."
+      "confidence": "B",
+      "source": "dossier §3.6; corpus C18480419–CSC18481223. If the Pacific/Stockton block is absent at the built date it is surfaced as unresolved, not forced. s95: reconciliation pass reviewed all 20 available receipts (place-tavern-shades-tavern, mentions:37, receiptsTruncated:true) and confirms Pacific&Stockton over the single Pacific&Jackson citation; confidence raised C->B on the strength of this corroboration, though the exact quadrant remains unstated as before."
     },
     {
       "landmarkId": "portsmouth-house",
       "name": "Portsmouth House",
       "dossier": "§1.6",
-      "anchor": { "kind": "block-frontage", "block": "B|kearny|montgomery|clay|sacramento", "frontage": "north", "frontStreet": "clay", "frontFrac0": 0.05, "frontFrac1": 0.38, "depthM": 20, "corner": "NW" },
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|kearny|montgomery|clay|sacramento",
+        "frontage": "north",
+        "frontStreet": "clay",
+        "frontFrac0": 0.05,
+        "frontFrac1": 0.38,
+        "depthM": 20,
+        "corner": "NW"
+      },
       "approximate": true,
       "dates": {
         "built": "1846-10-17",
@@ -267,7 +336,16 @@ window.LANDMARK_RESERVATIONS = {
       "landmarkId": "merchants-exchange",
       "name": "Merchants' Exchange",
       "dossier": "§1.8",
-      "anchor": { "kind": "block-frontage", "block": "B|kearny|montgomery|jackson|washington", "frontage": "south", "frontStreet": "washington", "frontFrac0": 0.30, "frontFrac1": 0.65, "depthM": 16, "corner": false },
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|kearny|montgomery|jackson|washington",
+        "frontage": "south",
+        "frontStreet": "washington",
+        "frontFrac0": 0.3,
+        "frontFrac1": 0.65,
+        "depthM": 16,
+        "corner": false
+      },
       "approximate": true,
       "dates": {
         "built": "1849-08-30",
@@ -280,7 +358,16 @@ window.LANDMARK_RESERVATIONS = {
       "landmarkId": "california-star-office",
       "name": "California Star printing office",
       "dossier": "§1.10",
-      "anchor": { "kind": "block-frontage", "block": "B|dupont|kearny|jackson|washington", "frontage": "south", "frontStreet": "washington", "frontFrac0": 0.44, "frontFrac1": 0.54, "depthM": 12, "corner": false },
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|dupont|kearny|jackson|washington",
+        "frontage": "south",
+        "frontStreet": "washington",
+        "frontFrac0": 0.44,
+        "frontFrac1": 0.54,
+        "depthM": 12,
+        "corner": false
+      },
       "approximate": true,
       "dates": {
         "built": "1847-10-16",
@@ -293,7 +380,16 @@ window.LANDMARK_RESERVATIONS = {
       "landmarkId": "post-office",
       "name": "Post Office",
       "dossier": "§1.9",
-      "anchor": { "kind": "block-frontage", "block": "B|stockton|dupont|clay|sacramento", "frontage": "north", "frontStreet": "clay", "frontFrac0": 0.10, "frontFrac1": 0.38, "depthM": 14, "corner": "SW" },
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|stockton|dupont|clay|sacramento",
+        "frontage": "north",
+        "frontStreet": "clay",
+        "frontFrac0": 0.1,
+        "frontFrac1": 0.38,
+        "depthM": 14,
+        "corner": "SW"
+      },
       "approximate": true,
       "dates": {
         "built": "1849-03-01",
@@ -301,6 +397,857 @@ window.LANDMARK_RESERVATIONS = {
       },
       "confidence": "B",
       "source": "dossier §1.9; timeline-part-1849.md/timeline-spine.md (Clay & Pike, March 1849, FoundSF POST_OFFICE_1849); cast.md (Charles Cora, Belle Cora entries: '27 Waverly Place (formerly Pike Street)') for the Pike=Waverly identification; WebSearch this pass (gpsmycity.com, evendo.com, Medium/Doug Chan) corroborating Waverly Place's Washington-Sacramento, one-block-west-of-Grant-Ave position. Block/frontFrac position is an approximation onto the nearest spine block, not a corpus-resolved footprint."
+    },
+    {
+      "landmarkId": "ward-smith-ward-co-montgomery",
+      "name": "Ward & Smith / Ward & Co",
+      "kind": "store",
+      "class": "store",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|kearny|montgomery|clay|sacramento",
+        "frontage": "east",
+        "frontStreet": "montgomery",
+        "frontFrac0": 0.26,
+        "frontFrac1": 0.48,
+        "depthM": 18,
+        "corner": false
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1847-02-06",
+        "note": "'No. 3 Montgomery street' (Ward & Smith, attested 1847-02-06 to 1849-06-07, 174+10 mentions across name-variant records) continues as 'Ward & Co' from 1849-06-28 ('late Ward & Smith' self-identifies as the successor firm; one 1849 ad reads 'Montgomery street, corner Clay'). Treated as ONE physical storefront under two successive trading names rather than two separate footprints — a merge judgment call. built=firstSeen is a mention proxy, not a construction date."
+      },
+      "confidence": "B",
+      "source": "places.jsonl place-store-ward-smith (174), place-store-ward-co (34), place-store-ward-smith-store (10, dup). Corner/quadrant at the Clay end of Montgomery inferred from the low street number and the one 'corner Clay' Ward & Co ad; not corpus-pinned to this exact block. Flagged: three source records merged into one landmark on a succession judgment call."
+    },
+    {
+      "landmarkId": "wh-davis-store-montgomery",
+      "name": "W. H. Davis store",
+      "kind": "store",
+      "class": "store",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|kearny|montgomery|clay|sacramento",
+        "frontage": "east",
+        "frontStreet": "montgomery",
+        "frontFrac0": 0.5,
+        "frontFrac1": 0.68,
+        "depthM": 16,
+        "corner": false
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1847-07-10",
+        "note": "'No. 2, Montgomery street' (W. H. Davis, sole trader, 1847-07-10 to 1848-06-03); a duplicate-kind record 'WM. H. DAVIS store' (8 mentions, same proprietor) merged in. Kept distinct from the later 'Davis & Carter' partnership store (different address emphasis, later window) rather than merged with it — a judgment call, since both involve William H. Davis."
+      },
+      "confidence": "C",
+      "source": "places.jsonl place-store-w-h-davis-store (34), place-store-wm-h-davis-store (8, dup merged). Position along Montgomery is ordinal (adjacent to the low-numbered Ward & Smith storefront), not corpus-resolved."
+    },
+    {
+      "landmarkId": "starkey-janion-co",
+      "name": "Starkey, Janion & Co",
+      "kind": "store",
+      "class": "store",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|kearny|montgomery|washington|clay",
+        "frontage": "south",
+        "frontStreet": "clay",
+        "frontFrac0": 0.19,
+        "frontFrac1": 0.33,
+        "depthM": 18,
+        "corner": "SW"
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1848-09-02",
+        "note": "'corner of Clay and Kearney sts' (also 'foot California st.' for a later/second address, not used here), attested 1848-09-02 to 1849-11-29, 67 mentions."
+      },
+      "confidence": "B",
+      "source": "places.jsonl place-store-starkey-janion-co. Corner streets explicit; the specific quadrant (of 4 at Clay&Kearny — the other 3 already hold City Hotel, Portsmouth House-approx, and the Portsmouth Square reserve itself) is inferred as the only open quadrant, not corpus-pinned."
+    },
+    {
+      "landmarkId": "shelley-norris",
+      "name": "SHELLEY & NORRIS",
+      "kind": "store",
+      "class": "store",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|kearny|montgomery|washington|clay",
+        "frontage": "south",
+        "frontStreet": "clay",
+        "frontFrac0": 0.35,
+        "frontFrac1": 0.47,
+        "depthM": 16,
+        "corner": false
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1847-07-10",
+        "note": "'corner of Clay and Kearny streets', attested 1847-07-10 to 1847-10-27 (9 mentions) — closes BEFORE Starkey, Janion & Co opens at the same corner phrase (1848-09-02). No time overlap: plausibly the same physical corner storefront under sequential tenants, not two separate buildings. Modeled here as an adjacent, non-overlapping slice on the same frontage rather than sharing Starkey Janion's footprint, since the schema has no lifecycle/succession field."
+      },
+      "confidence": "C",
+      "source": "places.jsonl place-store-shelley-norris. Flagged for Director: likely the same corner as starkey-janion-co under an earlier tenant, not independently verified as a distinct footprint."
+    },
+    {
+      "landmarkId": "davis-carter",
+      "name": "Davis & Carter",
+      "kind": "store",
+      "class": "store",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|montgomery|sansome|clay|sacramento",
+        "frontage": "north",
+        "frontStreet": "clay",
+        "frontFrac0": 0.02,
+        "frontFrac1": 0.25,
+        "depthM": 18,
+        "corner": "NW"
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1848-09-02",
+        "note": "'corner of Clay and Montgomery streets', attested 1848-09-02 to 1849-06-07, 36 mentions — the most-mentioned of the Clay&Montgomery-corner store cluster after Howard & Mellus (which already holds the Kearny-Montgomery/Clay-Sacramento block's Montgomery-end Clay frontage)."
+      },
+      "confidence": "B",
+      "source": "places.jsonl place-store-davis-carter. Corner streets explicit; the exact quadrant (one of the 3 remaining, since Howard & Mellus occupies the SW-real/NE-labeled one) is inferred, not corpus-pinned — William H. Davis of this partnership is likely the same person as the solo W. H. Davis store, unconfirmed."
+    },
+    {
+      "landmarkId": "sherman-ruckel",
+      "name": "Sherman & Ruckel",
+      "kind": "store",
+      "class": "store",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|kearny|montgomery|washington|clay",
+        "frontage": "south",
+        "frontStreet": "clay",
+        "frontFrac0": 0.75,
+        "frontFrac1": 0.97,
+        "depthM": 18,
+        "corner": "SE"
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1848-07-15",
+        "note": "'corner of Clay and Montgomery streets', attested 1848-07-15 to 1849-11-22, 27 mentions; corroborated by E. Mickle & Co.'s ad citing 'warehouse of Messrs. Sherman & Ruckle, corner of Clay and Montgomery sts.' as a landmark reference, confirming a well-known corner presence."
+      },
+      "confidence": "B",
+      "source": "places.jsonl place-store-sherman-ruckel; cross-ref place-store-e-mickle-co. Quadrant (2nd of the 3 open Clay&Montgomery corners) inferred, not corpus-pinned."
+    },
+    {
+      "landmarkId": "bleecker-vandyke-belden",
+      "name": "Bleecker, Van Dyke & Belden",
+      "kind": "store",
+      "class": "store",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|montgomery|sansome|washington|clay",
+        "frontage": "south",
+        "frontStreet": "clay",
+        "frontFrac0": 0.03,
+        "frontFrac1": 0.25,
+        "depthM": 16,
+        "corner": "SW"
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1849-08-04",
+        "note": "'cor. Montgomery and Clay sts.', attested 1849-08-04 to 1849-11-22, 12 mentions."
+      },
+      "confidence": "B",
+      "source": "places.jsonl place-store-bleecker-van-dyke-belden. Quadrant (3rd of the 3 open Clay&Montgomery corners) inferred, not corpus-pinned."
+    },
+    {
+      "landmarkId": "a-hugues-pioche-co",
+      "name": "A. Hugues, Pioche & Co.",
+      "kind": "store",
+      "class": "store",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|montgomery|sansome|clay|sacramento",
+        "frontage": "north",
+        "frontStreet": "clay",
+        "frontFrac0": 0.3,
+        "frontFrac1": 0.55,
+        "depthM": 18,
+        "corner": false
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1849-03-15",
+        "note": "'Clay street' only, no cross street, attested 1849-03-15 to 1849-11-29, 37 mentions."
+      },
+      "confidence": "C",
+      "source": "places.jsonl place-store-a-hugues-pioche-co. Placed on the Clay-fronting block east of Montgomery (open ground after Davis & Carter's corner slice); position along Clay is ordinal, not corpus-resolved."
+    },
+    {
+      "landmarkId": "cross-hobson-co",
+      "name": "Cross, Hobson & Co.",
+      "kind": "store",
+      "class": "store",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|montgomery|sansome|clay|sacramento",
+        "frontage": "north",
+        "frontStreet": "clay",
+        "frontFrac0": 0.58,
+        "frontFrac1": 0.8,
+        "depthM": 16,
+        "corner": false
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1848-12-23",
+        "note": "'Clay Street' only, no cross street, attested 1848-12-23 to 1849-11-15, 28 mentions."
+      },
+      "confidence": "C",
+      "source": "places.jsonl place-store-cross-hobson-co. Same block as a-hugues-pioche-co; position along Clay is ordinal, not corpus-resolved."
+    },
+    {
+      "landmarkId": "robert-a-parker-store",
+      "name": "Robert A. Parker's Store (Adobe House)",
+      "kind": "store",
+      "class": "store",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|dupont|kearny|clay|sacramento",
+        "frontage": "north",
+        "frontStreet": "clay",
+        "frontFrac0": 0.05,
+        "frontFrac1": 0.28,
+        "depthM": 16,
+        "corner": false
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1847-06-05",
+        "note": "'Clay street' / named 'the Adobie House' (a distinctive older adobe building), attested 1847-06-05 to 1848-11-18, 22 mentions."
+      },
+      "confidence": "C",
+      "source": "places.jsonl place-store-robert-a-parker-s-store. Placed on the City Hotel block's open Clay frontage (west of City Hotel's own footprint) on the reasoning that a named older adobe building plausibly sits on the square-fronting block; position is ordinal, not corpus-resolved."
+    },
+    {
+      "landmarkId": "leighton-swasey-co",
+      "name": "Leighton, Swasey & Co.",
+      "kind": "store",
+      "class": "store",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|kearny|montgomery|washington|clay",
+        "frontage": "south",
+        "frontStreet": "clay",
+        "frontFrac0": 0.49,
+        "frontFrac1": 0.61,
+        "depthM": 14,
+        "corner": false
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1848-12-23",
+        "note": "'Clay Street' only, no cross street, attested 1848-12-23 to 1849-07-02, 11 mentions."
+      },
+      "confidence": "C",
+      "source": "places.jsonl place-store-leighton-swasey-co. Placed in the mid-block Clay-frontage gap between the Clay&Kearny and Clay&Montgomery corner clusters on this block; position ordinal, not corpus-resolved."
+    },
+    {
+      "landmarkId": "jj-chauviteau-co",
+      "name": "J. J. Chauviteau & Co.",
+      "kind": "store",
+      "class": "store",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|kearny|montgomery|washington|clay",
+        "frontage": "south",
+        "frontStreet": "clay",
+        "frontFrac0": 0.63,
+        "frontFrac1": 0.74,
+        "depthM": 14,
+        "corner": false
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1849-07-26",
+        "note": "'Clay street' only, no cross street, attested 1849-07-26 to 1849-11-29, 9 mentions."
+      },
+      "confidence": "C",
+      "source": "places.jsonl place-store-j-j-chauviteau-co. Same block as leighton-swasey-co; position ordinal, not corpus-resolved."
+    },
+    {
+      "landmarkId": "woodruff-addison",
+      "name": "Woodruff & Addison",
+      "kind": "store",
+      "class": "store",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|stockton|dupont|clay|sacramento",
+        "frontage": "north",
+        "frontStreet": "clay",
+        "frontFrac0": 0.4,
+        "frontFrac1": 0.6,
+        "depthM": 16,
+        "corner": false
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1849-07-02",
+        "note": "'Clay st., above Portsmouth square', attested 1849-07-02 to 1849-10-04, 11 mentions — 'above' read as west of the square along Clay, toward Stockton."
+      },
+      "confidence": "C",
+      "source": "places.jsonl place-store-woodruff-addison. Placed on the Post Office's block (open Clay frontage west of the existing post-office reservation); 'above the square' reading is a judgment call."
+    },
+    {
+      "landmarkId": "new-york-store-ross",
+      "name": "New York Store (C. L. Ross)",
+      "kind": "store",
+      "class": "store",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|kearny|montgomery|washington|clay",
+        "frontage": "north",
+        "frontStreet": "washington",
+        "frontFrac0": 0.72,
+        "frontFrac1": 0.98,
+        "depthM": 18,
+        "corner": "NE"
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1847-09-25",
+        "note": "'corner of Montgomery and Washington streets' / 'Cor. Washington & Montgomery Sts.', explicit and repeated across five name-variant records spanning C. L. Ross's operation under his own name and successive partnership names (C. L. Ross → C. L. Ross store → NEW YORK STORE / N. Y. Store → Ross, Benton & Co.), 1847-09-25 through 1849-11-08, 136 combined mentions. Corroborated independently by CENTRE MARKET's ad text 'opposite the New York Store'. built=firstSeen (C. L. Ross's earliest appearance) is a mention proxy."
+      },
+      "confidence": "A",
+      "source": "places.jsonl place-store-new-york-store (53), place-store-n-y-store (38), place-store-c-l-ross-store (21), place-store-ross-benton-co (15), place-store-c-l-ross (9) — 5 records merged as one continuously-operated corner storefront under one proprietor's evolving trade names. This is the largest merge judgment call in this batch; flagged for Director review. Quadrant (of 4 at Washington&Montgomery) inferred as the only one not yet claimed by an existing or newly-anchored landmark, not corpus-pinned."
+    },
+    {
+      "landmarkId": "centre-market",
+      "name": "Centre Market",
+      "kind": "market",
+      "class": "market",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|montgomery|sansome|jackson|washington",
+        "frontage": "south",
+        "frontStreet": "washington",
+        "frontFrac0": 0.03,
+        "frontFrac1": 0.3,
+        "depthM": 14,
+        "corner": "SW"
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1848-10-21",
+        "note": "'Corner of Washington and Montgomery sts., opposite the New York Store' (explicit cross-reference), attested 1848-10-21 to 1849-06-07, 17 mentions. One receipt gives 'corner of Jackson and Montgomery streets' instead — read as a one-off transcription slip against the 3-of-4 Washington/Montgomery citations."
+      },
+      "confidence": "B",
+      "source": "places.jsonl place-market-centre-market. Placed on the block across Montgomery from new-york-store-ross per the 'opposite' phrasing; exact quadrant among the streets-Washington/Montgomery intersection's four corners is inferred."
+    },
+    {
+      "landmarkId": "robert-wells-co",
+      "name": "Robert Wells & Co.",
+      "kind": "store",
+      "class": "store",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|kearny|montgomery|clay|sacramento",
+        "frontage": "south",
+        "frontStreet": "sacramento",
+        "frontFrac0": 0.75,
+        "frontFrac1": 0.97,
+        "depthM": 16,
+        "corner": "SE"
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1848-09-30",
+        "note": "'corner of Sacramento and Montgomery streets', attested 1848-09-30 to 1849-11-08 across two name-variant records (R. Wells & Co., no cross-street given, merged with Robert Wells & Co., corner explicit), 27 combined mentions."
+      },
+      "confidence": "B",
+      "source": "places.jsonl place-store-r-wells-co (14), place-store-robert-wells-co (13) — merged as the same proprietor. Quadrant (1 of 3 open at Sacramento&Montgomery) inferred, not corpus-pinned."
+    },
+    {
+      "landmarkId": "osborn-brannan",
+      "name": "Osborn & Brannan",
+      "kind": "store",
+      "class": "store",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|montgomery|sansome|clay|sacramento",
+        "frontage": "south",
+        "frontStreet": "sacramento",
+        "frontFrac0": 0.03,
+        "frontFrac1": 0.25,
+        "depthM": 16,
+        "corner": "SW"
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1849-07-26",
+        "note": "'corner Montgomery and Sacramento sts' (majority) vs one 'corner Montgomery and Sansome sts.' outlier, attested 1849-07-26 to 1849-11-29, 13 mentions. NOTE: this record DOES carry street addresses, which refines (does not contradict) the existing _meta note that Osborn & Brannan's record is 'unaddressed' — that note was about it not being evidence for Sam Brannan's OWN store location; Osborn & Brannan's auction-room partnership has its own, separate, defensible corner."
+      },
+      "confidence": "B",
+      "source": "places.jsonl place-store-osborn-brannan. Quadrant (2nd of 3 open at Sacramento&Montgomery) inferred. Flagged: this record has addresses despite the existing sam-brannan-store unanchorable note describing Osborn & Brannan's record as address-less; worth a Director sanity check against the source data."
+    },
+    {
+      "landmarkId": "grayson-guild-co",
+      "name": "Grayson, Guild & Co.",
+      "kind": "store",
+      "class": "store",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|kearny|montgomery|sacramento|california-street",
+        "frontage": "north",
+        "frontStreet": "sacramento",
+        "frontFrac0": 0.75,
+        "frontFrac1": 0.97,
+        "depthM": 14,
+        "corner": "NE"
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1849-08-16",
+        "note": "'corner of Sacramento and Montgomery sts', attested 1849-08-16 to 1849-11-08, 8 mentions."
+      },
+      "confidence": "B",
+      "source": "places.jsonl place-store-grayson-guild-co. Quadrant (3rd of 3 open at Sacramento&Montgomery) inferred, not corpus-pinned. Constructed block (kearny-montgomery/sacramento-california) is south of the existing Howard & Mellus block; flagged as an unresolved-if-absent key. s95-fix: the block key here was a typo — the live cadastre street id is \"california-street\", not \"california\"; corrected, so any \"unresolved-if-absent\" flag above no longer applies and the entry resolves on the existing always-present block."
+    },
+    {
+      "landmarkId": "everett-co",
+      "name": "Everett & Co.",
+      "kind": "store",
+      "class": "store",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|kearny|montgomery|sacramento|california-street",
+        "frontage": "west",
+        "frontStreet": "kearny",
+        "frontFrac0": 0.02,
+        "frontFrac1": 0.22,
+        "depthM": 14,
+        "corner": "NW"
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1847-12-29",
+        "note": "'Corner Sacramento and Kearny sts.', attested 1847-12-29 to 1849-12-06, 10 mentions."
+      },
+      "confidence": "B",
+      "source": "places.jsonl place-store-everett-co. Quadrant inferred (this construction places it on the Grayson-Guild/Simmons-Lilly/Probst-Smith block's Kearny-facing edge). Constructed block flagged as unresolved-if-absent. s95-fix: the block key here was a typo — the live cadastre street id is \"california-street\", not \"california\"; corrected, so any \"unresolved-if-absent\" flag above no longer applies and the entry resolves on the existing always-present block."
+    },
+    {
+      "landmarkId": "mcdonald-reynolds-co",
+      "name": "McDonald, Reynolds & Co.",
+      "kind": "store",
+      "class": "store",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|kearny|montgomery|sacramento|california-street",
+        "frontage": "west",
+        "frontStreet": "kearny",
+        "frontFrac0": 0.24,
+        "frontFrac1": 0.42,
+        "depthM": 12,
+        "corner": false
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1849-08-31",
+        "note": "'Kearny street, 2 doors above Sacramento', attested 1849-08-31 to 1849-11-29, 8 mentions — 'above Sacramento' read as just north of the Sacramento&Kearny corner, set back from everett-co's corner slice."
+      },
+      "confidence": "B",
+      "source": "places.jsonl place-store-mcdonald-reynolds-co. Same block as everett-co; 'two doors above' gives relative but not absolute position. s95-fix: the block key here was a typo — the live cadastre street id is \"california-street\", not \"california\"; corrected, so any \"unresolved-if-absent\" flag above no longer applies and the entry resolves on the existing always-present block."
+    },
+    {
+      "landmarkId": "simmons-lilly-co",
+      "name": "Simmons, Lilly & Co.",
+      "kind": "store",
+      "class": "store",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|kearny|montgomery|sacramento|california-street",
+        "frontage": "north",
+        "frontStreet": "sacramento",
+        "frontFrac0": 0.13,
+        "frontFrac1": 0.35,
+        "depthM": 16,
+        "corner": false
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1849-07-02",
+        "note": "'Sacramento street' (also 'Sacramento st., between Montgomery and Kearney sts.' — consistent with this block) is the majority address; one receipt gives 'Sansome Street near Pacific street' instead, read as a separate retail branch not anchored here. Attested 1849-07-02 to 1849-12-06, 14 mentions."
+      },
+      "confidence": "C",
+      "source": "places.jsonl place-store-simmons-lilly-co. Address conflict (Sacramento st. primary vs. a Sansome/Pacific retail-branch mention) flagged; only the Sacramento st. address is anchored. s95-fix: the block key here was a typo — the live cadastre street id is \"california-street\", not \"california\"; corrected, so any \"unresolved-if-absent\" flag above no longer applies and the entry resolves on the existing always-present block."
+    },
+    {
+      "landmarkId": "probst-smith-co",
+      "name": "Probst, Smith & Co.",
+      "kind": "store",
+      "class": "store",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|kearny|montgomery|sacramento|california-street",
+        "frontage": "south",
+        "frontStreet": "california",
+        "frontFrac0": 0.3,
+        "frontFrac1": 0.55,
+        "depthM": 16,
+        "corner": false
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1849-04-05",
+        "note": "Two addresses across the run: 'Washington street' / '19 Washington street' (earlier) then '43 California street' / 'California Street' (more specific, taken as the later/operative address). Attested 1849-04-05 to 1849-12-06, 24 mentions."
+      },
+      "confidence": "C",
+      "source": "places.jsonl place-store-probst-smith-co. Anchored at the more specific numbered California St. address; the earlier Washington St. address is not separately anchored. Constructed California-fronting block is new to this registry — flagged as unresolved-if-absent. s95-fix: the block key here was a typo — the live cadastre street id is \"california-street\", not \"california\"; corrected, so any \"unresolved-if-absent\" flag above no longer applies and the entry resolves on the existing always-present block."
+    },
+    {
+      "landmarkId": "colonnade-house",
+      "name": "Colonnade House",
+      "kind": "hotel",
+      "class": "hotel",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|kearny|montgomery|jackson|washington",
+        "frontage": "west",
+        "frontStreet": "kearny",
+        "frontFrac0": 0.72,
+        "frontFrac1": 0.95,
+        "depthM": 20,
+        "corner": false
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1848-03-29",
+        "note": "'Kearny Street, a few doors from Portsmouth Square', attested 1848-03-29 to 1849-07-02, 18 mentions."
+      },
+      "confidence": "B",
+      "source": "places.jsonl place-hotel-colonnade-house. Placed on Dennison's Exchange's block (Kearny frontage, north of Parker House/El Dorado's block, open ground north of Dennison's own footprint) as the nearest 'few doors up Kearny from the square' reading; exact block among plausible Kearny-corridor blocks is a judgment call."
+    },
+    {
+      "landmarkId": "hood-wilson",
+      "name": "Hood & Wilson",
+      "kind": "manufactory",
+      "class": "manufactory",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|kearny|montgomery|pacific|jackson",
+        "frontage": "north",
+        "frontStreet": "pacific",
+        "frontFrac0": 0.03,
+        "frontFrac1": 0.28,
+        "depthM": 16,
+        "corner": "NW"
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1848-03-29",
+        "note": "'Corner of Kearny and Pacific Sts.', attested across two name-variant records (Hood & Wilson, Hood & Wilson Shop) 1848-03-29 to 1849-06-28, 31 combined mentions."
+      },
+      "confidence": "B",
+      "source": "places.jsonl place-manufactory-hood-wilson (21), place-manufactory-hood-wilson-shop (10) — merged, same proprietors. Quadrant inferred."
+    },
+    {
+      "landmarkId": "tent-store",
+      "name": "Tent Store",
+      "kind": "store",
+      "class": "store",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|kearny|montgomery|pacific|jackson",
+        "frontage": "south",
+        "frontStreet": "jackson",
+        "frontFrac0": 0.05,
+        "frontFrac1": 0.28,
+        "depthM": 14,
+        "corner": "SW"
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1849-07-02",
+        "note": "'corner of Kearny and Jackson sts.', attested 1849-07-02 to 1849-11-22, 14 mentions."
+      },
+      "confidence": "B",
+      "source": "places.jsonl place-store-tent-store. Same block as hood-wilson (different frontage); quadrant inferred."
+    },
+    {
+      "landmarkId": "public-house-denecke-wissell",
+      "name": "Public House (Denecke's / New Hotel, Wissell's)",
+      "kind": "hotel",
+      "class": "hotel",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|sansome|battery|pacific|jackson",
+        "frontage": "north",
+        "frontStreet": "pacific",
+        "frontFrac0": 0.05,
+        "frontFrac1": 0.3,
+        "depthM": 20,
+        "corner": "NW"
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1847-12-15",
+        "note": "'corner of Pacific & Sansome streets', attested under 'Public House' (Peter Davidson, then George Denecke) 1847-12-15 to 1848-12-23, then continues at the same corner and proprietor lineage (Denecke) as 'New Hotel (formerly Denecke's Public House)' under Frederick Wissell & Co. 1849-02-15 to 1849-10-25 — the same building renamed, not a new footprint. 31 combined mentions."
+      },
+      "confidence": "B",
+      "source": "places.jsonl place-tavern-public-house (23), place-hotel-new-hotel-formerly-denecke-s-public-house (8) — merged as one building under successive names/operators at the same corner. Quadrant inferred."
+    },
+    {
+      "landmarkId": "sign-of-the-watch",
+      "name": "Sign of the Watch",
+      "kind": "store",
+      "class": "store",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|sansome|battery|pacific|jackson",
+        "frontage": "south",
+        "frontStreet": "jackson",
+        "frontFrac0": 0.05,
+        "frontFrac1": 0.28,
+        "depthM": 14,
+        "corner": "SW"
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1848-04-12",
+        "note": "'corner of Jackson and Sansome sts.', attested 1848-04-12 to 1849-02-22, 12 mentions."
+      },
+      "confidence": "B",
+      "source": "places.jsonl place-store-sign-of-the-watch. Same block as public-house-denecke-wissell (different frontage); quadrant inferred."
+    },
+    {
+      "landmarkId": "blythe-co",
+      "name": "Blythe & Co.",
+      "kind": "store",
+      "class": "store",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|dupont|kearny|pacific|jackson",
+        "frontage": "north",
+        "frontStreet": "pacific",
+        "frontFrac0": 0.05,
+        "frontFrac1": 0.25,
+        "depthM": 14,
+        "corner": "NW"
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1849-05-17",
+        "note": "'corner of Pacific and Dupont streets', attested 1849-05-17 to 1849-11-22, 8 mentions."
+      },
+      "confidence": "B",
+      "source": "places.jsonl place-store-blythe-co. Quadrant inferred; constructed block flagged as unresolved-if-absent."
+    },
+    {
+      "landmarkId": "buckland-house",
+      "name": "Buckland House",
+      "kind": "hotel",
+      "class": "hotel",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|kearny|montgomery|broadway|pacific",
+        "frontage": "south",
+        "frontStreet": "pacific",
+        "frontFrac0": 0.1,
+        "frontFrac1": 0.35,
+        "depthM": 18,
+        "corner": false
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1849-05-24",
+        "note": "'Pacific street' only, no cross street, attested 1849-05-24 to 1849-10-04, 14 mentions."
+      },
+      "confidence": "C",
+      "source": "places.jsonl place-hotel-buckland-house. Constructed block flagged as unresolved-if-absent; position along Pacific is ordinal."
+    },
+    {
+      "landmarkId": "salmon-ellis",
+      "name": "Salmon & Ellis",
+      "kind": "store",
+      "class": "store",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|kearny|montgomery|broadway|pacific",
+        "frontage": "south",
+        "frontStreet": "pacific",
+        "frontFrac0": 0.37,
+        "frontFrac1": 0.55,
+        "depthM": 14,
+        "corner": false
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1849-07-26",
+        "note": "'Pacific street, next the Buckland House', attested 1849-07-26 to 1849-12-06, 18 mentions — placed immediately adjacent to buckland-house per the explicit cross-reference."
+      },
+      "confidence": "B",
+      "source": "places.jsonl place-store-salmon-ellis. Relative position (next to Buckland House) is corpus-attested; the block itself is a construction, flagged as unresolved-if-absent."
+    },
+    {
+      "landmarkId": "californian-office-broadway-sansome",
+      "name": "The Californian (newspaper office)",
+      "kind": "newspaper_office",
+      "class": "newspaper-office",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|sansome|battery|broadway|pacific",
+        "frontage": "north",
+        "frontStreet": "broadway",
+        "frontFrac0": 0.21,
+        "frontFrac1": 0.46,
+        "depthM": 14,
+        "corner": "NW"
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1847-08-02",
+        "note": "'corner Broadway and Sansome Sts.' across four name-variant records, 133 combined mentions. DIRECTOR CORRECTION (2026-07-14): built moved from the s95 mention-proxy 1846-08-15 (the paper's Monterey FOUNDING date under Colton & Semple, before it moved to SF) to 1847-05-22, the documented resumption of publication in San Francisco — the earliest the Broadway/Sansome office could stand. Corner streets explicit and well-corroborated (SF masthead 'CALIFORNIAN. SAN FRANCISCO' by Sept 1847); quadrant inferred; the exact first Broadway/Sansome citation date is still unpinned, so 1847-05-22 remains a best-effort SF-era anchor, not a construction record."
+      },
+      "confidence": "A",
+      "source": "places.jsonl place-newspaper-office-the-californian (53), place-newspaper-office-californian-office (34), place-newspaper-office-californian (30), place-newspaper-office-office-of-the-californian (16) — 4 records merged as the same paper's SF office. Corner streets explicit and well-corroborated; quadrant inferred. Flagged: the built date is the weakest part of this otherwise strong anchor. s95-fix: built clamped 1847-05-22 -> 1847-08-02 (the surveyed block B|sansome|battery|broadway|pacific is born ~1847-08-01; the office cannot anchor to ground before it is surveyed) and frontFrac shifted off the Broadway/Sansome NW corner it shared with bingham-reynolds-bartlett-co."
+    },
+    {
+      "landmarkId": "bingham-reynolds-bartlett-co",
+      "name": "Bingham, Reynolds, Bartlett, & Co.",
+      "kind": "store",
+      "class": "store",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|sansome|battery|broadway|pacific",
+        "frontage": "west",
+        "frontStreet": "sansome",
+        "frontFrac0": 0.05,
+        "frontFrac1": 0.3,
+        "depthM": 16,
+        "corner": "NW"
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1849-08-23",
+        "note": "'corner of Sansome street and Broadway', also 'two doors from De Witt and Harrison's', attested 1849-08-23 to 1849-11-15, 12 mentions."
+      },
+      "confidence": "B",
+      "source": "places.jsonl place-store-bingham-reynolds-bartlett-co. Placed on the Sansome-facing edge of the same corner block as the Californian office (different frontage face of the same corner); quadrant inferred."
+    },
+    {
+      "landmarkId": "de-witt-harrison",
+      "name": "De Witt & Harrison",
+      "kind": "store",
+      "class": "store",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|sansome|battery|broadway|pacific",
+        "frontage": "west",
+        "frontStreet": "sansome",
+        "frontFrac0": 0.33,
+        "frontFrac1": 0.55,
+        "depthM": 18,
+        "corner": false
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1848-11-25",
+        "note": "'Sansome street, opposite the Government Reserve', attested across two name-variant records (De Witt & Harrison, DeWitt & Harrison) 1848-11-25 to 1849-11-22, 28 combined mentions; Bingham, Reynolds, Bartlett & Co.'s ad places itself 'two doors' north of this store, which is used to set its position just south of bingham-reynolds-bartlett-co on the same frontage."
+      },
+      "confidence": "B",
+      "source": "places.jsonl place-store-de-witt-harrison (18), place-store-dewitt-harrison (10) — merged, same proprietors. 'Government Reserve' identification (the Clark's Point-area military/public reserve) and quadrant are inferred, not corpus-pinned."
+    },
+    {
+      "landmarkId": "schwerin-garbe-co",
+      "name": "Schwerin, Garbe & Co.",
+      "kind": "store",
+      "class": "store",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|kearny|montgomery|jackson|washington",
+        "frontage": "south",
+        "frontStreet": "washington",
+        "frontFrac0": 0.18,
+        "frontFrac1": 0.29,
+        "depthM": 14,
+        "corner": false
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1849-08-16",
+        "note": "'Washington st.' only, no cross street, attested 1849-08-16 to 1849-11-22, 10 mentions."
+      },
+      "confidence": "C",
+      "source": "places.jsonl place-store-schwerin-garbe-co. Placed on the Merchants' Exchange block's open Washington frontage (west of the existing merchants-exchange reservation); position ordinal, not corpus-resolved."
+    },
+    {
+      "landmarkId": "drings-store",
+      "name": "Dring's store",
+      "kind": "store",
+      "class": "store",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|kearny|montgomery|washington|clay",
+        "frontage": "east",
+        "frontStreet": "montgomery",
+        "frontFrac0": 0.23,
+        "frontFrac1": 0.38,
+        "depthM": 14,
+        "corner": false
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1849-01-04",
+        "note": "'Montgomery Street' only, no cross street, attested 1849-01-04 to 1849-04-19, 14 mentions."
+      },
+      "confidence": "C",
+      "source": "places.jsonl place-store-dring-s-store. Position along Montgomery is ordinal, not corpus-resolved."
+    },
+    {
+      "landmarkId": "jewett-melhado",
+      "name": "Jewett & Melhado",
+      "kind": "store",
+      "class": "store",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|kearny|montgomery|washington|clay",
+        "frontage": "east",
+        "frontStreet": "montgomery",
+        "frontFrac0": 0.55,
+        "frontFrac1": 0.66,
+        "depthM": 14,
+        "corner": false
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1849-07-12",
+        "note": "'Montgomery Street' only, no cross street, attested 1849-07-12 to 1849-11-08, 8 mentions."
+      },
+      "confidence": "C",
+      "source": "places.jsonl place-store-jewett-melhado. NOTE: 'Jewett & Melhado' also appear as proprietor names on the existing merchants-exchange record — this store and the Exchange tenancy may be the same people operating two ventures, or one conflated record; not resolved here, flagged for Director review."
+    },
+    {
+      "landmarkId": "burgoyne-co",
+      "name": "Burgoyne & Co.",
+      "kind": "bank",
+      "class": "bank",
+      "anchor": {
+        "kind": "block-frontage",
+        "block": "B|kearny|montgomery|washington|clay",
+        "frontage": "east",
+        "frontStreet": "montgomery",
+        "frontFrac0": 0.68,
+        "frontFrac1": 0.78,
+        "depthM": 14,
+        "corner": false
+      },
+      "approximate": true,
+      "dates": {
+        "built": "1849-08-31",
+        "note": "'Montgomery street' only, no cross street, attested 1849-08-31 to 1849-12-01, 10 mentions. Notable as the batch's only bank-kind candidate."
+      },
+      "confidence": "C",
+      "source": "places.jsonl place-bank-burgoyne-co. Position along Montgomery is ordinal, not corpus-resolved."
     }
   ]
 };
