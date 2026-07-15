@@ -3517,6 +3517,114 @@ function terrainHeight(x,z){ return terrainHeightFrom(sampleTerrainGrid(x,z), x,
 /* alias: pre-rewrite code called the unified sampler groundHeight() */
 function groundHeight(x,z){ return terrainHeight(x,z); }
 
+/* =====================================================================
+   THE DATE-EDITABLE HEIGHTFIELD (terrain-morphing-spec §1/§2/§2b/§4,
+   temporal-world-model §2 the cascade). Phase B — the machinery only.
+
+   terrainHeightAt(x,z,day) = baseline1846(x,z) + Σ (active morph delta by
+   `day`). The baseline is terrainHeight() (the pad/gate 1846 sampler); the
+   deltas come from AUTHORED morph operations in TERRAIN_MORPH_OPS. That list
+   is EMPTY in the release build, so terrainHeightAt === terrainHeight and the
+   public terrain is the 1846 baseline, UNCHANGED. terrainHeight(x,z) itself is
+   untouched (no existing caller regresses); terrainHeightAt is the new
+   date-parameterized truth every future date-aware consumer reads.
+
+   MORPH-OP MODEL (§2 + §2b): { id, kind:'cut'|'fill'|'move',
+     region:[{x,z}...] world polygon, profile:{ targetDeltaM, edgeFalloffM },
+     arc:{ startDay, completeDay }, fedBy?:<cut-op-id> }.
+   The delta RAMPS LINEARLY over [startDay, completeDay] (the annual-checkpoint
+   ramp), is SHAPED by an edge falloff (a graded bank, never a step) so the
+   morphed ground blends, and is bounded to the region (surgical). CUT =
+   negative targetDeltaM (loose), FILL = positive (surgical), MOVE = a coupled
+   cut+fill via the optional narrative `fedBy` link (no volume accounting). A
+   PURE function of (x,z,day,ops): zero dice, rewind-exact, identical every
+   seed. ===================================================================== */
+window.TERRAIN_MORPH_OPS = window.TERRAIN_MORPH_OPS || []; // RELEASE: EMPTY — terrain === 1846 baseline
+var TERRAIN_WATERLINE_Y = 0.0;   // the bay water plane (mirrors LM_WATERLINE_Y / WHARF_WATER_Y)
+var TERRAIN_LAND_MARGIN = 0.0;   // land <=> ground strictly above the waterline (§4 predicate)
+function _morphSegDist(x,z,ax,az,bx,bz){
+  var dx=bx-ax, dz=bz-az, l2=dx*dx+dz*dz;
+  var t = l2>0 ? ((x-ax)*dx+(z-az)*dz)/l2 : 0;
+  t = t<0?0:(t>1?1:t);
+  var px=ax+t*dx, pz=az+t*dz;
+  return Math.hypot(x-px, z-pz);
+}
+function _morphPointInPoly(x,z,poly){
+  var inside=false;
+  for(var i=0,j=poly.length-1;i<poly.length;j=i++){
+    var xi=poly[i].x, zi=poly[i].z, xj=poly[j].x, zj=poly[j].z;
+    if(((zi>z)!==(zj>z)) && (x < (xj-xi)*(z-zi)/((zj-zi)||1e-9)+xi)) inside=!inside;
+  }
+  return inside;
+}
+function _morphDistToEdge(x,z,poly){
+  var best=Infinity;
+  for(var i=0,j=poly.length-1;i<poly.length;j=i++){
+    var d=_morphSegDist(x,z,poly[j].x,poly[j].z,poly[i].x,poly[i].z);
+    if(d<best) best=d;
+  }
+  return best;
+}
+/* the annual-checkpoint ramp (§2b): the delta eases in LINEARLY across the
+   op's dated arc, so the cove visibly fills over time. Undated op = fully
+   applied (a static edit). Pure of `day`. */
+function morphOpRamp(op, day){
+  var a = op.arc; if(!a || a.startDay==null || a.completeDay==null) return 1;
+  if(day <= a.startDay) return 0;
+  if(day >= a.completeDay) return 1;
+  return (a.completeDay===a.startDay) ? 1 : (day-a.startDay)/(a.completeDay-a.startDay);
+}
+/* one op's shaped, ramped delta at (x,z,day): full targetDeltaM in the region
+   interior, tapered to 0 across the last edgeFalloffM before the boundary (the
+   graded bank), zero outside the region (bounded/surgical). */
+function morphOpDeltaAt(op, x, z, day){
+  var prof = op.profile || {}, target = prof.targetDeltaM || 0;
+  if(!target) return 0;
+  var ramp = morphOpRamp(op, day);
+  if(ramp <= 0) return 0;
+  var poly = op.region;
+  if(!poly || poly.length < 3 || !_morphPointInPoly(x,z,poly)) return 0;
+  var fall = prof.edgeFalloffM || 0;
+  var shape = fall > 0 ? smoothstep(0, fall, _morphDistToEdge(x,z,poly)) : 1;
+  return target * ramp * shape;
+}
+/* the active-delta stack at (x,z,day). ops defaults to the release list
+   (window.TERRAIN_MORPH_OPS); the atelier passes its own list (release ops +
+   the demo op) so the machinery is provable without authoring release ops. */
+function morphDeltaAt(x, z, day, ops){
+  ops = ops || window.TERRAIN_MORPH_OPS;
+  if(!ops || !ops.length) return 0;
+  var sum = 0;
+  for(var i=0;i<ops.length;i++) sum += morphOpDeltaAt(ops[i], x, z, day);
+  return sum;
+}
+/* THE DATE-PARAMETERIZED HEIGHT (§1). Empty ops -> === terrainHeight (baseline). */
+function terrainHeightAt(x, z, day, ops){
+  return terrainHeight(x, z) + morphDeltaAt(x, z, day, ops);
+}
+/* THE ONE PREDICATE (§4): land <=> ground above the waterline at date. Building
+   placement, cove water-lots, wharf-fill and anchorage all reduce to this. */
+function isLandAt(x, z, day, ops){
+  return terrainHeightAt(x, z, day, ops) > TERRAIN_WATERLINE_Y + TERRAIN_LAND_MARGIN;
+}
+/* shorelineAt(day): the DERIVED coast (§4) — a coarse contour sample, not a
+   full trace. Marches seaward across the cove z-span and records the outermost
+   land->water crossing per row, so as fill raises the cove the sampled shore
+   advances seaward on its own. */
+function shorelineAt(day, ops){
+  var pts=[];
+  for(var z=-360; z<=1180; z+=30){
+    var prev=null, found=null;
+    for(var x=-200; x<=1500; x+=12){
+      var land = isLandAt(x, z, day, ops);
+      if(prev===true && land===false) found = x;   // outermost land->water edge = the shore
+      prev = land;
+    }
+    if(found!==null) pts.push({ x:found, z:z });
+  }
+  return pts;
+}
+
 var _SEALROCK_GREY = new THREE.Color(0x757b72);
 function terrainColor(x,z,h){
   var d = hash2(Math.floor(x*0.4), Math.floor(z*0.4));

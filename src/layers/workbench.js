@@ -115,8 +115,10 @@
     probe: false,
     overlays: { spine:false, row:false, lots:false, parcels:false, wharf:false, keepout:false, zones:false, audits:false },
     tl: false,            // coordinate timeline inspector armed
+    morph: { demo:false, patch:false, regions:false, island:false }, // s102 terrain-morph viz toggles
     knobs: { sunMul:1, hemiMul:1, ambientMul:1, nightLift:0, detailAmp:null, doodadMul:1, streetAlphaMul:1 }
   };
+  var WB_MORPH = WB.morph;   // short alias (the isLandAt seam + the s102 viz read it)
   var WB_ORDER = ["terrain","ground-paint","zones-tint","buildings","wharves","doodads","people","ships","fauna","effects","labels"];
   // labels is presented as its own tri-state FAMILY below (parent + 3 sublayers),
   // not a flat mute row — exclude it here so it is not doubled.
@@ -164,6 +166,9 @@
         overlayObjs[key] = buildOverlay(key);
         if(overlayObjs[key]) scene.add(overlayObjs[key]);
       });
+      // s102 terrain-morph viz re-derives on date scrub (the patch re-meshes,
+      // the region ramp + shoreline + isLand overlay re-read terrainHeightAt).
+      if(typeof wbRefreshMorph==="function" && (WB.morph.patch||WB.morph.regions||WB.morph.island)) wbRefreshMorph();
     }
   }
   renderer.render = function(s,c){ wbFrame(); _wbRender(s,c); };
@@ -939,14 +944,17 @@
      the morphing engine they visualize (s102/s103) — debug-viz-first PER SYSTEM.
      ===================================================================== */
 
-  /* THE isLandAt SEAM (temporal-world-model.md §2/§7). STATIC interim impl:
-     land <=> terrainHeight > the bay waterline (y=0). The inspector's land/water
-     read routes through this ONE helper, so when the date-editable heightfield
-     lands (s103) the cove FILLS by swapping this single call-site to
-     terrainHeightAt(x,z,day) — nothing else changes. The `day` argument is
-     accepted now (ignored) so the signature is already correct. */
-  var WB_WATERLINE_Y = 0.0;
-  function wbIsLandAt(x, z, day){ return terrainHeight(x, z) > WB_WATERLINE_Y; }
+  /* THE isLandAt SEAM (temporal-world-model.md §2/§7) — SWAPPED to the real
+     date-editable predicate (s102). wbIsLandAt now routes through the core
+     isLandAt(x,z,day,ops): terrainHeightAt(baseline + morph deltas) above the
+     waterline. This is the ONE call-site the s101 inspector reads. With the
+     release op list empty AND the demo op disarmed it equals the old static
+     terrainHeight>0 read (the inspector is unchanged); arm the demo cove-fill
+     op below and the same coordinate reports water->land at the ramp date. */
+  function wbActiveMorphOps(){
+    return WB_MORPH.demo ? (window.TERRAIN_MORPH_OPS||[]).concat([WB_DEMO_OP]) : (window.TERRAIN_MORPH_OPS||[]);
+  }
+  function wbIsLandAt(x, z, day){ return isLandAt(x, z, day, wbActiveMorphOps()); }
 
   /* oriented-footprint hit test (same width/depth axis convention as the buildings
      layer's poseQuad): is (x,z) inside a building's drawn box. */
@@ -1050,6 +1058,174 @@
     ev.stopImmediatePropagation(); ev.preventDefault();
     wbRunTimeline(ev.clientX, ev.clientY);
   }, true);
+
+  /* =====================================================================
+     s102 TERRAIN MORPHING DEBUG-VIZ (debug-viz-first, PER SYSTEM) — the
+     atelier proof of the date-editable heightfield. Reads the core machinery
+     (terrainHeightAt / isLandAt / morphDeltaAt / shorelineAt) against an
+     atelier-only DEMO cove-fill op — NEVER added to window.TERRAIN_MORPH_OPS
+     (the release list stays empty; the public terrain is the 1846 baseline).
+     Four views: the DEMO op toggle, the terrain-at-date PATCH (re-meshes the
+     op region on date scrub), the MORPH-REGION overlay (op footprint + ramp +
+     the derived shoreline), and the isLand/BUILDABLE overlay. Scrub the
+     timeline and watch the cove patch fill from water to land.
+     ===================================================================== */
+  /* THE DEMO OP (terrain-morphing §2 model) — a small FILL over a Yerba Buena
+     Cove test patch with a dated ramp. Region is authored in WORLD coords (no
+     grid frame involved). The ramp dates are chosen to be SCRUBBABLE inside the
+     sim window (1848-06 -> 1849-10) to prove the mechanism; the real, historically
+     dated cove fill is s103 and lives in the release op list, not here. */
+  var WB_DEMO_OP = {
+    id:"demo-cove-fill", kind:"fill",
+    region:[ {x:300,z:-90}, {x:480,z:-90}, {x:480,z:90}, {x:300,z:90} ],
+    profile:{ targetDeltaM:8, edgeFalloffM:40 },
+    arc:{ startDay: eventDateToSimDay("1848-06-01"), completeDay: eventDateToSimDay("1849-10-01") }
+  };
+
+  var morphObjs = { patch:null, regions:null, island:null };
+  var morphStatusEl = null;
+  function wbClearMorph(key){ if(morphObjs[key]){ scene.remove(morphObjs[key]); morphObjs[key]=null; } }
+
+  /* union bbox of the active ops' regions (+ a bank margin) — the ONLY area the
+     patch re-meshes (surgical; nothing to build when no op is active). */
+  function wbMorphBBox(ops){
+    var xMin=Infinity,xMax=-Infinity,zMin=Infinity,zMax=-Infinity;
+    ops.forEach(function(op){ (op.region||[]).forEach(function(p){
+      xMin=Math.min(xMin,p.x); xMax=Math.max(xMax,p.x); zMin=Math.min(zMin,p.z); zMax=Math.max(zMax,p.z); }); });
+    if(!isFinite(xMin)) return null;
+    var pad=70;                                     // include the edge-falloff bank
+    return { xMin:xMin-pad, xMax:xMax+pad, zMin:zMin-pad, zMax:zMax+pad };
+  }
+  /* TERRAIN-AT-DATE PATCH — a direct bounded grid mesh over the op region, its
+     heights = terrainHeightAt(x,z,day, activeOps) and colours = terrainColor at
+     the morphed height. Rebuilt on date scrub, so it fills as the ramp advances.
+     A local re-triangulation of the touched region only (no MARTINI/delatin
+     vendored — a bounded grid edit is the cheaper-correct path here); the base
+     terrain mesh is untouched and nothing rebuilds when no op is active. */
+  function wbBuildMorphPatch(day){
+    var ops = wbActiveMorphOps(), box = wbMorphBBox(ops);
+    if(!box) return null;
+    var W=box.xMax-box.xMin, H=box.zMax-box.zMin, res=6;   // ~6 m grid over the bounded patch
+    var nx=Math.max(2,Math.round(W/res)), nz=Math.max(2,Math.round(H/res));
+    var g=new THREE.PlaneGeometry(W,H,nx,nz); g.rotateX(-Math.PI/2);
+    var pos=g.attributes.position, cx=(box.xMin+box.xMax)/2, cz=(box.zMin+box.zMax)/2;
+    var colors=new Float32Array(pos.count*3);
+    for(var i=0;i<pos.count;i++){
+      var x=pos.getX(i)+cx, z=pos.getZ(i)+cz, h=terrainHeightAt(x,z,day,ops);
+      pos.setY(i,h);
+      var c=terrainColor(x,z,h); colors[i*3]=c.r; colors[i*3+1]=c.g; colors[i*3+2]=c.b;
+    }
+    pos.needsUpdate=true;
+    g.setAttribute("color", new THREE.BufferAttribute(colors,3));
+    g.computeVertexNormals();
+    var m=new THREE.Mesh(g, new THREE.MeshPhongMaterial({ vertexColors:true, flatShading:true, specular:0x000000, shininess:0,
+      polygonOffset:true, polygonOffsetFactor:-1, polygonOffsetUnits:-1 }));   // win over the coplanar base terrain at ramp t=0
+    m.position.set(cx,0,cz); m.frustumCulled=false; m.renderOrder=1;
+    return m;
+  }
+  /* MORPH-REGION overlay — each active op's footprint (fill = blue, cut = red),
+     brightened by its ramp progress at the current date, + the exact boundary,
+     + the DERIVED shoreline (shorelineAt) as a gold line that advances seaward
+     as the fill raises the cove. */
+  function wbBuildMorphRegions(day){
+    var ops=wbActiveMorphOps();
+    var grp=new THREE.Group(); grp.frustumCulled=false;
+    var fillPos=[], fillCol=[], strokePos=[], strokeCol=[];
+    ops.forEach(function(op){
+      var poly=op.region; if(!poly||poly.length<3) return;
+      var ramp=morphOpRamp(op,day), br=0.4+0.6*ramp;
+      var base=(op.kind==="cut")?[0.92,0.36,0.30]:[0.28,0.68,0.96];
+      var c={ r:base[0]*br, g:base[1]*br, b:base[2]*br };
+      var ring=poly.map(function(p){ return {x:p.x,z:p.z}; });
+      wbEarClip(ring).forEach(function(t){
+        var A=ring[t[0]],B=ring[t[1]],C=ring[t[2]], before=fillPos.length;
+        wbPushDrapedTri(fillPos, A, B, C, 0.5, 2);
+        for(var q=0,added=(fillPos.length-before)/3;q<added;q++) fillCol.push(c.r,c.g,c.b);
+      });
+      wbPushDrapedRun(strokePos, strokeCol, ring.concat([ring[0]]), new THREE.Color(base[0],base[1],base[2]), 0.7, false, 9);
+    });
+    if(fillPos.length){
+      var fg=new THREE.BufferGeometry();
+      fg.setAttribute("position", new THREE.Float32BufferAttribute(fillPos,3));
+      fg.setAttribute("color", new THREE.Float32BufferAttribute(fillCol,3));
+      var fm=new THREE.Mesh(fg, new THREE.MeshBasicMaterial({ vertexColors:true, transparent:true, opacity:0.4, depthTest:false, depthWrite:false, side:THREE.DoubleSide }));
+      fm.renderOrder=997; fm.frustumCulled=false; grp.add(fm);
+    }
+    if(strokePos.length) grp.add(wbLineSegs(strokePos, strokeCol, 0.95, 1000));
+    // the derived coast at date (shorelineAt) — a thin gold contour
+    var sh=shorelineAt(day, ops), shPos=[], shCol=[], GOLD=new THREE.Color(0xffd75e);
+    for(var s=0;s<sh.length-1;s++){
+      if(Math.abs(sh[s+1].z-sh[s].z)>60) continue;   // don't bridge across a gap in the sampled contour
+      var a=sh[s], b=sh[s+1];
+      shPos.push(a.x, terrainHeight(a.x,a.z)+0.8, a.z, b.x, terrainHeight(b.x,b.z)+0.8, b.z);
+      shCol.push(GOLD.r,GOLD.g,GOLD.b, GOLD.r,GOLD.g,GOLD.b);
+    }
+    if(shPos.length) grp.add(wbLineSegs(shPos, shCol, 0.98, 1001));
+    return grp.children.length ? grp : null;
+  }
+  /* isLand / BUILDABLE overlay — colours the town+cove at date via isLandAt:
+     water = blue, existing land = green, and land CREATED by an active fill
+     (morph delta > 0) = amber, so the fill's advance reads directly. Buildable
+     collapses to isLand this phase (platted + spine-served gating is s103). */
+  function wbBuildIslandOverlay(day){
+    var ops=wbActiveMorphOps();
+    var box={ xMin:-220, xMax:900, zMin:-520, zMax:720 };   // town + Yerba Buena Cove
+    return samplePlaneOverlay(box, 208, function(x,z){
+      var land=isLandAt(x,z,day,ops);
+      if(!land) return [60,120,200,90];                      // water
+      if(morphDeltaAt(x,z,day,ops) > 0.1) return [240,190,70,160]; // fill-created land (the advance)
+      return [90,180,90,80];                                  // existing land
+    });
+  }
+  function wbBuildMorph(key, day){
+    if(key==="patch")   return wbBuildMorphPatch(day);
+    if(key==="regions") return wbBuildMorphRegions(day);
+    if(key==="island")  return wbBuildIslandOverlay(day);
+    return null;
+  }
+  function wbMorphStatus(){
+    if(!morphStatusEl) return;
+    var iso=(window.__P1850&&window.__P1850.date)||dateFromSimDay(simDay).toISOString().slice(0,10);
+    if(!WB.morph.demo){
+      morphStatusEl.textContent="release op list empty ("+(window.TERRAIN_MORPH_OPS||[]).length+" ops) — terrain = 1846 baseline. Arm the demo op to morph.";
+      morphStatusEl.style.color="#8a9098"; return;
+    }
+    var r=morphOpRamp(WB_DEMO_OP, simDay);
+    morphStatusEl.textContent="demo cove-fill @ "+iso+": ramp "+Math.round(r*100)+"% (fill +"+WB_DEMO_OP.profile.targetDeltaM+"m, 1848-06 → 1849-10)";
+    morphStatusEl.style.color = r>=1 ? "#7ee2a0" : (r<=0 ? "#8a9098" : "#e0c06a");
+  }
+  function wbRefreshMorph(){
+    ["patch","regions","island"].forEach(function(key){
+      wbClearMorph(key);
+      if(!WB.morph[key]) return;
+      var obj=wbBuildMorph(key, simDay);
+      if(obj){ morphObjs[key]=obj; scene.add(obj); }
+    });
+    wbMorphStatus();
+  }
+
+  beginSection("s102","TERRAIN MORPHING", { desc:"The date-editable heightfield (s102) proven in the atelier. Arm the DEMO cove-fill op (atelier-only — the release op list stays empty) then scrub the timeline: the terrain-at-date PATCH re-meshes and fills water→land over its ramp, the MORPH REGION lights up (fill = blue, brighter as it completes) with the derived shoreline advancing, and the isLand/BUILDABLE overlay flips the filled cove from blue (water) to amber (new land). Reads the core terrainHeightAt / isLandAt — the same predicate the s101 inspector now uses." });
+  var morphActions = el("div","wb-actions");
+  var demoBtn = el("button","wb-btn","demo cove-fill op: OFF", morphActions);
+  demoBtn.addEventListener("click", function(){
+    WB.morph.demo = !WB.morph.demo;
+    demoBtn.textContent = WB.morph.demo ? "demo cove-fill op: ON" : "demo cove-fill op: OFF";
+    demoBtn.classList.toggle("on", WB.morph.demo);
+    markSectionActive("s102", WB.morph.demo);
+    wbRefreshMorph();
+  });
+  function morphToggleRow(key, label){
+    var row=el("div","wb-row");
+    var cb=document.createElement("input"); cb.type="checkbox"; row.appendChild(cb);
+    el("span","wb-lname",label,row);
+    cb.addEventListener("change", function(){ WB.morph[key]=cb.checked; wbRefreshMorph(); });
+    return cb;
+  }
+  morphToggleRow("patch",   "terrain-at-date patch (re-mesh on scrub)");
+  morphToggleRow("regions", "morph regions + derived shoreline");
+  morphToggleRow("island",  "isLand / buildable overlay");
+  morphStatusEl = el("div","wb-ov-status","(arm the demo op, then scrub the timeline)");
+  wbMorphStatus();
 
   /* ---- 2. PROVENANCE PROBE ---- */
   beginSection("probe","PROVENANCE PROBE", { desc:"Arm, then click any world point for a full provenance card at the current date — terrain, ground-paint, cadastre lot/block/parcel/zone-law, landmark reservation, buildings, doodads, people, walk mask, and the real pick hit." });
