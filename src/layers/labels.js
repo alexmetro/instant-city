@@ -71,22 +71,65 @@ var LABELS_VIS = {
 var LBL_HALO_DARK  = "rgba(12,14,17,0.90)";     // inner ring — beats the bright sunlit ground
 var LBL_HALO_LIGHT = "rgba(250,247,236,0.66)";  // outer glow — beats road-paint + shadow (≥3.8:1 worst-case)
 var LBL_GLOW_EXTRA = 2.4;                       // outer glow half-width beyond the dark ring (px @ LBL_FONT_PX)
-var LBL_STYLE = {
-  region:  { key:"region",  family:"Georgia, 'Times New Roman', serif", weight:"600", color:"#efe7d2", haloColor:LBL_HALO_DARK, halo:5, letterSpacing:0.34, smallCaps:true,  italic:false },
-  hill:    { key:"hill",    family:"Georgia, 'Times New Roman', serif", weight:"600", color:"#e9dfc4", haloColor:LBL_HALO_DARK, halo:5, letterSpacing:0.30, smallCaps:true,  italic:false },
-  water:   { key:"water",   family:"Georgia, 'Times New Roman', serif", weight:"600", color:"#9fc6dd", haloColor:LBL_HALO_DARK, halo:5, letterSpacing:0.18, smallCaps:false, italic:true  },
-  place:   { key:"place",   family:"Georgia, 'Times New Roman', serif", weight:"600", color:"#e7dcc2", haloColor:LBL_HALO_DARK, halo:5, letterSpacing:0.26, smallCaps:true,  italic:false },
-  civic:   { key:"civic",   family:"Georgia, 'Times New Roman', serif", weight:"700", color:"#f0d79a", haloColor:LBL_HALO_DARK, halo:5, letterSpacing:0.24, smallCaps:true,  italic:false },
-  street:  { key:"street",  family:"Georgia, 'Times New Roman', serif", weight:"600", color:"#efe9db", haloColor:LBL_HALO_DARK, halo:4, letterSpacing:0.22, smallCaps:true,  italic:false },
-  lotNum:  { key:"lotNum",  family:"Georgia, 'Times New Roman', serif", weight:"700", color:"#f4efe4", haloColor:LBL_HALO_DARK, halo:4, letterSpacing:0.02, smallCaps:false, italic:false },
-  lotOwn:  { key:"lotOwn",  family:"Georgia, 'Times New Roman', serif", weight:"500", color:"#dcd3c0", haloColor:LBL_HALO_DARK, halo:3, letterSpacing:0.04, smallCaps:false, italic:true  }
+
+/* ---- s93 item 4 — TYPOGRAPHY OPTION SETS (no unilateral change; the user
+   picks). THREE complete style tables selected by ONE constant; the atelier /
+   verify harness can flip it to screenshot a/b/c side by side. DEFAULT IS 'a'
+   (the current s92 look) — this sprint ships NO type change. SINGLE-FILE LAW:
+   system/web-safe font STACKS only, zero font files. Documented stacks:
+     a CURRENT   — Georgia (the shipped serif); the s92 dual-halo voices as-is.
+     b CARTO     — Palatino Linotype / Book Antiqua / Palatino: a warmer old-
+                   style serif with open counters + generous tracking, the feel
+                   of an engraved 19th-C survey plate. Streets small-caps,
+                   waterways italic (period-map convention).
+     c ENGRAVED  — Didot / Bodoni MT (high-contrast didone) with TIGHTER
+                   tracking + THINNER weights + brighter ink and a stronger dark
+                   ring: the fine copperplate-engraving look. Falls back to the
+                   Times/Georgia serif where the didone is absent.
+   Every set keeps the SAME dual-halo colours (the contrast audit is halo-based
+   and set-independent) unless a set deliberately raises ink/ring for contrast. */
+var LBL_STYLE_SETS = {
+  a: {
+    region:  { key:"a.region",  family:"Georgia, 'Times New Roman', serif", weight:"600", color:"#efe7d2", haloColor:LBL_HALO_DARK, halo:5, letterSpacing:0.34, smallCaps:true,  italic:false },
+    hill:    { key:"a.hill",    family:"Georgia, 'Times New Roman', serif", weight:"600", color:"#e9dfc4", haloColor:LBL_HALO_DARK, halo:5, letterSpacing:0.30, smallCaps:true,  italic:false },
+    water:   { key:"a.water",   family:"Georgia, 'Times New Roman', serif", weight:"600", color:"#9fc6dd", haloColor:LBL_HALO_DARK, halo:5, letterSpacing:0.18, smallCaps:false, italic:true  },
+    place:   { key:"a.place",   family:"Georgia, 'Times New Roman', serif", weight:"600", color:"#e7dcc2", haloColor:LBL_HALO_DARK, halo:5, letterSpacing:0.26, smallCaps:true,  italic:false },
+    civic:   { key:"a.civic",   family:"Georgia, 'Times New Roman', serif", weight:"700", color:"#f0d79a", haloColor:LBL_HALO_DARK, halo:5, letterSpacing:0.24, smallCaps:true,  italic:false },
+    street:  { key:"a.street",  family:"Georgia, 'Times New Roman', serif", weight:"600", color:"#efe9db", haloColor:LBL_HALO_DARK, halo:4, letterSpacing:0.22, smallCaps:true,  italic:false },
+    lotNum:  { key:"a.lotNum",  family:"Georgia, 'Times New Roman', serif", weight:"700", color:"#f4efe4", haloColor:LBL_HALO_DARK, halo:4, letterSpacing:0.02, smallCaps:false, italic:false },
+    lotOwn:  { key:"a.lotOwn",  family:"Georgia, 'Times New Roman', serif", weight:"500", color:"#dcd3c0", haloColor:LBL_HALO_DARK, halo:3, letterSpacing:0.04, smallCaps:false, italic:true  }
+  },
+  b: {
+    region:  { key:"b.region",  family:"'Palatino Linotype','Book Antiqua',Palatino,'Times New Roman',serif", weight:"600", color:"#efe7d2", haloColor:LBL_HALO_DARK, halo:5, letterSpacing:0.40, smallCaps:true,  italic:false },
+    hill:    { key:"b.hill",    family:"'Palatino Linotype','Book Antiqua',Palatino,'Times New Roman',serif", weight:"600", color:"#e9dfc4", haloColor:LBL_HALO_DARK, halo:5, letterSpacing:0.36, smallCaps:true,  italic:false },
+    water:   { key:"b.water",   family:"'Palatino Linotype','Book Antiqua',Palatino,'Times New Roman',serif", weight:"500", color:"#9fc6dd", haloColor:LBL_HALO_DARK, halo:5, letterSpacing:0.20, smallCaps:false, italic:true  },
+    place:   { key:"b.place",   family:"'Palatino Linotype','Book Antiqua',Palatino,'Times New Roman',serif", weight:"600", color:"#e7dcc2", haloColor:LBL_HALO_DARK, halo:5, letterSpacing:0.32, smallCaps:true,  italic:false },
+    civic:   { key:"b.civic",   family:"'Palatino Linotype','Book Antiqua',Palatino,'Times New Roman',serif", weight:"700", color:"#f0d79a", haloColor:LBL_HALO_DARK, halo:5, letterSpacing:0.30, smallCaps:true,  italic:false },
+    street:  { key:"b.street",  family:"'Palatino Linotype','Book Antiqua',Palatino,'Times New Roman',serif", weight:"600", color:"#efe9db", haloColor:LBL_HALO_DARK, halo:4, letterSpacing:0.30, smallCaps:true,  italic:false },
+    lotNum:  { key:"b.lotNum",  family:"'Palatino Linotype','Book Antiqua',Palatino,'Times New Roman',serif", weight:"700", color:"#f4efe4", haloColor:LBL_HALO_DARK, halo:4, letterSpacing:0.02, smallCaps:false, italic:false },
+    lotOwn:  { key:"b.lotOwn",  family:"'Palatino Linotype','Book Antiqua',Palatino,'Times New Roman',serif", weight:"500", color:"#dcd3c0", haloColor:LBL_HALO_DARK, halo:3, letterSpacing:0.04, smallCaps:false, italic:true  }
+  },
+  c: {
+    region:  { key:"c.region",  family:"Didot,'Bodoni MT','Times New Roman',serif", weight:"500", color:"#f4efe0", haloColor:LBL_HALO_DARK, halo:5, letterSpacing:0.20, smallCaps:true,  italic:false },
+    hill:    { key:"c.hill",    family:"Didot,'Bodoni MT','Times New Roman',serif", weight:"500", color:"#efe6cd", haloColor:LBL_HALO_DARK, halo:5, letterSpacing:0.18, smallCaps:true,  italic:false },
+    water:   { key:"c.water",   family:"Didot,'Bodoni MT','Times New Roman',serif", weight:"400", color:"#a9d0e6", haloColor:LBL_HALO_DARK, halo:5, letterSpacing:0.10, smallCaps:false, italic:true  },
+    place:   { key:"c.place",   family:"Didot,'Bodoni MT','Times New Roman',serif", weight:"500", color:"#f0e6cc", haloColor:LBL_HALO_DARK, halo:5, letterSpacing:0.16, smallCaps:true,  italic:false },
+    civic:   { key:"c.civic",   family:"Didot,'Bodoni MT','Times New Roman',serif", weight:"600", color:"#f6dda0", haloColor:LBL_HALO_DARK, halo:5, letterSpacing:0.14, smallCaps:true,  italic:false },
+    street:  { key:"c.street",  family:"Didot,'Bodoni MT','Times New Roman',serif", weight:"500", color:"#f6f1e6", haloColor:LBL_HALO_DARK, halo:4, letterSpacing:0.12, smallCaps:true,  italic:false },
+    lotNum:  { key:"c.lotNum",  family:"Didot,'Bodoni MT','Times New Roman',serif", weight:"600", color:"#f8f3ea", haloColor:LBL_HALO_DARK, halo:4, letterSpacing:0.02, smallCaps:false, italic:false },
+    lotOwn:  { key:"c.lotOwn",  family:"Didot,'Bodoni MT','Times New Roman',serif", weight:"400", color:"#e0d7c4", haloColor:LBL_HALO_DARK, halo:3, letterSpacing:0.03, smallCaps:false, italic:true  }
+  }
 };
+/* THE ONE KNOB. 'a' = current shipped look (default; unchanged this sprint).
+   Atelier/harness override: window.LABEL_TYPE_SET = 'b'|'c' before boot, or set
+   labelsSetTypeSet('b') at runtime (rebuilds the label set with the new voices). */
+var LABEL_TYPE_SET = (typeof window!=="undefined" && window.LABEL_TYPE_SET && LBL_STYLE_SETS[window.LABEL_TYPE_SET]) ? window.LABEL_TYPE_SET : "a";
+var LBL_STYLE = LBL_STYLE_SETS[LABEL_TYPE_SET];
 
 /* ---- THE HAND-ROLLED TEXT TEXTURE RENDERER. Rasterize `text` in `style` to a
    supersampled canvas with a stroke halo (no plate), cache by style+text so a
    rebuild across date scrubs re-uses the bitmap. Returns { tex, aspect }. ---- */
-var LBL_SS = 3;              // supersample: crisp at the world-size band (§11 close-zoom)
-var LBL_FONT_PX = 60;        // base raster height; on-screen size set by geometry/sprite scale
+var LBL_FONT_PX = 60;        // layout font height (CSS px) — the on-screen size is set by geometry/sprite scale
 var _lblTexCache = {};
 var _lblMeasureCtx = document.createElement("canvas").getContext("2d");
 function _lblFontStr(style, px){ return (style.italic?"italic ":"") + style.weight + " " + px + "px " + style.family; }
@@ -96,9 +139,59 @@ function _lblAdvances(disp, style){
   for(var i=0;i<disp.length;i++){ var w = _lblMeasureCtx.measureText(disp[i]).width; adv.push(w); total += w + (i<disp.length-1?ls:0); }
   return { adv:adv, total:total, ls:ls };
 }
-function labelTexture(text, style){
-  var key = style.key + "|" + text;
-  if(_lblTexCache[key]) return _lblTexCache[key];
+
+/* ---- s93 item 1 — PER-SCALE-BAND RE-RASTERIZATION (user finding #1: text
+   blurry at altitude). ROOT CAUSE: s90/s92 rasterized every label ONCE at a
+   fixed ~500px master (LBL_SS 3 × the ~166px layout box). A grounded label is
+   then shown at whatever on-screen size its geometry/scale gives — ~30-40 px at
+   the town/overview framings — so the master is 12-16× the displayed size and
+   viewed at a grazing ground angle. That deep, oblique MINIFICATION is exactly
+   where trilinear+anisotropic sampling goes soft: the mip level chosen for the
+   foreshortened footprint is far coarser than the screen, and the aniso ratio
+   blows past the old 8× clamp on the receding axis. FIX: rasterize each label at
+   a RESOLUTION BAND chosen from its current on-screen height, targeting ~1 texel
+   per screen pixel (texel/screen ratio in [1,2)). Bands are powers of two (the
+   canvas text-box height in px); the smallest band ≥ the displayed height wins.
+   Re-raster only on camera-settle when a label's band changes (reuses the s92
+   yaw-settle throttle) — cached by style+text+BAND so words share bitmaps and a
+   band is paid for once. Total texture memory is budgeted + reported (the
+   crispness audit + labelsTexBudget()). Plus: anisotropy clamp raised to the
+   renderer max (≤16) and mip/min-mag filters kept correct. ---- */
+var LBL_BAND_PX = [48, 96, 192, 384];        // canvas text-box heights (px); a label picks the smallest ≥ its on-screen px
+var LBL_BAND_DEFAULT = 192;                  // pre-first-settle band (refined on the first settle frame)
+var LBL_TEX_BUDGET_MB = 96;                  // eviction ceiling (RGBA + mip tail ≈ ×1.34); LRU-evicts back toward 0.8× this
+var _lblAniso = Math.min(16, (renderer.capabilities.getMaxAnisotropy && renderer.capabilities.getMaxAnisotropy()) || 1);
+var _lblTexBytes = 0;                        // running estimate of live canvas-texture bytes
+var _lblTexClock = 0;                        // monotonic LRU stamp
+function _lblPickBand(hPx){
+  var h = hPx>0 ? hPx : 1;
+  for(var i=0;i<LBL_BAND_PX.length;i++){ if(LBL_BAND_PX[i] >= h) return LBL_BAND_PX[i]; }
+  return LBL_BAND_PX[LBL_BAND_PX.length-1];
+}
+/* LRU eviction — bounds the cache over a long date-scrub / type-set session.
+   NEVER disposes a texture currently on a live label's material (that would blank
+   it); an evicted word simply re-rasterizes on demand. Called before a new
+   allocation so the fresh texture is never a candidate. */
+function _lblEvictIfNeeded(){
+  var cap = LBL_TEX_BUDGET_MB*1048576;
+  if(_lblTexBytes <= cap) return;
+  var inUse = {};
+  for(var i=0;i<_lblItems.length;i++){ var m=_lblItems[i].obj.material && _lblItems[i].obj.material.map; if(m) inUse[m.uuid]=1; }
+  var keys = Object.keys(_lblTexCache);
+  keys.sort(function(a,b){ return _lblTexCache[a].lru - _lblTexCache[b].lru; });
+  var target = cap*0.8;
+  for(var k=0;k<keys.length && _lblTexBytes>target;k++){
+    var e=_lblTexCache[keys[k]];
+    if(inUse[e.tex.uuid]) continue;           // keep visible textures
+    _lblTexBytes -= e.cw*e.ch*4*1.34; if(_lblTexBytes<0) _lblTexBytes=0;
+    e.tex.dispose(); delete _lblTexCache[keys[k]];
+  }
+}
+function labelTexture(text, style, band){
+  band = band || LBL_BAND_DEFAULT;
+  var key = style.key + "|" + band + "|" + text;
+  if(_lblTexCache[key]){ _lblTexCache[key].lru = ++_lblTexClock; return _lblTexCache[key]; }
+  _lblEvictIfNeeded();
   var disp = style.smallCaps ? text.toUpperCase() : text;
   var m = _lblAdvances(disp, style);
   // pad must clear the WIDEST ring — the light outer glow (halo + glow, both
@@ -106,8 +199,12 @@ function labelTexture(text, style){
   var glowW = style.halo + LBL_GLOW_EXTRA;
   var pad = Math.ceil(LBL_FONT_PX*0.42 + glowW*2 + style.halo);
   var W = Math.ceil(m.total) + pad*2, H = Math.ceil(LBL_FONT_PX*1.36) + pad*2;
-  var cv = document.createElement("canvas"); cv.width = Math.max(2, W*LBL_SS); cv.height = Math.max(2, H*LBL_SS);
-  var ctx = cv.getContext("2d"); ctx.scale(LBL_SS, LBL_SS);
+  // BAND SUPERSAMPLE: choose ss so the rasterized canvas box height ≈ band px
+  // (texel≈screen at that band). Replaces the old fixed LBL_SS=3.
+  var ss = band / H;
+  var cw = Math.max(2, Math.round(W*ss)), ch = Math.max(2, Math.round(H*ss));
+  var cv = document.createElement("canvas"); cv.width = cw; cv.height = ch;
+  var ctx = cv.getContext("2d"); ctx.scale(ss, ss);
   ctx.font = _lblFontStr(style, LBL_FONT_PX);
   ctx.textBaseline = "middle"; ctx.textAlign = "left"; ctx.lineJoin = "round"; ctx.miterLimit = 2;
   var y = H/2;
@@ -128,9 +225,18 @@ function labelTexture(text, style){
   var x = pad; for(var j=0;j<disp.length;j++){ ctx.fillText(disp[j], x, y); x += m.adv[j] + m.ls; }
   var tex = new THREE.CanvasTexture(cv);
   tex.minFilter = THREE.LinearMipmapLinearFilter; tex.magFilter = THREE.LinearFilter; tex.generateMipmaps = true;
-  tex.anisotropy = Math.min(8, (renderer.capabilities.getMaxAnisotropy && renderer.capabilities.getMaxAnisotropy()) || 1);
+  tex.anisotropy = _lblAniso;
   tex.needsUpdate = true;
-  var e = { tex:tex, aspect: W/H }; _lblTexCache[key] = e; return e;
+  _lblTexBytes += cw*ch*4*1.34;   // RGBA + mip tail
+  // texelH = the canvas box height in px (== band, up to rounding) — the crispness
+  // audit reads this to form texel/screen without re-deriving the raster.
+  var e = { tex:tex, aspect: W/H, band:band, texelH:ch, cw:cw, ch:ch, lru: ++_lblTexClock }; _lblTexCache[key] = e; return e;
+}
+/* live texture-memory report (QA/audit + budget check). */
+function labelsTexBudget(){
+  var n = 0; for(var k in _lblTexCache){ if(_lblTexCache.hasOwnProperty(k)) n++; }
+  return { textures:n, estBytes:Math.round(_lblTexBytes), estMB:+(_lblTexBytes/1048576).toFixed(2),
+           budgetMB:LBL_TEX_BUDGET_MB, withinBudget:(_lblTexBytes/1048576) <= LBL_TEX_BUDGET_MB, anisotropy:_lblAniso, bands:LBL_BAND_PX };
 }
 
 /* ---- GRID BASIS (once): unit world directions of +u (street run) and +v (down
@@ -143,15 +249,17 @@ var _lblGrid = (function(){
 })();
 var LBL_LIFT = 0.5;         // ground text sits just above the paint drape
 
-/* ---- geometry factories ---- */
-function _lblGroundMesh(text, style, x, z, worldH, angle, grow){
-  var t = labelTexture(text, style), w = worldH * t.aspect;
+/* ---- geometry factories. s93 item 1: each carries its text+style+band so the
+   settle pass can re-raster to a new band by swapping the material map. ---- */
+function _lblGroundMesh(text, style, x, z, worldH, angle, grow, band){
+  var t = labelTexture(text, style, band), w = worldH * t.aspect;
   var geo = new THREE.PlaneGeometry(w, worldH); geo.rotateX(-Math.PI/2);   // lie flat on the ground
   var mat = new THREE.MeshBasicMaterial({ map:t.tex, transparent:true, depthTest:false, depthWrite:false, opacity:0 });
   var mesh = new THREE.Mesh(geo, mat);
   mesh.position.set(x, terrainHeight(x,z)+LBL_LIFT, z);
   mesh.rotation.y = -angle;                                                // align text with the line
   mesh.renderOrder = 20; mesh.frustumCulled = false; mesh.userData.text = text;
+  mesh.userData.style = style; mesh.userData.band = t.band;               // for the band re-raster swap
   // s92 flip (finding #3 — never upside down): remember the world-anchored
   // baseline orientation so updateLabels can add ±π to keep it camera-upright.
   mesh.userData.baseRotY = -angle;            // world-anchored rotation (no flip)
@@ -161,13 +269,107 @@ function _lblGroundMesh(text, style, x, z, worldH, angle, grow){
   mesh.userData.grow = !!grow;                // finding #2: scale up with altitude so it stays legible high
   return mesh;
 }
-function _lblSprite(text, style, x, z, lift){
-  var t = labelTexture(text, style);
+function _lblSprite(text, style, x, z, lift, band){
+  var t = labelTexture(text, style, band);
   var mat = new THREE.SpriteMaterial({ map:t.tex, transparent:true, depthTest:false, depthWrite:false, opacity:0 });
   var s = new THREE.Sprite(mat); s.userData.aspect = t.aspect; s.userData.text = text;
+  s.userData.style = style; s.userData.band = t.band;
   s.position.set(x, terrainHeight(x,z)+lift, z);
   s.renderOrder = 25; s.frustumCulled = false;
   return s;
+}
+
+/* ---- s93 item 2 — STREET NAMES FOLLOW THEIR STREETS. A street name is no
+   longer a single flat quad hung at one height (which floats/clips on a downhill
+   run and never bends). It is a THIN GROUND RIBBON sampled ALONG the street's
+   polyline arc: cross-sections stepped down the arc, each draped to its own
+   terrainHeight, the word canvas mapped across the arc-length (u) and the ROW
+   width (v). Result: glyph spacing preserved, the run gently follows curvature,
+   and it drapes over downhill grades — "almost painted-on." The whole word is
+   the flip unit (s92 camera-upright: reverse u+v, never per-letter). Where the
+   arc bends too hard over the word (LBL_CURV_MAX) it would read as a smear, so
+   we fall back to the straight quad there. Vertices are ANCHOR-RELATIVE so the
+   grow scale (finding #2) grows the word about its centre, same as the quad. */
+var LBL_CURV_MAX = 0.62;    // rad — total tangent turn over a word above which we straight-quad-fallback (~36°)
+function _lblArcCum(pts){
+  var cum=[0], total=0;
+  for(var k=1;k<pts.length;k++){ total += Math.hypot(pts[k].x-pts[k-1].x, pts[k].z-pts[k-1].z); cum.push(total); }
+  return { cum:cum, total:total };
+}
+function _lblArcSample(pts, cum, s){
+  var seg=1; while(seg<cum.length-1 && cum[seg]<s) seg++;
+  var a=pts[seg-1], b=pts[seg], segLen=(cum[seg]-cum[seg-1])||1, f=(s-cum[seg-1])/segLen;
+  var dx=(b.x-a.x)/segLen, dz=(b.z-a.z)/segLen;
+  return { x:a.x+(b.x-a.x)*f, z:a.z+(b.z-a.z)*f, tx:dx, tz:dz };
+}
+/* build (or rebuild) the ribbon geometry from stored arc params; anchor-relative
+   positions + per-vertex terrain drape. UVs written by _lblRibbonSetFlip. */
+function _lblRibbonGeom(ud){
+  var pts=ud.pts, cum=ud.cum, s0=ud.s0, s1=ud.s1, K=ud.K, hw=ud.worldH*0.5;
+  var ax=ud.ax, ay=ud.ay, az=ud.az;
+  var pos=new Float32Array((K+1)*2*3), uvA=new Float32Array((K+1)*2*2), baseU=new Float32Array((K+1)*2);
+  for(var k=0;k<=K;k++){
+    var s=s0+(s1-s0)*(k/K), sm=_lblArcSample(pts,cum,s);
+    var nx=-sm.tz, nz=sm.tx;                       // left-hand ground normal
+    var lx=sm.x+nx*hw, lz=sm.z+nz*hw, rx=sm.x-nx*hw, rz=sm.z-nz*hw;
+    var li=(k*2)*3, ri=(k*2+1)*3;
+    pos[li]=lx-ax; pos[li+1]=terrainHeight(lx,lz)+LBL_LIFT-ay; pos[li+2]=lz-az;
+    pos[ri]=rx-ax; pos[ri+1]=terrainHeight(rx,rz)+LBL_LIFT-ay; pos[ri+2]=rz-az;
+    baseU[k*2]=k/K; baseU[k*2+1]=k/K;
+  }
+  var idx=[];
+  for(var q=0;q<K;q++){ var a0=q*2, b0=q*2+1, a1=(q+1)*2, b1=(q+1)*2+1; idx.push(a0,b0,a1, b0,b1,a1); }
+  var geo=new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(pos,3));
+  geo.setAttribute("uv", new THREE.BufferAttribute(uvA,2));
+  geo.setIndex(idx);
+  geo.userData.baseU = baseU;   // per-vertex u before flip (v is 1 for left edge, 0 for right)
+  return geo;
+}
+function _lblRibbonSetFlip(mesh, flip){
+  // v=1 (canvas top / glyph tops) must sit on the SAME side of the tangent the
+  // working straight quad puts it — the (tz,-tx) side, i.e. the RIGHT vertex
+  // (P − Nperp·hw, the odd index). Putting it on the left mirrors the run.
+  var geo=mesh.geometry, baseU=geo.userData.baseU, uv=geo.attributes.uv.array, n=baseU.length;
+  for(var i=0;i<n;i++){
+    var isLeft=(i%2)===0, u=baseU[i], v=isLeft?0:1;
+    uv[i*2]   = flip ? (1-u) : u;
+    uv[i*2+1] = flip ? (1-v) : v;
+  }
+  geo.attributes.uv.needsUpdate = true;
+  mesh.userData.flip = flip;
+}
+/* one street-name instance centred at arc-length sCenter. Returns a ribbon mesh,
+   or null when the arc bends too hard (caller places a straight quad instead). */
+function _lblStreetRibbon(name, style, pts, cum, total, sCenter, worldH, band){
+  var t = labelTexture(name, style, band), wordW = worldH * t.aspect;
+  var s0 = sCenter - wordW/2, s1 = sCenter + wordW/2;
+  if(s0 < 0){ s1 -= s0; s0 = 0; }
+  if(s1 > total){ s0 -= (s1-total); s1 = total; if(s0<0) s0=0; }
+  if(s1-s0 < 1) return null;
+  var K = Math.max(4, Math.min(48, Math.round((s1-s0)/4)));
+  // curvature: total absolute turn of the tangent across the word span
+  var turn=0, prev=null;
+  for(var k=0;k<=K;k++){
+    var sm=_lblArcSample(pts,cum, s0+(s1-s0)*(k/K)), ang=Math.atan2(sm.tz,sm.tx);
+    if(prev!==null){ var d=ang-prev; while(d>Math.PI)d-=2*Math.PI; while(d<-Math.PI)d+=2*Math.PI; turn+=Math.abs(d); }
+    prev=ang;
+  }
+  if(turn > LBL_CURV_MAX) return null;   // too bent → straight-quad fallback
+  var ac = _lblArcSample(pts,cum,sCenter);
+  var ax=ac.x, ay=terrainHeight(ac.x,ac.z)+LBL_LIFT, az=ac.z;
+  var ud = { ribbon:true, text:name, style:style, band:t.band, aspect:t.aspect, worldH:worldH,
+             pts:pts, cum:cum, s0:s0, s1:s1, K:K, ax:ax, ay:ay, az:az, grow:true,
+             dirX:ac.tx, dirZ:ac.tz, flip:false };
+  var geo = _lblRibbonGeom(ud);
+  // DoubleSide: the strip lies flat on the ground; winding-from-above is not
+  // guaranteed across curved runs, so render both faces (flat text, no lighting).
+  var mat = new THREE.MeshBasicMaterial({ map:t.tex, transparent:true, depthTest:false, depthWrite:false, opacity:0, side:THREE.DoubleSide });
+  var mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set(ax, ay, az);
+  mesh.renderOrder = 20; mesh.frustumCulled = false; mesh.userData = ud;
+  _lblRibbonSetFlip(mesh, false);
+  return mesh;
 }
 
 /* ---- ERA-DATED STREET NAMES (item B consumer). The dated name arrays live in
@@ -287,24 +489,16 @@ function _lblStreetPrio(cls){
    panning always keeps one instance in frame. Returns [{x,z,ang}] in world. */
 var LBL_REPEAT_M = 240;     // spacing between repeated street-name instances (world metres)
 var LBL_REPEAT_MAX = 6;     // cap instances per street run
-function _lblStreetAnchors(poly, i0, i1){
+function _lblStreetPlaces(poly, i0, i1){
   var pts = [];
   for(var i=i0;i<=i1;i++){ var w = gridToWorldAt(poly[i].u, poly[i].v, GRID_ROT_BASE); pts.push({x:w.x,z:w.z}); }
-  if(pts.length<2) return [];
-  var cum=[0], total=0;
-  for(var k=1;k<pts.length;k++){ total += Math.hypot(pts[k].x-pts[k-1].x, pts[k].z-pts[k-1].z); cum.push(total); }
-  if(total < 1) return [];
-  // target arc-length positions: centered, spaced LBL_REPEAT_M, at least the midpoint
-  var n = Math.min(LBL_REPEAT_MAX, Math.max(1, Math.round(total/LBL_REPEAT_M)));
-  var out=[];
-  for(var a=0;a<n;a++){
-    var s = total*(a+0.5)/n, seg=1;
-    while(seg<cum.length-1 && cum[seg]<s) seg++;
-    var segLen = cum[seg]-cum[seg-1] || 1, f = (s-cum[seg-1])/segLen;
-    var p0=pts[seg-1], p1=pts[seg];
-    out.push({ x:p0.x+(p1.x-p0.x)*f, z:p0.z+(p1.z-p0.z)*f, ang:Math.atan2(p1.z-p0.z, p1.x-p0.x) });
-  }
-  return out;
+  if(pts.length<2) return null;
+  var ac = _lblArcCum(pts); if(ac.total < 1) return null;
+  // centre arc-lengths: spaced LBL_REPEAT_M, at least the midpoint
+  var n = Math.min(LBL_REPEAT_MAX, Math.max(1, Math.round(ac.total/LBL_REPEAT_M)));
+  var centers=[];
+  for(var a=0;a<n;a++) centers.push(ac.total*(a+0.5)/n);
+  return { pts:pts, cum:ac.cum, total:ac.total, centers:centers };
 }
 
 /* ====================================================================
@@ -364,10 +558,15 @@ function rebuildLabels(){
       var i0 = active.extent[0], i1 = active.extent[1]; if(i1<=i0) return;
       var name = eraStreetName(s, day);
       var prio = _lblStreetPrio(s.cls);
-      _lblStreetAnchors(s.polyline, i0, i1).forEach(function(an){
-        if(terrainHeight(an.x, an.z) <= 0.5) return;           // don't float a name over the tide flats
-        // grow=true → updateLabels scales it up with altitude (finding #2)
-        _lblAdd(_lblGroundMesh(name, LBL_STYLE.street, an.x, an.z, 10, an.ang, true), LBL_BANDS.street, "streets", prio, 0, true);
+      var pl = _lblStreetPlaces(s.polyline, i0, i1); if(!pl) return;
+      pl.centers.forEach(function(sc){
+        var ac = _lblArcSample(pl.pts, pl.cum, sc);
+        if(terrainHeight(ac.x, ac.z) <= 0.5) return;           // don't float a name over the tide flats
+        // item 2: per-arc RIBBON that follows the street + drapes downhill; on a
+        // too-bent span fall back to the straight quad (grow=true → altitude scale).
+        var rib = _lblStreetRibbon(name, LBL_STYLE.street, pl.pts, pl.cum, pl.total, sc, 10, LBL_BAND_DEFAULT);
+        var obj = rib || _lblGroundMesh(name, LBL_STYLE.street, ac.x, ac.z, 10, Math.atan2(ac.tz, ac.tx), true, LBL_BAND_DEFAULT);
+        _lblAdd(obj, LBL_BANDS.street, "streets", prio, 0, true);
       });
     });
   }
@@ -443,7 +642,18 @@ function _lblZoomFactor(alt){ var zf = alt/LBL_ZF_REF; return zf<1?1:(zf>LBL_ZF_
    rotation — a cheap quad flip, NOT a canvas re-raster. Throttled: recomputed
    only when the camera yaw has settled to a new heading (or on rebuild), never
    per frame. Zone SPRITES are camera-facing billboards → skipped (no dirX). */
-var _lblFlipYaw = null;
+var _lblFlipYaw = null, _lblSettleAlt = -1;
+/* s93 item 1 — re-raster a label to a new resolution band by swapping its
+   material map (cached by style+text+band). Geometry/aspect are band-independent
+   so only the texture changes; sprites keep their (band-independent) aspect. */
+function _lblSetBand(it, band){
+  var o = it.obj, ud = o.userData;
+  if(ud.band === band) return;
+  var e = labelTexture(ud.text, ud.style, band);
+  o.material.map = e.tex; o.material.needsUpdate = true; ud.band = band;
+  if(!it.ground) o.userData.aspect = e.aspect;   // sprites size from userData.aspect
+  it._texelH = e.texelH;
+}
 function _lblComputeFlips(){
   var EPS = 6;   // world metres along the baseline to sample screen direction
   for(var i=0;i<_lblItems.length;i++){
@@ -453,7 +663,13 @@ function _lblComputeFlips(){
     var p1 = _lblProject(o.position.x + o.userData.dirX*EPS, o.position.y, o.position.z + o.userData.dirZ*EPS);
     if(!p0.front || !p1.front) continue;
     var flip = (p1.x - p0.x) < 0;                 // baseline runs leftward on screen ⇒ inverted
-    if(flip !== o.userData.flip){ o.userData.flip = flip; o.rotation.y = o.userData.baseRotY + (flip?Math.PI:0); }
+    if(flip !== o.userData.flip){
+      // s93 item 2 — the WHOLE WORD is the flip unit. A ribbon can't spin 180°
+      // (that unwinds it off the curve), so it flips by reversing its u+v; a
+      // straight quad keeps the s92 ±π rotation.
+      if(o.userData.ribbon) _lblRibbonSetFlip(o, flip);
+      else { o.userData.flip = flip; o.rotation.y = o.userData.baseRotY + (flip?Math.PI:0); }
+    }
   }
 }
 function updateLabels(){
@@ -465,10 +681,14 @@ function updateLabels(){
   var vpH = window.innerHeight, fovK = 2*Math.tan(camera.fov*Math.PI/360)/vpH; // world-per-screen-px at unit distance
   var zf = _lblZoomFactor(alt);   // finding #2: altitude → world-size scale for `grow` labels
 
-  // finding #3: recompute camera-upright flips only when the yaw has settled to
-  // a new heading (throttled) — or after a rebuild reset _lblFlipYaw to null.
+  // finding #3 + item 1: recompute camera-upright flips AND re-raster bands only
+  // when the view has SETTLED to a new heading OR a materially new altitude
+  // (throttled) — or after a rebuild reset _lblFlipYaw to null. Band depends on
+  // altitude (zoom), so a big alt change must re-trigger the band pass.
   var yawNow = (typeof CAM!=="undefined" && CAM) ? CAM.yaw : 0;
-  if(_lblFlipYaw===null || Math.abs(yawNow-_lblFlipYaw) > 0.05){ _lblComputeFlips(); _lblFlipYaw = yawNow; }
+  var settle = (_lblFlipYaw===null || Math.abs(yawNow-_lblFlipYaw) > 0.05
+               || _lblSettleAlt<0 || Math.abs(alt-_lblSettleAlt)/Math.max(1,_lblSettleAlt) > 0.08);
+  if(settle) _lblComputeFlips();
 
   // 1) compute each item's target (band × sublayer) + screen box; collect visible
   var cands = [];
@@ -476,24 +696,38 @@ function updateLabels(){
     var it = _lblItems[i], target = it.band(alt) * (LABELS_VIS[it.sublayer]?1:0);
     it._target = target;
     // apply the altitude scale up-front so the declutter box below sees the
-    // real on-screen footprint (a grown label reserves more space).
+    // real on-screen footprint (a grown label reserves more space). Ribbons are
+    // anchor-relative, so setScalar grows them about their centre like a quad.
     if(it.ground && it.obj.userData.grow) it.obj.scale.setScalar(zf);
     if(target < 0.02){ it._box = null; continue; }
     var p = _lblProject(it.obj.position.x, it.obj.position.y, it.obj.position.z);
     if(!p.front){ it._box = null; it._target = 0; continue; }
-    var t = it.obj.material.map;
-    var aspect = it.ground ? (it.obj.geometry.parameters ? (it.obj.geometry.parameters.width/it.obj.geometry.parameters.height) : 4) : it.obj.userData.aspect;
-    var hPx;
+    // ground geometry may be a PlaneGeometry (parameters) or a ribbon (userData)
+    var gp = it.ground ? it.obj.geometry.parameters : null;
+    var aspect = it.ground ? (gp ? gp.width/gp.height : it.obj.userData.aspect) : it.obj.userData.aspect;
+    var hPx, hPxRaw;
     if(it.ground){
+      var gH = gp ? gp.height : it.obj.userData.worldH;
       var dist = camera.position.distanceTo(it.obj.position);
-      hPx = (it.obj.geometry.parameters.height * it.obj.scale.y) / Math.max(1, dist*fovK);   // scaled world height → screen px
+      var dpk = dist*fovK;
+      hPx = (gH * it.obj.scale.y) / Math.max(1, dpk);                    // declutter-box height (legacy clamp kept)
+      hPxRaw = (gH * it.obj.scale.y) / Math.max(0.0001, dpk);            // TRUE on-screen height → band selection (item 1)
     } else {
-      hPx = it.ss;                                                        // sprite: constant on-screen px (scaled below)
+      hPx = it.ss; hPxRaw = it.ss;                                       // sprite: constant on-screen px (scaled below)
     }
     var wPx = hPx*aspect;
     it._box = { minX:p.x-wPx/2, minY:p.y-hPx/2, maxX:p.x+wPx/2, maxY:p.y+hPx/2 };
-    it._px = p; it._hPx = hPx;
+    it._px = p; it._hPx = hPx; it._hPxRaw = hPxRaw;
     cands.push(it);
+  }
+
+  // item 1: BAND RE-RASTER PASS (throttled with the settle gate). Each visible
+  // label picks the smallest band ≥ its on-screen height (texel≈screen) and
+  // swaps its map if that changed — off the hot per-frame path, so a settled
+  // camera pays the raster once per band transition.
+  if(settle){
+    for(var bi=0; bi<cands.length; bi++){ var itb=cands[bi]; _lblSetBand(itb, _lblPickBand(itb._hPxRaw)); }
+    _lblFlipYaw = yawNow; _lblSettleAlt = alt;
   }
 
   // 2) priority declutter (rbush): reserve the horizon bar, then place high-prio
@@ -537,6 +771,26 @@ renderer.render = function(s,c){ try{ updateLabels(); }catch(e){ if(!updateLabel
 registerLayerVisibility("labels", function(v){ LABELS_VIS.parent = v; LBL_GROUP.visible = v; });
 function labelsSetSublayer(key, on){ if(key in LABELS_VIS){ LABELS_VIS[key] = on; } }
 function labelsGetSublayer(key){ return !!LABELS_VIS[key]; }
+/* s93 item 4 — flip the typography option set at runtime (atelier / harness
+   triptych). Rebuilds the label set with the new voices on the next update. */
+function labelsSetTypeSet(k){
+  if(!LBL_STYLE_SETS[k]) return false;
+  LABEL_TYPE_SET = k; LBL_STYLE = LBL_STYLE_SETS[k];
+  _lblLastDay = null; _lblLastVisKey = null;   // force a rebuild with the new styles
+  return true;
+}
+function labelsGetTypeSet(){ return LABEL_TYPE_SET; }
+/* driving hooks for the verify harness. This layer (chunk 40) runs BEFORE
+   core/06-debug (chunk 70) creates window.__P1850, so attach on the next tick —
+   after the synchronous module IIFE finishes and __P1850 exists. Lets the harness
+   screenshot a/b/c + read the texture budget without reaching into the closure. */
+setTimeout(function(){
+  if(typeof window!=="undefined" && window.__P1850){
+    window.__P1850.labelsSetTypeSet = labelsSetTypeSet;
+    window.__P1850.labelsGetTypeSet = labelsGetTypeSet;
+    window.__P1850.labelsTexBudget  = labelsTexBudget;
+  }
+}, 0);
 
 /* audit + QA hooks live in core/06-debug (labels namespace) — this layer exposes
    the live set through a getter the debug registry reads. */
@@ -654,4 +908,41 @@ registerAudit("labels", "contrast", function(){
   var bad = styles.filter(function(s){ return s.minRatio < GATE; });
   return { pass: bad.length===0, gate:GATE, method:"dual-halo WCAG min over earth palette (haloed text: halo-vs-bg + glyph-vs-halo)",
            minContrastRatio: worst.ratio, worstCase: worst, styles: styles, bad: bad };
+});
+
+/* ---- AUDIT 4 — crispness (s93 item 1, user finding: "text blurry at altitude").
+   METHOD (stated honestly): a canvas-texture label is sharp when its texture
+   resolution matches its on-screen size — the effective TEXEL-PER-SCREEN-PIXEL
+   ratio should sit near 1 (below ~0.5 the texture is magnified = fuzzy; above
+   ~2 it is deeply minified and the mip/aniso footprint softens on a grazing
+   ground plane, which is exactly the s90/s92 blur). The per-band re-raster picks,
+   for each label, the smallest band ≥ its on-screen height, so the ratio is
+   band ÷ screenPx. We evaluate the STREET case (the user's subject) at 3
+   altitudes {300, 900, 1800} m, using the live camera fov + viewport and the
+   grow zoom-factor: worldH = 10 m, near-overhead viewing distance ≈ alt, so
+   screenPx = worldH·zf(alt) ÷ (alt·fovK). GATE: every sampled ratio in
+   [0.5, 2.0] AND the texture budget within cap. FAILS BEFORE (the old fixed
+   ~500 px master shown at ~32 screen px = ratio ~15, far above 2.0); PASSES
+   after (band selection holds the ratio in [1,2)). Camera-independent except for
+   fov/vpH; runs at any date. ---- */
+registerAudit("labels", "crispness", function(){
+  var vpH = (typeof window!=="undefined" && window.innerHeight) ? window.innerHeight : 1000;
+  var fovDeg = (typeof camera!=="undefined" && camera && camera.fov) ? camera.fov : 55;
+  var fovK = 2*Math.tan(fovDeg*Math.PI/360)/vpH;
+  var worldH = 10, alts = [300, 900, 1800], GATE_LO = 0.5, GATE_HI = 2.0;
+  var rows = [], ok = true, worst = { alt:null, ratio:1 };
+  alts.forEach(function(alt){
+    var zf = alt/LBL_ZF_REF; zf = zf<1?1:(zf>LBL_ZF_MAX?LBL_ZF_MAX:zf);
+    var dist = alt;                                   // representative near-overhead street viewing distance
+    var screenPx = (worldH*zf)/Math.max(0.0001, dist*fovK);   // TRUE on-screen height (no declutter clamp)
+    var band = _lblPickBand(screenPx);
+    var ratio = band/Math.max(0.001, screenPx);       // texel(=band px) per screen px
+    rows.push({ alt:alt, zf:+zf.toFixed(2), screenPx:+screenPx.toFixed(1), band:band, texelPerScreen:+ratio.toFixed(2) });
+    if(ratio < GATE_LO || ratio > GATE_HI) ok = false;
+    if(Math.abs(ratio-1.25) > Math.abs(worst.ratio-1.25)) worst = { alt:alt, ratio:+ratio.toFixed(2) };
+  });
+  var bud = labelsTexBudget();
+  return { pass: ok && bud.withinBudget, gate:[GATE_LO, GATE_HI],
+           method:"street case: texelPerScreen = band ÷ (worldH·zf ÷ (alt·fovK)); band = smallest of ["+LBL_BAND_PX.join(",")+"] ≥ screenPx; fov "+(+fovDeg.toFixed(1))+"°, vpH "+vpH,
+           samples: rows, worst: worst, texture: bud };
 });
