@@ -128,6 +128,42 @@ var LM_CLASS_KIT = {
 function lmKitOf(id){ return LM_CLASS_KIT[lmClassOf(id)] || LM_CLASS_KIT.store; }
 
 /* =====================================================================
+   OPTION B — NEUTRAL PLACEHOLDER MASSING (user ruling 2026-07-14, s94a-b RIDER:
+   the legacy wood/adobe/brick kit skin above "masquerades as final graphical
+   output"). The rendered SKIN is now ONE neutral material world — a light grey
+   volume + a flat roof cap — with only a SUBTLE per-legibility tint (civic vs
+   commercial vs dwelling a hair apart) so classes read at a glance WITHOUT
+   reading as materials: no grain, no weathering, no palette variety. It must
+   read as a DIAGRAM, not a building. The STRUCTURAL machinery is UNCHANGED —
+   resolved footprint dims, C0->C4 construction scaling, and the per-class heights
+   (LM_CLASS_KIT.h, still consumed) all stand; ONLY colour changes here. The kit
+   palette above is retained as the documented substrate for the DEFERRED
+   per-landmark graphics program (spec §1) — it simply no longer paints the
+   placeholder. ===================================================================== */
+var LM_PLACEHOLDER = {
+  body:   0x9ea19c,   // light neutral grey — the base massing
+  roof:   0x868984,   // a hair darker neutral — the flat roof cap
+  pad:    0x6f6b63,   // neutral site-pad grey (donor foundation-skirt, de-tinted)
+  marker: 0xff6a1a    // HIGH-CONTRAST entrance/front accent (orange) — legible to town-500m
+};
+/* SUBTLE per-legibility category tint — a hair off neutral, NOT a palette. The
+   authored LM_CLASS collapses to a coarse civic/commercial/dwelling read tinted
+   onto the neutral body so classes are distinguishable at the plaza framing. */
+var LM_TINT = { civic: 0xb7c1c7, commercial: 0x9ea19c, dwelling: 0xb8b2a4 };
+var LM_CATEGORY = { civic:"civic", adobe:"civic", hotel:"commercial", store:"commercial",
+                    brick:"commercial", canvas:"dwelling" };
+function lmBodyColor(id){
+  var cat = LM_CATEGORY[lmClassOf(id)] || "commercial";
+  return new THREE.Color(LM_TINT[cat] || LM_PLACEHOLDER.body);
+}
+/* a flat ground triangle (arrowhead), position+color only — merges via mergeGeoms. */
+function lmTriLocal(ax, az, bx, bz, cx2, cz2, yy, color){
+  var g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.BufferAttribute(new Float32Array([ax,yy,az, bx,yy,bz, cx2,yy,cz2]), 3));
+  return colorizeUniform(g, color);
+}
+
+/* =====================================================================
    THE CONSTRUCTION-STATE MACHINE (C0->C4, building-spawn-spec §1 / brief §3;
    user ruling 2026-07-14 "nothing appears instantly"). The arc runs in the
    window [built - leadDays, built]; `built` (the reservation date) is C4
@@ -184,19 +220,84 @@ function lmStateAt(rec, day){
    the rendered door face and the reservation frontage normal are the SAME
    vector by definition. ===================================================================== */
 function lmUnit(x, z){ var l = Math.hypot(x, z) || 1; return { x: x / l, z: z / l }; }
-/* outward-facing unit normal (world) for a reservation, from its footprint quad. */
+/* map a block EDGE name -> its outward-facing unit normal (world), from the
+   footprint's +u/+v world axes. The single canonical edge->normal mapping shared
+   by block-frontage and the plaza CORNER RULE. */
+function lmEdgeToNormal(edge, uAx, vAx){
+  switch(edge){
+    case "west":  return lmUnit(-uAx.x, -uAx.z);
+    case "east":  return lmUnit( uAx.x,  uAx.z);
+    case "north": return lmUnit(-vAx.x, -vAx.z);
+    case "south": return lmUnit( vAx.x,  vAx.z);
+  }
+  return null;
+}
+/* the four bounding-street outward normals of a footprint (its edge normals) —
+   the set the orientationLandmark street-alignment clause measures against. */
+function lmEdgeNormals(fp){
+  var q = fp.quad;
+  var uAx = lmUnit(q[1].x - q[0].x, q[1].z - q[0].z);
+  var vAx = lmUnit(q[3].x - q[0].x, q[3].z - q[0].z);
+  return [ {x:uAx.x,z:uAx.z}, {x:-uAx.x,z:-uAx.z}, {x:vAx.x,z:vAx.z}, {x:-vAx.x,z:-vAx.z} ];
+}
+/* the bounding-street ids per edge for a reservation's block (plaza block for a
+   plaza-exception; the documented block otherwise) — lets a street NAME resolve
+   to one edge. */
+function lmBlockEdges(rec){
+  var a = rec.anchor || {};
+  if(a.kind === "plaza-exception") return (typeof CAD_PLAZA_BLOCK !== "undefined" && CAD_PLAZA_BLOCK) ? CAD_PLAZA_BLOCK.edges : null;
+  var key = rec.block || a.block;
+  if(typeof cadReservationBlockIndex === "function" && key){ var b = cadReservationBlockIndex()[key]; return b ? b.edges : null; }
+  return null;
+}
+/* resolve a street NAME to the block edge (west/east/north/south) that carries
+   it — exact id match, then a substring tolerance for id/name drift. */
+function lmStreetToEdge(edges, street){
+  if(!edges || !street) return null;
+  street = String(street).toLowerCase().trim();
+  var names = { west:edges.west, east:edges.east, north:edges.north, south:edges.south }, k;
+  for(k in names){ if(names[k] && String(names[k]).toLowerCase() === street) return k; }
+  for(k in names){ var n = names[k] ? String(names[k]).toLowerCase() : ""; if(n && (n.indexOf(street) >= 0 || street.indexOf(n) >= 0)) return k; }
+  return null;
+}
+/* the optional `anchor.facing` OVERRIDE (spec §1.6): a cardinal edge word/letter,
+   a bounding-street name, or (rare escape hatch) an intercardinal bearing. The
+   first two resolve to ONE edge and pass the audit; a genuine intercardinal
+   diagonal is returned as-is and the street-alignment clause REJECTS it by design. */
+function lmFacingNormal(facing, edges, uAx, vAx){
+  var f = String(facing).toLowerCase().trim();
+  var card = { north:"north", n:"north", south:"south", s:"south", east:"east", e:"east", west:"west", w:"west" };
+  if(card[f]) return lmEdgeToNormal(card[f], uAx, vAx);
+  var edge = lmStreetToEdge(edges, f);
+  if(edge) return lmEdgeToNormal(edge, uAx, vAx);
+  var inter = { ne:["north","east"], nw:["north","west"], se:["south","east"], sw:["south","west"] };
+  if(inter[f]){
+    var e0 = lmEdgeToNormal(inter[f][0], uAx, vAx), e1 = lmEdgeToNormal(inter[f][1], uAx, vAx);
+    if(e0 && e1) return lmUnit(e0.x + e1.x, e0.z + e1.z);
+  }
+  return null;
+}
+/* outward-facing unit normal (world) for a reservation, from its footprint quad.
+   CORNER RULE (building-spawn-spec §1.6, s94a): a corner reservation faces ONE
+   street — never the 45° diagonal (the retired plaza-civics defect). */
 function lmFrontageNormal(rec, fp){
   var q = fp.quad;                                              // [SW, SE, NE, NW]
   var uAx = lmUnit(q[1].x - q[0].x, q[1].z - q[0].z);          // +u world axis (SW->SE)
   var vAx = lmUnit(q[3].x - q[0].x, q[3].z - q[0].z);          // +v world axis (SW->NW)
   var a = rec.anchor || {};
+  if(a.facing){                                                 // explicit override wins (any anchor)
+    var nf = lmFacingNormal(a.facing, lmBlockEdges(rec), uAx, vAx);
+    if(nf) return nf;
+  }
   if(a.kind === "plaza-exception"){
-    // a civic building ON the square addresses its CORNER — face diagonally
-    // outward (away from the plaza common toward the street intersection).
-    var west = (a.corner === "NW" || a.corner === "SW"), north = (a.corner === "NW" || a.corner === "NE");
-    var nx = (west ? -uAx.x : uAx.x) + (north ? -vAx.x : vAx.x);
-    var nz = (west ? -uAx.z : uAx.z) + (north ? -vAx.z : vAx.z);
-    return lmUnit(nx, nz);
+    // face the FIRST street in frontStreet, mapped to the plaza block edge that
+    // carries it — a SINGLE edge's outward normal, never the corner bisector.
+    var first = String(a.frontStreet || "").split("/")[0];
+    var edge = lmStreetToEdge(lmBlockEdges(rec), first);
+    var pn = lmEdgeToNormal(edge, uAx, vAx);
+    if(pn) return pn;
+    // street unmatched: fall back to the corner's N/S edge — still ONE edge, never a diagonal
+    return lmEdgeToNormal((a.corner === "NW" || a.corner === "NE") ? "north" : "south", uAx, vAx) || { x: 0, z: 1 };
   }
   switch(a.frontage){                                           // block-frontage: outward = away from block interior
     case "west":  return lmUnit(-uAx.x, -uAx.z);
@@ -273,26 +374,37 @@ function lmBuildMesh(e){
   var y = terrainHeight(e.cx, e.cz);
   var w = Math.max(e.w - LM_INSET, 1.2), d = Math.max(e.d - LM_INSET, 1.2);
   var parts = [];
-  // C1..C4: a low foundation pad (donor foundation-skirt idea) — the "site" read
-  var pad = makeBoxLocal(w, 0.3, d, new THREE.Color(LM_KIT.pad));
+  // C1..C4: a low neutral site pad (donor foundation-skirt idea) — the "site" read
+  var pad = makeBoxLocal(w, 0.3, d, new THREE.Color(LM_PLACEHOLDER.pad));
   bake(pad, new THREE.Vector3(e.cx, y, e.cz), e.yaw);
   parts.push(pad);
-  if(e.state >= 2){                                             // C2/C3/C4: the massing, scaled by hFrac
-    var kit = lmKitOf(e.id);
-    var hkey = (e.id.length * 31 + Math.round(e.cx) * 7 + Math.round(e.cz) * 13) | 0;
+  // GROUND ARROW — the front/entrance orientation aid, present from C1 so the
+  // facing reads even at the site stage. A flat high-contrast arrowhead just
+  // beyond the front (+z) edge, pointing OUT along the frontage normal.
+  var az0 = d / 2 + 0.4, aLen = Math.max(2.2, Math.min(w * 0.6, 4.2)), aHW = Math.max(1.0, Math.min(w * 0.28, 1.9));
+  var arrow = lmTriLocal(-aHW, az0, aHW, az0, 0, az0 + aLen, 0.14, new THREE.Color(LM_PLACEHOLDER.marker));
+  lmBakeAt(arrow, 0, 0, 0, e.yaw, e.cx, y, e.cz);
+  parts.push(arrow);
+  if(e.state >= 2){                                             // C2/C3/C4: the NEUTRAL massing, scaled by hFrac
+    var kit = lmKitOf(e.id);                                    // per-class HEIGHT only (skin is neutral)
     var h = Math.max(kit.h * e.hFrac, 0.8);
-    var body = makeBoxLocal(w, h, d, kit.body(hkey));
+    var body = makeBoxLocal(w, h, d, lmBodyColor(e.id));        // Option B: one neutral material + a subtle class tint
     bake(body, new THREE.Vector3(e.cx, y + 0.28, e.cz), e.yaw);
     parts.push(body);
-    var roof = makeGableRoof(w, d, 0.35, kit.ridge, new THREE.Color(kit.roof));
+    // FLAT ROOF CAP — a thin neutral slab (no gable: a pitched roof reads as a
+    // finished building; this must read as placeholder massing).
+    var roof = makeBoxLocal(w + 0.2, 0.28, d + 0.2, new THREE.Color(LM_PLACEHOLDER.roof));
     bake(roof, new THREE.Vector3(e.cx, y + 0.28 + h, e.cz), e.yaw);
     parts.push(roof);
-    // door decal on the FRONT (+z) face by construction — the s76 §1.6 proof:
-    // the front faces the frontage normal, so the door faces the street.
-    var doorH = Math.min(1.9, h * 0.82);
-    var door = makeBoxLocal(1.1, doorH, 0.09, new THREE.Color(LM_KIT.doorDark));
-    lmBakeAt(door, 0, 0.28, d / 2 - 0.03, e.yaw, e.cx, y, e.cz);
-    parts.push(door);
+    // FRONT-FACE STRIPE (brief §2) — a bold high-contrast vertical bar centred on
+    // the +z (front) face, protruding a hair so it catches light. The instantly-
+    // readable entrance indicator; with the ground arrow, legible at plaza-150m
+    // and town-500m. It sits on the front face BY CONSTRUCTION (yaw = frontage
+    // normal), so it is also the visible proof of the corner-rule orientation fix.
+    var stripeH = Math.max(h * 0.9, 0.8);
+    var stripe = makeBoxLocal(Math.min(0.9, w * 0.42), stripeH, 0.18, new THREE.Color(LM_PLACEHOLDER.marker));
+    lmBakeAt(stripe, 0, 0.28, d / 2 - 0.02, e.yaw, e.cx, y, e.cz);
+    parts.push(stripe);
   }
   var mesh = new THREE.Mesh(mergeGeoms(parts), LM_MAT);
   mesh.frustumCulled = false;
@@ -554,11 +666,17 @@ registerLayerVisibility("buildings", function(v){ LM_GROUP.visible = v; if(v){ _
              countA: a1.split("\n").filter(Boolean).length, countB: bJump.split("\n").filter(Boolean).length };
   });
 
-  /* ---- 5. orientationLandmark — each rendered front-face normal (sin yaw,
-     cos yaw) vs its reservation frontage normal <= 2deg (should be ~0 — it is
-     data-driven; this guards the wiring). ---- */
+  /* ---- 5. orientationLandmark — TWO clauses:
+     (a) SELF-CONSISTENCY: the rendered front-face normal (sin yaw, cos yaw) equals
+         its reservation frontage normal <= 2deg (should be ~0 — data-driven wiring).
+     (b) CORNER RULE (s94a, building-spawn-spec §1.6 / brief §4): the rendered front
+         bearing must align (±2°) to ONE of the building's real bounding-street
+         bearings — the four footprint-edge outward normals. A 45° diagonal between
+         two of them FAILS. Fail-before: the retired plaza-civics code faced Custom
+         House + School House diagonally (~45° off every edge) — that clause failed;
+         the single-street fix lands them on one edge (~0°). ---- */
   registerAudit("buildings", "orientationLandmark", function(){
-    var recs = resolvedRecs(), maxDeg = 0, viol = [];
+    var recs = resolvedRecs(), maxDeg = 0, maxStreetDeg = 0, viol = [];
     recs.forEach(function(rec){
       var fp = rec.footprint; if(!fp) return;
       var f = lmFootprint(rec, fp);
@@ -567,9 +685,20 @@ registerLayerVisibility("buildings", function(v){ LM_GROUP.visible = v; if(v){ _
       var dot = clamp(fnx * n.x + fnz * n.z, -1, 1);
       var deg = Math.acos(dot) * DEG;
       if(deg > maxDeg) maxDeg = deg;
-      if(deg > 2) viol.push({ id: rec.landmarkId, deg: +deg.toFixed(3), frontage: (rec.anchor && (rec.anchor.frontage || rec.anchor.corner)) || null });
+      if(deg > 2) viol.push({ id: rec.landmarkId, why: "door-vs-frontage", deg: +deg.toFixed(3), frontage: (rec.anchor && (rec.anchor.frontage || rec.anchor.corner)) || null });
+      // (b) front bearing must equal ONE bounding-street normal (no diagonal)
+      var edges = lmEdgeNormals(fp), best = 999;
+      for(var ei = 0; ei < edges.length; ei++){
+        var ed = clamp(fnx * edges[ei].x + fnz * edges[ei].z, -1, 1), edg = Math.acos(ed) * DEG;
+        if(edg < best) best = edg;
+      }
+      if(best > maxStreetDeg) maxStreetDeg = best;
+      if(best > 2) viol.push({ id: rec.landmarkId, why: "front-not-street-aligned", diagDeg: +best.toFixed(3),
+                               frontStreet: (rec.anchor && rec.anchor.frontStreet) || null,
+                               corner: (rec.anchor && rec.anchor.corner) || null });
     });
-    return { pass: viol.length === 0, landmarks: recs.length, maxDeg: +maxDeg.toFixed(4), violations: viol.length, sample: viol.slice(0, 6) };
+    return { pass: viol.length === 0, landmarks: recs.length, maxDeg: +maxDeg.toFixed(4),
+             maxStreetMisalignDeg: +maxStreetDeg.toFixed(4), violations: viol.length, sample: viol.slice(0, 6) };
   });
 })();
 

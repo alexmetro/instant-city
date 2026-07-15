@@ -73,9 +73,10 @@ function isStringSkip(s) { return typeof s === "string" && s.length > 0; }
 // canonical framings: alt (metres) + a note; the harness writes camSet then
 // snaps and captures. Zones→streets→lots choreography reads across altitudes.
 const FRAMINGS = [
-  { id: "overview-1500m", alt: 1500, date: "1849-09-15", note: "region/zone band" },
-  { id: "town-500m",      alt: 500,  date: "1849-09-15", note: "street band" },
-  { id: "plaza-150m",     alt: 150,  date: "1849-12-20", note: "lot band" }
+  { id: "overview-1500m",   alt: 1500, date: "1849-09-15", note: "region/zone band" },
+  { id: "town-500m",        alt: 500,  date: "1849-09-15", note: "street band" },
+  { id: "plaza-150m-1848",  alt: 150,  date: "1848-04-01", note: "lot band — early plaza (s94a-b: neutral volumes + front markers)" },
+  { id: "plaza-150m",       alt: 150,  date: "1849-12-20", note: "lot band" }
 ];
 
 const args = process.argv.slice(2);
