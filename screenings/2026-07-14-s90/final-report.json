@@ -1,0 +1,1014 @@
+{
+  "generatedAt": "2026-07-15T00:51:22.950Z",
+  "appRoot": "C:\\Agents\\projects\\1850\\app\\.claude\\worktrees\\s90-labels",
+  "canonicalDates": [
+    "1846-07-01",
+    "1848-04-01",
+    "1849-09-15",
+    "1849-12-20"
+  ],
+  "fixture": "OSM Overpass way-intersection nodes (shared node between the two named street ways), fetched 2026-07-11. Canonical source of record: tools/map-overlay.py CONTROL_POINTS (docs repo) and the core.geodeticLock audit (src/core/06-debug.js), verbatim. SF's downtown grid is unchanged since O'Farrell 1847, so modern intersections are valid 1846-56 ground truth.",
+  "overall": "GREEN",
+  "targets": [
+    {
+      "label": "index",
+      "url": "http://127.0.0.1:65267/index.html",
+      "boot": {
+        "ok": true,
+        "veilCleared": true,
+        "consoleErrorsAtBoot": 0
+      },
+      "noon": [
+        {
+          "date": "1846-07-01",
+          "pass": true,
+          "ran": 35,
+          "failed": 0,
+          "failedList": [],
+          "unexpectedSkips": [],
+          "allowedSkips": [
+            {
+              "audit": "placement.anchorageHeading",
+              "why": "fewer than 2 anchored ships"
+            },
+            {
+              "audit": "placement.fences",
+              "why": "no yard fences built"
+            },
+            {
+              "audit": "placement.moorings",
+              "why": "Central Wharf not yet built at this date"
+            },
+            {
+              "audit": "placement.wharfContinuity",
+              "why": "Central Wharf not yet built at this date"
+            }
+          ],
+          "newConsoleErrors": 0,
+          "red": false
+        },
+        {
+          "date": "1848-04-01",
+          "pass": true,
+          "ran": 35,
+          "failed": 0,
+          "failedList": [],
+          "unexpectedSkips": [],
+          "allowedSkips": [
+            {
+              "audit": "placement.anchorageHeading",
+              "why": "fewer than 2 anchored ships"
+            },
+            {
+              "audit": "placement.fences",
+              "why": "no yard fences built"
+            },
+            {
+              "audit": "placement.moorings",
+              "why": "Central Wharf not yet built at this date"
+            },
+            {
+              "audit": "placement.wharfContinuity",
+              "why": "Central Wharf not yet built at this date"
+            }
+          ],
+          "newConsoleErrors": 0,
+          "red": false
+        },
+        {
+          "date": "1849-09-15",
+          "pass": true,
+          "ran": 35,
+          "failed": 0,
+          "failedList": [],
+          "unexpectedSkips": [],
+          "allowedSkips": [
+            {
+              "audit": "placement.anchorageHeading",
+              "why": "fewer than 2 anchored ships"
+            },
+            {
+              "audit": "placement.fences",
+              "why": "no yard fences built"
+            },
+            {
+              "audit": "placement.moorings",
+              "why": "Central Wharf not yet built at this date"
+            },
+            {
+              "audit": "placement.wharfContinuity",
+              "why": "Central Wharf not yet built at this date"
+            }
+          ],
+          "newConsoleErrors": 0,
+          "red": false
+        },
+        {
+          "date": "1849-12-20",
+          "pass": true,
+          "ran": 35,
+          "failed": 0,
+          "failedList": [],
+          "unexpectedSkips": [],
+          "allowedSkips": [
+            {
+              "audit": "placement.anchorageHeading",
+              "why": "fewer than 2 anchored ships"
+            },
+            {
+              "audit": "placement.fences",
+              "why": "no yard fences built"
+            },
+            {
+              "audit": "placement.moorings",
+              "why": "Central Wharf not yet built at this date"
+            },
+            {
+              "audit": "placement.wharfContinuity",
+              "why": "Central Wharf not yet built at this date"
+            }
+          ],
+          "newConsoleErrors": 0,
+          "red": false
+        }
+      ],
+      "measurements": {
+        "geoOk": true,
+        "paintOk": true,
+        "lotOk": true,
+        "geodeticFit": {
+          "pass": true,
+          "datasetFitRms_m": 1.128,
+          "canonicalEndToEndRms_m": 1.232,
+          "canonicalEndToEndMax_m": 1.861,
+          "worst": "broadway_battery",
+          "gridToWorldAzDeg": -9,
+          "gridRotBaseDeg": -9,
+          "azimuthDriftDeg": 0,
+          "worldToGridRoundTripMax_m": 3.18e-14,
+          "singleFrame": true,
+          "controlPoints": 8,
+          "gates": "fitRms<=2, e2eRms<=2, azDrift<=0.1deg, roundTrip<=1e-3m"
+        },
+        "paintAlignment": {
+          "constantWidth": {
+            "pass": true,
+            "streetsProbed": 14,
+            "piersProbed": 1,
+            "stations": 16,
+            "violations": [],
+            "skipped": [
+              "stockton",
+              "shubrick",
+              "mission-street",
+              "presidio-road",
+              "broadway-wharf"
+            ]
+          },
+          "eraPaint": {
+            "pass": true,
+            "unappeared": 0,
+            "probes": 0,
+            "statsViolations": [],
+            "pixelViolations": [],
+            "unappearedPiers": 4
+          },
+          "oneOwner": {
+            "pass": true,
+            "canvases": 1,
+            "meshes": 1,
+            "probes": 18,
+            "painted": 18,
+            "unpainted": []
+          },
+          "roadDarkerThanGround": {
+            "pass": true,
+            "roadLum": 0.352,
+            "terrainMedianLum": 0.46,
+            "samples": 1949
+          }
+        },
+        "lotFit": {
+          "platClosure": {
+            "pass": true,
+            "law": "platClosure",
+            "standardBlocks": 130,
+            "perDistrict": {
+              "fifty-vara": {
+                "standard": 53,
+                "nonStandard": 17,
+                "reserve": 1
+              },
+              "hundred-vara": {
+                "standard": 77,
+                "nonStandard": 0,
+                "reserve": 0
+              }
+            },
+            "publicReserveBlocks": 1,
+            "publicReserveWithLots": [],
+            "nonStandardFlagged": 17,
+            "closureFailures": 0,
+            "failList": [],
+            "nonStandardList": [
+              {
+                "block": "B|sansome|battery|vallejo|broadway",
+                "shape": "2x2",
+                "lots": 4,
+                "water": 0
+              },
+              {
+                "block": "B|sansome|battery|broadway|pacific",
+                "shape": "2x2",
+                "lots": 4,
+                "water": 0
+              },
+              {
+                "block": "B|sansome|battery|pacific|jackson",
+                "shape": "2x2",
+                "lots": 4,
+                "water": 3
+              },
+              {
+                "block": "B|sansome|battery|jackson|washington",
+                "shape": "2x2",
+                "lots": 4,
+                "water": 4
+              },
+              {
+                "block": "B|sansome|battery|washington|clay",
+                "shape": "2x2",
+                "lots": 4,
+                "water": 4
+              },
+              {
+                "block": "B|sansome|battery|clay|sacramento",
+                "shape": "2x2",
+                "lots": 4,
+                "water": 4
+              },
+              {
+                "block": "B|sansome|battery|sacramento|california-street",
+                "shape": "2x2",
+                "lots": 4,
+                "water": 4
+              },
+              {
+                "block": "B|sansome|battery|california-street|pine",
+                "shape": "2x2",
+                "lots": 4,
+                "water": 3
+              },
+              {
+                "block": "B|sansome|battery|pine|bush",
+                "shape": "2x2",
+                "lots": 4,
+                "water": 0
+              },
+              {
+                "block": "B|battery|front|vallejo|broadway",
+                "shape": "2x2",
+                "lots": 4,
+                "water": 2
+              },
+              {
+                "block": "B|battery|front|broadway|pacific",
+                "shape": "2x2",
+                "lots": 4,
+                "water": 3
+              },
+              {
+                "block": "B|battery|front|pacific|jackson",
+                "shape": "2x2",
+                "lots": 4,
+                "water": 4
+              },
+              {
+                "block": "B|battery|front|jackson|washington",
+                "shape": "2x2",
+                "lots": 4,
+                "water": 4
+              },
+              {
+                "block": "B|battery|front|washington|clay",
+                "shape": "2x2",
+                "lots": 4,
+                "water": 4
+              },
+              {
+                "block": "B|battery|front|clay|sacramento",
+                "shape": "2x2",
+                "lots": 4,
+                "water": 4
+              },
+              {
+                "block": "B|battery|front|sacramento|california-street",
+                "shape": "2x2",
+                "lots": 4,
+                "water": 4
+              },
+              {
+                "block": "B|battery|front|california-street|pine",
+                "shape": "2x2",
+                "lots": 4,
+                "water": 4
+              }
+            ]
+          },
+          "lotDeterminism": {
+            "pass": true,
+            "law": "determinism",
+            "byteIdentical": true,
+            "rngConsumed": 0,
+            "blocks": 148,
+            "lots": 848
+          },
+          "parcelIntegrity": {
+            "pass": true,
+            "law": "parcelIntegrity",
+            "clip": {
+              "landParcelsContainNoWater": true,
+              "seawardPointsTested": 355,
+              "seawardInLandParcel": [],
+              "parcelClips": [
+                {
+                  "name": "yerba-buena-cove",
+                  "clip": "water",
+                  "rings": 1,
+                  "areaBefore": 1871647,
+                  "areaAfter": 1864414,
+                  "trimmedPct": 0.39,
+                  "libUsed": true
+                },
+                {
+                  "name": "happy-valley-camp",
+                  "clip": "land",
+                  "rings": 1,
+                  "areaBefore": 4886300,
+                  "areaAfter": 3569014,
+                  "trimmedPct": 26.96,
+                  "libUsed": true
+                },
+                {
+                  "name": "mission-cluster",
+                  "clip": "land",
+                  "rings": 1,
+                  "areaBefore": 163470,
+                  "areaAfter": 163470,
+                  "trimmedPct": 0,
+                  "libUsed": true
+                },
+                {
+                  "name": "presidio",
+                  "clip": "land",
+                  "rings": 1,
+                  "areaBefore": 208895,
+                  "areaAfter": 208895,
+                  "trimmedPct": 0,
+                  "libUsed": true
+                }
+              ],
+              "clipLibUsed": true
+            },
+            "bands": {
+              "falseNegNonBoundary": 0,
+              "allHaveRings": true,
+              "detail": [
+                {
+                  "band": "storeship-mud-band",
+                  "hasRings": true,
+                  "ringCount": 1,
+                  "sampled": 529,
+                  "disagreements": 1,
+                  "falseNeg_nonBoundary": 0,
+                  "interiorIslets_falsePos_nonBoundary": 0
+                },
+                {
+                  "band": "beach-band",
+                  "hasRings": true,
+                  "ringCount": 1,
+                  "sampled": 529,
+                  "disagreements": 1,
+                  "falseNeg_nonBoundary": 0,
+                  "interiorIslets_falsePos_nonBoundary": 0
+                }
+              ]
+            },
+            "clippedClosedRings": {
+              "pass": true,
+              "bad": []
+            },
+            "parcels": 8,
+            "openRings": [],
+            "sampledPoints": 1587,
+            "predicateDisagreements": 0,
+            "inlandPointsInWater": [],
+            "plazaCentroidInOwnParcel": true,
+            "plazaBlockDerived": {
+              "oneBlock": true,
+              "block": "B|dupont|kearny|washington|clay",
+              "lotsInsidePlaza": 0,
+              "lotList": [],
+              "polyWithinBlock": true,
+              "polyBoundsDevM": 0,
+              "edgeToRowOffset": {
+                "stations": 24,
+                "maxM": 0,
+                "exact": true,
+                "sample": [
+                  {
+                    "day": 0,
+                    "edge": "dupont",
+                    "offM": 0
+                  },
+                  {
+                    "day": 0,
+                    "edge": "dupont",
+                    "offM": 0
+                  },
+                  {
+                    "day": 0,
+                    "edge": "dupont",
+                    "offM": 0
+                  },
+                  {
+                    "day": 0,
+                    "edge": "kearny",
+                    "offM": 0
+                  },
+                  {
+                    "day": 0,
+                    "edge": "kearny",
+                    "offM": 0
+                  },
+                  {
+                    "day": 0,
+                    "edge": "kearny",
+                    "offM": 0
+                  },
+                  {
+                    "day": 0,
+                    "edge": "washington",
+                    "offM": 0
+                  },
+                  {
+                    "day": 0,
+                    "edge": "washington",
+                    "offM": 0
+                  }
+                ]
+              }
+            }
+          },
+          "platFrame": {
+            "pass": true,
+            "law": "platFrame",
+            "singleFrame": true,
+            "base-1846": {
+              "skewDeg": -9,
+              "blocks": 15,
+              "edgesChecked": 30,
+              "maxDevDeg": 0,
+              "violations": 0,
+              "list": []
+            },
+            "base-1849": {
+              "skewDeg": -9,
+              "blocks": 146,
+              "edgesChecked": 292,
+              "maxDevDeg": 0,
+              "violations": 0,
+              "list": []
+            }
+          }
+        },
+        "red": false
+      },
+      "shots": [
+        {
+          "framing": "overview-1500m",
+          "alt": 1500,
+          "date": "1849-09-15",
+          "note": "region/zone band",
+          "file": "shots\\index-overview-1500m.png"
+        },
+        {
+          "framing": "town-500m",
+          "alt": 500,
+          "date": "1849-09-15",
+          "note": "street band",
+          "file": "shots\\index-town-500m.png"
+        },
+        {
+          "framing": "plaza-150m",
+          "alt": 150,
+          "date": "1849-12-20",
+          "note": "lot band",
+          "file": "shots\\index-plaza-150m.png"
+        }
+      ],
+      "errors": [],
+      "red": false
+    },
+    {
+      "label": "atelier",
+      "url": "http://127.0.0.1:65267/atelier.html",
+      "boot": {
+        "ok": true,
+        "veilCleared": true,
+        "consoleErrorsAtBoot": 0
+      },
+      "noon": [
+        {
+          "date": "1846-07-01",
+          "pass": true,
+          "ran": 35,
+          "failed": 0,
+          "failedList": [],
+          "unexpectedSkips": [],
+          "allowedSkips": [
+            {
+              "audit": "placement.anchorageHeading",
+              "why": "fewer than 2 anchored ships"
+            },
+            {
+              "audit": "placement.fences",
+              "why": "no yard fences built"
+            },
+            {
+              "audit": "placement.moorings",
+              "why": "Central Wharf not yet built at this date"
+            },
+            {
+              "audit": "placement.wharfContinuity",
+              "why": "Central Wharf not yet built at this date"
+            }
+          ],
+          "newConsoleErrors": 0,
+          "red": false
+        },
+        {
+          "date": "1848-04-01",
+          "pass": true,
+          "ran": 35,
+          "failed": 0,
+          "failedList": [],
+          "unexpectedSkips": [],
+          "allowedSkips": [
+            {
+              "audit": "placement.anchorageHeading",
+              "why": "fewer than 2 anchored ships"
+            },
+            {
+              "audit": "placement.fences",
+              "why": "no yard fences built"
+            },
+            {
+              "audit": "placement.moorings",
+              "why": "Central Wharf not yet built at this date"
+            },
+            {
+              "audit": "placement.wharfContinuity",
+              "why": "Central Wharf not yet built at this date"
+            }
+          ],
+          "newConsoleErrors": 0,
+          "red": false
+        },
+        {
+          "date": "1849-09-15",
+          "pass": true,
+          "ran": 35,
+          "failed": 0,
+          "failedList": [],
+          "unexpectedSkips": [],
+          "allowedSkips": [
+            {
+              "audit": "placement.anchorageHeading",
+              "why": "fewer than 2 anchored ships"
+            },
+            {
+              "audit": "placement.fences",
+              "why": "no yard fences built"
+            },
+            {
+              "audit": "placement.moorings",
+              "why": "Central Wharf not yet built at this date"
+            },
+            {
+              "audit": "placement.wharfContinuity",
+              "why": "Central Wharf not yet built at this date"
+            }
+          ],
+          "newConsoleErrors": 0,
+          "red": false
+        },
+        {
+          "date": "1849-12-20",
+          "pass": true,
+          "ran": 35,
+          "failed": 0,
+          "failedList": [],
+          "unexpectedSkips": [],
+          "allowedSkips": [
+            {
+              "audit": "placement.anchorageHeading",
+              "why": "fewer than 2 anchored ships"
+            },
+            {
+              "audit": "placement.fences",
+              "why": "no yard fences built"
+            },
+            {
+              "audit": "placement.moorings",
+              "why": "Central Wharf not yet built at this date"
+            },
+            {
+              "audit": "placement.wharfContinuity",
+              "why": "Central Wharf not yet built at this date"
+            }
+          ],
+          "newConsoleErrors": 0,
+          "red": false
+        }
+      ],
+      "measurements": {
+        "geoOk": true,
+        "paintOk": true,
+        "lotOk": true,
+        "geodeticFit": {
+          "pass": true,
+          "datasetFitRms_m": 1.128,
+          "canonicalEndToEndRms_m": 1.232,
+          "canonicalEndToEndMax_m": 1.861,
+          "worst": "broadway_battery",
+          "gridToWorldAzDeg": -9,
+          "gridRotBaseDeg": -9,
+          "azimuthDriftDeg": 0,
+          "worldToGridRoundTripMax_m": 3.18e-14,
+          "singleFrame": true,
+          "controlPoints": 8,
+          "gates": "fitRms<=2, e2eRms<=2, azDrift<=0.1deg, roundTrip<=1e-3m"
+        },
+        "paintAlignment": {
+          "constantWidth": {
+            "pass": true,
+            "streetsProbed": 14,
+            "piersProbed": 1,
+            "stations": 16,
+            "violations": [],
+            "skipped": [
+              "stockton",
+              "shubrick",
+              "mission-street",
+              "presidio-road",
+              "broadway-wharf"
+            ]
+          },
+          "eraPaint": {
+            "pass": true,
+            "unappeared": 0,
+            "probes": 0,
+            "statsViolations": [],
+            "pixelViolations": [],
+            "unappearedPiers": 4
+          },
+          "oneOwner": {
+            "pass": true,
+            "canvases": 1,
+            "meshes": 1,
+            "probes": 18,
+            "painted": 18,
+            "unpainted": []
+          },
+          "roadDarkerThanGround": {
+            "pass": true,
+            "roadLum": 0.352,
+            "terrainMedianLum": 0.46,
+            "samples": 1949
+          }
+        },
+        "lotFit": {
+          "platClosure": {
+            "pass": true,
+            "law": "platClosure",
+            "standardBlocks": 130,
+            "perDistrict": {
+              "fifty-vara": {
+                "standard": 53,
+                "nonStandard": 17,
+                "reserve": 1
+              },
+              "hundred-vara": {
+                "standard": 77,
+                "nonStandard": 0,
+                "reserve": 0
+              }
+            },
+            "publicReserveBlocks": 1,
+            "publicReserveWithLots": [],
+            "nonStandardFlagged": 17,
+            "closureFailures": 0,
+            "failList": [],
+            "nonStandardList": [
+              {
+                "block": "B|sansome|battery|vallejo|broadway",
+                "shape": "2x2",
+                "lots": 4,
+                "water": 0
+              },
+              {
+                "block": "B|sansome|battery|broadway|pacific",
+                "shape": "2x2",
+                "lots": 4,
+                "water": 0
+              },
+              {
+                "block": "B|sansome|battery|pacific|jackson",
+                "shape": "2x2",
+                "lots": 4,
+                "water": 3
+              },
+              {
+                "block": "B|sansome|battery|jackson|washington",
+                "shape": "2x2",
+                "lots": 4,
+                "water": 4
+              },
+              {
+                "block": "B|sansome|battery|washington|clay",
+                "shape": "2x2",
+                "lots": 4,
+                "water": 4
+              },
+              {
+                "block": "B|sansome|battery|clay|sacramento",
+                "shape": "2x2",
+                "lots": 4,
+                "water": 4
+              },
+              {
+                "block": "B|sansome|battery|sacramento|california-street",
+                "shape": "2x2",
+                "lots": 4,
+                "water": 4
+              },
+              {
+                "block": "B|sansome|battery|california-street|pine",
+                "shape": "2x2",
+                "lots": 4,
+                "water": 3
+              },
+              {
+                "block": "B|sansome|battery|pine|bush",
+                "shape": "2x2",
+                "lots": 4,
+                "water": 0
+              },
+              {
+                "block": "B|battery|front|vallejo|broadway",
+                "shape": "2x2",
+                "lots": 4,
+                "water": 2
+              },
+              {
+                "block": "B|battery|front|broadway|pacific",
+                "shape": "2x2",
+                "lots": 4,
+                "water": 3
+              },
+              {
+                "block": "B|battery|front|pacific|jackson",
+                "shape": "2x2",
+                "lots": 4,
+                "water": 4
+              },
+              {
+                "block": "B|battery|front|jackson|washington",
+                "shape": "2x2",
+                "lots": 4,
+                "water": 4
+              },
+              {
+                "block": "B|battery|front|washington|clay",
+                "shape": "2x2",
+                "lots": 4,
+                "water": 4
+              },
+              {
+                "block": "B|battery|front|clay|sacramento",
+                "shape": "2x2",
+                "lots": 4,
+                "water": 4
+              },
+              {
+                "block": "B|battery|front|sacramento|california-street",
+                "shape": "2x2",
+                "lots": 4,
+                "water": 4
+              },
+              {
+                "block": "B|battery|front|california-street|pine",
+                "shape": "2x2",
+                "lots": 4,
+                "water": 4
+              }
+            ]
+          },
+          "lotDeterminism": {
+            "pass": true,
+            "law": "determinism",
+            "byteIdentical": true,
+            "rngConsumed": 0,
+            "blocks": 148,
+            "lots": 848
+          },
+          "parcelIntegrity": {
+            "pass": true,
+            "law": "parcelIntegrity",
+            "clip": {
+              "landParcelsContainNoWater": true,
+              "seawardPointsTested": 355,
+              "seawardInLandParcel": [],
+              "parcelClips": [
+                {
+                  "name": "yerba-buena-cove",
+                  "clip": "water",
+                  "rings": 1,
+                  "areaBefore": 1871647,
+                  "areaAfter": 1864414,
+                  "trimmedPct": 0.39,
+                  "libUsed": true
+                },
+                {
+                  "name": "happy-valley-camp",
+                  "clip": "land",
+                  "rings": 1,
+                  "areaBefore": 4886300,
+                  "areaAfter": 3569014,
+                  "trimmedPct": 26.96,
+                  "libUsed": true
+                },
+                {
+                  "name": "mission-cluster",
+                  "clip": "land",
+                  "rings": 1,
+                  "areaBefore": 163470,
+                  "areaAfter": 163470,
+                  "trimmedPct": 0,
+                  "libUsed": true
+                },
+                {
+                  "name": "presidio",
+                  "clip": "land",
+                  "rings": 1,
+                  "areaBefore": 208895,
+                  "areaAfter": 208895,
+                  "trimmedPct": 0,
+                  "libUsed": true
+                }
+              ],
+              "clipLibUsed": true
+            },
+            "bands": {
+              "falseNegNonBoundary": 0,
+              "allHaveRings": true,
+              "detail": [
+                {
+                  "band": "storeship-mud-band",
+                  "hasRings": true,
+                  "ringCount": 1,
+                  "sampled": 529,
+                  "disagreements": 1,
+                  "falseNeg_nonBoundary": 0,
+                  "interiorIslets_falsePos_nonBoundary": 0
+                },
+                {
+                  "band": "beach-band",
+                  "hasRings": true,
+                  "ringCount": 1,
+                  "sampled": 529,
+                  "disagreements": 1,
+                  "falseNeg_nonBoundary": 0,
+                  "interiorIslets_falsePos_nonBoundary": 0
+                }
+              ]
+            },
+            "clippedClosedRings": {
+              "pass": true,
+              "bad": []
+            },
+            "parcels": 8,
+            "openRings": [],
+            "sampledPoints": 1587,
+            "predicateDisagreements": 0,
+            "inlandPointsInWater": [],
+            "plazaCentroidInOwnParcel": true,
+            "plazaBlockDerived": {
+              "oneBlock": true,
+              "block": "B|dupont|kearny|washington|clay",
+              "lotsInsidePlaza": 0,
+              "lotList": [],
+              "polyWithinBlock": true,
+              "polyBoundsDevM": 0,
+              "edgeToRowOffset": {
+                "stations": 24,
+                "maxM": 0,
+                "exact": true,
+                "sample": [
+                  {
+                    "day": 0,
+                    "edge": "dupont",
+                    "offM": 0
+                  },
+                  {
+                    "day": 0,
+                    "edge": "dupont",
+                    "offM": 0
+                  },
+                  {
+                    "day": 0,
+                    "edge": "dupont",
+                    "offM": 0
+                  },
+                  {
+                    "day": 0,
+                    "edge": "kearny",
+                    "offM": 0
+                  },
+                  {
+                    "day": 0,
+                    "edge": "kearny",
+                    "offM": 0
+                  },
+                  {
+                    "day": 0,
+                    "edge": "kearny",
+                    "offM": 0
+                  },
+                  {
+                    "day": 0,
+                    "edge": "washington",
+                    "offM": 0
+                  },
+                  {
+                    "day": 0,
+                    "edge": "washington",
+                    "offM": 0
+                  }
+                ]
+              }
+            }
+          },
+          "platFrame": {
+            "pass": true,
+            "law": "platFrame",
+            "singleFrame": true,
+            "base-1846": {
+              "skewDeg": -9,
+              "blocks": 15,
+              "edgesChecked": 30,
+              "maxDevDeg": 0,
+              "violations": 0,
+              "list": []
+            },
+            "base-1849": {
+              "skewDeg": -9,
+              "blocks": 146,
+              "edgesChecked": 292,
+              "maxDevDeg": 0,
+              "violations": 0,
+              "list": []
+            }
+          }
+        },
+        "red": false
+      },
+      "shots": [
+        {
+          "framing": "overview-1500m",
+          "alt": 1500,
+          "date": "1849-09-15",
+          "note": "region/zone band",
+          "file": "shots\\atelier-overview-1500m.png"
+        },
+        {
+          "framing": "town-500m",
+          "alt": 500,
+          "date": "1849-09-15",
+          "note": "street band",
+          "file": "shots\\atelier-town-500m.png"
+        },
+        {
+          "framing": "plaza-150m",
+          "alt": 150,
+          "date": "1849-12-20",
+          "note": "lot band",
+          "file": "shots\\atelier-plaza-150m.png"
+        }
+      ],
+      "errors": [],
+      "red": false
+    }
+  ]
+}

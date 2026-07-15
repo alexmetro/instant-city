@@ -58,6 +58,8 @@ const SRC = path.join(APP, "src");
    only rejects duplicates/mis-order (see below). */
 const FILES = [
   "vendor/polybool.js",      // s87 — VENDORED polybooljs@1.2.2 (MIT), chunk 00: installs window.PolyBool BEFORE the app IIFE (foundation-reset §4b, the vendored-solved-problems policy; first consumer). Self-contained, zero-dep, deterministic.
+  "vendor/rbush.js",         // s90 — VENDORED rbush@3.0.1 (MIT), chunk 07: R-tree screen-box index for labels declutter (module-local RBush). §4b, second consumer.
+  "vendor/polylabel.js",     // s90 — VENDORED polylabel@1.1.0 + tinyqueue (ISC), chunk 09: polygon pole-of-inaccessibility for label anchors (module-local polylabel). §4b.
   "core/00-boot.js",
   "core/01-geography.js",
   "core/02-scene.js",
@@ -69,6 +71,7 @@ const FILES = [
   "core/07-main.js",
   "layers/terrain.js",       // slot 1  — KEPT (s78 1846 baseline)
   "layers/ground-paint.js",  // slot 2  — REWRITE (minimal uniform roads, admission #1)
+  "layers/labels.js",        // slot 12 — NEW (s90 admission): lot ground-text · street names · zones & landmarks (chunk 40)
   "layers/camera-input.js",  // slot 11 — KEPT (camera rig + pointer/keys + speed pill; the app must be navigable)
   "layers/ui-chrome.js"      // slot 13 — KEPT (HUD/timeline/menu/clock chrome + ticker + paper)
 ];

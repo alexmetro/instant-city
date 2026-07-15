@@ -144,6 +144,10 @@ window.__P1850 = {
   watch: setWatchMode, speed: setSimSpeed, flyTo: flyTo,
   get speedKey(){ return simSpeedKey; },
   get splatStats(){ return SPLAT_LAST_STATS; }, // s20 QA: era-diff ground truth — what the last splat repaint actually painted, per street
+  // s90 LABELS QA: the live set (post zoom-band + declutter) and the full built
+  // set (pre-gate: what the current date + sublayers produced). null until the
+  // labels layer is assembled in this build.
+  get labels(){ return (typeof labelsLiveSet==="function") ? { live:labelsLiveSet(), built:labelsBuiltSet() } : null; },
   /* ROAD LIFECYCLE (grounding.md §9b, s27): per-street lifecycle state at
      the CURRENT date, computed fresh (rewind-exact — pure function of
      simDay). streetId accepts the dataset id, a numbered-street member id,

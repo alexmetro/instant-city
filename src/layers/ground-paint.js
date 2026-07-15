@@ -50,7 +50,17 @@ var GP_TONE_PLANK = "#9c8560"; // rgb(156,133,96) — luminance ~0.51, reads as 
 /* ---- WORLD-SPACE PAINT CANVAS. Uniform px/m on both axes (canvas sized to
    the world aspect), so a constant class width in metres paints a constant
    width in pixels regardless of street orientation. ---- */
-var GP_MAXDIM = IS_TOUCH ? 2048 : 4096;
+/* s90 item C — desktop MAXDIM 4096 → 6144. The canvas spans the whole 17 km
+   peninsula domain, so at 4096 it resolved only ~0.24 px/m: a 10.67 m plank
+   deck was ~2.6 px wide, and the constantWidth probe (single-pixel alpha reads,
+   ~4 m pixel pitch) measured 8.4 m at one station and 12.4 m at the next purely
+   from sub-pixel phase (spread 4.0 m > tol 3.2 m) — a MEASUREMENT artifact of a
+   sub-3px feature, the painted width was already uniform. 6144 ⇒ ~0.36 px/m
+   (deck ~3.85 px, pixel pitch ~2.8 m), so a class-width member resolves to a
+   stable, station-independent width. Touch stays 2048 (mobile perf; the harness
+   verifies desktop). Not the reserved close-zoom "resolution tiering" art-gate
+   — the minimum bump for a surveyed member to measure constant. */
+var GP_MAXDIM = IS_TOUCH ? 2048 : 6144;
 var GP_PXPM = GP_MAXDIM / Math.max(WORLD.sizeX, WORLD.sizeZ);
 var GP_W = Math.max(2, Math.round(WORLD.sizeX * GP_PXPM));
 var GP_H = Math.max(2, Math.round(WORLD.sizeZ * GP_PXPM));
@@ -124,13 +134,24 @@ var _gpID = null;             // cached ImageData for audits, dropped each repai
 function _gpStrokeRun(pts, cls){
   if(pts.length < 2) return;
   if(cls === 1){ gpCtx.globalAlpha = GP_GHOST_ALPHA; gpCtx.strokeStyle = GP_TONE_GHOST; gpCtx.lineWidth = Math.max(1, gpPxLen(GP_GHOST_WM)); }
-  else if(cls === 3){ gpCtx.globalAlpha = 1;         gpCtx.strokeStyle = GP_TONE_PLANK; gpCtx.lineWidth = Math.max(1, gpPxLen(pts._wM)); } // s84 pier plank deck
   else         { gpCtx.globalAlpha = 1;              gpCtx.strokeStyle = GP_TONE_ROAD;  gpCtx.lineWidth = Math.max(1, gpPxLen(pts._wM)); }
   var p0 = gpPx(pts[0].x, pts[0].z);
   gpCtx.beginPath(); gpCtx.moveTo(p0.x, p0.y);
   for(var i = 1; i < pts.length; i++){ var p = gpPx(pts[i].x, pts[i].z); gpCtx.lineTo(p.x, p.y); }
   gpCtx.stroke();
   gpCtx.globalAlpha = 1;
+}
+/* s90 item C — fill a closed world-space ring (pier plank deck). Filling the
+   exact deck polygon gives symmetric coverage-AA on both long edges, so the
+   deck paints a MEASURABLY constant width even where it is only a few px wide
+   (a centred stroke of a sub-3px diagonal line does not — see the pier branch). */
+function _gpFillPoly(ring, tone){
+  if(!ring || ring.length < 3) return;
+  gpCtx.globalAlpha = 1; gpCtx.fillStyle = tone;
+  var p0 = gpPx(ring[0].x, ring[0].z);
+  gpCtx.beginPath(); gpCtx.moveTo(p0.x, p0.y);
+  for(var i = 1; i < ring.length; i++){ var p = gpPx(ring[i].x, ring[i].z); gpCtx.lineTo(p.x, p.y); }
+  gpCtx.closePath(); gpCtx.fill();
 }
 
 function renderGroundSplat(){
@@ -193,17 +214,22 @@ function renderGroundSplat(){
      (wood, lawfully slightly lighter than terrain). One uniform tone, one pass. */
   if(typeof PIERS_RUNTIME !== "undefined") PIERS_RUNTIME.forEach(function(p){
     var rec = stats.streets[p.id] = { painted:false, ghostSegs:0, wornSegs:0, state:4, worldPoly:null, stations:[], isPier:true };
-    var active = pierActiveCheckpoint(p, simDay);
-    if(!active) return; // era gate: not yet built at simDay
-    var i0 = active.extent[0], i1 = active.extent[1], wpts = [];
-    for(var pi = i0; pi <= i1; pi++) wpts.push(gridToWorldAt(p.polyline[pi].u, p.polyline[pi].v, GRID_ROT_BASE));
-    if(wpts.length < 2) return;
-    rec.worldPoly = wpts;
-    var run = wpts.slice(); run._wM = p.widthM;
-    _gpStrokeRun(run, 3);                       // class 3 = plank deck
-    rec.wornSegs = wpts.length - 1; rec.painted = true;
-    for(var si = 0; si < wpts.length - 1 && rec.stations.length < 3; si++){
-      var a = wpts[si], b = wpts[si+1], dl = Math.hypot(b.x-a.x, b.z-a.z);
+    /* s90 item C — FILLED DECK QUAD, not a centred stroke. The deck is only a
+       few px wide on the peninsula-scale paint canvas (~0.24 px/m ⇒ a 10.67 m
+       deck ≈ 2.6 px); a canvas STROKE of a diagonal line only ~2.6 px wide lays
+       down asymmetric per-pixel edge coverage, so the constantWidth probe read
+       8.4 m at one station and 12.4 m at the next (spread 4.0 m > tol 3.2 m) even
+       though the painted width was uniform. Filling the EXACT deck polygon
+       (pierEdgesAt → centreline ± width/2, the cadastre's own deck geometry) lays
+       coverage-based AA symmetrically about BOTH edges, so the perpendicular
+       measurement lands the same width at every station — genuinely constant. */
+    var e = pierEdgesAt(p, simDay);
+    if(!e || !e.active || !e.deckQuad || e.deckQuad.length < 4) return; // era gate: not yet built at simDay
+    rec.worldPoly = e.centerline;
+    _gpFillPoly(e.deckQuad, GP_TONE_PLANK);     // plank deck (grounding §9 planked exception)
+    rec.wornSegs = e.centerline.length - 1; rec.painted = true;
+    for(var si = 0; si < e.centerline.length - 1 && rec.stations.length < 3; si++){
+      var a = e.centerline[si], b = e.centerline[si+1], dl = Math.hypot(b.x-a.x, b.z-a.z);
       if(dl > 8) rec.stations.push({ x:(a.x+b.x)/2, z:(a.z+b.z)/2, nx:-(b.z-a.z)/dl, nz:(b.x-a.x)/dl });
     }
   });

@@ -84,7 +84,9 @@
     knobs: { sunMul:1, hemiMul:1, ambientMul:1, nightLift:0, detailAmp:null, doodadMul:1, streetAlphaMul:1 }
   };
   var WB_ORDER = ["terrain","ground-paint","zones-tint","buildings","doodads","people","ships","fauna","effects","labels"];
-  var WB_LAYERS = WB_ORDER.filter(function(n){ return !!__P1850_LAYER_VIS[n]; });
+  // labels is presented as its own tri-state FAMILY below (parent + 3 sublayers),
+  // not a flat mute row — exclude it here so it is not doubled.
+  var WB_LAYERS = WB_ORDER.filter(function(n){ return !!__P1850_LAYER_VIS[n] && n!=="labels"; });
   WB.knobs.detailAmp = window.__P1850 ? +window.__P1850.detailAmp : 1;
   var WB_KNOB_DEFAULTS = JSON.parse(JSON.stringify(WB.knobs));
   var WB_DOODAD_CELL_BASE = (typeof DOODAD_CELL !== "undefined") ? DOODAD_CELL : null; /* FOUNDATION: awaiting admission of doodads — knob inert until then */
@@ -167,6 +169,56 @@
       r.solo.classList.toggle("on", WB.solo===n);
       r.row.classList.toggle("off", !wbLayerOn(n));
     });
+  }
+
+  /* ---- 1c. LABELS FAMILY (s90) — the labels render-layer's category sublayers
+     as a tri-state family (parent LABELS → LOTS / STREETS / ZONES & LANDMARKS),
+     mirroring the Ground Plan group. Children drive labelsSetSublayer(); the
+     parent mirrors their state and mutes the whole layer via the visibility
+     registry (__P1850_LAYER_VIS.labels). Present only when the labels layer is
+     assembled in this build. ---- */
+  if(typeof __P1850_LAYER_VIS.labels === "function" && typeof labelsSetSublayer === "function"){
+    el("div","wb-sec","LABELS  (world text · §11 — tri-state family)");
+    var lblParentVisible = true;                    // the registry parent (LABELS layer present)
+    var lblGroupWrap = el("div","wb-ov-group");
+    var lblHeadRow = el("div","wb-row wb-ov-parent", null, lblGroupWrap);
+    var lblParentCb = document.createElement("input"); lblParentCb.type="checkbox"; lblHeadRow.appendChild(lblParentCb);
+    el("span","wb-lname wb-ov-parent-name","LABELS — floating haloed world text",lblHeadRow);
+    el("div","wb-ov-grouphdr","Lot ground-text · street names · zones & landmarks. §11 zoom bands: regions own the high view, streets then lots fade in on descent.",lblGroupWrap);
+    var lblBody = el("div","wb-ov-groupbody",null,lblGroupWrap);
+    var LBL_CHILDREN = [
+      ["lots",    "LOTS — record lot number + owner (flat ground text, polylabel anchor)"],
+      ["streets", "STREETS — era-correct names along the line (small-caps voice)"],
+      ["zones",   "ZONES & LANDMARKS — hills · waterways (blue italic) · plaza · outposts"]
+    ];
+    var lblChildCbs = {};
+    function lblSyncParent(){
+      var on = 0; LBL_CHILDREN.forEach(function(c){ if(labelsGetSublayer(c[0])) on++; });
+      LBL_CHILDREN.forEach(function(c){ lblChildCbs[c[0]].checked = labelsGetSublayer(c[0]); });
+      lblParentCb.checked = lblParentVisible && on > 0;
+      lblParentCb.indeterminate = lblParentVisible && on > 0 && on < LBL_CHILDREN.length;
+    }
+    LBL_CHILDREN.forEach(function(c){
+      var r = overlayRow(lblBody, c[0], "wb-ov-child", c[1], "");
+      r.legend.remove();                            // no separate legend line for these
+      lblChildCbs[c[0]] = r.cb;
+      r.cb.addEventListener("change", function(){
+        labelsSetSublayer(c[0], r.cb.checked);
+        if(r.cb.checked && !lblParentVisible){ lblParentVisible = true; __P1850_LAYER_VIS.labels(true); }
+        lblSyncParent();
+      });
+    });
+    lblParentCb.addEventListener("change", function(){
+      var want = lblParentCb.checked; lblParentCb.indeterminate = false;
+      if(want){
+        lblParentVisible = true; __P1850_LAYER_VIS.labels(true);
+        LBL_CHILDREN.forEach(function(c){ labelsSetSublayer(c[0], true); });
+      } else {
+        lblParentVisible = false; __P1850_LAYER_VIS.labels(false);   // mute the whole layer; child states preserved
+      }
+      lblSyncParent();
+    });
+    lblSyncParent();
   }
 
   /* ---- 2b. TERRAIN VIEW (Director addendum #3) — diagnostic material MODES

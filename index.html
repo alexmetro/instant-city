@@ -5317,12 +5317,791 @@ var DETAIL_GLSL_PARS = [
   "  return vec3(n.x, g);",
   "}"
 ].join("\n");
+/* =====================================================================
+   src/vendor/ — VENDORED SOLVED-PROBLEM (foundation-reset.md §4b, the
+   vendored-solved-problems policy). s90 THE LABELS BATCH is the second
+   consumer of the policy (after s87's polybooljs). ONE clearly-marked
+   vendor chunk, one self-contained file, pinned version, upstream license
+   verbatim, deterministic pure functions only (grepped: no Date / no
+   Math.random / no performance.* anywhere in the bundle).
+
+   WHY rbush — the §4b JUSTIFICATION: the labels layer needs priority
+   COLLISION DECLUTTER of label screen-boxes (the MapLibre semantics the
+   brief specifies) — insert placed labels' 2-D screen rectangles into a
+   spatial index and query "does this candidate overlap any already-placed
+   higher-priority label?" every frame the camera moves. That is exactly
+   an axis-aligned bounding-box R-tree; rbush is THE canonical tiny, single-
+   file, zero-runtime-dep implementation (bundles its own quickselect inline,
+   no external require). Hand-rolling an O(n²) box-overlap loop for dozens of
+   candidates per frame is the "checkable solved problem" a gate rejects.
+
+   PINNED: rbush@3.0.1 (npm), Vladimir Agafonkin, MIT. The body below is the
+   package's dist rbush.js UMD factory VERBATIM (import review per foundation-
+   reset §3.1: read end-to-end — one self-contained factory, quickselect
+   inlined, zero external module lookups, no assets/network/clock/RNG). The
+   only edit is the module wrapper: the UMD `(function(global,factory){…}(this,
+   function(){…}))` that would assign `window.RBush` is replaced by a plain
+   IIFE assigned to the module-local `var RBush` — the app is one classic-
+   script IIFE and every later chunk closes over this var (no global needed;
+   unlike polybooljs which stays a script-scope global for the pre-IIFE
+   cadastre). GREAT SPLIT: this file holds 1 chunk (build-app.js FILES).
+
+   ---- upstream LICENSE (MIT), included verbatim per its terms ----
+   MIT License
+   Copyright (c) 2016 Vladimir Agafonkin
+   Permission is hereby granted, free of charge, to any person obtaining a copy
+   of this software and associated documentation files (the "Software"), to deal
+   in the Software without restriction, including without limitation the rights
+   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+   copies of the Software, and to permit persons to whom the Software is
+   furnished to do so, subject to the following conditions:
+   The above copyright notice and this permission notice shall be included in
+   all copies or substantial portions of the Software.
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+   THE SOFTWARE.
+   ===================================================================== */
+var RBush = (function () { 'use strict';
+
+function quickselect(arr, k, left, right, compare) {
+    quickselectStep(arr, k, left || 0, right || (arr.length - 1), compare || defaultCompare);
+}
+
+function quickselectStep(arr, k, left, right, compare) {
+
+    while (right > left) {
+        if (right - left > 600) {
+            var n = right - left + 1;
+            var m = k - left + 1;
+            var z = Math.log(n);
+            var s = 0.5 * Math.exp(2 * z / 3);
+            var sd = 0.5 * Math.sqrt(z * s * (n - s) / n) * (m - n / 2 < 0 ? -1 : 1);
+            var newLeft = Math.max(left, Math.floor(k - m * s / n + sd));
+            var newRight = Math.min(right, Math.floor(k + (n - m) * s / n + sd));
+            quickselectStep(arr, k, newLeft, newRight, compare);
+        }
+
+        var t = arr[k];
+        var i = left;
+        var j = right;
+
+        swap(arr, left, k);
+        if (compare(arr[right], t) > 0) { swap(arr, left, right); }
+
+        while (i < j) {
+            swap(arr, i, j);
+            i++;
+            j--;
+            while (compare(arr[i], t) < 0) { i++; }
+            while (compare(arr[j], t) > 0) { j--; }
+        }
+
+        if (compare(arr[left], t) === 0) { swap(arr, left, j); }
+        else {
+            j++;
+            swap(arr, j, right);
+        }
+
+        if (j <= k) { left = j + 1; }
+        if (k <= j) { right = j - 1; }
+    }
+}
+
+function swap(arr, i, j) {
+    var tmp = arr[i];
+    arr[i] = arr[j];
+    arr[j] = tmp;
+}
+
+function defaultCompare(a, b) {
+    return a < b ? -1 : a > b ? 1 : 0;
+}
+
+var RBush = function RBush(maxEntries) {
+    if ( maxEntries === void 0 ) maxEntries = 9;
+
+    // max entries in a node is 9 by default; min node fill is 40% for best performance
+    this._maxEntries = Math.max(4, maxEntries);
+    this._minEntries = Math.max(2, Math.ceil(this._maxEntries * 0.4));
+    this.clear();
+};
+
+RBush.prototype.all = function all () {
+    return this._all(this.data, []);
+};
+
+RBush.prototype.search = function search (bbox) {
+    var node = this.data;
+    var result = [];
+
+    if (!intersects(bbox, node)) { return result; }
+
+    var toBBox = this.toBBox;
+    var nodesToSearch = [];
+
+    while (node) {
+        for (var i = 0; i < node.children.length; i++) {
+            var child = node.children[i];
+            var childBBox = node.leaf ? toBBox(child) : child;
+
+            if (intersects(bbox, childBBox)) {
+                if (node.leaf) { result.push(child); }
+                else if (contains(bbox, childBBox)) { this._all(child, result); }
+                else { nodesToSearch.push(child); }
+            }
+        }
+        node = nodesToSearch.pop();
+    }
+
+    return result;
+};
+
+RBush.prototype.collides = function collides (bbox) {
+    var node = this.data;
+
+    if (!intersects(bbox, node)) { return false; }
+
+    var nodesToSearch = [];
+    while (node) {
+        for (var i = 0; i < node.children.length; i++) {
+            var child = node.children[i];
+            var childBBox = node.leaf ? this.toBBox(child) : child;
+
+            if (intersects(bbox, childBBox)) {
+                if (node.leaf || contains(bbox, childBBox)) { return true; }
+                nodesToSearch.push(child);
+            }
+        }
+        node = nodesToSearch.pop();
+    }
+
+    return false;
+};
+
+RBush.prototype.load = function load (data) {
+    if (!(data && data.length)) { return this; }
+
+    if (data.length < this._minEntries) {
+        for (var i = 0; i < data.length; i++) {
+            this.insert(data[i]);
+        }
+        return this;
+    }
+
+    // recursively build the tree with the given data from scratch using OMT algorithm
+    var node = this._build(data.slice(), 0, data.length - 1, 0);
+
+    if (!this.data.children.length) {
+        // save as is if tree is empty
+        this.data = node;
+
+    } else if (this.data.height === node.height) {
+        // split root if trees have the same height
+        this._splitRoot(this.data, node);
+
+    } else {
+        if (this.data.height < node.height) {
+            // swap trees if inserted one is bigger
+            var tmpNode = this.data;
+            this.data = node;
+            node = tmpNode;
+        }
+
+        // insert the small tree into the large tree at appropriate level
+        this._insert(node, this.data.height - node.height - 1, true);
+    }
+
+    return this;
+};
+
+RBush.prototype.insert = function insert (item) {
+    if (item) { this._insert(item, this.data.height - 1); }
+    return this;
+};
+
+RBush.prototype.clear = function clear () {
+    this.data = createNode([]);
+    return this;
+};
+
+RBush.prototype.remove = function remove (item, equalsFn) {
+    if (!item) { return this; }
+
+    var node = this.data;
+    var bbox = this.toBBox(item);
+    var path = [];
+    var indexes = [];
+    var i, parent, goingUp;
+
+    // depth-first iterative tree traversal
+    while (node || path.length) {
+
+        if (!node) { // go up
+            node = path.pop();
+            parent = path[path.length - 1];
+            i = indexes.pop();
+            goingUp = true;
+        }
+
+        if (node.leaf) { // check current node
+            var index = findItem(item, node.children, equalsFn);
+
+            if (index !== -1) {
+                // item found, remove the item and condense tree upwards
+                node.children.splice(index, 1);
+                path.push(node);
+                this._condense(path);
+                return this;
+            }
+        }
+
+        if (!goingUp && !node.leaf && contains(node, bbox)) { // go down
+            path.push(node);
+            indexes.push(i);
+            i = 0;
+            parent = node;
+            node = node.children[0];
+
+        } else if (parent) { // go right
+            i++;
+            node = parent.children[i];
+            goingUp = false;
+
+        } else { node = null; } // nothing found
+    }
+
+    return this;
+};
+
+RBush.prototype.toBBox = function toBBox (item) { return item; };
+
+RBush.prototype.compareMinX = function compareMinX (a, b) { return a.minX - b.minX; };
+RBush.prototype.compareMinY = function compareMinY (a, b) { return a.minY - b.minY; };
+
+RBush.prototype.toJSON = function toJSON () { return this.data; };
+
+RBush.prototype.fromJSON = function fromJSON (data) {
+    this.data = data;
+    return this;
+};
+
+RBush.prototype._all = function _all (node, result) {
+    var nodesToSearch = [];
+    while (node) {
+        if (node.leaf) { result.push.apply(result, node.children); }
+        else { nodesToSearch.push.apply(nodesToSearch, node.children); }
+
+        node = nodesToSearch.pop();
+    }
+    return result;
+};
+
+RBush.prototype._build = function _build (items, left, right, height) {
+
+    var N = right - left + 1;
+    var M = this._maxEntries;
+    var node;
+
+    if (N <= M) {
+        // reached leaf level; return leaf
+        node = createNode(items.slice(left, right + 1));
+        calcBBox(node, this.toBBox);
+        return node;
+    }
+
+    if (!height) {
+        // target height of the bulk-loaded tree
+        height = Math.ceil(Math.log(N) / Math.log(M));
+
+        // target number of root entries to maximize storage utilization
+        M = Math.ceil(N / Math.pow(M, height - 1));
+    }
+
+    node = createNode([]);
+    node.leaf = false;
+    node.height = height;
+
+    // split the items into M mostly square tiles
+
+    var N2 = Math.ceil(N / M);
+    var N1 = N2 * Math.ceil(Math.sqrt(M));
+
+    multiSelect(items, left, right, N1, this.compareMinX);
+
+    for (var i = left; i <= right; i += N1) {
+
+        var right2 = Math.min(i + N1 - 1, right);
+
+        multiSelect(items, i, right2, N2, this.compareMinY);
+
+        for (var j = i; j <= right2; j += N2) {
+
+            var right3 = Math.min(j + N2 - 1, right2);
+
+            // pack each entry recursively
+            node.children.push(this._build(items, j, right3, height - 1));
+        }
+    }
+
+    calcBBox(node, this.toBBox);
+
+    return node;
+};
+
+RBush.prototype._chooseSubtree = function _chooseSubtree (bbox, node, level, path) {
+    while (true) {
+        path.push(node);
+
+        if (node.leaf || path.length - 1 === level) { break; }
+
+        var minArea = Infinity;
+        var minEnlargement = Infinity;
+        var targetNode = (void 0);
+
+        for (var i = 0; i < node.children.length; i++) {
+            var child = node.children[i];
+            var area = bboxArea(child);
+            var enlargement = enlargedArea(bbox, child) - area;
+
+            // choose entry with the least area enlargement
+            if (enlargement < minEnlargement) {
+                minEnlargement = enlargement;
+                minArea = area < minArea ? area : minArea;
+                targetNode = child;
+
+            } else if (enlargement === minEnlargement) {
+                // otherwise choose one with the smallest area
+                if (area < minArea) {
+                    minArea = area;
+                    targetNode = child;
+                }
+            }
+        }
+
+        node = targetNode || node.children[0];
+    }
+
+    return node;
+};
+
+RBush.prototype._insert = function _insert (item, level, isNode) {
+    var bbox = isNode ? item : this.toBBox(item);
+    var insertPath = [];
+
+    // find the best node for accommodating the item, saving all nodes along the path too
+    var node = this._chooseSubtree(bbox, this.data, level, insertPath);
+
+    // put the item into the node
+    node.children.push(item);
+    extend(node, bbox);
+
+    // split on node overflow; propagate upwards if necessary
+    while (level >= 0) {
+        if (insertPath[level].children.length > this._maxEntries) {
+            this._split(insertPath, level);
+            level--;
+        } else { break; }
+    }
+
+    // adjust bboxes along the insertion path
+    this._adjustParentBBoxes(bbox, insertPath, level);
+};
+
+// split overflowed node into two
+RBush.prototype._split = function _split (insertPath, level) {
+    var node = insertPath[level];
+    var M = node.children.length;
+    var m = this._minEntries;
+
+    this._chooseSplitAxis(node, m, M);
+
+    var splitIndex = this._chooseSplitIndex(node, m, M);
+
+    var newNode = createNode(node.children.splice(splitIndex, node.children.length - splitIndex));
+    newNode.height = node.height;
+    newNode.leaf = node.leaf;
+
+    calcBBox(node, this.toBBox);
+    calcBBox(newNode, this.toBBox);
+
+    if (level) { insertPath[level - 1].children.push(newNode); }
+    else { this._splitRoot(node, newNode); }
+};
+
+RBush.prototype._splitRoot = function _splitRoot (node, newNode) {
+    // split root node
+    this.data = createNode([node, newNode]);
+    this.data.height = node.height + 1;
+    this.data.leaf = false;
+    calcBBox(this.data, this.toBBox);
+};
+
+RBush.prototype._chooseSplitIndex = function _chooseSplitIndex (node, m, M) {
+    var index;
+    var minOverlap = Infinity;
+    var minArea = Infinity;
+
+    for (var i = m; i <= M - m; i++) {
+        var bbox1 = distBBox(node, 0, i, this.toBBox);
+        var bbox2 = distBBox(node, i, M, this.toBBox);
+
+        var overlap = intersectionArea(bbox1, bbox2);
+        var area = bboxArea(bbox1) + bboxArea(bbox2);
+
+        // choose distribution with minimum overlap
+        if (overlap < minOverlap) {
+            minOverlap = overlap;
+            index = i;
+
+            minArea = area < minArea ? area : minArea;
+
+        } else if (overlap === minOverlap) {
+            // otherwise choose distribution with minimum area
+            if (area < minArea) {
+                minArea = area;
+                index = i;
+            }
+        }
+    }
+
+    return index || M - m;
+};
+
+// sorts node children by the best axis for split
+RBush.prototype._chooseSplitAxis = function _chooseSplitAxis (node, m, M) {
+    var compareMinX = node.leaf ? this.compareMinX : compareNodeMinX;
+    var compareMinY = node.leaf ? this.compareMinY : compareNodeMinY;
+    var xMargin = this._allDistMargin(node, m, M, compareMinX);
+    var yMargin = this._allDistMargin(node, m, M, compareMinY);
+
+    // if total distributions margin value is minimal for x, sort by minX,
+    // otherwise it's already sorted by minY
+    if (xMargin < yMargin) { node.children.sort(compareMinX); }
+};
+
+// total margin of all possible split distributions where each node is at least m full
+RBush.prototype._allDistMargin = function _allDistMargin (node, m, M, compare) {
+    node.children.sort(compare);
+
+    var toBBox = this.toBBox;
+    var leftBBox = distBBox(node, 0, m, toBBox);
+    var rightBBox = distBBox(node, M - m, M, toBBox);
+    var margin = bboxMargin(leftBBox) + bboxMargin(rightBBox);
+
+    for (var i = m; i < M - m; i++) {
+        var child = node.children[i];
+        extend(leftBBox, node.leaf ? toBBox(child) : child);
+        margin += bboxMargin(leftBBox);
+    }
+
+    for (var i$1 = M - m - 1; i$1 >= m; i$1--) {
+        var child$1 = node.children[i$1];
+        extend(rightBBox, node.leaf ? toBBox(child$1) : child$1);
+        margin += bboxMargin(rightBBox);
+    }
+
+    return margin;
+};
+
+RBush.prototype._adjustParentBBoxes = function _adjustParentBBoxes (bbox, path, level) {
+    // adjust bboxes along the given tree path
+    for (var i = level; i >= 0; i--) {
+        extend(path[i], bbox);
+    }
+};
+
+RBush.prototype._condense = function _condense (path) {
+    // go through the path, removing empty nodes and updating bboxes
+    for (var i = path.length - 1, siblings = (void 0); i >= 0; i--) {
+        if (path[i].children.length === 0) {
+            if (i > 0) {
+                siblings = path[i - 1].children;
+                siblings.splice(siblings.indexOf(path[i]), 1);
+
+            } else { this.clear(); }
+
+        } else { calcBBox(path[i], this.toBBox); }
+    }
+};
+
+function findItem(item, items, equalsFn) {
+    if (!equalsFn) { return items.indexOf(item); }
+
+    for (var i = 0; i < items.length; i++) {
+        if (equalsFn(item, items[i])) { return i; }
+    }
+    return -1;
+}
+
+// calculate node's bbox from bboxes of its children
+function calcBBox(node, toBBox) {
+    distBBox(node, 0, node.children.length, toBBox, node);
+}
+
+// min bounding rectangle of node children from k to p-1
+function distBBox(node, k, p, toBBox, destNode) {
+    if (!destNode) { destNode = createNode(null); }
+    destNode.minX = Infinity;
+    destNode.minY = Infinity;
+    destNode.maxX = -Infinity;
+    destNode.maxY = -Infinity;
+
+    for (var i = k; i < p; i++) {
+        var child = node.children[i];
+        extend(destNode, node.leaf ? toBBox(child) : child);
+    }
+
+    return destNode;
+}
+
+function extend(a, b) {
+    a.minX = Math.min(a.minX, b.minX);
+    a.minY = Math.min(a.minY, b.minY);
+    a.maxX = Math.max(a.maxX, b.maxX);
+    a.maxY = Math.max(a.maxY, b.maxY);
+    return a;
+}
+
+function compareNodeMinX(a, b) { return a.minX - b.minX; }
+function compareNodeMinY(a, b) { return a.minY - b.minY; }
+
+function bboxArea(a)   { return (a.maxX - a.minX) * (a.maxY - a.minY); }
+function bboxMargin(a) { return (a.maxX - a.minX) + (a.maxY - a.minY); }
+
+function enlargedArea(a, b) {
+    return (Math.max(b.maxX, a.maxX) - Math.min(b.minX, a.minX)) *
+           (Math.max(b.maxY, a.maxY) - Math.min(b.minY, a.minY));
+}
+
+function intersectionArea(a, b) {
+    var minX = Math.max(a.minX, b.minX);
+    var minY = Math.max(a.minY, b.minY);
+    var maxX = Math.min(a.maxX, b.maxX);
+    var maxY = Math.min(a.maxY, b.maxY);
+
+    return Math.max(0, maxX - minX) *
+           Math.max(0, maxY - minY);
+}
+
+function contains(a, b) {
+    return a.minX <= b.minX &&
+           a.minY <= b.minY &&
+           b.maxX <= a.maxX &&
+           b.maxY <= a.maxY;
+}
+
+function intersects(a, b) {
+    return b.minX <= a.maxX &&
+           b.minY <= a.maxY &&
+           b.maxX >= a.minX &&
+           b.maxY >= a.minY;
+}
+
+function createNode(children) {
+    return {
+        children: children,
+        height: 1,
+        leaf: true,
+        minX: Infinity,
+        minY: Infinity,
+        maxX: -Infinity,
+        maxY: -Infinity
+    };
+}
+
+// sort an array so that items come in groups of n unsorted items, with groups sorted between each other;
+// combines selection algorithm with binary divide & conquer approach
+
+function multiSelect(arr, left, right, n, compare) {
+    var stack = [left, right];
+
+    while (stack.length) {
+        right = stack.pop();
+        left = stack.pop();
+
+        if (right - left <= n) { continue; }
+
+        var mid = left + Math.ceil((right - left) / n / 2) * n;
+        quickselect(arr, mid, left, right, compare);
+
+        stack.push(left, mid, mid, right);
+    }
+}
+
+return RBush;
+})();
 var terrainMat = new THREE.MeshPhongMaterial({ vertexColors:true, flatShading:true, specular:0x000000, shininess:0,
   polygonOffset:true, polygonOffsetFactor:1, polygonOffsetUnits:1 });
 patchGroundDetailMaterial(terrainMat, "terrain", null);
 var terrainMesh = new THREE.Mesh(terrainGeo, terrainMat);
 scene.add(terrainMesh);
 
+/* =====================================================================
+   src/vendor/ — VENDORED SOLVED-PROBLEM (foundation-reset.md §4b). s90 THE
+   LABELS BATCH, second policy consumer (after s87's polybooljs). ONE clearly-
+   marked vendor chunk, one self-contained file, pinned versions, upstream
+   licenses verbatim, purely deterministic (grepped: no Date / Math.random /
+   performance.*).
+
+   WHY polylabel — the §4b JUSTIFICATION: every ground/zone label needs a good
+   ANCHOR POINT INSIDE its polygon — not the centroid (which falls outside
+   L-shaped blocks, cove crescents, the plaza-notched grid) but the "pole of
+   inaccessibility", the interior point farthest from any edge, so a label sits
+   squarely on its lot / parcel / water body. That is polylabel's exact and only
+   job; it is the canonical tiny single-file solution. Hand-rolling a pole-of-
+   inaccessibility search is the checkable solved problem a gate rejects.
+
+   PINNED: polylabel@1.1.0 (npm, Mapbox, ISC). Its one runtime dependency is
+   tinyqueue@2.0.3 (Vladimir Agafonkin, ISC) — a binary heap. To keep the §4b
+   single-file constraint, tinyqueue is INLINED here (its ES-class source
+   rewritten as an equivalent ES5 constructor so the whole app stays one classic
+   script) and polylabel's require('tinyqueue') is dropped. Import review per
+   foundation-reset §3.1: both bundles read end-to-end — pure geometry + a heap,
+   zero external lookups, no assets/network/clock/RNG. The CommonJS
+   module.exports = polylabel wrapper is replaced by assignment to the module-
+   local var polylabel (every later chunk closes over it).
+   GREAT SPLIT: this file holds 1 chunk (build-app.js FILES).
+
+   ---- upstream LICENSE — polylabel (ISC), Copyright (c) 2016 Mapbox ----
+   ---- upstream LICENSE — tinyqueue (ISC), Copyright (c) 2017 Vladimir Agafonkin ----
+   Permission to use, copy, modify, and/or distribute this software for any
+   purpose with or without fee is hereby granted, provided that the above
+   copyright notice and this permission notice appear in all copies. THE SOFTWARE
+   IS PROVIDED "AS IS" AND THE AUTHOR/ISC DISCLAIMS ALL WARRANTIES WITH REGARD TO
+   THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS.
+   IN NO EVENT SHALL THE AUTHOR/ISC BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT,
+   OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE,
+   DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS
+   ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS
+   SOFTWARE.
+   ===================================================================== */
+var polylabel = (function () { "use strict";
+
+  /* ---- tinyqueue@2.0.3 (ISC) — ES class inlined as an ES5 constructor ---- */
+  function TinyQueue(data, compare) {
+    this.data = data || [];
+    this.length = this.data.length;
+    this.compare = compare || defaultCompare;
+    if (this.length > 0) { for (var i = (this.length >> 1) - 1; i >= 0; i--) this._down(i); }
+  }
+  TinyQueue.prototype.push = function (item) {
+    this.data.push(item); this.length++; this._up(this.length - 1);
+  };
+  TinyQueue.prototype.pop = function () {
+    if (this.length === 0) return undefined;
+    var top = this.data[0], bottom = this.data.pop();
+    this.length--;
+    if (this.length > 0) { this.data[0] = bottom; this._down(0); }
+    return top;
+  };
+  TinyQueue.prototype.peek = function () { return this.data[0]; };
+  TinyQueue.prototype._up = function (pos) {
+    var data = this.data, compare = this.compare, item = data[pos];
+    while (pos > 0) {
+      var parent = (pos - 1) >> 1, current = data[parent];
+      if (compare(item, current) >= 0) break;
+      data[pos] = current; pos = parent;
+    }
+    data[pos] = item;
+  };
+  TinyQueue.prototype._down = function (pos) {
+    var data = this.data, compare = this.compare, halfLength = this.length >> 1, item = data[pos];
+    while (pos < halfLength) {
+      var left = (pos << 1) + 1, best = data[left], right = left + 1;
+      if (right < this.length && compare(data[right], best) < 0) { left = right; best = data[right]; }
+      if (compare(best, item) >= 0) break;
+      data[pos] = best; pos = left;
+    }
+    data[pos] = item;
+  };
+  function defaultCompare(a, b) { return a < b ? -1 : a > b ? 1 : 0; }
+
+  /* ---- polylabel@1.1.0 (ISC) — verbatim, require('tinyqueue') -> TinyQueue ---- */
+  function polylabel(polygon, precision, debug) {
+    precision = precision || 1.0;
+    var minX, minY, maxX, maxY;
+    for (var i = 0; i < polygon[0].length; i++) {
+      var p = polygon[0][i];
+      if (!i || p[0] < minX) minX = p[0];
+      if (!i || p[1] < minY) minY = p[1];
+      if (!i || p[0] > maxX) maxX = p[0];
+      if (!i || p[1] > maxY) maxY = p[1];
+    }
+    var width = maxX - minX, height = maxY - minY;
+    var cellSize = Math.min(width, height), h = cellSize / 2;
+    if (cellSize === 0) {
+      var degenerate = [minX, minY]; degenerate.distance = 0; return degenerate;
+    }
+    var cellQueue = new TinyQueue(undefined, compareMax);
+    for (var x = minX; x < maxX; x += cellSize) {
+      for (var y = minY; y < maxY; y += cellSize) {
+        cellQueue.push(new Cell(x + h, y + h, h, polygon));
+      }
+    }
+    var bestCell = getCentroidCell(polygon);
+    var bboxCell = new Cell(minX + width / 2, minY + height / 2, 0, polygon);
+    if (bboxCell.d > bestCell.d) bestCell = bboxCell;
+    var numProbes = cellQueue.length;
+    while (cellQueue.length) {
+      var cell = cellQueue.pop();
+      if (cell.d > bestCell.d) {
+        bestCell = cell;
+        if (debug) console.log("found best %d after %d probes", Math.round(1e4 * cell.d) / 1e4, numProbes);
+      }
+      if (cell.max - bestCell.d <= precision) continue;
+      h = cell.h / 2;
+      cellQueue.push(new Cell(cell.x - h, cell.y - h, h, polygon));
+      cellQueue.push(new Cell(cell.x + h, cell.y - h, h, polygon));
+      cellQueue.push(new Cell(cell.x - h, cell.y + h, h, polygon));
+      cellQueue.push(new Cell(cell.x + h, cell.y + h, h, polygon));
+      numProbes += 4;
+    }
+    var pole = [bestCell.x, bestCell.y]; pole.distance = bestCell.d; return pole;
+  }
+  function compareMax(a, b) { return b.max - a.max; }
+  function Cell(x, y, h, polygon) {
+    this.x = x; this.y = y; this.h = h;
+    this.d = pointToPolygonDist(x, y, polygon);
+    this.max = this.d + this.h * Math.SQRT2;
+  }
+  function pointToPolygonDist(x, y, polygon) {
+    var inside = false, minDistSq = Infinity;
+    for (var k = 0; k < polygon.length; k++) {
+      var ring = polygon[k];
+      for (var i = 0, len = ring.length, j = len - 1; i < len; j = i++) {
+        var a = ring[i], b = ring[j];
+        if ((a[1] > y !== b[1] > y) && (x < (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1]) + a[0])) inside = !inside;
+        minDistSq = Math.min(minDistSq, getSegDistSq(x, y, a, b));
+      }
+    }
+    return minDistSq === 0 ? 0 : (inside ? 1 : -1) * Math.sqrt(minDistSq);
+  }
+  function getCentroidCell(polygon) {
+    var area = 0, x = 0, y = 0, points = polygon[0];
+    for (var i = 0, len = points.length, j = len - 1; i < len; j = i++) {
+      var a = points[i], b = points[j], f = a[0] * b[1] - b[0] * a[1];
+      x += (a[0] + b[0]) * f; y += (a[1] + b[1]) * f; area += f * 3;
+    }
+    if (area === 0) return new Cell(points[0][0], points[0][1], 0, polygon);
+    return new Cell(x / area, y / area, 0, polygon);
+  }
+  function getSegDistSq(px, py, a, b) {
+    var x = a[0], y = a[1], dx = b[0] - x, dy = b[1] - y;
+    if (dx !== 0 || dy !== 0) {
+      var t = ((px - x) * dx + (py - y) * dy) / (dx * dx + dy * dy);
+      if (t > 1) { x = b[0]; y = b[1]; }
+      else if (t > 0) { x += dx * t; y += dy * t; }
+    }
+    dx = px - x; dy = py - y;
+    return dx * dx + dy * dy;
+  }
+
+  return polylabel;
+})();
 /* =====================================================================
    ROAD LIFECYCLE ENGINE — grounding.md §9b (s27 sprint, 2026-07-11).
    Roads are not booleans; they EMERGE. Every street piece carries a
@@ -5995,7 +6774,17 @@ var GP_TONE_PLANK = "#9c8560"; // rgb(156,133,96) — luminance ~0.51, reads as 
 /* ---- WORLD-SPACE PAINT CANVAS. Uniform px/m on both axes (canvas sized to
    the world aspect), so a constant class width in metres paints a constant
    width in pixels regardless of street orientation. ---- */
-var GP_MAXDIM = IS_TOUCH ? 2048 : 4096;
+/* s90 item C — desktop MAXDIM 4096 → 6144. The canvas spans the whole 17 km
+   peninsula domain, so at 4096 it resolved only ~0.24 px/m: a 10.67 m plank
+   deck was ~2.6 px wide, and the constantWidth probe (single-pixel alpha reads,
+   ~4 m pixel pitch) measured 8.4 m at one station and 12.4 m at the next purely
+   from sub-pixel phase (spread 4.0 m > tol 3.2 m) — a MEASUREMENT artifact of a
+   sub-3px feature, the painted width was already uniform. 6144 ⇒ ~0.36 px/m
+   (deck ~3.85 px, pixel pitch ~2.8 m), so a class-width member resolves to a
+   stable, station-independent width. Touch stays 2048 (mobile perf; the harness
+   verifies desktop). Not the reserved close-zoom "resolution tiering" art-gate
+   — the minimum bump for a surveyed member to measure constant. */
+var GP_MAXDIM = IS_TOUCH ? 2048 : 6144;
 var GP_PXPM = GP_MAXDIM / Math.max(WORLD.sizeX, WORLD.sizeZ);
 var GP_W = Math.max(2, Math.round(WORLD.sizeX * GP_PXPM));
 var GP_H = Math.max(2, Math.round(WORLD.sizeZ * GP_PXPM));
@@ -6069,13 +6858,24 @@ var _gpID = null;             // cached ImageData for audits, dropped each repai
 function _gpStrokeRun(pts, cls){
   if(pts.length < 2) return;
   if(cls === 1){ gpCtx.globalAlpha = GP_GHOST_ALPHA; gpCtx.strokeStyle = GP_TONE_GHOST; gpCtx.lineWidth = Math.max(1, gpPxLen(GP_GHOST_WM)); }
-  else if(cls === 3){ gpCtx.globalAlpha = 1;         gpCtx.strokeStyle = GP_TONE_PLANK; gpCtx.lineWidth = Math.max(1, gpPxLen(pts._wM)); } // s84 pier plank deck
   else         { gpCtx.globalAlpha = 1;              gpCtx.strokeStyle = GP_TONE_ROAD;  gpCtx.lineWidth = Math.max(1, gpPxLen(pts._wM)); }
   var p0 = gpPx(pts[0].x, pts[0].z);
   gpCtx.beginPath(); gpCtx.moveTo(p0.x, p0.y);
   for(var i = 1; i < pts.length; i++){ var p = gpPx(pts[i].x, pts[i].z); gpCtx.lineTo(p.x, p.y); }
   gpCtx.stroke();
   gpCtx.globalAlpha = 1;
+}
+/* s90 item C — fill a closed world-space ring (pier plank deck). Filling the
+   exact deck polygon gives symmetric coverage-AA on both long edges, so the
+   deck paints a MEASURABLY constant width even where it is only a few px wide
+   (a centred stroke of a sub-3px diagonal line does not — see the pier branch). */
+function _gpFillPoly(ring, tone){
+  if(!ring || ring.length < 3) return;
+  gpCtx.globalAlpha = 1; gpCtx.fillStyle = tone;
+  var p0 = gpPx(ring[0].x, ring[0].z);
+  gpCtx.beginPath(); gpCtx.moveTo(p0.x, p0.y);
+  for(var i = 1; i < ring.length; i++){ var p = gpPx(ring[i].x, ring[i].z); gpCtx.lineTo(p.x, p.y); }
+  gpCtx.closePath(); gpCtx.fill();
 }
 
 function renderGroundSplat(){
@@ -6138,17 +6938,22 @@ function renderGroundSplat(){
      (wood, lawfully slightly lighter than terrain). One uniform tone, one pass. */
   if(typeof PIERS_RUNTIME !== "undefined") PIERS_RUNTIME.forEach(function(p){
     var rec = stats.streets[p.id] = { painted:false, ghostSegs:0, wornSegs:0, state:4, worldPoly:null, stations:[], isPier:true };
-    var active = pierActiveCheckpoint(p, simDay);
-    if(!active) return; // era gate: not yet built at simDay
-    var i0 = active.extent[0], i1 = active.extent[1], wpts = [];
-    for(var pi = i0; pi <= i1; pi++) wpts.push(gridToWorldAt(p.polyline[pi].u, p.polyline[pi].v, GRID_ROT_BASE));
-    if(wpts.length < 2) return;
-    rec.worldPoly = wpts;
-    var run = wpts.slice(); run._wM = p.widthM;
-    _gpStrokeRun(run, 3);                       // class 3 = plank deck
-    rec.wornSegs = wpts.length - 1; rec.painted = true;
-    for(var si = 0; si < wpts.length - 1 && rec.stations.length < 3; si++){
-      var a = wpts[si], b = wpts[si+1], dl = Math.hypot(b.x-a.x, b.z-a.z);
+    /* s90 item C — FILLED DECK QUAD, not a centred stroke. The deck is only a
+       few px wide on the peninsula-scale paint canvas (~0.24 px/m ⇒ a 10.67 m
+       deck ≈ 2.6 px); a canvas STROKE of a diagonal line only ~2.6 px wide lays
+       down asymmetric per-pixel edge coverage, so the constantWidth probe read
+       8.4 m at one station and 12.4 m at the next (spread 4.0 m > tol 3.2 m) even
+       though the painted width was uniform. Filling the EXACT deck polygon
+       (pierEdgesAt → centreline ± width/2, the cadastre's own deck geometry) lays
+       coverage-based AA symmetrically about BOTH edges, so the perpendicular
+       measurement lands the same width at every station — genuinely constant. */
+    var e = pierEdgesAt(p, simDay);
+    if(!e || !e.active || !e.deckQuad || e.deckQuad.length < 4) return; // era gate: not yet built at simDay
+    rec.worldPoly = e.centerline;
+    _gpFillPoly(e.deckQuad, GP_TONE_PLANK);     // plank deck (grounding §9 planked exception)
+    rec.wornSegs = e.centerline.length - 1; rec.painted = true;
+    for(var si = 0; si < e.centerline.length - 1 && rec.stations.length < 3; si++){
+      var a = e.centerline[si], b = e.centerline[si+1], dl = Math.hypot(b.x-a.x, b.z-a.z);
       if(dl > 8) rec.stations.push({ x:(a.x+b.x)/2, z:(a.z+b.z)/2, nx:-(b.z-a.z)/dl, nz:(b.x-a.x)/dl });
     }
   });
@@ -7037,6 +7842,439 @@ function updateHorizonRing(alt){
     + '<div class="hr-items">'+items+'</div>';
 }
 
+
+/* ---- RELEASE DEFAULT (flagged for user sign-off): labels ON in index.html,
+   matching legacy behavior. One named constant governs the release-boot state
+   of the parent layer AND all three sublayers; the atelier's checkbox family
+   overrides at runtime (dev only). Flip to false to ship with labels off. ---- */
+var LABELS_ON_AT_RELEASE = true;
+
+/* sublayer visibility state (parent + three sublayers). The atelier writes
+   these via labelsSetSublayer(); release boots from the constant above. */
+var LABELS_VIS = {
+  parent:  LABELS_ON_AT_RELEASE,
+  lots:    LABELS_ON_AT_RELEASE,
+  streets: LABELS_ON_AT_RELEASE,
+  zones:   LABELS_ON_AT_RELEASE
+};
+
+/* ---- §11 CATEGORY VOICES. One grammar so a reader never confuses types:
+   waterways = blue italic serif · streets = small-caps · zones/landmarks =
+   spaced caps softer sepia · regions = large faint caps · civic (plaza) = a
+   warm civic accent · lots = ink numerals + owner. Halo = a dark stroke under
+   light text (survives any ground). ---- */
+var LBL_HALO_DARK = "rgba(12,14,17,0.82)";
+var LBL_STYLE = {
+  region:  { key:"region",  family:"Georgia, 'Times New Roman', serif", weight:"600", color:"#efe7d2", haloColor:LBL_HALO_DARK, halo:5, letterSpacing:0.34, smallCaps:true,  italic:false },
+  hill:    { key:"hill",    family:"Georgia, 'Times New Roman', serif", weight:"600", color:"#e9dfc4", haloColor:LBL_HALO_DARK, halo:5, letterSpacing:0.30, smallCaps:true,  italic:false },
+  water:   { key:"water",   family:"Georgia, 'Times New Roman', serif", weight:"600", color:"#9fc6dd", haloColor:LBL_HALO_DARK, halo:5, letterSpacing:0.18, smallCaps:false, italic:true  },
+  place:   { key:"place",   family:"Georgia, 'Times New Roman', serif", weight:"600", color:"#e7dcc2", haloColor:LBL_HALO_DARK, halo:5, letterSpacing:0.26, smallCaps:true,  italic:false },
+  civic:   { key:"civic",   family:"Georgia, 'Times New Roman', serif", weight:"700", color:"#f0d79a", haloColor:LBL_HALO_DARK, halo:5, letterSpacing:0.24, smallCaps:true,  italic:false },
+  street:  { key:"street",  family:"Georgia, 'Times New Roman', serif", weight:"600", color:"#efe9db", haloColor:LBL_HALO_DARK, halo:4, letterSpacing:0.22, smallCaps:true,  italic:false },
+  lotNum:  { key:"lotNum",  family:"Georgia, 'Times New Roman', serif", weight:"700", color:"#f4efe4", haloColor:LBL_HALO_DARK, halo:4, letterSpacing:0.02, smallCaps:false, italic:false },
+  lotOwn:  { key:"lotOwn",  family:"Georgia, 'Times New Roman', serif", weight:"500", color:"#dcd3c0", haloColor:LBL_HALO_DARK, halo:3, letterSpacing:0.04, smallCaps:false, italic:true  }
+};
+
+/* ---- THE HAND-ROLLED TEXT TEXTURE RENDERER. Rasterize `text` in `style` to a
+   supersampled canvas with a stroke halo (no plate), cache by style+text so a
+   rebuild across date scrubs re-uses the bitmap. Returns { tex, aspect }. ---- */
+var LBL_SS = 3;              // supersample: crisp at the world-size band (§11 close-zoom)
+var LBL_FONT_PX = 60;        // base raster height; on-screen size set by geometry/sprite scale
+var _lblTexCache = {};
+var _lblMeasureCtx = document.createElement("canvas").getContext("2d");
+function _lblFontStr(style, px){ return (style.italic?"italic ":"") + style.weight + " " + px + "px " + style.family; }
+function _lblAdvances(disp, style){
+  _lblMeasureCtx.font = _lblFontStr(style, LBL_FONT_PX);
+  var ls = style.letterSpacing * LBL_FONT_PX, adv = [], total = 0;
+  for(var i=0;i<disp.length;i++){ var w = _lblMeasureCtx.measureText(disp[i]).width; adv.push(w); total += w + (i<disp.length-1?ls:0); }
+  return { adv:adv, total:total, ls:ls };
+}
+function labelTexture(text, style){
+  var key = style.key + "|" + text;
+  if(_lblTexCache[key]) return _lblTexCache[key];
+  var disp = style.smallCaps ? text.toUpperCase() : text;
+  var m = _lblAdvances(disp, style);
+  var pad = Math.ceil(LBL_FONT_PX*0.42 + style.halo*2);
+  var W = Math.ceil(m.total) + pad*2, H = Math.ceil(LBL_FONT_PX*1.36) + pad*2;
+  var cv = document.createElement("canvas"); cv.width = Math.max(2, W*LBL_SS); cv.height = Math.max(2, H*LBL_SS);
+  var ctx = cv.getContext("2d"); ctx.scale(LBL_SS, LBL_SS);
+  ctx.font = _lblFontStr(style, LBL_FONT_PX);
+  ctx.textBaseline = "middle"; ctx.textAlign = "left"; ctx.lineJoin = "round"; ctx.miterLimit = 2;
+  var y = H/2;
+  // halo pass (stroke every glyph), then ink pass — so the halo never overlays the ink
+  ctx.lineWidth = style.halo*2; ctx.strokeStyle = style.haloColor;
+  var x = pad; for(var i=0;i<disp.length;i++){ ctx.strokeText(disp[i], x, y); x += m.adv[i] + m.ls; }
+  ctx.fillStyle = style.color;
+  x = pad; for(var j=0;j<disp.length;j++){ ctx.fillText(disp[j], x, y); x += m.adv[j] + m.ls; }
+  var tex = new THREE.CanvasTexture(cv);
+  tex.minFilter = THREE.LinearMipmapLinearFilter; tex.magFilter = THREE.LinearFilter; tex.generateMipmaps = true;
+  tex.anisotropy = Math.min(8, (renderer.capabilities.getMaxAnisotropy && renderer.capabilities.getMaxAnisotropy()) || 1);
+  tex.needsUpdate = true;
+  var e = { tex:tex, aspect: W/H }; _lblTexCache[key] = e; return e;
+}
+
+/* ---- GRID BASIS (once): unit world directions of +u (street run) and +v (down
+   the block), for aligning ground text and offsetting the owner line. ---- */
+var _lblGrid = (function(){
+  var o = gridToWorldAt(0,0,GRID_ROT_BASE), pu = gridToWorldAt(1,0,GRID_ROT_BASE), pv = gridToWorldAt(0,1,GRID_ROT_BASE);
+  var ux = pu.x-o.x, uz = pu.z-o.z, ul = Math.hypot(ux,uz)||1;
+  var vx = pv.x-o.x, vz = pv.z-o.z, vl = Math.hypot(vx,vz)||1;
+  return { ux:ux/ul, uz:uz/ul, vx:vx/vl, vz:vz/vl, angle:Math.atan2(uz/ul, ux/ul) };
+})();
+var LBL_LIFT = 0.5;         // ground text sits just above the paint drape
+
+/* ---- geometry factories ---- */
+function _lblGroundMesh(text, style, x, z, worldH, angle){
+  var t = labelTexture(text, style), w = worldH * t.aspect;
+  var geo = new THREE.PlaneGeometry(w, worldH); geo.rotateX(-Math.PI/2);   // lie flat on the ground
+  var mat = new THREE.MeshBasicMaterial({ map:t.tex, transparent:true, depthTest:false, depthWrite:false, opacity:0 });
+  var mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set(x, terrainHeight(x,z)+LBL_LIFT, z);
+  mesh.rotation.y = -angle;                                                // align text with the line
+  mesh.renderOrder = 20; mesh.frustumCulled = false; mesh.userData.text = text;
+  return mesh;
+}
+function _lblSprite(text, style, x, z, lift){
+  var t = labelTexture(text, style);
+  var mat = new THREE.SpriteMaterial({ map:t.tex, transparent:true, depthTest:false, depthWrite:false, opacity:0 });
+  var s = new THREE.Sprite(mat); s.userData.aspect = t.aspect; s.userData.text = text;
+  s.position.set(x, terrainHeight(x,z)+lift, z);
+  s.renderOrder = 25; s.frustumCulled = false;
+  return s;
+}
+
+/* ---- ERA-DATED STREET NAMES (item B consumer). The dated name arrays live in
+   the street geometry data (window.STREETS_GEOMETRY .eraNames — added to
+   data/streets-geometry.json this sprint); the labels layer reads them directly
+   by street id, so no core plumbing changes. Each eraNames entry is
+   { name, start, end|null, source }; the period-correct name is the interval
+   covering the sim date, else the street's default runtime name. ---- */
+var _lblEraNames = (function(){
+  var map = {}, SG = window.STREETS_GEOMETRY;
+  if(SG && SG.streets) SG.streets.forEach(function(s){ if(s.eraNames && s.eraNames.length) map[s.id] = s.eraNames; });
+  return map;
+})();
+function eraStreetName(streetRt, day){
+  var baseId = streetRt.id.indexOf(":")>=0 ? streetRt.id.split(":")[0] : streetRt.id;
+  var arr = _lblEraNames[baseId];
+  if(arr){
+    for(var i=0;i<arr.length;i++){
+      var s0 = arr[i].start!=null ? eventDateToSimDay(arr[i].start) : -1e9;
+      var s1 = arr[i].end!=null ? eventDateToSimDay(arr[i].end) : 1e9;
+      if(day>=s0 && day<s1) return _lblStreetDisplay(arr[i].name);
+    }
+  }
+  return _lblStreetDisplay(streetRt.name);
+}
+/* short label name: the dataset carries a few long descriptive names ("Commercial
+   Street landing approach (the 1846 'Portsmouth street…')"). A label is a glance,
+   not a gloss — keep the name up to the first "Street"/"St", drop trailing clauses
+   and any parenthetical. */
+function _lblStreetDisplay(name){
+  var n = String(name||"");
+  var m = n.match(/^(.*?\b(?:Street|St\.?|Road|Wharf|Place|Avenue|Ave\.?)\b)/i);
+  if(m) return m[1].trim();
+  var cut = n.search(/[\(\/]|\b(?:to the|landing|approach)\b/i);
+  return (cut>0 ? n.slice(0,cut) : n).trim();
+}
+
+/* ---- ZONE / LANDMARK ANCHORS. Parcels (cove/plaza/camp/mission/presidio) →
+   polylabel pole of their world ring. Hills → the highest baked terrain vertex
+   inside a named search box (data-grounded, not invented; skipped if the box is
+   flat). Ocean/Bay → fixed points over open water. ---- */
+function _lblParcelWorldRing(p){
+  // largest-area world ring: p.rings (clipped/world multi-piece) or p.poly (uv/world)
+  var rings = [];
+  if(p.rings){ p.rings.forEach(function(r){ if(r&&r.length>=3) rings.push(r.map(function(pt){ return {x:pt.x,z:pt.z}; })); }); }
+  else if(p.poly){
+    if(p.space==="uv") rings.push(p.poly.map(function(pt){ var w=gridToWorldAt(pt.u,pt.v,GRID_ROT_BASE); return {x:w.x,z:w.z}; }));
+    else rings.push(p.poly.map(function(pt){ return {x:pt.x,z:pt.z}; }));
+  }
+  if(!rings.length) return null;
+  var best=null, bestA=-1;
+  rings.forEach(function(r){ var a=0; for(var i=0,j=r.length-1;i<r.length;j=i++) a+=r[j].x*r[i].z-r[i].x*r[j].z; a=Math.abs(a)/2; if(a>bestA){ bestA=a; best=r; } });
+  return best;
+}
+function _lblPolePoint(ring){
+  var poly = [ring.map(function(p){ return [p.x, p.z]; })];
+  var pole = polylabel(poly, 2.0);
+  return { x:pole[0], z:pole[1] };
+}
+/* hill peak search: highest baked vertex within a box centered PLAZA+offset. */
+function _lblPeakInBox(cx, cz, half){
+  var i0 = Math.max(0, Math.floor((cx-half-WORLD.x0)/WORLD.cell)), i1 = Math.min(TERRAIN.nx-1, Math.ceil((cx+half-WORLD.x0)/WORLD.cell));
+  var j0 = Math.max(0, Math.floor((cz-half-WORLD.z0)/WORLD.cell)), j1 = Math.min(TERRAIN.nz-1, Math.ceil((cz+half-WORLD.z0)/WORLD.cell));
+  var bh=-1e9, bx=cx, bz=cz;
+  for(var j=j0;j<=j1;j++) for(var i=i0;i<=i1;i++){ var h=TERRAIN.heights[j*TERRAIN.nx+i]; if(h>bh){ bh=h; bx=WORLD.x0+i*WORLD.cell; bz=WORLD.z0+j*WORLD.cell; } }
+  return { x:bx, z:bz, h:bh };
+}
+var LBL_HILLS = [   // offsets from the plaza in world metres (+x E, +z S); peak-found within ±half
+  { name:"Telegraph Hill", dx: 150, dz:-620, half:340, minH:24 },
+  { name:"Nob Hill",       dx:-640, dz:-140, half:360, minH:40 },
+  { name:"Russian Hill",   dx:-520, dz:-620, half:360, minH:40 },
+  { name:"Rincon Hill",    dx: 540, dz: 900, half:380, minH:18 }
+];
+/* Ocean/Bay fixed anchors + which parcels get a landmark label + its voice. */
+var LBL_WATERBODIES = [
+  { name:"Pacific Ocean",      x:-9200, z: 3200, style:"region", worldPx:34, band:"region" },
+  { name:"San Francisco Bay",  x: 3600, z: -200, style:"region", worldPx:34, band:"region" }
+];
+var LBL_PARCEL_LABELS = {   // cadastre parcel name -> { text, style, band, screenPx }
+  "yerba-buena-cove": { text:"Yerba Buena Cove", style:"water", band:"water", screenPx:26 },
+  "portsmouth-square":{ text:"Portsmouth Square",style:"civic", band:"place", screenPx:22 },
+  "happy-valley-camp":{ text:"Happy Valley",     style:"place", band:"place", screenPx:22 },
+  "mission-cluster":  { text:"Mission Dolores",  style:"place", band:"place", screenPx:22 },
+  "presidio":         { text:"The Presidio",     style:"place", band:"place", screenPx:22 }
+};
+
+/* ---- ZOOM-BAND OPACITY (alt in metres; lastKnownAlt). rampDown(a,b): 1 below
+   a, 0 above b, linear between — a category "fades OUT as you climb". Regions
+   own the high view and fade on descent (rampUp); streets then lots fade in as
+   you descend (rampDown at their bands). ---- */
+function _rDown(alt,a,b){ return alt<=a?1:(alt>=b?0:(b-alt)/(b-a)); }   // visible LOW, gone HIGH
+function _rUp(alt,a,b){ return alt<=a?0:(alt>=b?1:(alt-a)/(b-a)); }     // visible HIGH, gone LOW
+var LBL_BANDS = {
+  region:  function(a){ return _rUp(a, 480, 950); },                    // hills/ocean/bay: own altitude, fade on descent
+  water:   function(a){ return Math.min(_rUp(a,140,360), _rDown(a,4200,7000)); }, // cove: mid-high, gentle
+  place:   function(a){ return _rDown(a, 3600, 6600); },                // civic/landmark places: persist, fade only very high
+  street:  function(a){ return _rDown(a, 560, 880); },                  // fade in at the street band
+  lotNum:  function(a){ return _rDown(a, 180, 270); },                  // fade in at the lot band
+  lotOwn:  function(a){ return _rDown(a, 96, 158); }                    // owner: closer still
+};
+
+/* ====================================================================
+   LABEL SET — rebuilt when the sim DATE (integer day) or a sublayer toggle
+   changes (era gating + record-lot birth + era street names all move with the
+   date). Each label is { obj:Three obj, band:fn, sublayer, prio, ss?:screenPx,
+   ground?:bool }. Per-frame update only touches opacity/scale/visibility.
+   ==================================================================== */
+var LBL_GROUP = new THREE.Group(); LBL_GROUP.frustumCulled = false; scene.add(LBL_GROUP);
+var _lblItems = [];
+var _lblLastDay = null, _lblLastVisKey = null;
+
+function _lblClear(){
+  for(var i=0;i<_lblItems.length;i++){ var o=_lblItems[i].obj; LBL_GROUP.remove(o); if(o.geometry) o.geometry.dispose(); }
+  _lblItems.length = 0;
+}
+function _lblAdd(obj, bandFn, sublayer, prio, screenPx, ground){
+  obj.material.opacity = 0; LBL_GROUP.add(obj);
+  _lblItems.push({ obj:obj, band:bandFn, sublayer:sublayer, prio:prio, ss:screenPx||0, ground:!!ground, cur:0 });
+}
+
+function rebuildLabels(){
+  _lblClear();
+  var day = simDay;
+
+  /* --- ZONES & LANDMARKS --- */
+  if(LABELS_VIS.zones){
+    // hills (peak-found; skip a box that never rises to a real hill)
+    LBL_HILLS.forEach(function(H){
+      var pk = _lblPeakInBox(PLAZA_CENTER.x+H.dx, PLAZA_CENTER.z+H.dz, H.half);
+      if(pk.h < H.minH) return;
+      _lblAdd(_lblSprite(H.name, LBL_STYLE.hill, pk.x, pk.z, 30), LBL_BANDS.region, "zones", 10, 30, false);
+    });
+    // ocean / bay (fixed open-water anchors)
+    LBL_WATERBODIES.forEach(function(W){
+      _lblAdd(_lblSprite(W.name, LBL_STYLE.region, W.x, W.z, 8), LBL_BANDS.region, "zones", 12, W.worldPx, false);
+    });
+    // named parcels (cove / plaza / camp / mission / presidio) at their pole
+    Object.keys(LBL_PARCEL_LABELS).forEach(function(pname){
+      var p = parcelByName(pname); if(!p) return;
+      if(p.birth!=null && p.birth>day) return;                 // era-gated with the parcel
+      var ring = _lblParcelWorldRing(p); if(!ring) return;
+      var pole = _lblPolePoint(ring);
+      var cfg = LBL_PARCEL_LABELS[pname];
+      _lblAdd(_lblSprite(cfg.text, LBL_STYLE[cfg.style], pole.x, pole.z, 10), LBL_BANDS[cfg.band], "zones",
+              pname==="yerba-buena-cove"?11:14, cfg.screenPx, false);
+    });
+  }
+
+  /* --- STREETS (era-gated existence + era-correct name, oriented along line) --- */
+  if(LABELS_VIS.streets){
+    STREETS_RUNTIME.forEach(function(s){
+      var active = null;
+      for(var ci=0; ci<s.checkpoints.length; ci++){ if(s.checkpoints[ci].day<=day) active = s.checkpoints[ci]; }
+      if(!active) return;                                      // not surveyed/mentioned yet
+      var i0 = active.extent[0], i1 = active.extent[1]; if(i1<=i0) return;
+      var mid = (i0+i1)>>1;                                    // anchor at the middle segment
+      var a = gridToWorldAt(s.polyline[mid].u, s.polyline[mid].v, GRID_ROT_BASE);
+      var b = gridToWorldAt(s.polyline[Math.min(mid+1,i1)].u, s.polyline[Math.min(mid+1,i1)].v, GRID_ROT_BASE);
+      var mx=(a.x+b.x)/2, mz=(a.z+b.z)/2;
+      if(terrainHeight(mx,mz) <= 0.5) return;                  // don't float a name over the tide flats
+      var ang = Math.atan2(b.z-a.z, b.x-a.x);
+      var name = eraStreetName(s, day);
+      _lblAdd(_lblGroundMesh(name, LBL_STYLE.street, mx, mz, 10, ang), LBL_BANDS.street, "streets", 30, 0, true);
+    });
+  }
+
+  /* --- LOTS (record lots only: number flat on the ground + owner below) --- */
+  if(LABELS_VIS.lots){
+    blocksAt(day).forEach(function(bl){
+      bl.lots.forEach(function(l){
+        var isRecord = (l.source==="record") || (l.owners && l.owners.length);
+        if(!isRecord) return;
+        var q = lotWorldQuad(l, day).quad; if(!q || q.length<4) return;
+        var ring = [q[0],q[1],q[2],q[3]];
+        var pole = _lblPolePoint(ring);
+        var num = l.lotNumber!=null ? String(l.lotNumber) : (l.lot_number!=null ? String(l.lot_number) : null);
+        if(num) _lblAdd(_lblGroundMesh(num, LBL_STYLE.lotNum, pole.x, pole.z, 9, _lblGrid.angle), LBL_BANDS.lotNum, "lots", 40, 0, true);
+        if(l.owners && l.owners.length){
+          var nm = (typeof l.owners[0]==="string") ? l.owners[0] : (l.owners[0] && l.owners[0].name);
+          if(nm){ nm = nm.replace(/\s*\(.*$/,"").trim();       // drop "(uncertain cursive read)" etc.
+            var ox = pole.x + _lblGrid.vx*7.5, oz = pole.z + _lblGrid.vz*7.5;   // just "below" the number, down the block
+            _lblAdd(_lblGroundMesh(nm, LBL_STYLE.lotOwn, ox, oz, 5.2, _lblGrid.angle), LBL_BANDS.lotOwn, "lots", 41, 0, true);
+          }
+        }
+      });
+    });
+  }
+
+  _lblLastDay = Math.floor(simDay);
+  _lblLastVisKey = _lblVisKey();
+}
+function _lblVisKey(){ return (LABELS_VIS.lots?"1":"0")+(LABELS_VIS.streets?"1":"0")+(LABELS_VIS.zones?"1":"0"); }
+
+/* ====================================================================
+   PER-FRAME UPDATE — opacity by altitude (§11 bands) + priority DECLUTTER via
+   the vendored rbush over projected screen boxes, + camera-facing sprite scale
+   for a stable on-screen size. Opacity EASES toward its target each frame so
+   band cross-fades and declutter hide/show never pop. Wraps renderer.render so
+   it runs before every draw (release + atelier) with zero core-loop edits.
+   ==================================================================== */
+var LBL_HORIZON_H = 52;     // the world-news horizon bar screen rect (top strip) labels avoid
+var _lblTree = (typeof RBush!=="undefined") ? new RBush() : null;
+var _lblV3 = new THREE.Vector3();
+function _lblProject(x, y, z){
+  _lblV3.set(x, y, z).project(camera);
+  return { x:(_lblV3.x*0.5+0.5)*window.innerWidth, y:(-_lblV3.y*0.5+0.5)*window.innerHeight, front:_lblV3.z<1 };
+}
+function updateLabels(){
+  if(!LABELS_VIS.parent){ for(var q=0;q<_lblItems.length;q++){ var it0=_lblItems[q]; it0.cur+= (0-it0.cur)*0.3; it0.obj.material.opacity=it0.cur; it0.obj.visible=it0.cur>0.01; } return; }
+  // rebuild the label set when the date or sublayer selection changed
+  if(Math.floor(simDay)!==_lblLastDay || _lblVisKey()!==_lblLastVisKey) rebuildLabels();
+
+  var alt = (typeof lastKnownAlt==="number" && lastKnownAlt>0) ? lastKnownAlt : 800;
+  var vpH = window.innerHeight, fovK = 2*Math.tan(camera.fov*Math.PI/360)/vpH; // world-per-screen-px at unit distance
+
+  // 1) compute each item's target (band × sublayer) + screen box; collect visible
+  var cands = [];
+  for(var i=0;i<_lblItems.length;i++){
+    var it = _lblItems[i], target = it.band(alt) * (LABELS_VIS[it.sublayer]?1:0);
+    it._target = target;
+    if(target < 0.02){ it._box = null; continue; }
+    var p = _lblProject(it.obj.position.x, it.obj.position.y, it.obj.position.z);
+    if(!p.front){ it._box = null; it._target = 0; continue; }
+    var t = it.obj.material.map;
+    var aspect = it.ground ? (it.obj.geometry.parameters ? (it.obj.geometry.parameters.width/it.obj.geometry.parameters.height) : 4) : it.obj.userData.aspect;
+    var hPx;
+    if(it.ground){
+      var dist = camera.position.distanceTo(it.obj.position);
+      hPx = it.obj.geometry.parameters.height / Math.max(1, dist*fovK);   // world height → screen px
+    } else {
+      hPx = it.ss;                                                        // sprite: constant on-screen px (scaled below)
+    }
+    var wPx = hPx*aspect;
+    it._box = { minX:p.x-wPx/2, minY:p.y-hPx/2, maxX:p.x+wPx/2, maxY:p.y+hPx/2 };
+    it._px = p; it._hPx = hPx;
+    cands.push(it);
+  }
+
+  // 2) priority declutter (rbush): reserve the horizon bar, then place high-prio
+  // (low `prio` number) first; a candidate overlapping a placed box is suppressed.
+  if(_lblTree){
+    _lblTree.clear();
+    _lblTree.insert({ minX:0, minY:0, maxX:window.innerWidth, maxY:LBL_HORIZON_H });
+    cands.sort(function(a,b){ return a.prio-b.prio || (b._hPx-a._hPx); });
+    for(var c=0;c<cands.length;c++){
+      var it2 = cands[c], bx = it2._box;
+      var probe = { minX:bx.minX+2, minY:bx.minY+2, maxX:bx.maxX-2, maxY:bx.maxY-2 };
+      if(_lblTree.collides(probe)){ it2._target = 0; }
+      else _lblTree.insert(bx);
+    }
+  }
+
+  // 3) ease every item toward its target (band × declutter); scale sprites for
+  // a stable on-screen size. Easing is why cross-fades and hide/show never pop.
+  for(var k=0;k<_lblItems.length;k++){
+    var itf = _lblItems[k];                 // culled/decluttered items already have _target = 0
+    itf.cur += (itf._target - itf.cur) * 0.28;
+    if(itf._target < 0.004 && itf.cur < 0.004) itf.cur = 0;
+    itf.obj.material.opacity = itf.cur;
+    itf.obj.visible = itf.cur > 0.01;
+    if(!itf.ground && itf.obj.visible){
+      var dist2 = camera.position.distanceTo(itf.obj.position);
+      var wH = Math.max(1, dist2*fovK*itf.ss);                            // world height for the target screen px
+      itf.obj.scale.set(wH*itf.obj.userData.aspect, wH, 1);
+    }
+  }
+}
+
+/* wrap renderer.render — labels update immediately before every draw (mirrors
+   the workbench's per-frame hook; composes with it since labels load first). */
+var _lblPrevRender = renderer.render.bind(renderer);
+renderer.render = function(s,c){ try{ updateLabels(); }catch(e){ if(!updateLabels._warned){ console.warn("[labels] update failed", e); updateLabels._warned=true; } } _lblPrevRender(s,c); };
+
+/* ---- dev-tooling interface (layers-spec §15) + sublayer control for the
+   atelier's tri-state family. The parent toggle hides the whole group; the
+   three sublayers gate their own labels (rebuild picks up the change). ---- */
+registerLayerVisibility("labels", function(v){ LABELS_VIS.parent = v; LBL_GROUP.visible = v; });
+function labelsSetSublayer(key, on){ if(key in LABELS_VIS){ LABELS_VIS[key] = on; } }
+function labelsGetSublayer(key){ return !!LABELS_VIS[key]; }
+
+/* audit + QA hooks live in core/06-debug (labels namespace) — this layer exposes
+   the live set through a getter the debug registry reads. */
+function labelsLiveSet(){
+  var out = [];
+  for(var i=0;i<_lblItems.length;i++){ var it=_lblItems[i];
+    if(it.cur>0.02) out.push({ text:it.obj.userData.text, sublayer:it.sublayer, prio:it.prio, x:Math.round(it.obj.position.x), z:Math.round(it.obj.position.z), op:+it.cur.toFixed(2), box:it._box||null });
+  }
+  return out;
+}
+/* full built set (ignores opacity/declutter) — QA/audit ground truth: what the
+   current date + sublayer selection produced, before the zoom bands gate it. */
+function labelsBuiltSet(){
+  return _lblItems.map(function(it){ return { text:it.obj.userData.text, sublayer:it.sublayer, prio:it.prio,
+    x:Math.round(it.obj.position.x), z:Math.round(it.obj.position.z), ground:it.ground }; });
+}
+
+/* ---- AUDIT 1 — eraNames (item B; grounding §11 era-correct names). The period-
+   correct street name renders at the sim date: pre-1847-11-03 the plat names
+   (Howard / Bartlett), the modern names after. FAILS BEFORE the eraNames data
+   (falls back to the modern name at 1846), PASSES after. ---- */
+var LBL_ERA_FLIP = eventDateToSimDay("1847-11-03");
+registerAudit("labels", "eraNames", function(){
+  var want = [ { id:"sacramento", pre:"Howard",   post:"Sacramento" },
+               { id:"pacific",    pre:"Bartlett", post:"Pacific" } ];
+  var checks = [], bad = [];
+  want.forEach(function(w){
+    var s = STREETS_RUNTIME_BY_ID[w.id]; if(!s) return;
+    var got = eraStreetName(s, simDay), expect = (simDay < LBL_ERA_FLIP) ? w.pre : w.post;
+    checks.push({ id:w.id, got:got, expect:expect });
+    if(got.toLowerCase().indexOf(expect.toLowerCase()) < 0) bad.push({ id:w.id, got:got, expect:expect });
+  });
+  return { pass: bad.length===0, date:simDateISO(dateFromSimDay(simDay)), checks:checks, bad:bad };
+});
+
+/* ---- AUDIT 2 — anchorsInside (the verbatim acceptance: a label must be
+   attributable to its subject at a glance). Every ground/zone label anchor is
+   the polylabel pole of its subject polygon — verify each pole lies INSIDE its
+   lot quad / parcel ring, so no label floats off its subject. ---- */
+registerAudit("labels", "anchorsInside", function(){
+  var bad = [], n = 0;
+  blocksAt(simDay).forEach(function(bl){ bl.lots.forEach(function(l){
+    if(!((l.source==="record") || (l.owners && l.owners.length))) return;
+    var q = lotWorldQuad(l, simDay).quad; if(!q || q.length<4) return;
+    var pole = _lblPolePoint([q[0],q[1],q[2],q[3]]); n++;
+    if(!cadPointInPoly(q, pole.x, pole.z)) bad.push({ lot:l.lotNumber, x:Math.round(pole.x), z:Math.round(pole.z) });
+  }); });
+  Object.keys(LBL_PARCEL_LABELS).forEach(function(pn){
+    var p = parcelByName(pn); if(!p || (p.birth!=null && p.birth>simDay)) return;
+    var ring = _lblParcelWorldRing(p); if(!ring) return;
+    var pole = _lblPolePoint(ring); n++;
+    if(!cadPointInPoly(ring, pole.x, pole.z)) bad.push({ parcel:pn, x:Math.round(pole.x), z:Math.round(pole.z) });
+  });
+  return { pass: bad.length===0, anchorsChecked:n, bad:bad };
+});
 /* ---- 2b. STREET GRAPH — a waypoint graph over the real surveyed street
    grid (every streetsU x streetsV intersection), plus the Plaza (wired to
    its four bounding corners), the Clay St wharf/landing, the Mission-road
@@ -8286,6 +9524,10 @@ window.__P1850 = {
   watch: setWatchMode, speed: setSimSpeed, flyTo: flyTo,
   get speedKey(){ return simSpeedKey; },
   get splatStats(){ return SPLAT_LAST_STATS; }, // s20 QA: era-diff ground truth — what the last splat repaint actually painted, per street
+  // s90 LABELS QA: the live set (post zoom-band + declutter) and the full built
+  // set (pre-gate: what the current date + sublayers produced). null until the
+  // labels layer is assembled in this build.
+  get labels(){ return (typeof labelsLiveSet==="function") ? { live:labelsLiveSet(), built:labelsBuiltSet() } : null; },
   /* ROAD LIFECYCLE (grounding.md §9b, s27): per-street lifecycle state at
      the CURRENT date, computed fresh (rewind-exact — pure function of
      simDay). streetId accepts the dataset id, a numbered-street member id,
