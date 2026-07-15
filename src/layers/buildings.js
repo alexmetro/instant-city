@@ -322,6 +322,44 @@ function lmFootprint(rec, fp){
 }
 
 /* =====================================================================
+   THE LAND-AT-DATE GATE (s99, terrain-morphing-spec §4/§7-step-2 INTERIM). A
+   landmark renders only where its base stands on buildable land. This is the
+   STATIC interim of the isLandAt predicate: the date-editable heightfield (which
+   lets the cove FILL and these reservations LAND on their documented dates) is
+   step 2 — until then a waterfront reservation anchored on the un-filled 1846
+   cove is UNLANDED and does not render (it is not deleted: the reservation stands
+   and returns the day the fill reaches it). terrainHeight + the y=0 waterline are
+   read as-is; no data is edited. ===================================================================== */
+var LAND_FLOOR       = 0.5;   // m — buildable-land floor: mean water (y=0) + tide/headroom. fill:true tunable.
+var LM_WATERLINE_Y   = 0.0;   // bay water plane (mirrors wharves.js WHARF_WATER_Y; local — chunk 16 loads before chunk 17)
+var LM_CORNER_DEEP_M = 1.0;   // even a dry-CENTROID landmark is unlanded if a footprint corner is deeper than this under water
+/* authored exceptions (item 5): a pile-built / water-lot / over-water structure
+   legitimately stands over water and is NOT gated or flagged. None are set in the
+   s95 reservation data today — the fields are threaded so a future authored
+   waterfront structure passes the gate and the buildingInWater audit. */
+function lmExceptionOverWater(rec){ var a = rec.anchor || {}; return !!(rec.overWater || a.overWater); }
+function lmExceptionStilted(rec){ var a = rec.anchor || {}; return !!(rec.stilted || a.stilted); }
+/* UNLANDED test: returns null when the landmark is landed (renders), else a
+   descriptor (surfaced by registryHonored as reserved-but-unlanded). Base-
+   submerged ⇔ terrainHeight(centroid) ≤ LAND_FLOOR (kills sign-of-the-watch,
+   cross-hobson-co). Edge-over-water tolerance: a dry-centroid landmark with only
+   a shallow corner dip (centre-market's −0.07 m NE corner) stays LANDED — it is
+   unlanded on corners only when a corner is more than LM_CORNER_DEEP_M under water. */
+function lmUnlandedAt(rec, fp){
+  if(!fp) return null;                                          // block not born at `day` — handled by the caller's own skip
+  if(lmExceptionOverWater(rec)) return null;                    // authored water-lot / pile-built — legitimately over water
+  var cH = terrainHeight(fp.cx, fp.cz);
+  var q = fp.quad, minCornerH = Infinity;
+  for(var i = 0; i < q.length; i++){ var h = terrainHeight(q[i].x, q[i].z); if(h < minCornerH) minCornerH = h; }
+  var baseSubmerged = cH <= LAND_FLOOR;
+  var cornerDeep    = (LM_WATERLINE_Y - minCornerH) > LM_CORNER_DEEP_M;
+  if(!baseSubmerged && !cornerDeep) return null;
+  return { landmarkId: rec.landmarkId, centroidH: +cH.toFixed(3), minCornerH: +minCornerH.toFixed(3),
+           mUnderFloor: +(LAND_FLOOR - cH).toFixed(3), mUnderWater: +(LM_WATERLINE_Y - cH).toFixed(3),
+           reason: baseSubmerged ? "base-submerged" : "corner-deep-underwater" };
+}
+
+/* =====================================================================
    THE DERIVED SET (pure function of `day`) — the ONE source of truth read by
    BOTH the renderer and every audit (measurement law: the instrument reads the
    same numbers the picture draws). Iterates the resolved reservations, resolves
@@ -340,10 +378,12 @@ function deriveLandmarkSet(day){
     if(!st.active) continue;                                    // C0 absent (before start / after burn)
     var fp = resolveReservationFootprint(rec, day);             // day-frame footprint (brief §4)
     if(!fp) continue;                                           // block not born at `day` — skip, never force
+    if(lmUnlandedAt(rec, fp)) continue;                         // s99 LAND-AT-DATE GATE: un-render unlanded landmarks (returns in step 2 when the cove-fill lands)
     var f = lmFootprint(rec, fp);
     out.push({ id: rec.landmarkId, name: rec.name, cls: lmClassOf(rec.landmarkId),
                cx: f.cx, cz: f.cz, w: f.w, d: f.d, yaw: f.yaw, nx: f.nx, nz: f.nz,
                state: st.state, hFrac: st.hFrac, arc: st.arc,
+               overWater: lmExceptionOverWater(rec), stilted: lmExceptionStilted(rec),
                built: rec.built, burned: rec.burned });
   }
   out.sort(function(a, b){ return a.id < b.id ? -1 : (a.id > b.id ? 1 : 0); }); // stable order (determinism fingerprint)
@@ -558,7 +598,7 @@ registerLayerVisibility("buildings", function(v){ LM_GROUP.visible = v; if(v){ _
      rendered meshes whose id is not a resolved reservation. (Every authored
      thing rendered; nothing rendered that isn't authored.) ---- */
   registerAudit("buildings", "registryHonored", function(){
-    var days = sampleDays(), viol = [], perDay = [];
+    var days = sampleDays(), viol = [], perDay = [], unlanded = [];
     for(var di = 0; di < days.length; di++){
       var day = days[di];
       var set = deriveLandmarkSet(day);
@@ -569,18 +609,28 @@ registerLayerVisibility("buildings", function(v){ LM_GROUP.visible = v; if(v){ _
         if(!rec || !rec.resolved) viol.push({ day: +day.toFixed(1), id: e.id, why: "rendered-not-resolved" });
         if(byId[e.id] > 1) viol.push({ day: +day.toFixed(1), id: e.id, why: "duplicate-mesh", n: byId[e.id] });
       });
-      // every completed reservation (reservationsAt) has exactly one mesh at its centroid
+      // every completed reservation (reservationsAt) has exactly one mesh at its
+      // centroid — UNLESS it is reserved-but-unlanded (s99 land gate): then it
+      // correctly renders ZERO meshes and is ACCOUNTED here, not a phantom/failure.
       var res = reservationsAt(day);
       res.forEach(function(r){
+        var fp = resolveReservationFootprint(r, day);
+        var un = fp ? lmUnlandedAt(r, fp) : null;
         var matches = set.filter(function(e){ return e.id === r.landmarkId; });
+        if(un){
+          if(matches.length !== 0){ viol.push({ day: +day.toFixed(1), id: r.landmarkId, why: "unlanded-but-rendered", got: matches.length }); return; }
+          unlanded.push({ day: +day.toFixed(1), id: r.landmarkId, mUnderWater: un.mUnderWater, reason: un.reason });
+          return;
+        }
         if(matches.length !== 1){ viol.push({ day: +day.toFixed(1), id: r.landmarkId, why: "expected-1-mesh", got: matches.length }); return; }
-        var fp = resolveReservationFootprint(r, day); if(!fp) return;
+        if(!fp) return;
         var e = matches[0], dd = Math.hypot(e.cx - fp.cx, e.cz - fp.cz);
         if(dd > EPS) viol.push({ day: +day.toFixed(1), id: r.landmarkId, why: "centroid-off", off: +dd.toFixed(3) });
       });
       perDay.push({ day: +day.toFixed(1), rendered: set.length, completed: res.length });
     }
-    return { pass: viol.length === 0, violations: viol.length, sample: viol.slice(0, 8), perDay: perDay };
+    return { pass: viol.length === 0, violations: viol.length, sample: viol.slice(0, 8), perDay: perDay,
+             reservedButUnlanded: unlanded.length, unlandedSample: unlanded.slice(0, 12) };
   });
 
   /* ---- 2. footprintsOBB — true ORIENTED-bounding-box intersection = 0 across
@@ -962,7 +1012,7 @@ function buildFillMaster(){
     // canPlace: zone gate (residential-band/commercial-core per class) + terrain
     // + slope + ROW + overlap vs PLACEMENT_INDEX (the 51 landmark footprints live
     // there, so reserved landmark ground is respected here).
-    var cp = canPlace("structure", { x: cx, z: cz, yaw: slot.yaw, footprint: rBound },
+    var cp = canPlace("structure", { x: cx, z: cz, yaw: slot.yaw, footprint: rBound, footprintW: wM, footprintD: dM },
                       { day: slot.day, zoneClass: fillZoneClass(t) });
     if(!cp.ok) continue;
     if(fillOverlapsLocal(placed, cx, cz, rBound)) continue;   // detached vs other fill
@@ -973,6 +1023,7 @@ function buildFillMaster(){
     master.push({ code: t.code, cat: cat, material: t.material, subtype: t.subtype,
                   cx: cx, cz: cz, w: wM, d: dM, yaw: slot.yaw, nx: slot.outx, nz: slot.outz,
                   storyRange: t.storyRange || [1, 1], edgeId: slot.edgeId, edgeLen: slot.edgeLen,
+                  overWater: !!t.overWater, stilted: !!t.stilted,   // item 5: authored pile-built/stilted exceptions (none in v1 catalog)
                   rank: rank, appearDay: capDay });
   }
   fillAssignAppearDays(master, capDay);
@@ -1035,6 +1086,7 @@ function deriveFillSet(day){
     out.push({ code: e.code, cat: e.cat, material: e.material, subtype: e.subtype,
                cx: e.cx, cz: e.cz, w: e.w, d: e.d, yaw: e.yaw, nx: e.nx, nz: e.nz,
                storyRange: e.storyRange, edgeId: e.edgeId, edgeLen: e.edgeLen, rank: e.rank,
+               overWater: !!e.overWater, stilted: !!e.stilted,
                appearDay: e.appearDay, state: st.state, hFrac: st.hFrac, counted: counted });
   }
   return out;
@@ -1280,6 +1332,111 @@ registerLayerVisibility("buildings-fill", function(v){ FILL_GROUP.visible = v; i
     var sameDay = (a1 === a2), rewind = (a1 === aBack);
     return { pass: sameDay && rewind, sameDayIdentical: sameDay, rewindExact: rewind,
              countA: a1.split("\n").filter(Boolean).length, countB: bJump.split("\n").filter(Boolean).length };
+  });
+})();
+
+/* =====================================================================
+   THE PLACEMENT-INVARIANT AUDITS (s99, terrain-morphing-spec §5). Two standing
+   audits over the RENDERED building set (landmarks + fill) at the canonical
+   dates, enforcing §4 physically against the STATIC 1846 terrain (they become
+   date-aware for free once terrainHeightAt(x,z,day) exists in step 2). Each is a
+   framing-independent pure function: it reads terrainHeight + the y=0 waterline,
+   never the camera. Measurement law: the footprint quad is the drawn OBB (centre/
+   size/yaw) — the same box the renderer bakes. ===================================================================== */
+(function registerPlacementInvariantAudits(){
+  var WATER_Y      = 0.0;   // bay water plane (mirrors WHARF_WATER_Y)
+  var SUBMERGE_TOL = 0.3;   // a footprint corner may dip this far under the waterline (shore-edge overhang) before it is "in water"
+  var FLOAT_TOL    = 0.4;   // a footprint corner may hang this far above the ground before it is "floating"
+
+  function sampleDays(){
+    var ds = ["1846-07-01", "1848-04-01", "1849-09-15", "1849-12-20", "1849-12-26"];
+    var out = ds.map(function(iso){ return eventDateToSimDay(iso); });
+    if(typeof simDay === "number") out.push(simDay);
+    return out;
+  }
+  /* the drawn OBB [SW,SE,NE,NW]: depth axis = frontage normal (sin yaw, cos yaw),
+     width axis = its perpendicular — identical to the fill audits' fillQuad. */
+  function poseQuad(cx, cz, w, d, yaw){
+    var nx = Math.sin(yaw), nz = Math.cos(yaw), tx = nz, tz = -nx, hw = w / 2, hd = d / 2;
+    function P(sw, sd){ return { x: cx + tx * sw + nx * sd, z: cz + tz * sw + nz * sd }; }
+    return [ P(-hw, -hd), P(hw, -hd), P(hw, hd), P(-hw, hd) ];
+  }
+  /* every RENDERED building at `day`: landmarks + fill, each with its drawn OBB
+     and its authored over-water / stilted exception flags. */
+  function renderedAt(day){
+    var out = [];
+    deriveLandmarkSet(day).forEach(function(L){
+      out.push({ kind: "landmark", id: L.id, cx: L.cx, cz: L.cz,
+                 quad: poseQuad(L.cx, L.cz, L.w, L.d, L.yaw), overWater: !!L.overWater, stilted: !!L.stilted });
+    });
+    deriveFillSet(day).forEach(function(F){
+      out.push({ kind: "fill", id: F.code, cx: F.cx, cz: F.cz,
+                 quad: poseQuad(F.cx, F.cz, F.w, F.d, F.yaw), overWater: !!F.overWater, stilted: !!F.stilted });
+    });
+    return out;
+  }
+
+  /* ---- buildingInWater — no rendered building's base (centroid) is below the
+     waterline, and no footprint corner is more than SUBMERGE_TOL below it, UNLESS
+     the building carries an authored overWater exception. Fail-before: the s95
+     waterfront landmarks anchored on the un-filled cove (sign-of-the-watch,
+     cross-hobson-co) submerge; pass-after: the land-at-date gate un-renders them. */
+  registerAudit("buildings", "buildingInWater", function(){
+    var days = sampleDays(), viol = [], perDay = [], maxUnder = 0;
+    days.forEach(function(day){
+      var bs = renderedAt(day), dv = 0;
+      bs.forEach(function(b){
+        if(b.overWater) return;                                  // authored water structure — exempt
+        var centroidUnder = WATER_Y - terrainHeight(b.cx, b.cz); // >0 ⇒ centroid below the waterline
+        var worstCorner = 0;
+        b.quad.forEach(function(c){ var u = WATER_Y - terrainHeight(c.x, c.z); if(u > worstCorner) worstCorner = u; });
+        if(worstCorner > maxUnder) maxUnder = worstCorner;
+        if(centroidUnder > 0 || worstCorner > SUBMERGE_TOL){
+          dv++;
+          if(viol.length < 12) viol.push({ day: +day.toFixed(1), kind: b.kind, id: b.id,
+            centroidUnderM: +centroidUnder.toFixed(3), worstCornerUnderM: +worstCorner.toFixed(3) });
+        }
+      });
+      perDay.push({ day: +day.toFixed(1), rendered: bs.length, offenders: dv });
+    });
+    return { pass: viol.length === 0, submergeTolM: SUBMERGE_TOL, offenders: viol.length,
+             maxCornerUnderM: +maxUnder.toFixed(3), sample: viol.slice(0, 10), perDay: perDay };
+  });
+
+  /* ---- buildingFloating — no rendered footprint corner is suspended more than
+     FLOAT_TOL above terrainHeight at that corner (the slope case: the flat pad
+     sits at the centroid's ground height, so a downhill corner hangs in air),
+     UNLESS an authored stilted exception.
+
+     NON-GATING (informational), by brief §3 ("there may be some on sloped ground
+     — surface them; if the fix is non-trivial, flag for the Director, don't
+     force"). The offenders are REAL: authored landmarks and steep-slope fill on
+     the natural plaza→Stockton grade float up to several metres at their downhill
+     corner, because the placeholder is a FLAT pad at one (centroid) height with no
+     foundation cut/fill. The honest fix is a Director-level REPRESENTATION
+     decision — a foundation-skirt-to-grade plinth, or the step-2 terrain grading
+     (cut/fill morph) that levels the building pad — NOT a number forced green
+     here. So this audit REPORTS the offenders every run (a standing watch that
+     drops to zero once grading lands) but does not red the gate. `pass` stays true
+     while `gating:false` + `offenders` carry the finding — the fillCensus
+     informational-check convention. ---- */
+  registerAudit("buildings", "buildingFloating", function(){
+    var days = sampleDays(), off = [], perDay = [], maxFloat = 0, total = 0;
+    days.forEach(function(day){
+      var bs = renderedAt(day), dv = 0;
+      bs.forEach(function(b){
+        if(b.stilted) return;
+        var baseY = terrainHeight(b.cx, b.cz);                   // the mesh base sits at the centroid's ground height
+        var worst = 0;
+        b.quad.forEach(function(c){ var f = baseY - terrainHeight(c.x, c.z); if(f > worst) worst = f; });
+        if(worst > maxFloat) maxFloat = worst;
+        if(worst > FLOAT_TOL){ dv++; total++; if(off.length < 12) off.push({ day: +day.toFixed(1), kind: b.kind, id: b.id, cornerFloatM: +worst.toFixed(3) }); }
+      });
+      perDay.push({ day: +day.toFixed(1), rendered: bs.length, offenders: dv });
+    });
+    return { pass: true, gating: false, floatTolM: FLOAT_TOL, offenders: total,
+             maxCornerFloatM: +maxFloat.toFixed(3), sample: off.slice(0, 10), perDay: perDay,
+             note: "INFORMATIONAL (non-gating): slope-grading offenders flagged for the Director — resolved by a foundation-skirt-to-grade plinth or step-2 terrain grading, not forced here." };
   });
 })();
 

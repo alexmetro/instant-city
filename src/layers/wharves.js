@@ -96,8 +96,16 @@ function deriveWharfSet(day){
       minSeabed = Math.min(minSeabed, sL, sR); maxSeabed = Math.max(maxSeabed, sL, sR);
     }
     var topY = Math.max(WHARF_DECK_Y, maxSeabed + WHARF_DECK_CLEARANCE);   // flat deck, above water and above any ground under it
+    // s99 RIDER — a single FLAT base at the DEEPEST sampled seabed under the block
+    // (minus the footing). A per-vertex base only touches the floor AT each sample;
+    // between coarsely-sampled polyline vertices, over a seabed that dips into deep
+    // water, the straight wall-bottom chord would FLOAT above the floor. A flat base
+    // at (minSeabed - footing) sits at or below the seabed CONTINUOUSLY — no floating
+    // gap anywhere — and stays grounded at every vertex (base ≤ local seabed), so
+    // wharfBlockGrounded's per-vertex base-below-seabed check still holds.
+    var baseFloorY = minSeabed - WHARF_FOOTING;
     var baseL = new Array(n), baseR = new Array(n);
-    for(var m2 = 0; m2 < n; m2++){ baseL[m2] = seabedL[m2] - WHARF_FOOTING; baseR[m2] = seabedR[m2] - WHARF_FOOTING; }
+    for(var m2 = 0; m2 < n; m2++){ baseL[m2] = baseFloorY; baseR[m2] = baseFloorY; }
     out.push({ id: p.id, lengthFt: e.lengthFt, extent: active.extent,
                leftEdge: L, rightEdge: R, seabedL: seabedL, seabedR: seabedR, baseL: baseL, baseR: baseR,
                topY: topY, minSeabed: minSeabed, maxSeabed: maxSeabed, overWater: minSeabed < WHARF_WATER_Y,

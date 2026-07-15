@@ -478,13 +478,30 @@ function canPlaceClass(cls, pose, ctx){
     if(!zg.ok) return zg;
   }
   if(!law) return { ok:true, reason:"no-law:"+cls };   // unknown class: engine imposes nothing beyond the zone gate
-  var h = terrainHeight(x,z);
-  if(law.surface==="land" && h <= (law.minY!=null?law.minY:0.5)) return { ok:false, reason:"not-on-land" };
-  if(law.surface==="water" && h > -0.5) return { ok:false, reason:"not-in-water" };
-  if(law.intertidalAllowed===false && inIntertidalBand(x,z)) return { ok:false, reason:"intertidal" };
-  if(law.beachOnly && !inBeachBand(x,z)) return { ok:false, reason:"off-beach" };
-  if(law.water===true && h <= 0) return { ok:false, reason:"on-water" };
-  if(law.slopeMaxPct!=null && terrainSlopePct(x,z) > law.slopeMaxPct) return { ok:false, reason:"slope" };
+  /* s99 CORNER-LEVEL GROUND LAWS (terrain-morphing-spec §4: land-at-date is tested
+     at footprint CORNERS, not just the centroid). When the caller supplies the
+     footprint dims (pose.footprintW/footprintD + yaw — the fill spawner does), the
+     surface / intertidal / slope laws are evaluated at the centroid AND the four
+     footprint corners, so a footprint whose corner juts over water or onto steep
+     ground is rejected even when its centre reads as good land. Callers that pass
+     no dims (every legacy caller) sample the centroid only — behaviour unchanged.
+     Preventive: fill is currently inland and clean; this holds when later sprints
+     push it toward the waterfront. */
+  var pts = [{ x:x, z:z }];
+  if(pose.footprintW!=null && pose.footprintD!=null){
+    var yaw = pose.yaw||0, nx = Math.sin(yaw), nz = Math.cos(yaw), tx = nz, tz = -nx;
+    var hw = pose.footprintW/2, hd = pose.footprintD/2, sgn = [[-1,-1],[1,-1],[1,1],[-1,1]];
+    for(var ci=0; ci<4; ci++){ pts.push({ x: x + tx*sgn[ci][0]*hw + nx*sgn[ci][1]*hd, z: z + tz*sgn[ci][0]*hw + nz*sgn[ci][1]*hd }); }
+  }
+  for(var pi=0; pi<pts.length; pi++){
+    var px = pts[pi].x, pz = pts[pi].z, at = pi===0 ? "centroid" : "corner", h = terrainHeight(px,pz);
+    if(law.surface==="land" && h <= (law.minY!=null?law.minY:0.5)) return { ok:false, reason:"not-on-land", at:at };
+    if(law.surface==="water" && h > -0.5) return { ok:false, reason:"not-in-water", at:at };
+    if(law.intertidalAllowed===false && inIntertidalBand(px,pz)) return { ok:false, reason:"intertidal", at:at };
+    if(law.beachOnly && !inBeachBand(px,pz)) return { ok:false, reason:"off-beach", at:at };
+    if(law.water===true && h <= 0) return { ok:false, reason:"on-water", at:at };
+    if(law.slopeMaxPct!=null && terrainSlopePct(px,pz) > law.slopeMaxPct) return { ok:false, reason:"slope", at:at };
+  }
   if(law.plazaKeepOut===true && inPublicSquare(x,z)) return { ok:false, reason:"plaza-keepout" };
   if(law.row===false && nearAnyRoad(x,z, law.rowMargin||0)) return { ok:false, reason:"row" };
   if(law.rowCenter===false && nearAnyRoad(x,z, 0)) return { ok:false, reason:"row-center" };
