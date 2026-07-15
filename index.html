@@ -8236,9 +8236,19 @@ var LABELS_VIS = {
 /* ---- §11 CATEGORY VOICES. One grammar so a reader never confuses types:
    waterways = blue italic serif · streets = small-caps · zones/landmarks =
    spaced caps softer sepia · regions = large faint caps · civic (plaza) = a
-   warm civic accent · lots = ink numerals + owner. Halo = a dark stroke under
-   light text (survives any ground). ---- */
-var LBL_HALO_DARK = "rgba(12,14,17,0.82)";
+   warm civic accent · lots = ink numerals + owner.
+
+   s92 DUAL-HALO (user finding #1 — "same background fill color, very hard to
+   read"). §11's "halo that survives ANY background" made real: every glyph gets
+   a DARK INNER stroke (separates light/gold text from the bright amber ground —
+   the common case) PLUS a LIGHT OUTER glow (separates the dark inner ring from
+   the scene's brown road-paint + hillshade shadows — where a dark-only halo
+   vanishes). One ring or the other always carries ≥3:1 against whatever the
+   label lands on; the labels.contrast audit proves this against the earth
+   palette. Applied to ALL categories via labelTexture. ---- */
+var LBL_HALO_DARK  = "rgba(12,14,17,0.90)";     // inner ring — beats the bright sunlit ground
+var LBL_HALO_LIGHT = "rgba(250,247,236,0.66)";  // outer glow — beats road-paint + shadow (≥3.8:1 worst-case)
+var LBL_GLOW_EXTRA = 2.4;                       // outer glow half-width beyond the dark ring (px @ LBL_FONT_PX)
 var LBL_STYLE = {
   region:  { key:"region",  family:"Georgia, 'Times New Roman', serif", weight:"600", color:"#efe7d2", haloColor:LBL_HALO_DARK, halo:5, letterSpacing:0.34, smallCaps:true,  italic:false },
   hill:    { key:"hill",    family:"Georgia, 'Times New Roman', serif", weight:"600", color:"#e9dfc4", haloColor:LBL_HALO_DARK, halo:5, letterSpacing:0.30, smallCaps:true,  italic:false },
@@ -8269,18 +8279,31 @@ function labelTexture(text, style){
   if(_lblTexCache[key]) return _lblTexCache[key];
   var disp = style.smallCaps ? text.toUpperCase() : text;
   var m = _lblAdvances(disp, style);
-  var pad = Math.ceil(LBL_FONT_PX*0.42 + style.halo*2);
+  // pad must clear the WIDEST ring — the light outer glow (halo + glow, both
+  // sides) plus the soft blur, else the glow clips at the texture edge.
+  var glowW = style.halo + LBL_GLOW_EXTRA;
+  var pad = Math.ceil(LBL_FONT_PX*0.42 + glowW*2 + style.halo);
   var W = Math.ceil(m.total) + pad*2, H = Math.ceil(LBL_FONT_PX*1.36) + pad*2;
   var cv = document.createElement("canvas"); cv.width = Math.max(2, W*LBL_SS); cv.height = Math.max(2, H*LBL_SS);
   var ctx = cv.getContext("2d"); ctx.scale(LBL_SS, LBL_SS);
   ctx.font = _lblFontStr(style, LBL_FONT_PX);
   ctx.textBaseline = "middle"; ctx.textAlign = "left"; ctx.lineJoin = "round"; ctx.miterLimit = 2;
   var y = H/2;
-  // halo pass (stroke every glyph), then ink pass — so the halo never overlays the ink
-  ctx.lineWidth = style.halo*2; ctx.strokeStyle = style.haloColor;
-  var x = pad; for(var i=0;i<disp.length;i++){ ctx.strokeText(disp[i], x, y); x += m.adv[i] + m.ls; }
+  // DUAL-HALO, widest→narrowest→fill so the rings nest concentrically around
+  // each glyph: [1] light outer glow (with a soft blur) reads on dark scene
+  // shadow/road-paint; [2] dark inner stroke reads on the bright amber ground;
+  // [3] the ink fill covers the glyph body. Painting wide-then-narrow leaves a
+  // light ring OUTSIDE the dark ring OUTSIDE the ink — §11's any-background halo.
+  var strokePass = function(color, lw, blur){
+    ctx.lineWidth = lw; ctx.strokeStyle = color;
+    ctx.shadowColor = blur ? color : "rgba(0,0,0,0)"; ctx.shadowBlur = blur || 0;
+    var xi = pad; for(var i=0;i<disp.length;i++){ ctx.strokeText(disp[i], xi, y); xi += m.adv[i] + m.ls; }
+  };
+  strokePass(LBL_HALO_LIGHT, glowW*2, style.halo*0.9);   // [1] outer glow (soft)
+  strokePass(style.haloColor, style.halo*2, 0);          // [2] dark inner ring
+  ctx.shadowBlur = 0; ctx.shadowColor = "rgba(0,0,0,0)";
   ctx.fillStyle = style.color;
-  x = pad; for(var j=0;j<disp.length;j++){ ctx.fillText(disp[j], x, y); x += m.adv[j] + m.ls; }
+  var x = pad; for(var j=0;j<disp.length;j++){ ctx.fillText(disp[j], x, y); x += m.adv[j] + m.ls; }
   var tex = new THREE.CanvasTexture(cv);
   tex.minFilter = THREE.LinearMipmapLinearFilter; tex.magFilter = THREE.LinearFilter; tex.generateMipmaps = true;
   tex.anisotropy = Math.min(8, (renderer.capabilities.getMaxAnisotropy && renderer.capabilities.getMaxAnisotropy()) || 1);
@@ -8299,7 +8322,7 @@ var _lblGrid = (function(){
 var LBL_LIFT = 0.5;         // ground text sits just above the paint drape
 
 /* ---- geometry factories ---- */
-function _lblGroundMesh(text, style, x, z, worldH, angle){
+function _lblGroundMesh(text, style, x, z, worldH, angle, grow){
   var t = labelTexture(text, style), w = worldH * t.aspect;
   var geo = new THREE.PlaneGeometry(w, worldH); geo.rotateX(-Math.PI/2);   // lie flat on the ground
   var mat = new THREE.MeshBasicMaterial({ map:t.tex, transparent:true, depthTest:false, depthWrite:false, opacity:0 });
@@ -8307,6 +8330,13 @@ function _lblGroundMesh(text, style, x, z, worldH, angle){
   mesh.position.set(x, terrainHeight(x,z)+LBL_LIFT, z);
   mesh.rotation.y = -angle;                                                // align text with the line
   mesh.renderOrder = 20; mesh.frustumCulled = false; mesh.userData.text = text;
+  // s92 flip (finding #3 — never upside down): remember the world-anchored
+  // baseline orientation so updateLabels can add ±π to keep it camera-upright.
+  mesh.userData.baseRotY = -angle;            // world-anchored rotation (no flip)
+  mesh.userData.dirX = Math.cos(angle);       // world +x-z unit vector the text reads along
+  mesh.userData.dirZ = Math.sin(angle);
+  mesh.userData.flip = false;
+  mesh.userData.grow = !!grow;                // finding #2: scale up with altitude so it stays legible high
   return mesh;
 }
 function _lblSprite(text, style, x, z, lift){
@@ -8412,11 +8442,48 @@ var LBL_BANDS = {
   region:  function(a){ return _rUp(a, 480, 950); },                    // hills/ocean/bay: own altitude, fade on descent
   water:   function(a){ return Math.min(_rUp(a,140,360), _rDown(a,4200,7000)); }, // cove: mid-high, gentle
   place:   function(a){ return _rDown(a, 3600, 6600); },                // civic/landmark places: persist, fade only very high
-  street:  function(a){ return _rDown(a, 560, 880); },                  // fade in at the street band
+  // s92 finding #2 — streets stay legible from ~2x the old altitude. Old
+  // ceiling 880m fully hid every street name by the town framing; the raised
+  // ceiling (fade 1500→2400m) keeps majors readable up into the overview band,
+  // where zoom-scaling (updateLabels) + priority declutter show the majors first.
+  street:  function(a){ return _rDown(a, 1500, 2400); },                // fade in low, persist to the overview
   lotNum:  function(a){ return _rDown(a, 180, 270); },                  // fade in at the lot band
   lotOwn:  function(a){ return _rDown(a, 96, 158); },                   // owner: closer still
-  landmark:function(a){ return _rDown(a, 360, 560); }                   // s91: reservation names — read earlier (higher) than lot numbers
+  landmark:function(a){ return _rDown(a, 520, 780); }                   // s91/s92: reservation names — read earlier (higher) than lot numbers
 };
+/* s92 STREET PRIORITY (finding #2): main streets outrank cross streets in the
+   declutter so altitude reveals the majors first. Lower number = placed first.
+   Streets sit BELOW zones/landmarks (prio 10–14) so region labels still win. */
+function _lblStreetPrio(cls){
+  if(cls==="market"||cls==="main"||cls==="main-override"||cls==="plank-road") return 27;
+  if(cls==="cross"||cls==="cross-ofarrell"||cls==="cross-override"||cls==="hundred-vara") return 30;
+  return 32;   // lane / wharf-lane / trail / pier / future-tag
+}
+/* s92 REPEAT-ALONG-LINE (finding #2 — "some streets visible, not all"): one
+   label per street can sit off-screen or lose the declutter. Walk the street's
+   active run and drop an anchor every LBL_REPEAT_M of world length (capped), so
+   panning always keeps one instance in frame. Returns [{x,z,ang}] in world. */
+var LBL_REPEAT_M = 240;     // spacing between repeated street-name instances (world metres)
+var LBL_REPEAT_MAX = 6;     // cap instances per street run
+function _lblStreetAnchors(poly, i0, i1){
+  var pts = [];
+  for(var i=i0;i<=i1;i++){ var w = gridToWorldAt(poly[i].u, poly[i].v, GRID_ROT_BASE); pts.push({x:w.x,z:w.z}); }
+  if(pts.length<2) return [];
+  var cum=[0], total=0;
+  for(var k=1;k<pts.length;k++){ total += Math.hypot(pts[k].x-pts[k-1].x, pts[k].z-pts[k-1].z); cum.push(total); }
+  if(total < 1) return [];
+  // target arc-length positions: centered, spaced LBL_REPEAT_M, at least the midpoint
+  var n = Math.min(LBL_REPEAT_MAX, Math.max(1, Math.round(total/LBL_REPEAT_M)));
+  var out=[];
+  for(var a=0;a<n;a++){
+    var s = total*(a+0.5)/n, seg=1;
+    while(seg<cum.length-1 && cum[seg]<s) seg++;
+    var segLen = cum[seg]-cum[seg-1] || 1, f = (s-cum[seg-1])/segLen;
+    var p0=pts[seg-1], p1=pts[seg];
+    out.push({ x:p0.x+(p1.x-p0.x)*f, z:p0.z+(p1.z-p0.z)*f, ang:Math.atan2(p1.z-p0.z, p1.x-p0.x) });
+  }
+  return out;
+}
 
 /* ====================================================================
    LABEL SET — rebuilt when the sim DATE (integer day) or a sublayer toggle
@@ -8465,21 +8532,21 @@ function rebuildLabels(){
     });
   }
 
-  /* --- STREETS (era-gated existence + era-correct name, oriented along line) --- */
+  /* --- STREETS (era-gated existence + era-correct name, oriented along line,
+         repeat-along-line so one instance is always in frame) --- */
   if(LABELS_VIS.streets){
     STREETS_RUNTIME.forEach(function(s){
       var active = null;
       for(var ci=0; ci<s.checkpoints.length; ci++){ if(s.checkpoints[ci].day<=day) active = s.checkpoints[ci]; }
       if(!active) return;                                      // not surveyed/mentioned yet
       var i0 = active.extent[0], i1 = active.extent[1]; if(i1<=i0) return;
-      var mid = (i0+i1)>>1;                                    // anchor at the middle segment
-      var a = gridToWorldAt(s.polyline[mid].u, s.polyline[mid].v, GRID_ROT_BASE);
-      var b = gridToWorldAt(s.polyline[Math.min(mid+1,i1)].u, s.polyline[Math.min(mid+1,i1)].v, GRID_ROT_BASE);
-      var mx=(a.x+b.x)/2, mz=(a.z+b.z)/2;
-      if(terrainHeight(mx,mz) <= 0.5) return;                  // don't float a name over the tide flats
-      var ang = Math.atan2(b.z-a.z, b.x-a.x);
       var name = eraStreetName(s, day);
-      _lblAdd(_lblGroundMesh(name, LBL_STYLE.street, mx, mz, 10, ang), LBL_BANDS.street, "streets", 30, 0, true);
+      var prio = _lblStreetPrio(s.cls);
+      _lblStreetAnchors(s.polyline, i0, i1).forEach(function(an){
+        if(terrainHeight(an.x, an.z) <= 0.5) return;           // don't float a name over the tide flats
+        // grow=true → updateLabels scales it up with altitude (finding #2)
+        _lblAdd(_lblGroundMesh(name, LBL_STYLE.street, an.x, an.z, 10, an.ang, true), LBL_BANDS.street, "streets", prio, 0, true);
+      });
     });
   }
 
@@ -8512,13 +8579,14 @@ function rebuildLabels(){
         if(!r.footprint) return;
         var cx=r.footprint.cx, cz=r.footprint.cz;
         if(terrainHeight(cx,cz) <= 0.3) return;               // don't float a name over water
-        _lblAdd(_lblGroundMesh(r.name, LBL_STYLE.civic, cx, cz, 8, _lblGrid.angle), LBL_BANDS.landmark, "lots", 34, 0, true);
+        _lblAdd(_lblGroundMesh(r.name, LBL_STYLE.civic, cx, cz, 8, _lblGrid.angle, true), LBL_BANDS.landmark, "lots", 34, 0, true);
       });
     }
   }
 
   _lblLastDay = Math.floor(simDay);
   _lblLastVisKey = _lblVisKey();
+  _lblFlipYaw = null;   // fresh meshes: force a flip recompute on the next frame
 }
 function _lblVisKey(){ return (LABELS_VIS.lots?"1":"0")+(LABELS_VIS.streets?"1":"0")+(LABELS_VIS.zones?"1":"0"); }
 
@@ -8536,6 +8604,36 @@ function _lblProject(x, y, z){
   _lblV3.set(x, y, z).project(camera);
   return { x:(_lblV3.x*0.5+0.5)*window.innerWidth, y:(-_lblV3.y*0.5+0.5)*window.innerHeight, front:_lblV3.z<1 };
 }
+
+/* s92 finding #2 — ZOOM-SCALED GROUND LABELS (MapLibre text-size interpolate):
+   a `grow` ground label's world-size scales ∝ altitude between clamps, so its
+   ON-SCREEN size stays legible as the camera climbs (screen ≈ worldH/dist, and
+   dist ∝ alt, so worldH ∝ alt ⇒ near-constant screen height) — then clamps so
+   it never runs away. Base size (zf=1) holds through the low street band. */
+var LBL_ZF_REF = 300;       // altitude (m) at which grow labels sit at base size
+var LBL_ZF_MAX = 6;         // clamp: never bigger than 6x base
+function _lblZoomFactor(alt){ var zf = alt/LBL_ZF_REF; return zf<1?1:(zf>LBL_ZF_MAX?LBL_ZF_MAX:zf); }
+
+/* s92 finding #3 — CAMERA-UPRIGHT FLIP. Ground text is WORLD-anchored (fixed to
+   the street/lot, does not spin with a pan) but must never render upside-down.
+   Project the label's world baseline; if it reads right-to-left on screen (the
+   camera has yawed past 90° relative to the text run) add π to the mesh's y-
+   rotation — a cheap quad flip, NOT a canvas re-raster. Throttled: recomputed
+   only when the camera yaw has settled to a new heading (or on rebuild), never
+   per frame. Zone SPRITES are camera-facing billboards → skipped (no dirX). */
+var _lblFlipYaw = null;
+function _lblComputeFlips(){
+  var EPS = 6;   // world metres along the baseline to sample screen direction
+  for(var i=0;i<_lblItems.length;i++){
+    var o = _lblItems[i].obj;
+    if(!_lblItems[i].ground || o.userData.dirX===undefined) continue;
+    var p0 = _lblProject(o.position.x, o.position.y, o.position.z);
+    var p1 = _lblProject(o.position.x + o.userData.dirX*EPS, o.position.y, o.position.z + o.userData.dirZ*EPS);
+    if(!p0.front || !p1.front) continue;
+    var flip = (p1.x - p0.x) < 0;                 // baseline runs leftward on screen ⇒ inverted
+    if(flip !== o.userData.flip){ o.userData.flip = flip; o.rotation.y = o.userData.baseRotY + (flip?Math.PI:0); }
+  }
+}
 function updateLabels(){
   if(!LABELS_VIS.parent){ for(var q=0;q<_lblItems.length;q++){ var it0=_lblItems[q]; it0.cur+= (0-it0.cur)*0.3; it0.obj.material.opacity=it0.cur; it0.obj.visible=it0.cur>0.01; } return; }
   // rebuild the label set when the date or sublayer selection changed
@@ -8543,12 +8641,21 @@ function updateLabels(){
 
   var alt = (typeof lastKnownAlt==="number" && lastKnownAlt>0) ? lastKnownAlt : 800;
   var vpH = window.innerHeight, fovK = 2*Math.tan(camera.fov*Math.PI/360)/vpH; // world-per-screen-px at unit distance
+  var zf = _lblZoomFactor(alt);   // finding #2: altitude → world-size scale for `grow` labels
+
+  // finding #3: recompute camera-upright flips only when the yaw has settled to
+  // a new heading (throttled) — or after a rebuild reset _lblFlipYaw to null.
+  var yawNow = (typeof CAM!=="undefined" && CAM) ? CAM.yaw : 0;
+  if(_lblFlipYaw===null || Math.abs(yawNow-_lblFlipYaw) > 0.05){ _lblComputeFlips(); _lblFlipYaw = yawNow; }
 
   // 1) compute each item's target (band × sublayer) + screen box; collect visible
   var cands = [];
   for(var i=0;i<_lblItems.length;i++){
     var it = _lblItems[i], target = it.band(alt) * (LABELS_VIS[it.sublayer]?1:0);
     it._target = target;
+    // apply the altitude scale up-front so the declutter box below sees the
+    // real on-screen footprint (a grown label reserves more space).
+    if(it.ground && it.obj.userData.grow) it.obj.scale.setScalar(zf);
     if(target < 0.02){ it._box = null; continue; }
     var p = _lblProject(it.obj.position.x, it.obj.position.y, it.obj.position.z);
     if(!p.front){ it._box = null; it._target = 0; continue; }
@@ -8557,7 +8664,7 @@ function updateLabels(){
     var hPx;
     if(it.ground){
       var dist = camera.position.distanceTo(it.obj.position);
-      hPx = it.obj.geometry.parameters.height / Math.max(1, dist*fovK);   // world height → screen px
+      hPx = (it.obj.geometry.parameters.height * it.obj.scale.y) / Math.max(1, dist*fovK);   // scaled world height → screen px
     } else {
       hPx = it.ss;                                                        // sprite: constant on-screen px (scaled below)
     }
@@ -8662,6 +8769,69 @@ registerAudit("labels", "anchorsInside", function(){
     if(!cadPointInPoly(ring, pole.x, pole.z)) bad.push({ parcel:pn, x:Math.round(pole.x), z:Math.round(pole.z) });
   });
   return { pass: bad.length===0, anchorsChecked:n, bad:bad };
+});
+
+/* ---- AUDIT 3 — contrast (s92 finding #1, verbatim: "same background fill
+   color, making it very hard to read"). METHOD (stated honestly): the labels
+   are HALOED, so a glyph never abuts the terrain directly — its effective
+   background is its own halo, and the halo's job is to separate the text mass
+   from whatever ground it lands on. So we do NOT measure glyph-vs-terrain (that
+   is intentionally low and irrelevant); we measure the DUAL-HALO system:
+     • ringSep(bg)   = max( contrast(darkInner⊕bg, bg), contrast(lightOuter⊕bg, bg) )
+                       — the dual-halo guarantee: on a bright amber bg the dark
+                         inner ring carries the edge; on a dark road/shadow bg
+                         the light outer glow carries it; we take whichever wins.
+     • glyphVsInner  = contrast(glyphColor, darkInner⊕bg) — the ink vs its ring.
+   The per-style score is min over the EARTH PALETTE (grounding §9: brightest
+   sunlit sand → darkest hillshade/road-paint, plus the cove's water) of
+   min(ringSep, glyphVsInner). Contrast is WCAG relative-luminance; semi-
+   transparent halos are alpha-composited over each background first. GATE: every
+   style's worst-case ≥ 3.0 (readable-text floor for haloed labels). FAILS BEFORE
+   the dual halo (a single 0.82 dark stroke drops below 3:1 on the dark road/
+   shadow backgrounds); PASSES after. Date-independent (palette + styles fixed). */
+function _lblSrgbToLin(c){ c/=255; return c<=0.03928 ? c/12.92 : Math.pow((c+0.055)/1.055, 2.4); }
+function _lblRelLum(rgb){ return 0.2126*_lblSrgbToLin(rgb[0]) + 0.7152*_lblSrgbToLin(rgb[1]) + 0.0722*_lblSrgbToLin(rgb[2]); }
+function _lblContrast(a,b){ var la=_lblRelLum(a), lb=_lblRelLum(b), hi=Math.max(la,lb), lo=Math.min(la,lb); return (hi+0.05)/(lo+0.05); }
+function _lblHex(h){ return [(h>>16)&255,(h>>8)&255,h&255]; }
+function _lblParseRgba(s){ var m=s.match(/rgba?\(([^)]+)\)/); var p=m[1].split(",").map(function(v){return parseFloat(v);}); return { rgb:[p[0],p[1],p[2]], a:(p[3]==null?1:p[3]) }; }
+function _lblParseCss(col){ if(col[0]==="#"){ var h=col.slice(1); if(h.length===3) h=h[0]+h[0]+h[1]+h[1]+h[2]+h[2]; return [parseInt(h.slice(0,2),16),parseInt(h.slice(2,4),16),parseInt(h.slice(4,6),16)]; } return _lblParseRgba(col).rgb; }
+function _lblComposite(src, a, bg){ return [src[0]*a+bg[0]*(1-a), src[1]*a+bg[1]*(1-a), src[2]*a+bg[2]*(1-a)]; }
+registerAudit("labels", "contrast", function(){
+  // THE EARTH PALETTE a ground/zone label can land on (albedos, grounding §9;
+  // the darkest entries stand in for hillshade + road-paint + shadow — runtime
+  // lighting only darkens the bright end, which the outer glow is built for).
+  var BG = [
+    { name:"sand",     rgb:_lblHex(0xb7a06f) },  // brightest sunlit ground
+    { name:"duneGold", rgb:_lblHex(0xa98e58) },
+    { name:"village",  rgb:_lblHex(0xa8905f) },  // town dirt (under most street/lot labels)
+    { name:"scrubDry", rgb:_lblHex(0x8c8a52) },
+    { name:"rocky",    rgb:_lblHex(0x977e55) },
+    { name:"plank",    rgb:_lblHex(0x9c8560) },  // planked deck
+    { name:"road",     rgb:_lblHex(0x6b5838) },  // road-paint band
+    { name:"ghost",    rgb:_lblHex(0x5c4e33) },  // surveyor ghost line
+    { name:"shadow",   rgb:_lblHex(0x3a2a14) },  // darkest hillshade (terrain shadeWarm)
+    { name:"waterLo",  rgb:_lblHex(0x8fc2c9) },  // bright shallow (cove label)
+    { name:"waterHi",  rgb:_lblHex(0x2a5570) }
+  ];
+  var dark = _lblParseRgba(LBL_HALO_DARK), light = _lblParseRgba(LBL_HALO_LIGHT);
+  var GATE = 3.0, styles = [], worst = { style:null, bg:null, ratio:1e9 };
+  Object.keys(LBL_STYLE).forEach(function(key){
+    var st = LBL_STYLE[key], glyph = _lblParseCss(st.color);
+    var sMin = 1e9, sBg = null;
+    BG.forEach(function(b){
+      var eInner = _lblComposite(dark.rgb, dark.a, b.rgb);
+      var eOuter = _lblComposite(light.rgb, light.a, b.rgb);
+      var ringSep = Math.max(_lblContrast(eInner, b.rgb), _lblContrast(eOuter, b.rgb));
+      var glyphVsInner = _lblContrast(glyph, eInner);
+      var here = Math.min(ringSep, glyphVsInner);
+      if(here < sMin){ sMin = here; sBg = b.name; }
+    });
+    styles.push({ style:key, minRatio:+sMin.toFixed(2), worstBg:sBg });
+    if(sMin < worst.ratio){ worst = { style:key, bg:sBg, ratio:+sMin.toFixed(2) }; }
+  });
+  var bad = styles.filter(function(s){ return s.minRatio < GATE; });
+  return { pass: bad.length===0, gate:GATE, method:"dual-halo WCAG min over earth palette (haloed text: halo-vs-bg + glyph-vs-halo)",
+           minContrastRatio: worst.ratio, worstCase: worst, styles: styles, bad: bad };
 });
 /* ---- 2b. STREET GRAPH — a waypoint graph over the real surveyed street
    grid (every streetsU x streetsV intersection), plus the Plaza (wired to
