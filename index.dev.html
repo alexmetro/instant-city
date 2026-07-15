@@ -969,13 +969,13 @@
 <script src="catalog-activities.js"></script>
 <script src="streets-geometry.js?v=s88"></script> <!-- ?v: cache-buster — bumped s88 (SoMa street re-spacing: true 200x300-vara Hundred Vara blocks + Howard/Mission) so a cached old bake can never pair with a new index.html -->
 <script src="plat-lots-known.js?v=s86"></script> <!-- s86: digitized survey lot registry (68 records, window.PLAT_LOTS_KNOWN), consumed by core/08 cadApplyRecord -->
-<script src="landmark-reservations.js?v=s91"></script> <!-- s91: landmark reservations (10 anchored + 5 documented-unanchorable, window.LANDMARK_RESERVATIONS), consumed by core/08 cadApplyReservations -->
+<script src="landmark-reservations.js?v=s94"></script> <!-- s94: landmark reservations (14 anchored + 1 documented-unanchorable, window.LANDMARK_RESERVATIONS), consumed by core/08 cadApplyReservations + rendered by layers/buildings.js -->
 <script>
 /* @P1850 DEV LOADER — assembles the same module from src/ at runtime.
    Identical semantics to the built index.html (one classic script, one
    IIFE, original chunk order). Requires an http server (fetch). */
 (function(){
-  var FILES = ["vendor/polybool.js","vendor/rbush.js","vendor/polylabel.js","core/00-boot.js","core/01-geography.js","core/02-scene.js","core/08-cadastre.js","core/03-sim.js","core/04-roads.js","core/05-routing.js","core/06-debug.js","core/07-main.js","layers/terrain.js","layers/ground-paint.js","layers/labels.js","layers/camera-input.js","layers/ui-chrome.js"];
+  var FILES = ["vendor/polybool.js","vendor/rbush.js","vendor/polylabel.js","core/00-boot.js","core/01-geography.js","core/02-scene.js","core/08-cadastre.js","core/03-sim.js","core/04-roads.js","core/05-routing.js","core/06-debug.js","core/07-main.js","layers/terrain.js","layers/ground-paint.js","layers/buildings.js","layers/labels.js","layers/camera-input.js","layers/ui-chrome.js"];
   var RE = /^\/\* @P1850-CHUNK (\d+) — (.*) \*\/$/;
   Promise.all(FILES.map(function(f){
     return fetch('src/'+f).then(function(r){ if(!r.ok) throw new Error('fetch failed: src/'+f); return r.text(); });

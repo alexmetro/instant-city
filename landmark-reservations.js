@@ -2,7 +2,10 @@
  * The landmark reservation registry consumed by core/08-cadastre cadApplyReservations()
  * as window.LANDMARK_RESERVATIONS. Regenerate when the source JSON changes.
  * s91: Zoning Project stage 3 — 10 anchored reservations (plaza cluster + Howard&Mellus + Shades),
- * 5 unanchorable landmarks documented in _meta.unanchorable (reserved nothing on a guess). */
+ * 5 unanchorable landmarks documented in _meta.unanchorable (reserved nothing on a guess).
+ * s94: PRESENCE-OVER-PRECISION re-anchor — 4 of the 5 unanchorable landmarks moved into
+ * reservations[] with approximate:true best-effort placements (14 total); sam-brannan-store
+ * remains the sole unanchorable entry (genuinely zero locational basis). */
 window.LANDMARK_RESERVATIONS = {
   "_meta": {
     "title": "Landmark reservations — the record gets its ground (Zoning Project stage 3, s91)",
@@ -27,36 +30,13 @@ window.LANDMARK_RESERVATIONS = {
     "dates_note": "built/burned/rebuilt arcs from the dossier. The Dec 24 1849 Great Fire (origin: Dennison's Exchange) took the Parker House, El Dorado, Bella Union, and Haley House — encoded as burned:1849-12-24 so the buildings admission can honor the pre-fire / post-fire plaza states within the window (sim ends 1849-12-31).",
     "unanchorable": [
       {
-        "landmarkId": "portsmouth-house",
-        "name": "Portsmouth House",
-        "dossier": "§1.6",
-        "reason": "the dossier gives only 'Clay Street' — no cross street or corner; picking a Clay block would be a guess (65 corpus mentions confirm the building, not its block)."
-      },
-      {
-        "landmarkId": "merchants-exchange",
-        "name": "Merchants' Exchange",
-        "dossier": "§1.8",
-        "reason": "'Washington street' only — no cross street; ambiguous which Washington block."
-      },
-      {
-        "landmarkId": "california-star-office",
-        "name": "California Star printing office",
-        "dossier": "§1.10",
-        "reason": "'Washington St., rear of the U.S. Barracks' — a rear-lot structure with no street frontage; the barracks lot is not itself reserved, so 'rear of' has no resolvable anchor."
-      },
-      {
-        "landmarkId": "post-office",
-        "name": "Post Office",
-        "dossier": "§1.9",
-        "reason": "'Clay & Pike' — Pike Street (later Waverly Place) is not in the street spine, so the intersection cannot be resolved."
-      },
-      {
         "landmarkId": "sam-brannan-store",
         "name": "Sam Brannan's store",
         "dossier": "§1.11",
-        "reason": "no in-window San Francisco street address in the corpus ('S. BRANNAN, San Francisco, Dec 30 1847' gives no street); the 1849 Sacramento/Sutter's Fort operations are out of the sim map."
+        "reason": "re-reviewed under the PRESENCE-OVER-PRECISION ruling (s94) and still has no defensible SF-map basis: the earliest attested notice ('S. BRANNAN, San Francisco, Dec. 30, 1847', CS18480115) carries no street at all, and every dated, addressed Brannan operation found in the corpus (WAC18490125, WAC18490201, WAC18490517) explicitly relocates to Sacramento City and Sutter's Fort — off the sim's San Francisco map. The separately-indexed 'Osborn & Brannan' auction-room partnership (multiple 1849 hits) is a distinct entity with its own unaddressed record, not evidence for a 'Sam Brannan's store' street position. Presence-over-precision licenses best-effort approximation from a hint, not invention from zero hint; this one stays unanchorable."
       }
     ],
+    "s94_reanchor_pass": "PRESENCE-OVER-PRECISION re-anchor (building-spawn-spec.md §1, user ruling 2026-07-14): 4 of the 5 previously-unanchorable landmarks (portsmouth-house, merchants-exchange, california-star-office, post-office) moved into reservations[] below with approximate:true, best-effort block/frontage placements reasoned from partial hints (dossier adjacency language, corpus cross-references, external Pike->Waverly Place verification), and honest confidence/source strings recording exactly what was guessed. sam-brannan-store remains unanchorable (genuinely zero locational basis, see above). Reuses only the existing block-frontage/plaza-exception anchor kinds — no new anchor kind invented.",
     "out_of_scope_this_pass": "Storeships (Niantic, Euphemia, Apollo, General Harrison — ships-era, per the brief). Peripheral areas (Mission Dolores, Presidio, Telegraph Hill signal station, the 1847 windmill) are already named parcels or ships/terrain-era and are not building reservations in this plaza-cluster pass."
   },
   "reservations": [
@@ -268,6 +248,58 @@ window.LANDMARK_RESERVATIONS = {
       },
       "confidence": "C",
       "source": "dossier §3.6; corpus C18480419–CSC18481223. If the Pacific/Stockton block is absent at the built date it is surfaced as unresolved, not forced."
+    },
+    {
+      "landmarkId": "portsmouth-house",
+      "name": "Portsmouth House",
+      "dossier": "§1.6",
+      "anchor": { "kind": "block-frontage", "block": "B|kearny|montgomery|clay|sacramento", "frontage": "north", "frontStreet": "clay", "frontFrac0": 0.05, "frontFrac1": 0.38, "depthM": 20, "corner": "NW" },
+      "approximate": true,
+      "dates": {
+        "built": "1846-10-17",
+        "note": "open by Oct 17 1846 (earliest corpus hit) through at least Aug 1849; 'recently enlarged to double its former size' by Jan 1848 (CS18480101). PRESENCE-OVER-PRECISION placement: dossier §1.6 gives only 'Clay Street', no cross street; §4.1's ensemble narrative places it 'one block over on Clay' from the City Hotel (B|dupont|kearny|clay|sacramento, the square-adjacent block). 'One block over' is directionally ambiguous (west toward Stockton vs. east across Kearny toward Montgomery) — the east/Montgomery-corridor block is taken as the more defensible reading: Montgomery was the developing merchant corridor by 1846-47 (Howard & Mellus's later 1848 brick store sits on this same block), while Stockton was still 'a rudimentary thoroughfare amid sand hills' as late as 1849 (streets-geometry.json). Positioned at the block's NW (Kearny) corner — the end nearest the City Hotel/square, i.e. literally 'one block over' at the well-attested Clay & Kearny corner — leaving the Montgomery end (already Howard & Mellus's ground, frontFrac 0.70-0.98) untouched."
+      },
+      "confidence": "C",
+      "source": "dossier §1.6 (Clay Street only, 65 corpus mentions of the building, none of its block); §4.1 ('one block over on Clay' from City Hotel); places.jsonl place-hotel-portsmouth-house (addresses: 'Clay street'/'Clay st.' only, no cross street). Direction of 'one block over' is a judgment call, not corpus-resolved — flagged for review."
+    },
+    {
+      "landmarkId": "merchants-exchange",
+      "name": "Merchants' Exchange",
+      "dossier": "§1.8",
+      "anchor": { "kind": "block-frontage", "block": "B|kearny|montgomery|jackson|washington", "frontage": "south", "frontStreet": "washington", "frontFrac0": 0.30, "frontFrac1": 0.65, "depthM": 16, "corner": false },
+      "approximate": true,
+      "dates": {
+        "built": "1849-08-30",
+        "note": "opened Aug-Sept 1849 (first ad WAC18490830); the second-floor hall specifically completed Nov 22 1849 (WAC18491122). PRESENCE-OVER-PRECISION placement: dossier §1.8 gives only 'Washington street', no cross street at all (places.jsonl confirms: single address 'Washington street'). Placed on the Washington-fronting block immediately east of the square (Kearny-Montgomery x Jackson-Washington) rather than the square-fronting block itself, reasoning: (1) the square-fronting Washington block already carries Bella Union + Alta California office ground and a 1849 purpose-built two-story commercial hall isn't corroborated as sharing that specific frontage; (2) 1849-built commercial construction skews toward the Montgomery corridor, matching Howard & Mellus's already-established brick-store presence one block south on this same Kearny-Montgomery block. This is the weakest-evidenced of the four re-anchored entries — no textual hint narrows it beyond 'Washington street'; flagged for Director review, could equally sit on the square-fronting Washington block."
+      },
+      "confidence": "C",
+      "source": "dossier §1.8 (WAC18490830/0831/1115/1122/1129/1201/1206); places.jsonl place-public-building-merchants-exchange (addresses: ['Washington street'] only). Block choice is a default-to-plausible-cluster guess, not corpus-resolved."
+    },
+    {
+      "landmarkId": "california-star-office",
+      "name": "California Star printing office",
+      "dossier": "§1.10",
+      "anchor": { "kind": "block-frontage", "block": "B|dupont|kearny|jackson|washington", "frontage": "south", "frontStreet": "washington", "frontFrac0": 0.44, "frontFrac1": 0.54, "depthM": 12, "corner": false },
+      "approximate": true,
+      "dates": {
+        "built": "1847-10-16",
+        "note": "address attested CS18471016 through CS18480614 (paper founded Jan 1847, masthead from CS18470109, but the 'rear of the U.S. Barracks' address specifically confirmed only from Oct 1847). PRESENCE-OVER-PRECISION placement: dossier §1.10 gives 'Washington St., rear of the U.S. Barracks' — a rear-lot structure, no street frontage of its own. A separate corpus hit (C18470529, places.jsonl place-public-building-portsmouth-square-barracks) locates 'the Barracks in Portsmouth square' — i.e. a barracks building fronting the square itself, most plausibly on the square's north (Washington) edge given the newspaper's own Washington St. address for its 'rear'. Modeled as a narrow, shallow interior slice of the same square-fronting Washington block already carrying Alta California office (frontFrac 0.10-0.42) and Bella Union (0.55-0.92), placed in the untouched gap between them (0.44-0.54) with a reduced depthM to signal it as the 'modest secondary/rear-lot structure' the dossier itself calls it, not a full street-facing building. This treats 'rear of the barracks' as an address of convenience along the same frontage rather than true interior depth, which the anchor schema has no field to express directly."
+      },
+      "confidence": "C",
+      "source": "dossier §1.10 (CS18471016-CS18480614, 'Washington St., rear of the U.S. Barracks'); C18470529 ('in front of the Barracks in Portsmouth square', places.jsonl place-public-building-portsmouth-square-barracks) — the identification of this May-1847 'Portsmouth Square Barracks' hit with the same 'U.S. Barracks' cited in the paper's own Oct-1847-onward address ads is plausible (same military-occupation era, same square) but not independently confirmed as the identical structure. Flagged: the barracks' own footprint is not itself reserved (out of scope), and the office's placement here approximates a rear-lot relationship the anchor schema cannot literally encode."
+    },
+    {
+      "landmarkId": "post-office",
+      "name": "Post Office",
+      "dossier": "§1.9",
+      "anchor": { "kind": "block-frontage", "block": "B|stockton|dupont|clay|sacramento", "frontage": "north", "frontStreet": "clay", "frontFrac0": 0.10, "frontFrac1": 0.38, "depthM": 14, "corner": "SW" },
+      "approximate": true,
+      "dates": {
+        "built": "1849-03-01",
+        "note": "the FORMAL Clay & Pike civilian post office, opened March 1849 (timeline-spine.md/FoundSF POST_OFFICE_1849) — distinct from the informal 1847 Quartermaster-office 'Post Office' (C18470605), which is NOT anchored here (no location beyond 'the Quarter Master at the several points at which troops are stationed'). PRESENCE-OVER-PRECISION placement: Pike Street is verified (this pass, cast.md + web research) to be the same street later renamed Waverly Place — cast.md independently attests this twice ('27 Waverly Place (formerly Pike Street)', Charles Cora and Belle Cora entries) and modern sources confirm Waverly Place runs one block WEST of Grant Ave/Dupont, between Washington and Sacramento Streets (crossing Clay), parallel to Dupont and Stockton — i.e. Pike/Waverly is the mid-block alley in the Stockton-Dupont corridor, NOT between Dupont and Kearny. (NOTE: timeline-part-1849.md's phrasing 'southwest corner of Pike (later Clay) and Clay Streets' reads as a transcription glitch — read against cast.md's clean double-attestation, Pike was renamed to Waverly Place, not to Clay.) Pike/Waverly itself is not in the street spine, so the intersection is approximated onto the nearest resolvable block: B|stockton|dupont|clay|sacramento (the Clay-fronting block south of Clay, spanning Stockton to Dupont), positioned toward its west (Stockton) portion per the dossier's own 'southwest corner of Pike and Clay' phrasing (west of the mid-block alley, south of Clay)."
+      },
+      "confidence": "B",
+      "source": "dossier §1.9; timeline-part-1849.md/timeline-spine.md (Clay & Pike, March 1849, FoundSF POST_OFFICE_1849); cast.md (Charles Cora, Belle Cora entries: '27 Waverly Place (formerly Pike Street)') for the Pike=Waverly identification; WebSearch this pass (gpsmycity.com, evendo.com, Medium/Doug Chan) corroborating Waverly Place's Washington-Sacramento, one-block-west-of-Grant-Ave position. Block/frontFrac position is an approximation onto the nearest spine block, not a corpus-resolved footprint."
     }
   ]
 };
