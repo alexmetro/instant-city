@@ -102,6 +102,36 @@ var STREET_GRAPH = (function(){
     });
     if(bestK2) addEdge(bestK2, c.key);
   });
+  // s97 PIER ADMISSION (pier-system-spec §1 THE JUNCTION + §3 walk continuity):
+  // wire each pier into the walk graph as street -> junction(foot) -> deck(end)
+  // so the routing corridor flows continuously from the street grid onto the
+  // wharf deck (spine.pierWalkContinuity proves reachability). The FOOT node
+  // sits on its anchor street's centreline (verified 0.00 m off-centre by
+  // spine.pierJunction) and links to the nearest real street/grid node — the
+  // shared shoreline junction — and to the deck END node (the full built
+  // bayward extent). A pure SPUR: END is a dead end, so no through-route
+  // shortcut is introduced into the land network. Topology is date-independent
+  // (full extent); the audit is a reachability property, not a per-day gate.
+  // Reads only PIERS_RUNTIME + gridToWorld (both defined far upstream); never
+  // pierEdgesAt (cadastre, defined downstream of this graph IIFE).
+  if(typeof PIERS_RUNTIME !== "undefined") PIERS_RUNTIME.forEach(function(p){
+    if(!p.checkpoints.length || !p.polyline.length) return;
+    var footW = gridToWorld(p.polyline[0].u, p.polyline[0].v);
+    var lastCk = p.checkpoints[p.checkpoints.length-1];
+    var oi = Math.max(0, Math.min(lastCk.extent[1], p.polyline.length-1));
+    var endW = gridToWorld(p.polyline[oi].u, p.polyline[oi].v);
+    var footKey = "pier_"+p.id+"_foot", endKey = "pier_"+p.id+"_end";
+    addNode(footKey, footW.x, footW.z);
+    addNode(endKey, endW.x, endW.z);
+    var bestK=null, bestD=1e18;
+    Object.keys(idx).forEach(function(k){
+      if(k.indexOf("pier_")===0 || k.indexOf("camp_")===0 || k.indexOf("mroad_")===0) return;
+      var n=nodes[idx[k]], d=Math.hypot(n.x-footW.x, n.z-footW.z);
+      if(d<bestD){ bestD=d; bestK=k; }
+    });
+    if(bestK) addEdge(bestK, footKey);   // the shoreline junction (street -> foot)
+    addEdge(footKey, endKey);            // the deck corridor (foot -> end)
+  });
   return { nodes:nodes, edges:edgeList, idx:idx };
 })();
 function nearestGraphNode(x,z){

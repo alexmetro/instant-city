@@ -205,13 +205,22 @@ function renderGroundSplat(){
     rec.painted = (rec.ghostSegs + rec.wornSegs) > 0;
   });
 
-  /* s84: PIER-CLASS SPINE MEMBERS — plank decks (road-master-spec SPINE
-     MEMBERSHIP AMENDMENT). Painted AFTER the streets so a deck sits over the
-     wet-lot gap its anchor street leaves. Constant class width, era-gated by
-     construction date (pierActiveCheckpoint == null ⇒ not yet built ⇒ zero
-     paint), extent GROWS with the dated checkpoints. The wet-lot skip does NOT
-     apply — a pier IS over water; the plank tone is the documented §9 exception
-     (wood, lawfully slightly lighter than terrain). One uniform tone, one pass. */
+  /* s84/s97: PIER-CLASS SPINE MEMBERS — plank decks (road-master-spec SPINE
+     MEMBERSHIP AMENDMENT; pier-system-spec §1 unified renderer). Painted AFTER
+     the streets so a deck sits over the wet-lot gap its anchor street leaves.
+     Constant class width, era-gated by construction date (pierActiveCheckpoint
+     == null ⇒ not yet built OR still reaching ⇒ zero paint), extent GROWS with
+     the dated checkpoints. The wet-lot skip does NOT apply — a pier IS over
+     water; the plank tone is the documented §9 exception (wood, lawfully
+     slightly lighter than terrain). One uniform tone, one pass.
+     NOT A FORKED RENDERER (pier-system-spec §1): this is the SAME
+     renderGroundSplat pass, drawing the deck from the SINGLE canonical geometry
+     source — pierEdgesAt (core/08-cadastre, produced in the one -9.0° frame at
+     query time) — through the SAME fill primitive (_gpFillPoly) the street
+     aprons/plaza use. No parallel pier geometry exists to drift from the spine;
+     the frame is locked by spine.pierEdgesFrame. The street's own stroke path is
+     signed-off substrate and is untouched — the deck class-switches off
+     PIERS_RUNTIME, it does not re-implement the street renderer. */
   if(typeof PIERS_RUNTIME !== "undefined") PIERS_RUNTIME.forEach(function(p){
     var rec = stats.streets[p.id] = { painted:false, ghostSegs:0, wornSegs:0, state:4, worldPoly:null, stations:[], isPier:true };
     /* s90 item C — FILLED DECK QUAD, not a centred stroke. The deck is only a

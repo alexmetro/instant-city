@@ -76,7 +76,10 @@ const FRAMINGS = [
   { id: "overview-1500m",   alt: 1500, date: "1849-09-15", note: "region/zone band" },
   { id: "town-500m",        alt: 500,  date: "1849-09-15", note: "street band" },
   { id: "plaza-150m-1848",  alt: 150,  date: "1848-04-01", note: "lot band — early plaza (s94a-b: neutral volumes + front markers)" },
-  { id: "plaza-150m",       alt: 150,  date: "1849-12-20", note: "lot band" }
+  { id: "plaza-150m",       alt: 150,  date: "1849-12-20", note: "lot band" },
+  // s97 PIER ADMISSION waterfront framings (x/z = world metres, override plazaCenter).
+  { id: "waterfront-1848",  alt: 420, x: 160, z: -140, date: "1848-04-01", note: "waterfront — Broadway Wharf (born Dec 1847) reaching out; Central Wharf NOT yet commenced (birth Jul 1849) per corrections.md #8" },
+  { id: "waterfront-1849",  alt: 520, x: 180, z: -70,  date: "1849-09-15", note: "waterfront — Central Wharf reaching (300 ft, commenced Jul 7 / decked Aug 31 1849) + Broadway Wharf; the three CITY public wharves are 1850, out of window" }
 ];
 
 const args = process.argv.slice(2);
@@ -191,7 +194,7 @@ async function verifyTarget(browser, url, label) {
   fs.mkdirSync(SHOT_DIR, { recursive: true });
   for (const f of FRAMINGS) {
     await page.evaluate((iso) => window.__P1850.jump(iso), f.date);
-    await page.evaluate((o) => { window.__P1850.camSet({ alt: o.alt, x: window.__P1850.plazaCenter.x, z: window.__P1850.plazaCenter.z, snap: true }); }, f);
+    await page.evaluate((o) => { window.__P1850.camSet({ alt: o.alt, x: (o.x != null ? o.x : window.__P1850.plazaCenter.x), z: (o.z != null ? o.z : window.__P1850.plazaCenter.z), snap: true }); }, f);
     await settle(50);
     await page.evaluate(() => window.__P1850.render && window.__P1850.render());
     const name = `${label}-${f.id}.png`;

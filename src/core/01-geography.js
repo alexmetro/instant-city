@@ -309,12 +309,22 @@ var PIERS_RUNTIME = (function(){
 })();
 var PIERS_RUNTIME_BY_ID = {}; PIERS_RUNTIME.forEach(function(p){ PIERS_RUNTIME_BY_ID[p.id]=p; });
 /* The active checkpoint (largest extent whose date has arrived) for a pier at a
-   given simDay, or null if the pier is not yet born. */
+   given simDay, or null if the pier is not yet born OR is still in its
+   reaching/pile-driving phase (born but no DECKED checkpoint has fired yet).
+   s97 PIER ADMISSION (pier-system-spec §2, the build-out lifecycle): the
+   P0 absent -> P1 reaching -> P2 decked states are made legible in the extent
+   over time. The old `|| checkpoints[0]` fallback front-loaded the first
+   checkpoint's deck onto a pier's birth day; removed so that Central Wharf —
+   which COMMENCED 1849-07-07 (birth) but whose first 300 ft of deck is
+   documented 1849-08-31 (WAC18490831, the s97 date fix) — carries no deck in
+   its reaching window (returns null). Safe for every other pier: each has
+   birthDay <= its first checkpoint's day, and where they are equal the loop
+   finds that checkpoint immediately (the removed fallback was dead for them). */
 function pierActiveCheckpoint(p, day){
   if(day < p.birthDay) return null;
   var active = null;
   for(var i=0;i<p.checkpoints.length;i++){ if(p.checkpoints[i].day <= day) active = p.checkpoints[i]; }
-  return active || (p.checkpoints.length ? p.checkpoints[0] : null);
+  return active;
 }
 
 /* Every simDay where SOME street's rendered state could change — its own

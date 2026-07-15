@@ -1586,3 +1586,215 @@ registerAudit("spine", "pierAnchors", function(){
   out.pass = out.violations.length === 0;
   return out;
 });
+
+/* =====================================================================
+   s97 PIER ADMISSION — the spine.pier* audit family (pier-system-spec §4 +
+   SPRINT-s97 brief). Five framing-independent guards over the pier spine and
+   its render/route surfaces, companions to spine.pierAnchors (s84). Every
+   check is a pure function of the pier data + the ONE canonical frame
+   (GRID_ROT_BASE, -9.0deg) — no camera, no wall-clock, no RNG — so the whole
+   family is rewind-exact by construction. Registered at top level like
+   pierAnchors; runAll() picks them up from the live __P1850_AUDITS registry.
+   ===================================================================== */
+(function(){
+  function az(dx,dz){ var a=Math.atan2(dz,dx)*180/Math.PI; return ((a%180)+180)%180; } // undirected 0..180
+  function angDiff(a,b){ var d=Math.abs(a-b)%180; return Math.min(d,180-d); }
+  function pierWorld(p,i){ var q=p.polyline[i]; return gridToWorld(q.u,q.v); }
+  function anchorOf(p){ return (typeof STREETS_RUNTIME_BY_ID!=="undefined") ? STREETS_RUNTIME_BY_ID[p.anchorStreet] : null; }
+  function livePiers(){ return (typeof PIERS_RUNTIME!=="undefined") ? PIERS_RUNTIME : []; }
+
+  /* spine.pierJunction — the TIGHT integration (pier-system-spec §1). Every pier's
+     LANDWARD vertex sits ON its anchor street's centreline (continuous collinear
+     spine: perpendicular gap <= 1 m AND the foot projects onto the anchor's own
+     span, a real shared shoreline node) and the pier is collinear with the anchor
+     (bearing dev <= 3 deg). junctionType is reported: 'terminus' (foot == the
+     anchor's seaward endpoint, ~0 m — Central/Market) vs 'bulkhead' (foot is a
+     documented bulkhead inset on the anchor; the platted water-lot line continues
+     seaward over unbuilt in-window tideflat — the gap-to-platted-endpoint is
+     RECORDED, not a fault). No-double-paint at the waterline is upheld structurally
+     (streets wet-lot-skip over water; piers paint the plank exception) and proven
+     independently by ground-paint.oneOwner. */
+  registerAudit("spine","pierJunction", function(){
+    var out={ pass:true, piers:0, violations:[], detail:[] };
+    var piers=livePiers();
+    if(!piers.length) return { pass:true, piers:0, note:"no piers in spine" };
+    var GAP_TOL=1.0, BEAR_TOL=3.0;
+    piers.forEach(function(p){
+      out.piers++;
+      var d={ id:p.id, anchor:p.anchorStreet };
+      var anchor=anchorOf(p);
+      if(!anchor){ out.violations.push({id:p.id,reason:"anchor-missing"}); out.detail.push(d); return; }
+      var foot=pierWorld(p,0), bay=pierWorld(p,p.polyline.length-1);
+      var acl=anchor.polyline.map(function(q){ return gridToWorld(q.u,q.v); });
+      var dmin=Infinity, onSpan=false;
+      for(var i=0;i<acl.length-1;i++){
+        var a=acl[i],b=acl[i+1],dx=b.x-a.x,dz=b.z-a.z,l2=dx*dx+dz*dz;
+        var t=l2>0?((foot.x-a.x)*dx+(foot.z-a.z)*dz)/l2:0, tc=Math.max(0,Math.min(1,t));
+        var qx=a.x+dx*tc, qz=a.z+dz*tc, dd=Math.hypot(foot.x-qx,foot.z-qz);
+        if(dd<dmin){ dmin=dd; onSpan=(t>=-0.001 && t<=1.001); }
+      }
+      d.footToAnchorCentrelineM=+dmin.toFixed(3);
+      d.onAnchorSpan=onSpan;
+      var pierAz=az(bay.x-foot.x,bay.z-foot.z), anchAz=az(acl[acl.length-1].x-acl[0].x, acl[acl.length-1].z-acl[0].z);
+      d.bearingDevDeg=+angDiff(pierAz,anchAz).toFixed(3);
+      var e0=acl[0], e1=acl[acl.length-1];
+      var gEnd=Math.min(Math.hypot(foot.x-e0.x,foot.z-e0.z), Math.hypot(foot.x-e1.x,foot.z-e1.z));
+      d.gapToPlattedTerminusM=+gEnd.toFixed(1);
+      d.junctionType = gEnd<=GAP_TOL ? "terminus" : "bulkhead";
+      if(dmin>GAP_TOL) out.violations.push({id:p.id,reason:"foot-off-anchor-centreline",gapM:d.footToAnchorCentrelineM,tolM:GAP_TOL});
+      if(d.bearingDevDeg>BEAR_TOL) out.violations.push({id:p.id,reason:"pier-not-collinear",devDeg:d.bearingDevDeg,tolDeg:BEAR_TOL});
+      if(!onSpan) out.violations.push({id:p.id,reason:"foot-off-anchor-span"});
+      out.detail.push(d);
+    });
+    out.pass=out.violations.length===0;
+    return out;
+  });
+
+  /* spine.pierBuildoutMonotonic — the build-out lifecycle (pier-system-spec §2).
+     (A) STATIC: each pier's checkpoints have strictly increasing dates and
+     non-decreasing extent + lengthFt; birth <= first checkpoint (a reaching
+     phase is allowed, never a negative gap). (B) RUNTIME at simDay: the ACTIVE
+     extent equals pierActiveCheckpoint, and the rendered deck (pierEdgesAt)
+     agrees with it — so the deck the paint layer draws follows the corrected
+     checkpoint dates exactly (Central Wharf: reaching -> 300 ft @ 1849-08-31 ->
+     800 ft @ fall-1849, the s97 date fix). */
+  registerAudit("spine","pierBuildoutMonotonic", function(){
+    var out={ pass:true, piers:0, violations:[], detail:[] };
+    var piers=livePiers();
+    if(!piers.length) return { pass:true, piers:0, note:"no piers in spine" };
+    piers.forEach(function(p){
+      out.piers++;
+      var d={ id:p.id, birthDay:+p.birthDay.toFixed(0), checkpoints:p.checkpoints.length };
+      var lastDay=-Infinity,lastExt=-1,lastLen=-1;
+      p.checkpoints.forEach(function(c){
+        // dates NON-DECREASING (equal dates are legitimate: Pacific St Wharf
+        // carries an as-built + a planned extent on the SAME Mayor's-Message
+        // date — a same-day plan bump, valid as long as the extent still grows).
+        if(c.day<lastDay) out.violations.push({id:p.id,reason:"decreasing-date",day:c.day});
+        if(c.extent[1]<lastExt) out.violations.push({id:p.id,reason:"decreasing-extent",extent:c.extent});
+        if(c.lengthFt!=null && c.lengthFt<lastLen) out.violations.push({id:p.id,reason:"decreasing-length",lengthFt:c.lengthFt});
+        lastDay=c.day; lastExt=c.extent[1]; if(c.lengthFt!=null) lastLen=c.lengthFt;
+      });
+      if(p.checkpoints.length && p.birthDay>p.checkpoints[0].day+0.5) out.violations.push({id:p.id,reason:"birth-after-first-checkpoint",birth:+p.birthDay.toFixed(0),first:+p.checkpoints[0].day.toFixed(0)});
+      var active=pierActiveCheckpoint(p, simDay), e=pierEdgesAt(p, simDay);
+      d.activeLengthFt = active?active.lengthFt:null;
+      if(!active){ if(e.active) out.violations.push({id:p.id,reason:"deck-active-but-no-checkpoint"}); d.rendered="none/reaching"; }
+      else {
+        if(!e.active) out.violations.push({id:p.id,reason:"checkpoint-active-but-no-deck"});
+        else if(e.lengthFt!==active.lengthFt) out.violations.push({id:p.id,reason:"deck-extent-mismatch",deck:e.lengthFt,active:active.lengthFt});
+        d.rendered=active.lengthFt+"ft";
+      }
+      out.detail.push(d);
+    });
+    out.pass=out.violations.length===0;
+    return out;
+  });
+
+  /* spine.pierDeckWidth — the constant-width law for piers (road-master-spec
+     CONSTANT-WIDTH AMENDMENT / §9b). The canonical deck geometry (pierEdgesAt)
+     must place each edge exactly width/2 from the centreline at EVERY station,
+     for the full built extent — one constant width per member, no taper. */
+  registerAudit("spine","pierDeckWidth", function(){
+    var out={ pass:true, piers:0, violations:[], detail:[] };
+    var piers=livePiers();
+    if(!piers.length) return { pass:true, piers:0, note:"no piers in spine" };
+    var TOL=0.05;
+    piers.forEach(function(p){
+      out.piers++;
+      var e=pierEdgesAt(p, 1e9), d={ id:p.id, width_m:+p.widthM.toFixed(2) };
+      if(!e.active || !e.centerline.length){ d.note="no-extent"; out.detail.push(d); return; }
+      var hw=p.widthM/2, maxDev=0;
+      for(var k=0;k<e.centerline.length;k++){
+        var cl=e.centerline[k], L=e.leftEdge[k], R=e.rightEdge[k];
+        maxDev=Math.max(maxDev, Math.abs(Math.hypot(L.x-cl.x,L.z-cl.z)-hw), Math.abs(Math.hypot(R.x-cl.x,R.z-cl.z)-hw));
+      }
+      d.halfWidth_m=+hw.toFixed(3); d.maxEdgeDev_m=+maxDev.toFixed(4); d.stations=e.centerline.length;
+      if(maxDev>TOL) out.violations.push({id:p.id,reason:"deck-width-not-constant",maxDevM:d.maxEdgeDev_m,tolM:TOL});
+      out.detail.push(d);
+    });
+    out.pass=out.violations.length===0;
+    return out;
+  });
+
+  /* spine.pierWalkContinuity — the routing corridor flows street -> junction ->
+     pier deck (pier-system-spec §3). In the shared STREET_GRAPH: every pier has
+     a foot node and an end node; the foot edges to at least one NON-pier (street)
+     node — the shared shoreline junction — and to the deck end; and both are
+     reachable from the town core (plaza) by BFS. A regression that drops the
+     pier wiring, or strands a wharf, turns this red. junctionGap is reported
+     (short for the Montgomery-footed wharves; larger for the Sansome/Front
+     bulkhead wharves the sparse core-street graph has no adjacent node for). */
+  registerAudit("spine","pierWalkContinuity", function(){
+    var out={ pass:true, piers:0, violations:[], detail:[] };
+    var piers=livePiers();
+    if(!piers.length) return { pass:true, piers:0, note:"no piers in spine" };
+    if(typeof STREET_GRAPH==="undefined" || !STREET_GRAPH.nodes) return { pass:false, reason:"no street graph" };
+    var G=STREET_GRAPH;
+    function reachableFrom(startKey){
+      var start=G.idx[startKey]; if(start==null) return {};
+      var seen={}, q=[start]; seen[start]=true;
+      while(q.length){ var u=q.shift(); G.edges[u].forEach(function(ed){ if(!seen[ed.to]){ seen[ed.to]=true; q.push(ed.to); } }); }
+      return seen;
+    }
+    var reach=reachableFrom("plaza");
+    piers.forEach(function(p){
+      out.piers++;
+      var fi=G.idx["pier_"+p.id+"_foot"], ei=G.idx["pier_"+p.id+"_end"], d={ id:p.id };
+      if(fi==null||ei==null){ out.violations.push({id:p.id,reason:"pier-nodes-missing"}); out.detail.push(d); return; }
+      var junctEdge=G.edges[fi].filter(function(ed){ return G.nodes[ed.to].key.indexOf("pier_")!==0; });
+      if(!junctEdge.length) out.violations.push({id:p.id,reason:"foot-has-no-street-junction"});
+      else d.junctionGapM=+Math.min.apply(null,junctEdge.map(function(ed){return ed.d;})).toFixed(1);
+      if(!G.edges[fi].some(function(ed){ return ed.to===ei; })) out.violations.push({id:p.id,reason:"no-deck-edge"});
+      d.footReachable=!!reach[fi]; d.endReachable=!!reach[ei];
+      if(!reach[fi]||!reach[ei]) out.violations.push({id:p.id,reason:"pier-unreachable-from-core",foot:!!reach[fi],end:!!reach[ei]});
+      out.detail.push(d);
+    });
+    out.pass=out.violations.length===0;
+    return out;
+  });
+
+  /* spine.pierEdgesFrame — the pierEdges data surface the ships admission will
+     consume (pier-system-spec §3). (1) DETERMINISM: two identical queries return
+     byte-identical geometry (no RNG / stale-frame contamination -> rewind-exact).
+     (2) CANONICAL FRAME: every centreline vertex round-trips through worldToGrid
+     back to the pier's own (u,v) within 1 cm — proving the ONE -9.0deg frame, not
+     a baked/other frame. (3) DOUBLE-SIDED + SYMMETRIC: left != right and both lie
+     width/2 from the centreline (|dL-dR| ~ 0), so the mooring/ship-exclusion band
+     is symmetric about the deck spine. Queried at full built extent (day 1e9). */
+  registerAudit("spine","pierEdgesFrame", function(){
+    var out={ pass:true, piers:0, violations:[], detail:[] };
+    var piers=livePiers();
+    if(!piers.length) return { pass:true, piers:0, note:"no piers in spine" };
+    var DAY=1e9, FRAME_TOL=0.01, SYM_TOL=0.02;
+    piers.forEach(function(p){
+      out.piers++;
+      var e1=pierEdgesAt(p, DAY), e2=pierEdgesAt(p, DAY), d={ id:p.id };
+      if(!e1.active){ d.note="no-extent"; out.detail.push(d); return; }
+      var n=e1.centerline.length, det=(e2.centerline.length===n);
+      for(var k=0;k<n && det;k++){
+        if(e1.centerline[k].x!==e2.centerline[k].x || e1.centerline[k].z!==e2.centerline[k].z ||
+           e1.leftEdge[k].x!==e2.leftEdge[k].x || e1.rightEdge[k].x!==e2.rightEdge[k].x) det=false;
+      }
+      if(!det) out.violations.push({id:p.id,reason:"non-deterministic-edges"});
+      var i0=pierActiveCheckpoint(p,DAY).extent[0], maxFrame=0;
+      for(var k2=0;k2<n;k2++){
+        var uv=p.polyline[i0+k2], g=worldToGrid(e1.centerline[k2].x, e1.centerline[k2].z);
+        maxFrame=Math.max(maxFrame, Math.abs(g.u-uv.u), Math.abs(g.v-uv.v));
+      }
+      d.maxFrameRoundTrip_m=+maxFrame.toFixed(4);
+      if(maxFrame>FRAME_TOL) out.violations.push({id:p.id,reason:"edges-not-in-canonical-frame",maxM:d.maxFrameRoundTrip_m});
+      var hw=p.widthM/2, maxSym=0, distinct=true;
+      for(var k3=0;k3<n;k3++){
+        var cl=e1.centerline[k3], L=e1.leftEdge[k3], R=e1.rightEdge[k3];
+        maxSym=Math.max(maxSym, Math.abs(Math.hypot(L.x-cl.x,L.z-cl.z)-Math.hypot(R.x-cl.x,R.z-cl.z)));
+        if(Math.hypot(L.x-R.x,L.z-R.z) < hw) distinct=false;
+      }
+      d.maxLRAsym_m=+maxSym.toFixed(4);
+      if(maxSym>SYM_TOL) out.violations.push({id:p.id,reason:"deck-edges-asymmetric",maxM:d.maxLRAsym_m});
+      if(!distinct) out.violations.push({id:p.id,reason:"deck-edges-not-double-sided"});
+      out.detail.push(d);
+    });
+    out.pass=out.violations.length===0;
+    return out;
+  });
+})();
