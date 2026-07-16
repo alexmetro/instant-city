@@ -3675,6 +3675,132 @@ function shorelineAt(day, ops){
   return pts;
 }
 
+/* =====================================================================
+   TIDE-AWARE DRY LAND (terrain-edge-grounding-spec §0). The mean-tide
+   isLandAt() answers cove / water-lot questions (ground above the y=0 mean
+   waterline). But the tide sweeps to +TIDE.amp at high water, so ground
+   between 0 and +TIDE.amp is land at mean tide and SUBMERGED at high tide.
+   isDryLand is the BUILDABLE / ANCHORABLE surface: ground never under water
+   at ANY tide, plus a visible operator-set freeboard so "dry" is
+   unambiguous. Every road-end and every wharf-anchor is measured against the
+   DRY-LAND EDGE, not the mean waterline.
+     DRY_LAND_Y = TERRAIN_WATERLINE_Y + TIDE_HIGH + DRY_LAND_FREEBOARD ~ +0.85 m.
+   TIDE_HIGH reads the canonical tide amplitude TIDE.amp (the terrain module
+   owns it; it is assigned in a later chunk, so read it lazily) — the CONSTANT
+   amplitude, never the animated water plane, so isDryLand is pure of the
+   time-of-day clock and rewind-exact. Keep isLandAt untouched for cove /
+   water-lot questions; isDryLand is specifically the buildable surface. */
+var DRY_LAND_FREEBOARD = 0.5;    // operator-set visible freeboard above the highest tide
+function dryLandTideHigh(){ return (typeof TIDE !== "undefined" && TIDE && TIDE.amp != null) ? TIDE.amp : 0.35; }
+function dryLandY(){ return TERRAIN_WATERLINE_Y + dryLandTideHigh() + DRY_LAND_FREEBOARD; }
+function isDryLand(x, z, day, ops){ return terrainHeightAt(x, z, day, ops) > dryLandY(); }
+/* dryLandEdgeAt(day): the DERIVED dry-land coast — one x per z-row, marched
+   exactly like shorelineAt (skip leading water, latch the contiguous
+   mainland, record its first dry->not-dry crossing, stop). One x per row, so
+   it is monotone in z and cannot self-cross; it advances/retreats as the
+   terrain morphs. This is the ONE boundary the road-clamp and wharf-anchor
+   rules are measured against. */
+function dryLandEdgeAt(day, ops){
+  var pts=[];
+  for(var z=-360; z<=1180; z+=30){
+    var onDry=false, found=null;
+    for(var x=-200; x<=1500 && found===null; x+=12){
+      var dry = isDryLand(x, z, day, ops);
+      if(!onDry){ if(dry) onDry=true; }              // skip leading water; latch the mainland
+      else if(!dry){ found = x; }                     // first dry->not-dry of that run = the edge
+    }
+    if(found!==null) pts.push({ x:found, z:z });
+  }
+  return pts;
+}
+/* dryLandEdgeXAt(z, edge): interpolate the seaward dry-land edge x at a given
+   z from a dryLandEdgeAt() table (nearest-rows lerp, like shoreAnchorsX). +X
+   is east/seaward, so a point with x < edgeX is inland of the edge. */
+function dryLandEdgeXAt(z, edge){
+  if(!edge || !edge.length) return null;
+  if(z<=edge[0].z) return edge[0].x;
+  if(z>=edge[edge.length-1].z) return edge[edge.length-1].x;
+  for(var i=0;i<edge.length-1;i++){
+    if(z>=edge[i].z && z<=edge[i+1].z){
+      var t=(z-edge[i].z)/((edge[i+1].z-edge[i].z)||1e-9);
+      return edge[i].x + (edge[i+1].x-edge[i].x)*t;
+    }
+  }
+  return edge[edge.length-1].x;
+}
+
+/* =====================================================================
+   THE PROGRAMMATIC ROAD DRAPE + CLAMP (terrain-edge-grounding-spec §0b) —
+   roadDrawnExtentAt(road, day). A PURE f(authored XZ, dated terrain): the
+   road's authored (u,v) polyline, (a) DRAPED — tessellated to ~the terrain
+   grid spacing, every vertex Y = terrainHeightAt(x,z,day) so it hugs uneven
+   ground — and (b) CLAMPED — the drawn extent trimmed at the first crossing
+   of the dry-land edge, marching from the road's landward/grounded end. A
+   road end that connects to a grounded STRUCTURE (a pier/wharf deck, which
+   runs seaward over water by design) is NOT trimmed there. Deterministic;
+   rewind-exact; recomputes automatically as the terrain morphs — the authored
+   data owns only the XZ centerline; Y and drawn-extent are DERIVED. NOT wired
+   into the release render this pass (Phase 2) — the demonstrable machinery,
+   shown raw-vs-clamped in the atelier overlay. ===================================================================== */
+var ROAD_DRAPE_STEP = 15;        // ~half the terrain cell (~31 m) — hugs the mesh relief
+function _roadWorldPolyline(road){
+  var poly = road.polyline || [], out = [];
+  for(var i=0;i<poly.length;i++){
+    var p = poly[i], w = (p.u!=null) ? gridToWorld(p.u, p.v) : { x:p.x, z:p.z };
+    out.push({ x:w.x, z:w.z });
+  }
+  return out;
+}
+function _drapeRun(a, b, day, ops, out){
+  var L = Math.hypot(b.x-a.x, b.z-a.z), n = Math.max(1, Math.round(L/ROAD_DRAPE_STEP));
+  for(var k=1;k<=n;k++){
+    var t=k/n, x=a.x+(b.x-a.x)*t, z=a.z+(b.z-a.z)*t;
+    out.push({ x:x, z:z, y:terrainHeightAt(x,z,day,ops) });
+  }
+}
+/* is (x,z) over some pier's active deck at `day` (a grounded structure the
+   road may legitimately meet without a dry-land trim)? — distance to the
+   active-extent centerline within the deck half-width. */
+function _overActivePierDeck(x, z, day){
+  var piers = (typeof PIERS_RUNTIME !== "undefined") ? PIERS_RUNTIME : [];
+  for(var i=0;i<piers.length;i++){
+    var p=piers[i], active=pierActiveCheckpoint(p, day); if(!active) continue;
+    var hw = p.widthM/2 + 2;
+    for(var k=active.extent[0]; k<active.extent[1]; k++){
+      var a=gridToWorld(p.polyline[k].u,p.polyline[k].v), b=gridToWorld(p.polyline[k+1].u,p.polyline[k+1].v);
+      if(_morphSegDist(x,z,a.x,a.z,b.x,b.z) < hw) return true;
+    }
+  }
+  return false;
+}
+function roadDrawnExtentAt(road, day, ops){
+  var wpoly = _roadWorldPolyline(road);
+  var isPier = (road.cls==="pier");
+  var raw = [];
+  if(wpoly.length){
+    raw.push({ x:wpoly[0].x, z:wpoly[0].z, y:terrainHeightAt(wpoly[0].x, wpoly[0].z, day, ops) });
+    for(var s=0;s<wpoly.length-1;s++) _drapeRun(wpoly[s], wpoly[s+1], day, ops, raw);
+  }
+  // PIER: the deck IS the grounded structure and runs seaward over water by
+  // design — no water-trim; the full draped extent is the drawn extent.
+  if(isPier || raw.length<2) return { raw:raw, clamped:raw.slice(), trimmedAt:null, landwardEnd:0 };
+  // CLAMP: march from the landward end (the dry endpoint; if only the tail is
+  // dry, from the tail), keep dry samples (or samples over a grounded pier
+  // deck), stop at the first crossing past the dry-land edge.
+  var head = raw[0], tail = raw[raw.length-1];
+  var headDry = isDryLand(head.x, head.z, day, ops), tailDry = isDryLand(tail.x, tail.z, day, ops);
+  var fromHead = headDry || !tailDry;
+  var seq = fromHead ? raw : raw.slice().reverse();
+  var clamped = [], trimmedAt = null;
+  for(var i=0;i<seq.length;i++){
+    var pt = seq[i];
+    if(isDryLand(pt.x, pt.z, day, ops) || _overActivePierDeck(pt.x, pt.z, day)){ clamped.push(pt); }
+    else { trimmedAt = { x:pt.x, z:pt.z }; break; }            // first crossing of the dry-land edge
+  }
+  if(!fromHead) clamped.reverse();
+  return { raw:raw, clamped:clamped, trimmedAt:trimmedAt, landwardEnd: fromHead?0:1 };
+}
+
 var _SEALROCK_GREY = new THREE.Color(0x757b72);
 function terrainColor(x,z,h){
   var d = hash2(Math.floor(x*0.4), Math.floor(z*0.4));
@@ -9746,6 +9872,117 @@ registerLayerVisibility("wharves", function(v){ WHARF_GROUP.visible = v; if(v){ 
   });
 })();
 
+/* =====================================================================
+   s110a TERRAIN-EDGE GROUNDING AUDITS (terrain-edge-grounding-spec §1/§2/§3),
+   spine family alongside the pier audits above. PHASE 1 — REPORT-ONLY: each
+   audit COMPUTES the real violation counts + locations against the raw
+   authored data and carries them in `detail`, but returns pass:true so it does
+   NOT redden the noon gate while the operator sees the scope. Phase 2 flips
+   them to GATING (after the clamp/re-anchor lands). Every audit is a
+   framing-independent pure function of (simDay + authored spine + dated
+   terrain) via the core dry-land predicate — rewind-exact. ===== */
+(function registerEdgeGroundingAudits(){
+  var STEEP_SUSPECT = 0.315;   // 31.5% — SF's period-typical steepest (Filbert St)
+  var STEEP_FAIL    = 0.41;    // 41% — Bradford above Tompkins, the single real-world outlier
+  var FOOT_SETBACK_M = 2.4;    // ~8 ft inland of the dry-land edge (operator-set within the 5-10 ft band)
+
+  function liveStreets(){ return (typeof STREETS_RUNTIME !== "undefined") ? STREETS_RUNTIME : []; }
+  function livePiers(){ return (typeof PIERS_RUNTIME !== "undefined") ? PIERS_RUNTIME : []; }
+  // the street's active-extent (u,v) slice at `day` (largest checkpoint whose
+  // date has arrived) — the actual drawn road, era-gated like the paint/spine.
+  function activeStreetRoad(s, day){
+    var active=null;
+    for(var ci=0; ci<s.checkpoints.length; ci++){ if(s.checkpoints[ci].day<=day) active=s.checkpoints[ci]; }
+    if(!active) return null;
+    return { id:s.id, name:s.name, cls:s.cls, widthM:s.widthM,
+             polyline:s.polyline.slice(active.extent[0], active.extent[1]+1) };
+  }
+
+  /* spine.roadGrounded — a road (spine centerline + its draped paint) must rest
+     on dry land or on a grounded structure; it may NEVER float off the terrain
+     edge over water / off a cliff. A violation = a draped centerline sample
+     seaward of the dry-land edge with no pier/wharf deck under it (i.e. the
+     authored extent overhangs the coast). roadDrawnExtentAt trims exactly those
+     samples; the count of trimmed samples per road is the floating extent. The
+     rendered paint drapes on the terrain mesh by construction (spineGrounded),
+     so its horizontal extent equals the centerline's — trimmed here identically. */
+  registerAudit("spine", "roadGrounded", function(){
+    var out = { pass:true, reportOnly:true, phase:1, roadsChecked:0, floatingRoads:0, floatingRoadIds:[], floatingSamples:0, detail:[] };
+    liveStreets().forEach(function(s){
+      var road = activeStreetRoad(s, simDay); if(!road || road.polyline.length<2) return;
+      out.roadsChecked++;
+      var ext = roadDrawnExtentAt(road, simDay);
+      if(!ext.trimmedAt) return;
+      var floated = ext.raw.length - ext.clamped.length;
+      if(floated<=0) return;
+      out.floatingRoads++; out.floatingRoadIds.push(road.id); out.floatingSamples += floated;
+      // the seaward (floating) raw end is the end OPPOSITE the landward anchor
+      var seaEnd = (ext.landwardEnd===0) ? ext.raw[ext.raw.length-1] : ext.raw[0];
+      var clampEnd = ext.clamped.length ? ((ext.landwardEnd===0) ? ext.clamped[ext.clamped.length-1] : ext.clamped[0]) : null;
+      if(out.detail.length<40) out.detail.push({ id:road.id, name:road.name, floatingSamples:floated,
+        trimAt:{ x:+ext.trimmedAt.x.toFixed(1), z:+ext.trimmedAt.z.toFixed(1) },
+        floatEnd:{ x:+seaEnd.x.toFixed(1), z:+seaEnd.z.toFixed(1) },
+        clampedEnd: clampEnd ? { x:+clampEnd.x.toFixed(1), z:+clampEnd.z.toFixed(1) } : null });
+    });
+    out.note = "REPORT-ONLY (Phase 1): "+out.floatingRoads+" of "+out.roadsChecked+" active roads float past the dry-land edge — clamp is Phase 2.";
+    return out;
+  });
+
+  /* spine.roadGrade — a road is always walkable: per grounded (clamped) segment
+     the grade stays under SF's real-world ceiling. suspect > 31.5% (steeper than
+     any period street), fail-level > 41% (the single real-world outlier). Graded
+     on the CLAMPED extent (the on-land road); the coast/cliff drop past the edge
+     is roadGrounded's concern, not grade. */
+  registerAudit("spine", "roadGrade", function(){
+    var out = { pass:true, reportOnly:true, phase:1, roadsChecked:0, segments:0, suspectSegments:0, failSegments:0, worstGradePct:0, detail:[] };
+    liveStreets().forEach(function(s){
+      var road = activeStreetRoad(s, simDay); if(!road || road.polyline.length<2) return;
+      out.roadsChecked++;
+      var pts = roadDrawnExtentAt(road, simDay).clamped;
+      var sSuspect=0, sFail=0, worst=0, worstAt=null;
+      for(var k=0;k<pts.length-1;k++){
+        var a=pts[k], b=pts[k+1], run=Math.hypot(b.x-a.x, b.z-a.z);
+        if(run<1e-3) continue;
+        out.segments++;
+        var grade = Math.abs(b.y-a.y)/run;
+        if(grade>worst){ worst=grade; worstAt={ x:+((a.x+b.x)/2).toFixed(1), z:+((a.z+b.z)/2).toFixed(1) }; }
+        if(grade>STEEP_FAIL) sFail++; else if(grade>STEEP_SUSPECT) sSuspect++;
+      }
+      out.suspectSegments+=sSuspect; out.failSegments+=sFail;
+      if(worst>out.worstGradePct/100) out.worstGradePct=+(worst*100).toFixed(1);
+      if((sSuspect||sFail) && out.detail.length<40)
+        out.detail.push({ id:road.id, name:road.name, suspect:sSuspect, fail:sFail, worstGradePct:+(worst*100).toFixed(1), worstAt:worstAt });
+    });
+    out.note = "REPORT-ONLY (Phase 1): "+out.failSegments+" fail-level (>41%) + "+out.suspectSegments+" suspect (>31.5%) segments across "+out.roadsChecked+" active roads.";
+    return out;
+  });
+
+  /* spine.wharfFootDryInland — each pier/wharf foot anchors on DRY LAND and
+     is set back >= ~8 ft (2.4 m) INLAND of the dry-land edge (above high tide),
+     NEVER at the coastline/waterline; the deck then runs seaward over water.
+     The authored feet (Broadway, Central) sit on the Montgomery beach line —
+     dry at mean tide, under water at high tide — so they FLAG here (the proof
+     the rule works; re-anchoring inland is Phase 2). */
+  registerAudit("spine", "wharfFootDryInland", function(){
+    var out = { pass:true, reportOnly:true, phase:1, wharvesChecked:0, misAnchored:0, misAnchoredIds:[], detail:[] };
+    var edge = dryLandEdgeAt(simDay);
+    livePiers().forEach(function(p){
+      var active = pierActiveCheckpoint(p, simDay); if(!active) return;   // absent/reaching at this date
+      out.wharvesChecked++;
+      var f = gridToWorld(p.polyline[active.extent[0]].u, p.polyline[active.extent[0]].v);
+      var dry = isDryLand(f.x, f.z, simDay);
+      var edgeX = dryLandEdgeXAt(f.z, edge);
+      var setback = (edgeX!=null) ? (edgeX - f.x) : null;               // +X seaward: inland foot has x < edgeX
+      var ok = dry && setback!=null && setback >= FOOT_SETBACK_M;
+      if(!ok){ out.misAnchored++; out.misAnchoredIds.push(p.id); }
+      out.detail.push({ id:p.id, name:p.name, foot:{ x:+f.x.toFixed(1), z:+f.z.toFixed(1) },
+        footDry:dry, setbackM:(setback==null?null:+setback.toFixed(1)), minSetbackM:FOOT_SETBACK_M, ok:ok });
+    });
+    out.note = "REPORT-ONLY (Phase 1): "+out.misAnchored+" of "+out.wharvesChecked+" active wharf feet fail the dry-inland anchor rule.";
+    return out;
+  });
+})();
+
 /* driving hook for the verify harness — expose the derived set (mirrors
    buildings' landmarksAt attach). ZERO new geometry. */
 setTimeout(function(){
@@ -12532,6 +12769,8 @@ window.__P1850 = {
     shorelineX: function(z){ return shorelineX(z); },
     heightAt: function(x,z,day,ops){ return terrainHeightAt(x,z,day,ops); },
     isLandAt: function(x,z,day,ops){ return isLandAt(x,z,day,ops); },
+    isDryLand: function(x,z,day,ops){ return isDryLand(x,z,day,ops); },        // s110a tide-aware buildable/anchorable surface
+    dryLandEdgeAt: function(day,ops){ return dryLandEdgeAt(day,ops); },        // s110a derived dry-land coast (one x per z-row)
     deltaAt: function(x,z,day,ops){ return morphDeltaAt(x,z,day,ops); },
     ramp: function(op,day){ return morphOpRamp(op,day); },
     shorelineAt: function(day,ops){ return shorelineAt(day,ops); }

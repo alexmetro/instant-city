@@ -25,6 +25,8 @@ window.__P1850 = {
     shorelineX: function(z){ return shorelineX(z); },
     heightAt: function(x,z,day,ops){ return terrainHeightAt(x,z,day,ops); },
     isLandAt: function(x,z,day,ops){ return isLandAt(x,z,day,ops); },
+    isDryLand: function(x,z,day,ops){ return isDryLand(x,z,day,ops); },        // s110a tide-aware buildable/anchorable surface
+    dryLandEdgeAt: function(day,ops){ return dryLandEdgeAt(day,ops); },        // s110a derived dry-land coast (one x per z-row)
     deltaAt: function(x,z,day,ops){ return morphDeltaAt(x,z,day,ops); },
     ramp: function(op,day){ return morphOpRamp(op,day); },
     shorelineAt: function(day,ops){ return shorelineAt(day,ops); }

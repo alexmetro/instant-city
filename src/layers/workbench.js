@@ -113,7 +113,7 @@
     muted: {},            // layerName -> true when hidden
     solo: null,           // layerName | null
     probe: false,
-    overlays: { spine:false, row:false, lots:false, parcels:false, wharf:false, keepout:false, zones:false, audits:false },
+    overlays: { spine:false, row:false, lots:false, parcels:false, wharf:false, keepout:false, zones:false, audits:false, dryland:false },
     tl: false,            // coordinate timeline inspector armed
     morph: { demo:false, patch:false, regions:false, island:false }, // s102 terrain-morph viz toggles
     knobs: { sunMul:1, hemiMul:1, ambientMul:1, nightLift:0, detailAmp:null, doodadMul:1, streetAlphaMul:1 }
@@ -160,7 +160,7 @@
     // frame — there is one frame; only the date-gated birth/extent changes.
     if(Math.floor(simDay)!==_overlayDay){
       _overlayDay = Math.floor(simDay);
-      ["spine","row","lots","parcels","reservations","wharf","keepout","zonelaw"].forEach(function(key){
+      ["spine","row","lots","parcels","reservations","wharf","keepout","zonelaw","dryland"].forEach(function(key){
         if(!WB.overlays[key]) return;
         if(overlayObjs[key]){ scene.remove(overlayObjs[key]); }
         overlayObjs[key] = buildOverlay(key);
@@ -365,7 +365,7 @@
      (walk keep-out · ecology zones · audit failures). Copy is Director-authored
      verbatim; each row is a name + a small legend line. ---- */
   beginSection("overlays","RULE OVERLAYS", { desc:"Overlays inspect the LAW and DATA behind the render — the survey spine, rights-of-way, plat lots, parcels, landmark reservations, walk keep-out mask, zones, and live audit failures. Each row's ? reveals its legend; active overlays are highlighted." });
-  var overlayObjs = { spine:null, row:null, lots:null, parcels:null, reservations:null, wharf:null, keepout:null, zones:null, zonelaw:null, audits:null };
+  var overlayObjs = { spine:null, row:null, lots:null, parcels:null, reservations:null, wharf:null, keepout:null, zones:null, zonelaw:null, audits:null, dryland:null };
   var overlayRowEls = {};
   var auditStatusEl = null, keepoutStatusEl = null;
 
@@ -475,6 +475,8 @@
     "The zoneAt classification tinted over the domain: which ground class governs placement and vegetation at each point. Hydrology reconciliation pending — creek network incomplete.");
   makeFlat("audits", "AUDIT FAILURES",
     "Runs the full audit suite at the current date; a red marker at every violation coordinate. An empty overlay is the goal state.");
+  makeFlat("dryland", "DRY-LAND EDGE + FLOATING ROADS (s110a)",
+    "terrain-edge-grounding-spec §0–§3, PHASE-1 SCOPE REVEAL. orange = the DRY-LAND EDGE (terrainHeightAt = +0.85 m, above every tide + freeboard) at this date. For each road whose authored centerline overhangs that edge: red = the RAW authored extent, green = the programmatic roadDrawnExtentAt CLAMP (draped + trimmed at the edge). magenta = too-steep segments (roadGrade > 31.5%). Wharf feet: green cross = dry & set back ≥8 ft inland; red cross = mis-anchored (below high tide or seaward of the edge). Read-only — nothing is moved this pass (clamp/re-anchor is Phase 2).");
 
   function buildOverlay(key){
     if(key==="spine") return buildSpineOverlay();
@@ -487,8 +489,86 @@
     if(key==="parcels") return buildParcelOverlay();
     if(key==="reservations") return buildReservationOverlay();
     if(key==="wharf") return buildWharfOverlay();
+    if(key==="dryland") return buildDrylandOverlay();
     return null;
   }
+
+  /* s110a DRY-LAND EDGE + FLOATING-ROADS overlay (terrain-edge-grounding-spec
+     §0–§3). Draws the derived dry-land edge, and for every road whose authored
+     centerline overhangs it the RAW extent (red) vs the programmatic
+     roadDrawnExtentAt CLAMP (green), plus too-steep segments (magenta) and each
+     wharf foot (green = dry & inland, red = mis-anchored). Reads the core
+     machinery + the atelier's active morph ops; nothing is moved (Phase 1). */
+  var DL_EDGE=new THREE.Color(0xff9a2e), DL_RAW=new THREE.Color(0xff3b30), DL_CLAMP=new THREE.Color(0x35d07f),
+      DL_STEEP=new THREE.Color(0xe23ce2), DL_FOOT_OK=new THREE.Color(0x35d07f), DL_FOOT_BAD=new THREE.Color(0xff2020);
+  var DL_STEEP_SUSPECT=0.315, DL_FOOT_SETBACK_M=2.4;
+  function dlActiveStreetRoad(s, day){
+    var active=null;
+    for(var ci=0; ci<s.checkpoints.length; ci++){ if(s.checkpoints[ci].day<=day) active=s.checkpoints[ci]; }
+    if(!active) return null;
+    return { id:s.id, name:s.name, cls:s.cls, polyline:s.polyline.slice(active.extent[0], active.extent[1]+1) };
+  }
+  function dlPushPoly(pos,col,pts,c,lift){
+    for(var i=0;i<pts.length-1;i++){
+      pos.push(pts[i].x, pts[i].y+lift, pts[i].z, pts[i+1].x, pts[i+1].y+lift, pts[i+1].z);
+      col.push(c.r,c.g,c.b, c.r,c.g,c.b);
+    }
+  }
+  function dlCross(pos,col,x,z,y,c,r){
+    pos.push(x-r,y,z, x+r,y,z, x,y,z-r, x,y,z+r);
+    col.push(c.r,c.g,c.b, c.r,c.g,c.b, c.r,c.g,c.b, c.r,c.g,c.b);
+  }
+  function buildDrylandOverlay(){
+    _overlayDay = Math.floor(simDay);
+    var day = simDay, ops = wbActiveMorphOps();
+    var grp = new THREE.Group(); grp.frustumCulled=false;
+    var edgePos=[], edgeCol=[], rawPos=[], rawCol=[], clampPos=[], clampCol=[], steepPos=[], steepCol=[], footPos=[], footCol=[];
+    // THE DRY-LAND EDGE contour (orange), draped; skip big z gaps in the sampled table
+    var edge = dryLandEdgeAt(day, ops);
+    for(var e=0;e<edge.length-1;e++){
+      if(Math.abs(edge[e+1].z-edge[e].z)>45) continue;
+      var a=edge[e], b=edge[e+1];
+      edgePos.push(a.x, terrainHeightAt(a.x,a.z,day,ops)+1.1, a.z, b.x, terrainHeightAt(b.x,b.z,day,ops)+1.1, b.z);
+      edgeCol.push(DL_EDGE.r,DL_EDGE.g,DL_EDGE.b, DL_EDGE.r,DL_EDGE.g,DL_EDGE.b);
+    }
+    // ROADS: raw (red) vs clamped (green) for floaters + steep (magenta) segments
+    (typeof STREETS_RUNTIME!=="undefined"?STREETS_RUNTIME:[]).forEach(function(s){
+      var road = dlActiveStreetRoad(s, day); if(!road || road.polyline.length<2) return;
+      var ext = roadDrawnExtentAt(road, day, ops);
+      if(ext.trimmedAt && ext.raw.length>1){
+        dlPushPoly(rawPos, rawCol, ext.raw, DL_RAW, 0.9);            // full authored extent (the overhang shows past green)
+        if(ext.clamped.length>1) dlPushPoly(clampPos, clampCol, ext.clamped, DL_CLAMP, 1.5);  // trimmed to the edge, on top
+      }
+      var pts = ext.clamped;
+      for(var k=0;k<pts.length-1;k++){
+        var p=pts[k], q=pts[k+1], run=Math.hypot(q.x-p.x,q.z-p.z);
+        if(run>1e-3 && Math.abs(q.y-p.y)/run > DL_STEEP_SUSPECT) dlPushPoly(steepPos, steepCol, [p,q], DL_STEEP, 2.1);
+      }
+    });
+    // WHARF FEET: green cross = dry & set back inland; red = mis-anchored
+    (typeof PIERS_RUNTIME!=="undefined"?PIERS_RUNTIME:[]).forEach(function(p){
+      var active = pierActiveCheckpoint(p, day); if(!active) return;
+      var f = gridToWorld(p.polyline[active.extent[0]].u, p.polyline[active.extent[0]].v);
+      var dry = isDryLand(f.x, f.z, day, ops), edgeX = dryLandEdgeXAt(f.z, edge);
+      var setback = (edgeX!=null) ? (edgeX - f.x) : null;
+      var ok = dry && setback!=null && setback>=DL_FOOT_SETBACK_M;
+      dlCross(footPos, footCol, f.x, f.z, terrainHeightAt(f.x,f.z,day,ops)+2.0, ok?DL_FOOT_OK:DL_FOOT_BAD, 8);
+    });
+    if(edgePos.length)  grp.add(wbLineSegs(edgePos,  edgeCol,  0.98, 1000));
+    if(rawPos.length)   grp.add(wbLineSegs(rawPos,   rawCol,   0.95, 1001));
+    if(clampPos.length) grp.add(wbLineSegs(clampPos, clampCol, 0.98, 1002));
+    if(steepPos.length) grp.add(wbLineSegs(steepPos, steepCol, 0.98, 1003));
+    if(footPos.length)  grp.add(wbLineSegs(footPos,  footCol,  1.0,  1004));
+    return grp.children.length ? grp : null;
+  }
+  /* s110a QA hook (atelier-only) — arm/disarm the dry-land overlay from the
+     verify/screenshot driver, mirroring the checkbox path exactly. */
+  window.__P1850_WBDRYLAND = function(on){
+    on = (on!==false);
+    if(overlayRowEls.dryland) overlayRowEls.dryland.cb.checked = on;
+    setOverlay("dryland", on);
+    return { on:on, date:(window.__P1850 && window.__P1850.date) || null };
+  };
 
   /* ---- SHARED OVERLAY DRAPING (s81 — the user's #1 finding: overlays must
      follow terrain like the road canvas, not float on a flat screen-plane).
