@@ -313,33 +313,55 @@ registerLayerVisibility("wharves", function(v){ WHARF_GROUP.visible = v; if(v){ 
              polyline:s.polyline.slice(active.extent[0], active.extent[1]+1) };
   }
 
-  /* spine.roadGrounded — a road (spine centerline + its draped paint) must rest
-     on dry land or on a grounded structure; it may NEVER float off the terrain
-     edge over water / off a cliff. A violation = a draped centerline sample
-     seaward of the dry-land edge with no pier/wharf deck under it (i.e. the
-     authored extent overhangs the coast). roadDrawnExtentAt trims exactly those
-     samples; the count of trimmed samples per road is the floating extent. The
-     rendered paint drapes on the terrain mesh by construction (spineGrounded),
-     so its horizontal extent equals the centerline's — trimmed here identically. */
+  /* spine.roadGrounded — GATING (s110b Phase 2a). A road (spine centerline + its
+     draped paint) must rest on dry land or on a grounded structure; it may NEVER
+     float off the terrain edge over open water. Measured on the BUILT road — the
+     CLAMPED drawn extent that ground-paint now renders (roadDrawnExtentAt.clamped,
+     the same source the paint reads) — not the raw authored polyline. The clamp
+     trims each road's seaward overhang back to the coast (the dry-land edge / a
+     grounded wharf deck), so the built road's seaward terminus is grounded and no
+     built sample hangs over open water; this audit confirms that property holds.
+     An interior swale sample (grounded terrain that dips below the high-tide
+     freeboard but is still land at mean tide, inland of the coast) is NOT a
+     floater and is not flagged — only a sample over genuine open water (isLandAt
+     false) with no deck under it is. The authored overhang the clamp removed is
+     reported for scope; the wholly-seaward (never reaches dry land) roads build
+     nothing (the survey plat still draws their line over the water). */
   registerAudit("spine", "roadGrounded", function(){
-    var out = { pass:true, reportOnly:true, phase:1, roadsChecked:0, floatingRoads:0, floatingRoadIds:[], floatingSamples:0, detail:[] };
+    var out = { pass:true, gating:true, roadsChecked:0, builtRoads:0,
+                floatingBuiltRoads:0, floatingBuiltRoadIds:[], floatingBuiltSamples:0,
+                authoredOverhangRoads:0, authoredOverhangSamples:0, fullyOverWater:0, detail:[] };
     liveStreets().forEach(function(s){
       var road = activeStreetRoad(s, simDay); if(!road || road.polyline.length<2) return;
       out.roadsChecked++;
       var ext = roadDrawnExtentAt(road, simDay);
-      if(!ext.trimmedAt) return;
-      var floated = ext.raw.length - ext.clamped.length;
-      if(floated<=0) return;
-      out.floatingRoads++; out.floatingRoadIds.push(road.id); out.floatingSamples += floated;
-      // the seaward (floating) raw end is the end OPPOSITE the landward anchor
-      var seaEnd = (ext.landwardEnd===0) ? ext.raw[ext.raw.length-1] : ext.raw[0];
-      var clampEnd = ext.clamped.length ? ((ext.landwardEnd===0) ? ext.clamped[ext.clamped.length-1] : ext.clamped[0]) : null;
-      if(out.detail.length<40) out.detail.push({ id:road.id, name:road.name, floatingSamples:floated,
-        trimAt:{ x:+ext.trimmedAt.x.toFixed(1), z:+ext.trimmedAt.z.toFixed(1) },
-        floatEnd:{ x:+seaEnd.x.toFixed(1), z:+seaEnd.z.toFixed(1) },
-        clampedEnd: clampEnd ? { x:+clampEnd.x.toFixed(1), z:+clampEnd.z.toFixed(1) } : null });
+      if(ext.trimmedAt){ out.authoredOverhangRoads++; out.authoredOverhangSamples += (ext.raw.length - ext.clamped.length); }
+      if(!ext.clamped.length){ out.fullyOverWater++; return; }   // never reaches dry land — nothing built; the plat shows the survey line
+      out.builtRoads++;
+      // The FLOATING defect is a road that runs OUT past the coast and terminates
+      // over the void. The clamp trims that seaward overhang, so both ENDS of the
+      // built extent sit on grounded terrain (dry land, or a wharf deck at a
+      // road->wharf junction). Interior water samples along a shoreline street
+      // (Sansome/Battery thread the irregular 1849 waterline) are NOT floaters:
+      // the paint wet-skips them (no dirt is stroked over the tideflat) and the
+      // survey plat carries the line — so this gate reads the drawn extent's
+      // SEAWARD TERMINI, not every sample. A terminus over open water (isLandAt
+      // false) with nothing under it is the true overhang.
+      var ends = [ext.clamped[0], ext.clamped[ext.clamped.length-1]], floatEnd = null;
+      for(var e=0;e<ends.length && !floatEnd;e++){
+        var p = ends[e];
+        if(isDryLand(p.x, p.z, simDay) || _overActivePierDeck(p.x, p.z, simDay)) continue;  // grounded terminus (dry land or wharf deck)
+        if(isLandAt(p.x, p.z, simDay)) continue;                                             // marginal but real ground at mean tide — not the void
+        floatEnd = { x:+p.x.toFixed(1), z:+p.z.toFixed(1) };                                 // terminus hangs over open water — a floater
+      }
+      if(floatEnd){
+        out.pass=false; out.floatingBuiltRoads++; out.floatingBuiltRoadIds.push(road.id);
+        out.floatingBuiltSamples++;
+        if(out.detail.length<40) out.detail.push({ id:road.id, name:road.name, floatEnd:floatEnd });
+      }
     });
-    out.note = "REPORT-ONLY (Phase 1): "+out.floatingRoads+" of "+out.roadsChecked+" active roads float past the dry-land edge — clamp is Phase 2.";
+    out.note = "GATING (Phase 2a): "+out.floatingBuiltRoads+" of "+out.builtRoads+" built roads float over open water; the clamp trimmed "
+             + out.authoredOverhangRoads+" authored overhangs ("+out.authoredOverhangSamples+" samples), "+out.fullyOverWater+" roads are wholly seaward (plat-only, unbuilt).";
     return out;
   });
 

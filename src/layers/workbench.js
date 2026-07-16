@@ -569,6 +569,15 @@
     setOverlay("dryland", on);
     return { on:on, date:(window.__P1850 && window.__P1850.date) || null };
   };
+  /* generic QA hook (atelier-only) — arm/disarm any RULE overlay by key from the
+     verify/screenshot driver (e.g. the survey spine + plat lots over the cove),
+     mirroring the checkbox path exactly. */
+  window.__P1850_WBSETOVERLAY = function(key, on){
+    on = (on!==false);
+    if(overlayRowEls[key]) overlayRowEls[key].cb.checked = on;
+    setOverlay(key, on);
+    return { key:key, on:on, date:(window.__P1850 && window.__P1850.date) || null };
+  };
 
   /* ---- SHARED OVERLAY DRAPING (s81 — the user's #1 finding: overlays must
      follow terrain like the road canvas, not float on a flat screen-plane).
@@ -1693,22 +1702,28 @@
       var rec = SPLAT_LAST_STATS && SPLAT_LAST_STATS.streets[s.id];
       if(!rec || !rec.worldPoly || rec.state < 2) return;
       var wp = rec.worldPoly, got = 0;
-      for(var i=0; i<wp.length-1; i++){
-        var a = wp[i], b = wp[i+1], L = Math.hypot(b.x-a.x, b.z-a.z); if(L < 6) continue;
+      // Walk the drawn spine by ARC LENGTH (robust to the ~15 m clamp
+      // tessellation that s110b records as worldPoly — a per-segment d=20..L-10
+      // probe would skip every short drape segment): a station every ~40 m,
+      // ~15 m in from each end, perpendicular scan along the LOCAL segment.
+      var segLen = [], total = 0, i;
+      for(i=0; i<wp.length-1; i++){ var Ls = Math.hypot(wp[i+1].x-wp[i].x, wp[i+1].z-wp[i].z); segLen.push(Ls); total += Ls; }
+      for(var d0=15; d0<=total-15 && got<12; d0+=40){
+        var acc=0, si=0; while(si<segLen.length && acc+segLen[si] < d0){ acc+=segLen[si]; si++; }
+        if(si>=segLen.length) break;
+        var a = wp[si], b = wp[si+1], L = segLen[si]; if(L < 1e-3) continue;
+        var t = (d0-acc)/L, mx = a.x+(b.x-a.x)*t, mz = a.z+(b.z-a.z)*t;
         var nx=-(b.z-a.z)/L, nz=(b.x-a.x)/L;
-        for(var d=20; d<L-10 && got<12; d+=40){
-          var mx=a.x+(b.x-a.x)*d/L, mz=a.z+(b.z-a.z)*d/L;
-          if(terrainHeight(mx,mz) <= 0.5) continue;                      // wet — never painted
-          if(_gpNearOtherStreet(mx, mz, s.id, s.widthM/2 + 6)) continue; // junction / parallel bleed
-          if(wbAlphaAt(mx,mz) < 128) continue;                           // not established paint here
-          var wSum=0, wOff=0;
-          for(var off=-(s.widthM/2+6); off<=s.widthM/2+6; off+=0.25){
-            var al=wbAlphaAt(mx+nx*off, mz+nz*off);
-            wSum += al; wOff += al*off;
-          }
-          if(wSum<=0) continue;
-          offs.push(Math.abs(wOff/wSum)); got++;
+        if(terrainHeight(mx,mz) <= 0.5) continue;                      // wet — never painted
+        if(_gpNearOtherStreet(mx, mz, s.id, s.widthM/2 + 6)) continue; // junction / parallel bleed
+        if(wbAlphaAt(mx,mz) < 128) continue;                           // not established paint here
+        var wSum=0, wOff=0;
+        for(var off=-(s.widthM/2+6); off<=s.widthM/2+6; off+=0.25){
+          var al=wbAlphaAt(mx+nx*off, mz+nz*off);
+          wSum += al; wOff += al*off;
         }
+        if(wSum<=0) continue;
+        offs.push(Math.abs(wOff/wSum)); got++;
       }
       if(got) streetsProbed++;
     });

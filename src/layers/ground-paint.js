@@ -169,11 +169,21 @@ function renderGroundSplat(){
     for(var ci = 0; ci < s.checkpoints.length; ci++){ if(s.checkpoints[ci].day <= simDay) active = s.checkpoints[ci]; }
     if(!active) return;
     var i0 = active.extent[0], i1 = active.extent[1];
-    var angle = GRID_ROT_BASE; // single frame (2026-07-14): every street at the one canonical frame
     var viogetFloor = (s.surveyedDay != null && s.surveyedDay <= 0); // Vioget-1839 lanes read as worn trails from sim start
-    var wpts = [];
-    for(var pi = i0; pi <= i1; pi++) wpts.push(gridToWorldAt(s.polyline[pi].u, s.polyline[pi].v, angle));
-    if(wpts.length < 2) return;
+    /* s110b (terrain-edge-grounding-spec §0b/§1): the BUILT road renders to its
+       DRAPED + CLAMPED extent, not the raw authored active-extent polyline.
+       roadDrawnExtentAt drapes every vertex on the dated terrain and trims the
+       SEAWARD overhang back to the coast (the dry-land edge, or a grounded
+       wharf deck where the corridor meets a wharf) so the street no longer
+       floats over the cove; it auto-extends seaward as s102 fill advances the
+       edge (pure f(authored XZ, dated terrain), no re-authoring). The same
+       clamped polyline is recorded as rec.worldPoly — the drawn spine every
+       downstream paint/measure read shares, so paint and walk-graph agree. The
+       survey PLAT is NOT routed through here: the cadastre/spine overlays draw
+       the platted grid over the water as the plan, unclamped. */
+    var ext = roadDrawnExtentAt({ id:s.id, cls:s.cls, widthM:s.widthM, polyline:s.polyline.slice(i0, i1 + 1) }, simDay);
+    var wpts = ext.clamped;
+    if(wpts.length < 2) return; // wholly seaward of the coast: nothing built to paint (the plat still shows the survey line over the water)
     rec.worldPoly = wpts;
 
     // classify each segment: 0 = none (S0 / wet water-lot), 1 = ghost (S1), 2 = established (S2+)

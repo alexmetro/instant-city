@@ -812,14 +812,17 @@ function dryLandEdgeXAt(z, edge){
    roadDrawnExtentAt(road, day). A PURE f(authored XZ, dated terrain): the
    road's authored (u,v) polyline, (a) DRAPED — tessellated to ~the terrain
    grid spacing, every vertex Y = terrainHeightAt(x,z,day) so it hugs uneven
-   ground — and (b) CLAMPED — the drawn extent trimmed at the first crossing
-   of the dry-land edge, marching from the road's landward/grounded end. A
-   road end that connects to a grounded STRUCTURE (a pier/wharf deck, which
-   runs seaward over water by design) is NOT trimmed there. Deterministic;
-   rewind-exact; recomputes automatically as the terrain morphs — the authored
-   data owns only the XZ centerline; Y and drawn-extent are DERIVED. NOT wired
-   into the release render this pass (Phase 2) — the demonstrable machinery,
-   shown raw-vs-clamped in the atelier overlay. ===================================================================== */
+   ground — and (b) CLAMPED — the drawn extent trimmed back off its SEAWARD
+   overhang to the seaward-most grounded sample, so the built road ends at the
+   coast instead of hanging over the cove. A road end that connects to a
+   grounded STRUCTURE (a pier/wharf deck, which runs seaward over water by
+   design) is NOT trimmed there. Deterministic; rewind-exact; recomputes
+   automatically as the terrain morphs — the authored data owns only the XZ
+   centerline; Y and drawn-extent are DERIVED. s110b (Phase 2a) WIRES `clamped`
+   into the release render: ground-paint strokes the built road to this extent
+   and records it as the road's drawn spine, so paint and walk-graph agree. The
+   survey plat/cadastre is NOT routed through here — it stays drawn over the
+   water as the plan (atelier spine/lot/ROW overlays). ===================================================================== */
 var ROAD_DRAPE_STEP = 15;        // ~half the terrain cell (~31 m) — hugs the mesh relief
 function _roadWorldPolyline(road){
   var poly = road.polyline || [], out = [];
@@ -862,21 +865,30 @@ function roadDrawnExtentAt(road, day, ops){
   // PIER: the deck IS the grounded structure and runs seaward over water by
   // design — no water-trim; the full draped extent is the drawn extent.
   if(isPier || raw.length<2) return { raw:raw, clamped:raw.slice(), trimmedAt:null, landwardEnd:0 };
-  // CLAMP: march from the landward end (the dry endpoint; if only the tail is
-  // dry, from the tail), keep dry samples (or samples over a grounded pier
-  // deck), stop at the first crossing past the dry-land edge.
-  var head = raw[0], tail = raw[raw.length-1];
-  var headDry = isDryLand(head.x, head.z, day, ops), tailDry = isDryLand(tail.x, tail.z, day, ops);
-  var fromHead = headDry || !tailDry;
-  var seq = fromHead ? raw : raw.slice().reverse();
-  var clamped = [], trimmedAt = null;
-  for(var i=0;i<seq.length;i++){
-    var pt = seq[i];
-    if(isDryLand(pt.x, pt.z, day, ops) || _overActivePierDeck(pt.x, pt.z, day)){ clamped.push(pt); }
-    else { trimmedAt = { x:pt.x, z:pt.z }; break; }            // first crossing of the dry-land edge
+  // CLAMP: trim the ungrounded runs off BOTH ends — keep the span from the
+  // FIRST grounded sample to the LAST grounded sample, so the drawn road ends
+  // on ground at each terminus (never hanging over the void). An interior
+  // swale/hollow that dips below the dry-land freeboard and dries out again (an
+  // inland road threading a low spot — e.g. Mission Road crossing the
+  // Mission-creek swale) is KEPT, since it sits between grounded samples; only
+  // a leading/trailing overhang past the coast is trimmed (spec §1: "the road
+  // ENDS AT THE EDGE" — an interior dip is not the edge). A shoreline street
+  // that threads the irregular waterline keeps its interior water samples too;
+  // the paint wet-skips those (no dirt over the tideflat) while the plat carries
+  // the line. A grounded sample is dry land OR over an active pier/wharf deck
+  // (the road->wharf junction is a grounded structure, never trimmed).
+  function _grounded(p){ return isDryLand(p.x, p.z, day, ops) || _overActivePierDeck(p.x, p.z, day); }
+  var firstGrounded = -1, lastGrounded = -1;
+  for(var i=0;i<raw.length;i++){ if(_grounded(raw[i])){ if(firstGrounded<0) firstGrounded=i; lastGrounded=i; } }
+  var headDry = _grounded(raw[0]);
+  var clamped, trimmedAt = null;
+  if(firstGrounded < 0){ clamped = []; trimmedAt = { x:raw[0].x, z:raw[0].z }; }   // no grounded sample: the whole drawn extent floats — nothing built
+  else {
+    clamped = raw.slice(firstGrounded, lastGrounded + 1);
+    if(firstGrounded > 0) trimmedAt = { x:raw[firstGrounded-1].x, z:raw[firstGrounded-1].z };            // trimmed a leading overhang
+    else if(lastGrounded < raw.length - 1) trimmedAt = { x:raw[lastGrounded+1].x, z:raw[lastGrounded+1].z }; // trimmed a trailing overhang
   }
-  if(!fromHead) clamped.reverse();
-  return { raw:raw, clamped:clamped, trimmedAt:trimmedAt, landwardEnd: fromHead?0:1 };
+  return { raw:raw, clamped:clamped, trimmedAt:trimmedAt, landwardEnd: headDry?0:1 };
 }
 
 var _SEALROCK_GREY = new THREE.Color(0x757b72);
