@@ -386,6 +386,10 @@
     } else if(overlayObjs[key]){
       scene.remove(overlayObjs[key]); overlayObjs[key] = null;
     }
+    // s108b: the BUILDING LIFECYCLE overlay carries its on-screen placeholder
+    // key with it — the floating legend (buildings.js) auto-opens/closes with
+    // the toggle so the state tints are never read without their key.
+    if(key === "lifecycle" && window.__P1850_LC_LEGEND) window.__P1850_LC_LEGEND.setOpen(on);
     refreshOverlayActive();
   }
   function overlayRow(parent, key, cls, title, legend){

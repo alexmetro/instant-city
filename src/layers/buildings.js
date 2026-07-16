@@ -2280,3 +2280,139 @@ setTimeout(function(){
     };
   }
 }, 0);
+
+/* =====================================================================
+   s108b — THE LIFECYCLE LEGEND (operator ask 2026-07-16): a floating,
+   collapsible on-screen key to the s108 placeholder states, because the
+   crude-block placeholders are only readable at a glance WITH a key.
+   Swatches are drawn from the SAME constants the renderer paints with
+   (LM_PLACEHOLDER / LM_TINT / LC_TONES via lcScaffoldStep / lcFreshTone /
+   lmBodyColorCls) — never hand-typed colour copies, so a tint change in the
+   render constants re-colours the legend on the next build by construction.
+   HUD voice: Roboto (--hud-font), white ink on a dark scrim (ics14e).
+   BOTH targets: release gets a small collapsed LEGEND chip (top-right,
+   under the clock); the atelier ALSO auto-opens it with the BUILDING
+   LIFECYCLE overlay toggle (workbench setOverlay hook ->
+   window.__P1850_LC_LEGEND.setOpen). ================================== */
+(function lcLegendInit(){
+  if(typeof document === "undefined") return;
+  function cssOf(v){                                            // int hex OR THREE.Color -> css
+    if(v && v.isColor) return "#" + v.getHexString();
+    return "#" + ("000000" + v.toString(16)).slice(-6);
+  }
+  var comTint  = lmBodyColorCls("store");                       // the commercial class tint (the common case)
+  var C = {
+    pad:      cssOf(LM_PLACEHOLDER.pad),
+    roof:     cssOf(LM_PLACEHOLDER.roof),
+    marker:   cssOf(LM_PLACEHOLDER.marker),
+    tint:     cssOf(comTint),
+    tintCiv:  cssOf(LM_TINT.civic),
+    tintDwl:  cssOf(LM_TINT.dwelling),
+    fresh:    cssOf(lcFreshTone(comTint, 0)),                   // agingT=0 — full first-day sheen
+    c2:       cssOf(lcScaffoldStep(comTint, 2)),
+    c3:       cssOf(lcScaffoldStep(comTint, 3)),
+    scaffold: cssOf(LC_TONES.scaffold),
+    charcoal: cssOf(LC_TONES.charcoal),
+    charRoof: cssOf(LC_TONES.charcoalRoof),
+    ember:    cssOf(LC_TONES.ember),
+    rubble:   cssOf(LC_TONES.rubble),
+    rubbleDk: cssOf(LC_TONES.rubbleDark),
+    debris:   cssOf(LC_TONES.debris)
+  };
+  var st = document.createElement("style");
+  st.textContent = [
+    "#lc-legend-chip{ position:fixed; top:66px; right:16px; z-index:11; pointer-events:auto; cursor:pointer;",
+    "  font-family:var(--hud-font); font-size:0.56rem; font-weight:700; letter-spacing:2px; color:#fff;",
+    "  background:rgba(14,17,21,0.68); padding:4px 10px; border-radius:3px;",
+    "  text-shadow:var(--halo-dark); user-select:none; -webkit-user-select:none; }",
+    "#lc-legend-chip:hover{ background:rgba(14,17,21,0.92); }",
+    "#lc-legend-chip.on{ background:rgba(14,17,21,0.92); }",
+    "#lc-legend{ position:fixed; top:94px; right:16px; z-index:11; pointer-events:auto; display:none;",
+    "  font-family:var(--hud-font); color:#fff; background:rgba(13,15,19,0.93); border-radius:4px;",
+    "  padding:8px 10px 9px; width:236px; box-sizing:border-box;",
+    "  max-height:calc(100vh - 150px); overflow-y:auto; }",
+    "#lc-legend.open{ display:block; }",
+    "#lc-legend .lcl-title{ font-size:0.54rem; font-weight:700; letter-spacing:2px; opacity:0.85; margin-bottom:6px; }",
+    "#lc-legend .lcl-title .lcl-x{ float:right; cursor:pointer; opacity:0.7; font-size:0.7rem; line-height:0.7; padding:0 2px; }",
+    "#lc-legend .lcl-title .lcl-x:hover{ opacity:1; }",
+    "#lc-legend .lcl-row{ display:flex; align-items:center; margin:3px 0; }",
+    "#lc-legend .lcl-row canvas{ width:40px; height:26px; flex:0 0 40px; margin-right:8px;",
+    "  border-radius:2px; background:rgba(255,255,255,0.06); }",
+    "#lc-legend .lcl-lab{ display:block; font-size:0.54rem; font-weight:700; letter-spacing:1.2px; }",
+    "#lc-legend .lcl-note{ display:block; font-size:0.5rem; font-weight:500; opacity:0.72; line-height:1.3; }",
+    "#lc-legend .lcl-dot{ display:inline-block; width:7px; height:7px; border-radius:1px; vertical-align:-1px; margin:0 2px 0 4px; }"
+  ].join("\n");
+  document.head.appendChild(st);
+
+  /* mini-diagram painters (2x backing for crispness). Same vocabulary as the
+     render: site pad low, box massing, flat roof cap, front markers. */
+  function sw(draw){
+    var cv = document.createElement("canvas"); cv.width = 80; cv.height = 52;
+    var ctx = cv.getContext("2d"); ctx.scale(2, 2); draw(ctx); return cv;
+  }
+  function pPad(ctx){ ctx.fillStyle = C.pad; ctx.fillRect(8, 20, 24, 3); }
+  function pArrow(ctx, col){ ctx.fillStyle = col; ctx.beginPath(); ctx.moveTo(38, 21.5); ctx.lineTo(33, 18.8); ctx.lineTo(33, 24.2); ctx.closePath(); ctx.fill(); }
+  function pBlock(ctx, x, w, h, col){ ctx.fillStyle = col; ctx.fillRect(x, 20 - h, w, h); }
+  function pRoof(ctx, h, col){ ctx.fillStyle = col; ctx.fillRect(11, 20 - h - 2.5, 18, 2.5); }
+  function pStripe(ctx, h){ ctx.fillStyle = C.marker; ctx.fillRect(19, 20 - h, 2, h); }
+
+  var ROWS = [
+    { lab: "C1 SITE", note: "site pad + orange entrance arrow", draw: function(ctx){
+        pPad(ctx); pArrow(ctx, C.marker); } },
+    { lab: "C2–C3 CONSTRUCTION", note: "pale partial block rising → class tint", draw: function(ctx){
+        pPad(ctx); pBlock(ctx, 12, 8, 7, C.c2); pBlock(ctx, 20, 8, 12, C.c3); pArrow(ctx, C.marker); } },
+    { lab: "ACTIVE", note: "class tint · brighter = fresh wood (first year)"
+        + " <span class='lcl-dot' style='background:" + C.tintCiv + "'></span>civic"
+        + "<span class='lcl-dot' style='background:" + C.tint + "'></span>comm"
+        + "<span class='lcl-dot' style='background:" + C.tintDwl + "'></span>dwell", draw: function(ctx){
+        pPad(ctx); pBlock(ctx, 12, 8, 14, C.fresh); pBlock(ctx, 20, 8, 14, C.tint);
+        pRoof(ctx, 14, C.roof); pStripe(ctx, 12); } },
+    { lab: "EXPANDING", note: "pale annex slab growing above the old roof", draw: function(ctx){
+        pPad(ctx); pBlock(ctx, 12, 16, 10, C.tint); pBlock(ctx, 14, 12, 5, C.scaffold);
+        ctx.fillStyle = C.roof; ctx.fillRect(13, 2.5, 14, 2.5); } },
+    { lab: "BURNING", note: "charcoal body + ember-red front (Dec 24 1849)", draw: function(ctx){
+        pPad(ctx); pBlock(ctx, 12, 16, 14, C.charcoal); pRoof(ctx, 14, C.charRoof);
+        ctx.fillStyle = C.ember; ctx.fillRect(19, 8, 2, 12); pArrow(ctx, C.ember); } },
+    { lab: "RUINS", note: "dark rubble slab + debris — must be cleared", draw: function(ctx){
+        ctx.fillStyle = C.rubble; ctx.fillRect(10, 16.5, 20, 4);
+        ctx.fillStyle = C.rubbleDk; ctx.fillRect(14, 14, 4, 2.5); ctx.fillRect(22, 14.7, 3, 1.8);
+        ctx.fillStyle = C.debris; ctx.beginPath(); ctx.moveTo(38, 18.5); ctx.lineTo(38, 24); ctx.lineTo(32.5, 21.2); ctx.closePath(); ctx.fill(); } },
+    { lab: "CLEARING", note: "rubble shrinking away", draw: function(ctx){
+        ctx.fillStyle = C.rubble; ctx.fillRect(13, 18.3, 14, 2.2);
+        ctx.fillStyle = C.rubbleDk; ctx.fillRect(17, 16.8, 3, 1.5); } },
+    { lab: "CLEARED", note: "bare site pad — ready ground, nothing else", draw: function(ctx){
+        pPad(ctx); } },
+    { lab: "TEARDOWN", note: "body shrinking, roof off (replacement path)", draw: function(ctx){
+        pPad(ctx); pBlock(ctx, 12, 16, 8, C.scaffold); pArrow(ctx, C.marker); } },
+    { lab: "REBUILD", note: "C1→C4 again — only on a cleared lot", draw: function(ctx){
+        pPad(ctx); pBlock(ctx, 12, 10, 5, C.c2); pArrow(ctx, C.marker); } }
+  ];
+
+  var chip = document.createElement("div");
+  chip.id = "lc-legend-chip"; chip.textContent = "LEGEND"; chip.title = "building lifecycle states — what the placeholder blocks mean";
+  var panel = document.createElement("div");
+  panel.id = "lc-legend";
+  var title = document.createElement("div"); title.className = "lcl-title";
+  title.innerHTML = "BUILDING LIFECYCLE — PLACEHOLDER KEY<span class='lcl-x' title='close'>×</span>";
+  panel.appendChild(title);
+  ROWS.forEach(function(r){
+    var row = document.createElement("div"); row.className = "lcl-row";
+    row.appendChild(sw(r.draw));
+    var txt = document.createElement("div");
+    txt.innerHTML = "<span class='lcl-lab'>" + r.lab + "</span><span class='lcl-note'>" + r.note + "</span>";
+    row.appendChild(txt);
+    panel.appendChild(row);
+  });
+  document.body.appendChild(chip);
+  document.body.appendChild(panel);
+
+  var open = false;
+  function setOpen(v){
+    open = !!v;
+    panel.classList.toggle("open", open);
+    chip.classList.toggle("on", open);
+  }
+  chip.addEventListener("click", function(){ setOpen(!open); });
+  title.querySelector(".lcl-x").addEventListener("click", function(){ setOpen(false); });
+  window.__P1850_LC_LEGEND = { setOpen: setOpen, isOpen: function(){ return open; } };
+})();
