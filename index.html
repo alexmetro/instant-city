@@ -7834,6 +7834,44 @@ gpTex.premultiplyAlpha = true; gpTex.generateMipmaps = true;
 gpTex.minFilter = THREE.LinearMipmapLinearFilter; gpTex.magFilter = THREE.LinearFilter;
 gpTex.anisotropy = Math.min(8, (renderer.capabilities.getMaxAnisotropy && renderer.capabilities.getMaxAnisotropy()) || 1);
 
+/* ---- ICS-12 NEAR-TOWN DETAIL TIER (operator backlog: road-paint clarity at
+   zoom). The world canvas above resolves ~0.36 px/m (one texel ≈ 2.77 m) —
+   fine at the 1500 m overview, but at the 150 m / 40-60 m framings a single
+   texel magnifies to 20-70 screen px, so every road edge smears into a blob.
+   Fix: a SECOND canvas at ~2.67 px/m (texel ≈ 0.375 m) over a fixed 1536 m
+   square centred on the plaza/town core (covers the whole 1849 street grid,
+   the waterfront piers, and years of growth margin), draped on the SAME
+   terrain-shaped overlay restricted to the region's triangles. This is a
+   RESOLUTION TIER of the one road owner, not a second painter: the identical
+   paint pass writes both canvases from the same classified runs, and every
+   audit/measurement keeps reading the world canvas, which is byte-identical
+   to before. The world material cuts a hole under the detail tier (alpha 0
+   inside the region) so the crisp paint replaces — never double-blends with —
+   the blurry magnified texels. TOUCH devices skip the tier (single 2048
+   canvas, unchanged mobile perf). The legacy splat engine's town/close tiers
+   (splatTownMesh — workbench streetAlphaMul already expects the name) return
+   here in minimal-uniform form. */
+var GPD_ON = !IS_TOUCH;
+var GPD_SPAN = 1536;                                  // metres; square, world-axis aligned
+var GPD_RECT = { x0:-874, z0:-690, x1:-874 + GPD_SPAN, z1:-690 + GPD_SPAN }; // plaza (-106,78) ± 768 m: whole 1849 grid + waterfront piers + growth margin
+var GPD_DIM = 4096;
+var GPD_PXPM = GPD_DIM / GPD_SPAN;                    // ≈ 2.667 px/m (0.375 m/texel; world tier is 2.77 m/texel)
+var GPD_BORDER_PX = 2;                                // cleared each repaint so ClampToEdge smears transparency, not paint
+var gpdCanvas = null, gpdCtx = null, gpdTex = null;
+if(GPD_ON){
+  gpdCanvas = document.createElement("canvas"); gpdCanvas.width = GPD_DIM; gpdCanvas.height = GPD_DIM;
+  gpdCtx = gpdCanvas.getContext("2d");
+  gpdTex = new THREE.CanvasTexture(gpdCanvas);
+  gpdTex.flipY = false; gpdTex.wrapS = gpdTex.wrapT = THREE.ClampToEdgeWrapping;
+  gpdTex.premultiplyAlpha = true; gpdTex.generateMipmaps = true;
+  gpdTex.minFilter = THREE.LinearMipmapLinearFilter; gpdTex.magFilter = THREE.LinearFilter;
+  gpdTex.anisotropy = gpTex.anisotropy;
+}
+/* every paint primitive strokes ALL targets — target 0 is the audit-visible
+   world canvas (exact same transform as before: byte-identical output). */
+var GP_TARGETS = [ { ctx:gpCtx, pxpm:GP_PXPM, x0:WORLD.x0, z0:WORLD.z0 } ];
+if(GPD_ON) GP_TARGETS.push({ ctx:gpdCtx, pxpm:GPD_PXPM, x0:GPD_RECT.x0, z0:GPD_RECT.z0 });
+
 /* DRAPED OVERLAY GEOMETRY — the terrain's OWN shape (shared vertex order),
    lifted a hair so it can never z-fight, UV = world XZ straight onto the
    canvas. Seamless with the terrain by construction (no rectangle, so no
@@ -7854,6 +7892,33 @@ var splatWorldGeo = new THREE.BufferGeometry();
   if(terrainGeo.index) splatWorldGeo.setIndex(terrainGeo.index);
 })();
 
+/* ICS-12 detail-tier drape: the SAME lifted terrain vertices (position/normal
+   BufferAttributes are shared objects, so invalidateGroundPaint()'s re-drape
+   flows to both meshes for free), a region-mapped UV set, and an index holding
+   only the triangles that touch GPD_RECT (~6.5k tris of the ~550k terrain —
+   one cheap extra draw, frustum-culled by its own bounding sphere). */
+var splatTownGeo = null;
+if(GPD_ON) (function(){
+  splatTownGeo = new THREE.BufferGeometry();
+  splatTownGeo.setAttribute("position", splatWorldGeo.attributes.position);
+  splatTownGeo.setAttribute("normal", splatWorldGeo.attributes.normal);
+  var sp = terrainGeo.attributes.position, n = sp.count;
+  var uv = new Float32Array(n * 2);
+  var inR = new Uint8Array(n), pad = WORLD.cell * 1.5; // 1.5-cell pad: no seam at the region boundary
+  for(var i = 0; i < n; i++){
+    var x = sp.getX(i), z = sp.getZ(i);
+    uv[i*2] = (x - GPD_RECT.x0) / GPD_SPAN; uv[i*2+1] = (z - GPD_RECT.z0) / GPD_SPAN;
+    inR[i] = (x > GPD_RECT.x0 - pad && x < GPD_RECT.x1 + pad && z > GPD_RECT.z0 - pad && z < GPD_RECT.z1 + pad) ? 1 : 0;
+  }
+  splatTownGeo.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
+  var src = terrainGeo.index.array, keep = [];
+  for(var t = 0; t < src.length; t += 3){
+    if(inR[src[t]] || inR[src[t+1]] || inR[src[t+2]]){ keep.push(src[t], src[t+1], src[t+2]); }
+  }
+  splatTownGeo.setIndex(new THREE.BufferAttribute(new Uint32Array(keep), 1));
+  splatTownGeo.computeBoundingSphere();
+})();
+
 /* PREMULTIPLIED-ALPHA lit material + fog-alpha patch: transparent texels add
    ZERO fog (a=0 ⇒ no haze wash over the whole overlay), painted road fades into
    the haze proportionally. Same proven equation as the legacy splat, minus the
@@ -7868,6 +7933,53 @@ function _gpFogChunk(){
   if(re.test(chunk)) return chunk.replace(re, fix);
   return null;
 }
+/* ICS-12 map_fragment patches (same string-replace-on-ShaderChunk pattern as
+   _gpFogChunk, so a three.js chunk drift degrades to the stock chunk, never a
+   compile error).
+     "hole" (world material): zero the texel inside the detail region — the
+       detail tier owns those pixels on screen, so the blurry magnified world
+       texels never show through or double-blend under it. The hole is inset
+       2.5 detail texels from the region edge; the detail canvas keeps paint
+       out to a 2-texel border-clear, so the tiers overlap by ≤ ~0.2 m (no
+       gap is possible; the sliver of overlap is invisible at any framing).
+     "sharp" (detail material): coverage-AA edge reconstruction. A magnified
+       linear-filtered stroke ramps alpha 0→1 across a whole texel (0.44 m ≈
+       10+ screen px at the 40 m framing) — reads as blur. The remap keeps a
+       screen-space-antialiased HARD edge at the alpha≈0.675 contour
+       (smoothstep half-width from fwidth), while alphas ≤ 0.35 pass through
+       IDENTICALLY — the S1 ghost hairlines (flat 0.30 alpha) render exactly
+       as authored, era look untouched. When minified (overview) the remap
+       fades back to raw alpha, so the far-out render is unchanged. rgb is
+       premultiplied, so it rescales with the alpha to keep the same tone. */
+function _gpMapChunk(mode){
+  var chunk = THREE.ShaderChunk && THREE.ShaderChunk.map_fragment; if(!chunk) return null;
+  var tail = "diffuseColor *= texelColor;";
+  if(chunk.indexOf(tail) === -1) return null;
+  var code;
+  if(mode === "hole"){
+    var m = GPD_BORDER_PX / GPD_PXPM + 0.5 / GPD_PXPM; // inset 2.5 detail texels (metres)
+    var f = function(v){ return v.toFixed(7); };
+    var u0 = f((GPD_RECT.x0 + m - WORLD.x0) / WORLD.sizeX), u1 = f((GPD_RECT.x1 - m - WORLD.x0) / WORLD.sizeX);
+    var v0 = f((GPD_RECT.z0 + m - WORLD.z0) / WORLD.sizeZ), v1 = f((GPD_RECT.z1 - m - WORLD.z0) / WORLD.sizeZ);
+    code = "if(vUv.x > " + u0 + " && vUv.x < " + u1 + " && vUv.y > " + v0 + " && vUv.y < " + v1 + ") texelColor = vec4(0.0);\n\t" + tail;
+  } else { // "sharp"
+    code = [
+      "{",
+      "  float gpa = texelColor.a;",
+      "  float gpfw = fwidth(gpa);",
+      "  float gpw = clamp(gpfw * 1.6, 0.05, 0.25);",       // ~1.6 texels of screen-space AA: blends the bilinear contour's texel-grid scallop
+      "  float gps = smoothstep(0.675 - gpw, 0.675 + gpw, gpa);",
+      "  float gpaa = max(min(gpa, 0.35), gps);",           // ≤0.35 (ghost hairlines + AA fringe) passes through untouched
+      "  gpaa = mix(gpaa, gpa, smoothstep(0.35, 0.8, gpfw));", // minified → identity (overview unchanged)
+      "  texelColor = vec4(gpa > 0.003 ? texelColor.rgb * (gpaa / gpa) : vec3(0.0), gpaa);",
+      "}",
+      tail
+    ].join("\n\t");
+  }
+  return chunk.replace(tail, code);
+}
+var GPD_SHARP = GPD_ON && !!(renderer.capabilities && renderer.capabilities.isWebGL2); // fwidth is core GLSL ES 3.00; WebGL1 falls back to plain high-res
+
 var splatWorldMat = new THREE.MeshPhongMaterial({ map:gpTex, transparent:true, depthWrite:false, specular:0x000000, shininess:0 });
 splatWorldMat.blending = THREE.CustomBlending;
 splatWorldMat.blendEquation = THREE.AddEquation;
@@ -7877,10 +7989,37 @@ splatWorldMat.onBeforeCompile = function(shader){
   var patched = _gpFogChunk();
   if(patched && shader.fragmentShader.indexOf("#include <fog_fragment>") !== -1)
     shader.fragmentShader = shader.fragmentShader.replace("#include <fog_fragment>", patched);
+  if(GPD_ON){
+    var hole = _gpMapChunk("hole");
+    if(hole && shader.fragmentShader.indexOf("#include <map_fragment>") !== -1)
+      shader.fragmentShader = shader.fragmentShader.replace("#include <map_fragment>", hole);
+  }
 };
 var splatWorldMesh = new THREE.Mesh(splatWorldGeo, splatWorldMat);
 splatWorldMesh.renderOrder = 1;
 scene.add(splatWorldMesh);
+
+var splatTownMesh = null;
+if(GPD_ON){
+  var splatTownMat = new THREE.MeshPhongMaterial({ map:gpdTex, transparent:true, depthWrite:false, specular:0x000000, shininess:0 });
+  splatTownMat.blending = THREE.CustomBlending;
+  splatTownMat.blendEquation = THREE.AddEquation;
+  splatTownMat.blendSrc = THREE.OneFactor;
+  splatTownMat.blendDst = THREE.OneMinusSrcAlphaFactor;
+  splatTownMat.onBeforeCompile = function(shader){
+    var patched = _gpFogChunk();
+    if(patched && shader.fragmentShader.indexOf("#include <fog_fragment>") !== -1)
+      shader.fragmentShader = shader.fragmentShader.replace("#include <fog_fragment>", patched);
+    if(GPD_SHARP){
+      var sharp = _gpMapChunk("sharp");
+      if(sharp && shader.fragmentShader.indexOf("#include <map_fragment>") !== -1)
+        shader.fragmentShader = shader.fragmentShader.replace("#include <map_fragment>", sharp);
+    }
+  };
+  splatTownMesh = new THREE.Mesh(splatTownGeo, splatTownMat);
+  splatTownMesh.renderOrder = 2; // after the world tier: opaque crisp paint sits over the (holed) world layer
+  scene.add(splatTownMesh);
+}
 
 /* ---- THE PAINT PASS. Called by core updateStreetPaint() when simDay crosses a
    street's survey/first-mention/checkpoint day (throttled ~3/s). One clear +
@@ -7890,15 +8029,21 @@ scene.add(splatWorldMesh);
 var SPLAT_LAST_STATS = null;  // s20 QA hook (read by __P1850.splatStats + the audits)
 var _gpID = null;             // cached ImageData for audits, dropped each repaint
 
+/* ICS-12: each primitive draws every GP_TARGETS entry — target 0 is the world
+   canvas with the exact pre-ICS-12 transform (audit output byte-identical),
+   target 1 the near-town detail tier (the 2D rasterizer clips runs outside
+   its region for free). */
 function _gpStrokeRun(pts, cls){
   if(pts.length < 2) return;
-  if(cls === 1){ gpCtx.globalAlpha = GP_GHOST_ALPHA; gpCtx.strokeStyle = GP_TONE_GHOST; gpCtx.lineWidth = Math.max(1, gpPxLen(GP_GHOST_WM)); }
-  else         { gpCtx.globalAlpha = 1;              gpCtx.strokeStyle = GP_TONE_ROAD;  gpCtx.lineWidth = Math.max(1, gpPxLen(pts._wM)); }
-  var p0 = gpPx(pts[0].x, pts[0].z);
-  gpCtx.beginPath(); gpCtx.moveTo(p0.x, p0.y);
-  for(var i = 1; i < pts.length; i++){ var p = gpPx(pts[i].x, pts[i].z); gpCtx.lineTo(p.x, p.y); }
-  gpCtx.stroke();
-  gpCtx.globalAlpha = 1;
+  for(var ti = 0; ti < GP_TARGETS.length; ti++){
+    var T = GP_TARGETS[ti], c = T.ctx;
+    if(cls === 1){ c.globalAlpha = GP_GHOST_ALPHA; c.strokeStyle = GP_TONE_GHOST; c.lineWidth = Math.max(1, GP_GHOST_WM * T.pxpm); }
+    else         { c.globalAlpha = 1;              c.strokeStyle = GP_TONE_ROAD;  c.lineWidth = Math.max(1, pts._wM * T.pxpm); }
+    c.beginPath(); c.moveTo((pts[0].x - T.x0) * T.pxpm, (pts[0].z - T.z0) * T.pxpm);
+    for(var i = 1; i < pts.length; i++) c.lineTo((pts[i].x - T.x0) * T.pxpm, (pts[i].z - T.z0) * T.pxpm);
+    c.stroke();
+    c.globalAlpha = 1;
+  }
 }
 /* s90 item C — fill a closed world-space ring (pier plank deck). Filling the
    exact deck polygon gives symmetric coverage-AA on both long edges, so the
@@ -7906,17 +8051,22 @@ function _gpStrokeRun(pts, cls){
    (a centred stroke of a sub-3px diagonal line does not — see the pier branch). */
 function _gpFillPoly(ring, tone){
   if(!ring || ring.length < 3) return;
-  gpCtx.globalAlpha = 1; gpCtx.fillStyle = tone;
-  var p0 = gpPx(ring[0].x, ring[0].z);
-  gpCtx.beginPath(); gpCtx.moveTo(p0.x, p0.y);
-  for(var i = 1; i < ring.length; i++){ var p = gpPx(ring[i].x, ring[i].z); gpCtx.lineTo(p.x, p.y); }
-  gpCtx.closePath(); gpCtx.fill();
+  for(var ti = 0; ti < GP_TARGETS.length; ti++){
+    var T = GP_TARGETS[ti], c = T.ctx;
+    c.globalAlpha = 1; c.fillStyle = tone;
+    c.beginPath(); c.moveTo((ring[0].x - T.x0) * T.pxpm, (ring[0].z - T.z0) * T.pxpm);
+    for(var i = 1; i < ring.length; i++) c.lineTo((ring[i].x - T.x0) * T.pxpm, (ring[i].z - T.z0) * T.pxpm);
+    c.closePath(); c.fill();
+  }
 }
 
 function renderGroundSplat(){
   gpCtx.clearRect(0, 0, GP_W, GP_H);
-  gpCtx.lineCap = "butt";     // butt caps: clean street ends, no spike, no round bloom
-  gpCtx.lineJoin = "round";   // smooth bends within a run
+  if(GPD_ON) gpdCtx.clearRect(0, 0, GPD_DIM, GPD_DIM);
+  for(var _ti = 0; _ti < GP_TARGETS.length; _ti++){
+    GP_TARGETS[_ti].ctx.lineCap = "butt";   // butt caps: clean street ends, no spike, no round bloom
+    GP_TARGETS[_ti].ctx.lineJoin = "round"; // smooth bends within a run
+  }
   var stats = { simDay:simDay, skew:GRID_ROT_BASE, streets:{} }; // single frame (2026-07-14)
 
   STREETS_RUNTIME.forEach(function(s){
@@ -8022,6 +8172,18 @@ function renderGroundSplat(){
     }
   });
 
+  if(GPD_ON){
+    /* border-clear: with ClampToEdgeWrapping the outermost texel row repeats
+       across everything outside [0,1] UV — a street exiting the region would
+       smear a stripe across the far terrain. A transparent 2-px border makes
+       the clamped edge invisible instead (the world tier still paints the
+       road out there; its hole is inset past this border, so no gap). */
+    gpdCtx.clearRect(0, 0, GPD_DIM, GPD_BORDER_PX);
+    gpdCtx.clearRect(0, GPD_DIM - GPD_BORDER_PX, GPD_DIM, GPD_BORDER_PX);
+    gpdCtx.clearRect(0, 0, GPD_BORDER_PX, GPD_DIM);
+    gpdCtx.clearRect(GPD_DIM - GPD_BORDER_PX, 0, GPD_BORDER_PX, GPD_DIM);
+    gpdTex.needsUpdate = true;
+  }
   gpTex.needsUpdate = true;
   _gpID = null;
   SPLAT_LAST_STATS = stats;
@@ -8034,6 +8196,7 @@ function invalidateGroundPaint(){
   var sp = terrainGeo.attributes.position, dp = splatWorldGeo.attributes.position;
   for(var i = 0; i < sp.count; i++){ dp.setX(i, sp.getX(i)); dp.setY(i, sp.getY(i) + GP_LIFT); dp.setZ(i, sp.getZ(i)); }
   dp.needsUpdate = true; splatWorldGeo.computeBoundingSphere();
+  if(splatTownGeo) splatTownGeo.computeBoundingSphere(); // ICS-12 detail tier shares the position attribute — just refresh its bounds
   LAST_SPLAT_SIMDAY = null; _lastSplatRepaintMs = 0; // core/01-geography repaint bookkeeping — repaint unconditionally next frame
 }
 
@@ -8244,7 +8407,7 @@ registerAudit("spine", "spineGrounded", function(){
 });
 
 /* dev-tooling visibility interface (layers-spec.md §15) */
-registerLayerVisibility("ground-paint", function(v){ splatWorldMesh.visible = v; });
+registerLayerVisibility("ground-paint", function(v){ splatWorldMesh.visible = v; if(splatTownMesh) splatTownMesh.visible = v; });
 
 /* ---- RELEASE DEFAULT (flagged for user sign-off): landmark structures ON in
    the release build, matching the reservations already drawn as ground + named
