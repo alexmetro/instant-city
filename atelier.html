@@ -12368,7 +12368,17 @@ registerAudit("labels", "poiSymbols", function(){
   }
   var plazaP = (typeof parcelByName==="function") ? parcelByName("portsmouth-square") : null;
   if(plazaP && !(plazaP.birth!=null && plazaP.birth>day) && _lblParcelWorldRing(plazaP)){ expect.park++; expectN++; }
-  // built census (sublayer "symbols" in the live label set)
+  // built census (sublayer "symbols" in the live label set). SETTLE FIRST
+  // (review-2026-07-16 integration fix): the built set is refreshed by the
+  // render loop (updateLabels → rebuildLabels on the first frame after a
+  // day change), so runAll() right after a __P1850.jump() can still see the
+  // PREVIOUS date's set when that frame hasn't completed yet (post-jump
+  // frames run multi-second under the harness's software GL once the
+  // ics12 town-tier + s110 clamp repaints joined). Settling here uses the
+  // EXACT trigger updateLabels uses — same production builder, no second
+  // code path — so this audit measures set fidelity at the queried date,
+  // never render-loop scheduling.
+  if(Math.floor(simDay)!==_lblLastDay || _lblVisKey()!==_lblLastVisKey) rebuildLabels();
   var built = { business:0, residence:0, park:0, other:0 }, builtN = 0, paletteBad = [];
   for(var i=0;i<_lblItems.length;i++){
     var it = _lblItems[i]; if(it.sublayer!=="symbols") continue;
