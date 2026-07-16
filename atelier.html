@@ -11154,82 +11154,54 @@ var LBL_GLOW_EXTRA = 2.4;                       // outer glow half-width beyond 
 var LBL_STREET_FAMILY = "Roboto, 'Segoe UI', Arial, sans-serif";
 var LBL_STREET_INK    = "#ffffff";                 // Maps satellite-mode street fill (white at every zoom)
 var LBL_STREET_CASE   = "rgba(40,44,48,0.94)";     // Maps dark-grey casing (#282c30 family)
-/* ics14 HOST-SURFACE POLARITY — district/region/hill voice (host = mid-tan
-   sand / green scrub land). MEASURED CHOICE between the two Maps pairings
-   (audit math over the LAND host family): dark ink #453F35 + light casing
-   measures better on our land tones AND matches Maps light-mode districts
-   (dark-grey ink on light land), so districts take the tonal INVERSE of the
-   street voice — casing is the opposite polarity of the ink per the
-   operator's rule. ics14b: the dark outer glow is GONE (same fog-at-grazing
-   defect as the street light glow, dark polarity); the casing alpha steps
-   0.90→0.96 so the light casing alone still clears 3:1 on the scrub/grass
-   end of the land host family (the glow used to carry that edge). */
-var LBL_DISTRICT_INK  = "#453f35";                 // dark warm-grey ink (engraved-plate read on tan land)
-var LBL_DISTRICT_CASE = "rgba(250,247,236,0.96)";  // light casing (opposite polarity; ics14b 0.90→0.96, no-glow contrast)
-/* ics14c LANDMARK/BUSINESS + LOT INK (operator: parchment-gold business names
-   unreadable over sand + grey placeholder roofs). Same polarity family as the
-   districts — these voices are hosted on LIGHT surfaces (sand/dirt ground AND
-   the placeholder roof greys), so dark ink + light casing — but the ink is
-   MEASURED one step darker than the district #453f35: glance voices must
-   clear raw ink-vs-host ≥3.0 (audit GLANCE rule) and #453f35 measures 2.69
-   on rocky, while WHITE street ink measures 1.83 on the light civic roof
-   tint 0xb7c1c7 — neither existing pairing serves this host set. #332e26
-   warm sepia-black clears ≥3.48 on every land AND roof background
-   (0xb7c1c7 / 0x9ea19c / 0x868984). Ink + casing only (ics14b no-glow law).
-   CASING WIDTH (screened, first ics14c pass): at glance sizes a halo:5 light
-   casing is as wide as the Georgia stems — the label rasters as a light-
-   rimmed emboss and the dark ink loses the mass. The name voices carry a
-   THIN casing (halo 3; lot numerals keep 4 — chunky bold digits screened
-   crisp) so the measured ink dominates the glyph; the casing's job here is
-   only to separate the dark ink on the rare dark-ground overhang. */
-var LBL_LANDMARK_INK  = "#332e26";                 // measured glance ink — civic/landmark names + both lot voices
+/* ICS-14d (OPERATOR DIRECTIVE 2026-07-16 — final authority, supersedes the
+   ics14 host-surface polarity inks and the ics14c measured dark landmark
+   ink): EVERY text voice takes the EXACT street treatment — embedded Roboto,
+   WHITE ink #ffffff + Maps dark-grey casing rgba(40,44,48,0.94), halo 4,
+   glow:false. The one sanctioned variation: WATER keeps a light BLUE TINT
+   of the ink (#b9dcef) — measured, it clears every audit gate (worst
+   carrier 3.47 on rocky, via the casing rim; ink-vs-casing ≥6.8 on every
+   background), so water still reads as water. italic is OFF everywhere:
+   only upright Roboto 500/700 are embedded, and canvas font-matching would
+   silently substitute the fallback stack for an italic request. Caps vs
+   mixed-case kept per voice; era serif faces (Georgia/Palatino/Didot sets)
+   are SUSPENDED by the override — era polish comes later; git history
+   preserves the tables. Civic letter-spacing steps 0.24→0.06: at glance
+   sizes the wide engraved tracking pulled cap glyphs apart faster than the
+   eye groups them (legibility is the only goal this pass). */
+var LBL_WATER_INK = "#b9dcef";   // light blue tint of the white ink (water voice only; measured, see contrast audit)
 var LBL_STREET_BOLD_PX = 44;   // on-screen CSS px (apparent size, NOT device px): at/above → Roboto 700, below → 500. ~44px ⇒ bold kicks in under ~220 m altitude (plaza framings), town/overview stay Medium.
 function _lblStreetStyle(setKey){
   return { key:setKey+".street", family:LBL_STREET_FAMILY, weight:"500", weightNear:"700", weightNearPx:LBL_STREET_BOLD_PX,
            color:LBL_STREET_INK, haloColor:LBL_STREET_CASE, halo:4, glow:false, letterSpacing:0.03, smallCaps:false, italic:false };
 }
-var LBL_STYLE_SETS = {
-  a: {
-    /* ics14 HOST-SURFACE POLARITY (operator's governing rule, from Maps dark-
-       mode reference: ink polarity adapts to the label's HOST surface, casing
-       is the OPPOSITE polarity). District/region/hill caps are HOSTED on the
-       mid-tan sand / green scrub land → DARK warm-grey ink + LIGHT casing +
-       dark outer glow (the tonal inverse of the street voice, which sits on
-       dark dirt paint). Era FONT (Georgia small-caps, letter-spaced)
-       unchanged; the contrast audit measures each pairing on its host family
-       (LBL_HOST_FAM) and gates the all-background worst case. */
-    region:  { key:"a.region",  family:"Georgia, 'Times New Roman', serif", weight:"600", color:LBL_DISTRICT_INK, haloColor:LBL_DISTRICT_CASE, glow:false, halo:5, letterSpacing:0.34, smallCaps:true,  italic:false },
-    hill:    { key:"a.hill",    family:"Georgia, 'Times New Roman', serif", weight:"600", color:LBL_DISTRICT_INK, haloColor:LBL_DISTRICT_CASE, glow:false, halo:5, letterSpacing:0.30, smallCaps:true,  italic:false },
-    water:   { key:"a.water",   family:"Georgia, 'Times New Roman', serif", weight:"600", color:"#9fc6dd", haloColor:LBL_HALO_DARK, halo:5, letterSpacing:0.18, smallCaps:false, italic:true  },
-    place:   { key:"a.place",   family:"Georgia, 'Times New Roman', serif", weight:"600", color:LBL_DISTRICT_INK, haloColor:LBL_DISTRICT_CASE, glow:false, halo:5, letterSpacing:0.26, smallCaps:true,  italic:false },
-    civic:   { key:"a.civic",   family:"Georgia, 'Times New Roman', serif", weight:"700", color:LBL_LANDMARK_INK, haloColor:LBL_DISTRICT_CASE, glow:false, halo:3, letterSpacing:0.24, smallCaps:true,  italic:false, wrap:8 },
-    street:  _lblStreetStyle("a"),
-    lotNum:  { key:"a.lotNum",  family:"Georgia, 'Times New Roman', serif", weight:"700", color:LBL_LANDMARK_INK, haloColor:LBL_DISTRICT_CASE, glow:false, halo:4, letterSpacing:0.02, smallCaps:false, italic:false },
-    lotOwn:  { key:"a.lotOwn",  family:"Georgia, 'Times New Roman', serif", weight:"500", color:LBL_LANDMARK_INK, haloColor:LBL_DISTRICT_CASE, glow:false, halo:3, letterSpacing:0.04, smallCaps:false, italic:true, wrap:8  }
-  },
-  b: {
-    /* ics14 host-surface polarity applied here too (district ink law is
-       set-independent; only the era FONT varies between sets). */
-    region:  { key:"b.region",  family:"'Palatino Linotype','Book Antiqua',Palatino,'Times New Roman',serif", weight:"600", color:LBL_DISTRICT_INK, haloColor:LBL_DISTRICT_CASE, glow:false, halo:5, letterSpacing:0.40, smallCaps:true,  italic:false },
-    hill:    { key:"b.hill",    family:"'Palatino Linotype','Book Antiqua',Palatino,'Times New Roman',serif", weight:"600", color:LBL_DISTRICT_INK, haloColor:LBL_DISTRICT_CASE, glow:false, halo:5, letterSpacing:0.36, smallCaps:true,  italic:false },
-    water:   { key:"b.water",   family:"'Palatino Linotype','Book Antiqua',Palatino,'Times New Roman',serif", weight:"500", color:"#9fc6dd", haloColor:LBL_HALO_DARK, halo:5, letterSpacing:0.20, smallCaps:false, italic:true  },
-    place:   { key:"b.place",   family:"'Palatino Linotype','Book Antiqua',Palatino,'Times New Roman',serif", weight:"600", color:LBL_DISTRICT_INK, haloColor:LBL_DISTRICT_CASE, glow:false, halo:5, letterSpacing:0.32, smallCaps:true,  italic:false },
-    civic:   { key:"b.civic",   family:"'Palatino Linotype','Book Antiqua',Palatino,'Times New Roman',serif", weight:"700", color:LBL_LANDMARK_INK, haloColor:LBL_DISTRICT_CASE, glow:false, halo:3, letterSpacing:0.30, smallCaps:true,  italic:false, wrap:8 },
-    street:  _lblStreetStyle("b"),   // ics14: the operator's Maps street voice overrides the era voice in every set
-    lotNum:  { key:"b.lotNum",  family:"'Palatino Linotype','Book Antiqua',Palatino,'Times New Roman',serif", weight:"700", color:LBL_LANDMARK_INK, haloColor:LBL_DISTRICT_CASE, glow:false, halo:4, letterSpacing:0.02, smallCaps:false, italic:false },
-    lotOwn:  { key:"b.lotOwn",  family:"'Palatino Linotype','Book Antiqua',Palatino,'Times New Roman',serif", weight:"500", color:LBL_LANDMARK_INK, haloColor:LBL_DISTRICT_CASE, glow:false, halo:3, letterSpacing:0.04, smallCaps:false, italic:true, wrap:8  }
-  },
-  c: {
-    region:  { key:"c.region",  family:"Didot,'Bodoni MT','Times New Roman',serif", weight:"500", color:LBL_DISTRICT_INK, haloColor:LBL_DISTRICT_CASE, glow:false, halo:5, letterSpacing:0.20, smallCaps:true,  italic:false },
-    hill:    { key:"c.hill",    family:"Didot,'Bodoni MT','Times New Roman',serif", weight:"500", color:LBL_DISTRICT_INK, haloColor:LBL_DISTRICT_CASE, glow:false, halo:5, letterSpacing:0.18, smallCaps:true,  italic:false },
-    water:   { key:"c.water",   family:"Didot,'Bodoni MT','Times New Roman',serif", weight:"400", color:"#a9d0e6", haloColor:LBL_HALO_DARK, halo:5, letterSpacing:0.10, smallCaps:false, italic:true  },
-    place:   { key:"c.place",   family:"Didot,'Bodoni MT','Times New Roman',serif", weight:"500", color:LBL_DISTRICT_INK, haloColor:LBL_DISTRICT_CASE, glow:false, halo:5, letterSpacing:0.16, smallCaps:true,  italic:false },
-    civic:   { key:"c.civic",   family:"Didot,'Bodoni MT','Times New Roman',serif", weight:"600", color:LBL_LANDMARK_INK, haloColor:LBL_DISTRICT_CASE, glow:false, halo:3, letterSpacing:0.14, smallCaps:true,  italic:false, wrap:8 },
-    street:  _lblStreetStyle("c"),   // ics14: the operator's Maps street voice overrides the era voice in every set
-    lotNum:  { key:"c.lotNum",  family:"Didot,'Bodoni MT','Times New Roman',serif", weight:"600", color:LBL_LANDMARK_INK, haloColor:LBL_DISTRICT_CASE, glow:false, halo:4, letterSpacing:0.02, smallCaps:false, italic:false },
-    lotOwn:  { key:"c.lotOwn",  family:"Didot,'Bodoni MT','Times New Roman',serif", weight:"400", color:LBL_LANDMARK_INK, haloColor:LBL_DISTRICT_CASE, glow:false, halo:3, letterSpacing:0.03, smallCaps:false, italic:true, wrap:8  }
-  }
-};
+/* voice builder — the street treatment with per-voice weight/tracking/caps/
+   wrap. Every voice: Roboto, white ink (water: blue tint), dark casing,
+   halo 4, no glow, upright. */
+function _lblVoice(key, o){
+  var st = { key:key, family:LBL_STREET_FAMILY, weight:(o.weight||"500"),
+             color:(o.color||LBL_STREET_INK), haloColor:LBL_STREET_CASE, halo:4, glow:false,
+             letterSpacing:(o.letterSpacing!=null?o.letterSpacing:0.03),
+             smallCaps:!!o.smallCaps, italic:false };
+  if(o.wrap) st.wrap = o.wrap;
+  return st;
+}
+function _lblRobotoVoices(setKey){
+  return {
+    region:  _lblVoice(setKey+".region", { weight:"500", letterSpacing:0.34, smallCaps:true }),
+    hill:    _lblVoice(setKey+".hill",   { weight:"500", letterSpacing:0.30, smallCaps:true }),
+    water:   _lblVoice(setKey+".water",  { weight:"500", letterSpacing:0.18, color:LBL_WATER_INK }),
+    place:   _lblVoice(setKey+".place",  { weight:"500", letterSpacing:0.26, smallCaps:true }),
+    civic:   _lblVoice(setKey+".civic",  { weight:"700", letterSpacing:0.06, smallCaps:true, wrap:8 }),
+    street:  _lblStreetStyle(setKey),
+    lotNum:  _lblVoice(setKey+".lotNum", { weight:"700", letterSpacing:0.02 }),
+    lotOwn:  _lblVoice(setKey+".lotOwn", { weight:"500", letterSpacing:0.04, wrap:8 })
+  };
+}
+/* ics14d: sets b/c ALIAS the same Roboto voices while the era override
+   stands (the type-set knob + labelsSetTypeSet API keep working; distinct
+   keys per set keep the texture cache namespaced as before). */
+var LBL_STYLE_SETS = { a:_lblRobotoVoices("a"), b:_lblRobotoVoices("b"), c:_lblRobotoVoices("c") };
 /* THE ONE KNOB. 'a' = current shipped look (default; unchanged this sprint).
    Atelier/harness override: window.LABEL_TYPE_SET = 'b'|'c' before boot, or set
    labelsSetTypeSet('b') at runtime (rebuilds the label set with the new voices). */
@@ -11250,21 +11222,27 @@ function _lblAdvances(disp, style){
   return { adv:adv, total:total, ls:ls };
 }
 
-/* ---- ICS-14 ROBOTO EMBED (street voice only). Classic Apache-2.0 Roboto
-   v2.138 (googlefonts/roboto release), Medium (500) + Bold (700), SUBSET with
-   fonttools/pyftsubset to the 72-char street-label charset
-   ( A-Z a-z 0-9 space . , ' ’ & - – — / ) and compressed to WOFF2:
-   3,700 + 3,692 bytes (≈9.9 KB as base64) — the whole face ships inside this
-   file, single-file law intact.
+/* ---- ICS-14 ROBOTO EMBED (ics14d: EVERY voice — the operator's uniform
+   street treatment). Classic Apache-2.0 Roboto v2.138 (googlefonts/roboto
+   release), Medium (500) + Bold (700), SUBSET with fonttools/pyftsubset to
+   the 74-char label charset ( A-Z a-z 0-9 space . , ' ’ & - – — / ( ) —
+   ics14d re-cut adds the parens: reservation names like "Robert A. Parker's
+   Store (Adobe House)" carry them; the charset was derived by scanning the
+   actual rendered strings of every voice across landmark-reservations.js,
+   plat-lots-known.js owners, streets-geometry.js era names, and the fixed
+   hill/water/parcel labels) and compressed to WOFF2: 3,780 + 3,732 bytes
+   (≈9.8 KB as base64) — the whole face ships inside this file, single-file
+   law intact.
    LOAD-BEFORE-RASTER: canvas 2D SILENTLY substitutes the fallback family when
    a FontFace has not finished loading — so the first rebuild may raster
-   streets with the fallback stack. When both faces resolve (data: URI, so
-   milliseconds), the street entries in the texture cache are purged and the
-   label set rebuilt ONCE with real Roboto metrics (geometry re-derives its
-   aspect from measureText). One-time event, never per-frame; both weights are
-   pre-loaded so later zoom weight-steps re-raster from the cache path only. */
-var LBL_ROBOTO_MEDIUM_B64 = "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";
-var LBL_ROBOTO_BOLD_B64 = "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";
+   labels with the fallback stack. When both faces resolve (data: URI, so
+   milliseconds), ALL text entries in the texture cache are purged (ics14d:
+   every voice is Roboto now, not just streets) and the label set rebuilt ONCE
+   with real Roboto metrics (geometry re-derives its aspect from measureText).
+   One-time event, never per-frame; both weights are pre-loaded so later zoom
+   weight-steps re-raster from the cache path only. */
+var LBL_ROBOTO_MEDIUM_B64 = "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";
+var LBL_ROBOTO_BOLD_B64 = "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";
 var _lblRobotoReady = false;
 (function(){
   if(typeof FontFace==="undefined" || typeof document==="undefined" || !document.fonts){ _lblRobotoReady = true; return; }
@@ -11274,12 +11252,13 @@ var _lblRobotoReady = false;
     document.fonts.add(med); document.fonts.add(bold);
     Promise.all([med.load(), bold.load()]).then(function(){
       _lblRobotoReady = true;
-      // purge any street raster made with the fallback face (keys "<set>.street|…"
-      // or weight-variant "<set>.street@700|…"), then force a full rebuild on the
+      // purge any TEXT raster made with the fallback face (ics14d: every
+      // voice is Roboto — purge everything except the "poi|…" emblem
+      // rasters, which carry no text), then force a full rebuild on the
       // next frame — updateLabels runs before every draw, so no frame ever
       // samples a disposed texture.
       for(var k in _lblTexCache){
-        if(_lblTexCache.hasOwnProperty(k) && /^[a-z]\.street[@|]/.test(k)){
+        if(_lblTexCache.hasOwnProperty(k) && !/^poi\|/.test(k)){
           var e = _lblTexCache[k];
           _lblTexBytes -= e.cw*e.ch*4*1.34; if(_lblTexBytes<0) _lblTexBytes = 0;
           e.tex.dispose(); delete _lblTexCache[k];
@@ -11670,12 +11649,21 @@ var LBL_WATERBODIES = [
   { name:"Pacific Ocean",      x:-9200, z: 3200, style:"water", worldPx:34, band:"region" },
   { name:"San Francisco Bay",  x: 3600, z: -200, style:"water", worldPx:34, band:"region" }
 ];
+/* ics14d SIZE FLOORS (operator: raise any voice whose NAME renders below
+   ~11 px/line at its band). A sprite's screenPx is the whole PADDED texture
+   box, not the glyph line: for a 1-line label the glyph em gets only
+   LBL_FONT_PX/(lineH + 2·pad) ≈ 0.38 of the box (pad = 0.42·em + casing
+   rings) — so the old civic 15 px box rendered its name at ≈5.7 px em,
+   the real illegibility the operator screenshotted. Floors below are set
+   so the rendered EM ≥ ~11 px: parcels 22→28, cove 26→28 (hills 30 and
+   ocean/bay 34 already clear at ≈11.9/13.5 px em; the civic reservation
+   voice steps 15→30 at its _lblAdd). */
 var LBL_PARCEL_LABELS = {   // cadastre parcel name -> { text, style, band, screenPx }
-  "yerba-buena-cove": { text:"Yerba Buena Cove", style:"water", band:"water", screenPx:26 },
-  "portsmouth-square":{ text:"Portsmouth Square",style:"civic", band:"place", screenPx:22 },
-  "happy-valley-camp":{ text:"Happy Valley",     style:"place", band:"place", screenPx:22 },
-  "mission-cluster":  { text:"Mission Dolores",  style:"place", band:"place", screenPx:22 },
-  "presidio":         { text:"The Presidio",     style:"place", band:"place", screenPx:22 }
+  "yerba-buena-cove": { text:"Yerba Buena Cove", style:"water", band:"water", screenPx:28 },
+  "portsmouth-square":{ text:"Portsmouth Square",style:"civic", band:"place", screenPx:28 },
+  "happy-valley-camp":{ text:"Happy Valley",     style:"place", band:"place", screenPx:28 },
+  "mission-cluster":  { text:"Mission Dolores",  style:"place", band:"place", screenPx:28 },
+  "presidio":         { text:"The Presidio",     style:"place", band:"place", screenPx:28 }
 };
 
 /* =====================================================================
@@ -12049,13 +12037,17 @@ function rebuildLabels(){
        stay along their street; only the orientation changed — voice, band,
        prio, era gating identical). Lift 8 m keeps the name below its POI
        emblem (13 m). Multi-line wrap still works (sprites stack lines), so
-       the ICS-16 close-zoom subtitle line has room to join later. */
+       the ICS-16 close-zoom subtitle line has room to join later.
+       ics14d SIZE FLOOR: screenPx 15→30 — 15 px was the PADDED texture box,
+       rendering the name's glyph em at ≈5.7 px (the operator's "effectively
+       illegible at real sizes"); 30 px puts the em at ≈11.4 px, the Maps
+       POI-label size. */
     if(typeof reservationsAt==="function"){
       reservationsAt(day).forEach(function(r){
         if(!r.footprint) return;
         var cx=r.footprint.cx, cz=r.footprint.cz;
         if(terrainHeight(cx,cz) <= 0.3) return;               // don't float a name over water
-        _lblAdd(_lblSprite(r.name, LBL_STYLE.civic, cx, cz, 8), LBL_BANDS.landmark, "lots", 34, 15, false);
+        _lblAdd(_lblSprite(r.name, LBL_STYLE.civic, cx, cz, 8), LBL_BANDS.landmark, "lots", 34, 30, false);
       });
     }
   }
@@ -12401,7 +12393,12 @@ function labelsBuiltSet(){
 /* ---- AUDIT 1 — eraNames (item B; grounding §11 era-correct names). The period-
    correct street name renders at the sim date: pre-1847-11-03 the plat names
    (Howard / Bartlett), the modern names after. FAILS BEFORE the eraNames data
-   (falls back to the modern name at 1846), PASSES after. ---- */
+   (falls back to the modern name at 1846), PASSES after.
+   ics14d NOTE (operator override, documented): this audit asserts era-correct
+   street NAMES only — it never asserted a typeface, so it survives the
+   directive that suspended the serif ERA VOICES (Georgia/Palatino/Didot style
+   sets → uniform Roboto street treatment; see LBL_STYLE_SETS). Era-dated
+   naming stays law; era TYPOGRAPHY polish returns in a later sprint. ---- */
 var LBL_ERA_FLIP = eventDateToSimDay("1847-11-03");
 registerAudit("labels", "eraNames", function(){
   var want = [ { id:"sacramento", pre:"Howard",   post:"Sacramento" },
@@ -12494,7 +12491,36 @@ registerAudit("labels", "anchorsInside", function(){
    render large + letter-spaced at altitude (silhouette-read, not glance-
    read) and keep the ics14b model; water keeps the dual halo. FAILS BEFORE
    (gold civic ink vs the light roof tint = 1.30); PASSES after (#332e26
-   landmark ink ≥3.48 on every host background). */
+   landmark ink ≥3.48 on every host background).
+   ICS-14d — THE UNIFORM MAPS-SATELLITE MODEL (operator directive 2026-07-16:
+   every voice takes the street treatment — white ink, dark casing, no glow;
+   the ics14c dark-ink pairing and its glance inkVsHost gate are SUPERSEDED).
+   With white ink on our mostly-LIGHT hosts (sand/roofs) the ink body can
+   NEVER directly clear the host — the separation is carried by the CASING
+   RIM around every glyph (exactly Google Maps' satellite streets, which are
+   white-filled with a dark border on bright imagery). The audit measures
+   what is actually painted, per voice per background:
+     inkVsCasing = contrast(ink, casing⊕bg)      — glyph body vs its own rim
+     casingVsBg  = contrast(casing⊕bg, bg)       — the rim edge vs the host
+     inkVsBg     = contrast(ink, bg)             — the ink edge vs the host
+     carrier(bg) = max(casingVsBg, inkVsBg)      — on LIGHT surfaces the dark
+                   rim carries (casingVsBg ≥3.0 there — the operator's
+                   white-on-light rule holds literally on every light host);
+                   on DARK surfaces the casing melts in and the WHITE INK is
+                   the visible boundary (Maps satellite mode; a dark rim can
+                   never clear a dark host, so the literal casing-vs-host
+                   gate is physically unsatisfiable there and the ink gates
+                   instead — stated, not hidden)
+     score(bg)   = min(inkVsCasing, carrier)
+   GATE: score ≥3.0 on EVERY background (all-palette, stronger than the old
+   host-only glance gate) for EVERY voice; host-family minima still tracked
+   and reported. Per-background decision tables are reported for ALL voices
+   (the operator's record). The dual-halo branch is gone — no voice paints a
+   glow anymore (water switched to a blue-tinted ink under the same casing).
+   FAILS BEFORE ics14d on the OLD styles (dark sepia civic ink vs its light
+   casing was the read; under this model the old water dual-halo styles are
+   simply absent); PASSES after: worst case ≈3.47 (water on rocky, carried
+   by the casing rim). */
 function _lblSrgbToLin(c){ c/=255; return c<=0.03928 ? c/12.92 : Math.pow((c+0.055)/1.055, 2.4); }
 function _lblRelLum(rgb){ return 0.2126*_lblSrgbToLin(rgb[0]) + 0.7152*_lblSrgbToLin(rgb[1]) + 0.0722*_lblSrgbToLin(rgb[2]); }
 function _lblContrast(a,b){ var la=_lblRelLum(a), lb=_lblRelLum(b), hi=Math.max(la,lb), lo=Math.min(la,lb); return (hi+0.05)/(lo+0.05); }
@@ -12525,55 +12551,39 @@ registerAudit("labels", "contrast", function(){
     { name:"waterLo",    fam:"water", rgb:_lblHex(0x8fc2c9) },  // bright shallow (cove label)
     { name:"waterHi",    fam:"water", rgb:_lblHex(0x2a5570) }
   ];
-  // ics14 — the surface families each voice is HOSTED on (operator's polarity
-  // rule: ink is chosen per host surface; these are our known constants).
-  // ics14c: values are SETS — civic/landmark + lot text sits over sand ground
-  // AND the grey placeholder roofs (buildings occupy the named lots).
+  // ics14 — the surface families each voice is HOSTED on (retained for the
+  // per-host reporting; every voice now shares the same white-ink/dark-casing
+  // pairing, so hosts inform the REPORT rather than choose an ink).
   var HOST_FAM = { street:["road"], region:["land"], hill:["land"], place:["land"],
                    civic:["land","roof"], lotNum:["land","roof"], lotOwn:["land","roof"], water:["water"] };
-  // ics14c GLANCE voices: small read-at-a-glance names whose INK BODY must
-  // itself clear the host surface (min component, not max — see doc above).
-  var GLANCE_INK = { street:1, civic:1, lotNum:1, lotOwn:1 };
-  var DETAIL_TABLE = { street:1, place:1, civic:1 };   // the operator-decided voices report full per-bg tables
   var GATE = 3.0, styles = [], worst = { style:null, bg:null, ratio:1e9 };
   Object.keys(LBL_STYLE).forEach(function(key){
-    var st = LBL_STYLE[key], glyph = _lblParseCss(st.color);
-    // ics14: measure the style's OWN rings (street/districts/civic/lots = ink
-    // + casing ONLY, no glow — ics14b/c; water = the classic dark ring +
-    // light glow dual halo).
-    var noGlow = st.glow === false;
-    var inner = _lblParseCssA(st.haloColor), outer = noGlow ? null : _lblParseCssA(st.glowColor || LBL_HALO_LIGHT);
+    var st = LBL_STYLE[key], ink = _lblParseCss(st.color), casing = _lblParseCssA(st.haloColor);
     var hostFams = HOST_FAM[key] || null;
     var sMin = 1e9, sBg = null, hMin = 1e9, hBg = null, perBg = [];
     BG.forEach(function(b){
-      var eInner = _lblComposite(inner.rgb, inner.a, b.rgb);
-      var inkVsBg = _lblContrast(glyph, b.rgb);
-      // ics14b no-glow: no outer ring exists — where the casing melts into the
-      // bg, the INK's own edge against the ground is the visible boundary.
-      var outerSep = noGlow ? inkVsBg
-                            : _lblContrast(_lblComposite(outer.rgb, outer.a, b.rgb), b.rgb);
-      var ringSep = Math.max(_lblContrast(eInner, b.rgb), outerSep);
-      var glyphVsInner = _lblContrast(glyph, eInner);
-      var here = Math.min(ringSep, glyphVsInner);
+      var eCase = _lblComposite(casing.rgb, casing.a, b.rgb);
+      var inkVsCasing = _lblContrast(ink, eCase);    // glyph body vs its own rim (white/dark-grey ≈ 12-13:1)
+      var casingVsBg  = _lblContrast(eCase, b.rgb);  // rim edge vs host — the carrier on LIGHT surfaces
+      var inkVsBg     = _lblContrast(ink, b.rgb);    // ink edge vs host — the carrier on DARK surfaces (Maps satellite mode)
+      var carrier = Math.max(casingVsBg, inkVsBg);
+      var here = Math.min(inkVsCasing, carrier);
       var isHost = hostFams !== null && hostFams.indexOf(b.fam) >= 0;
-      // ics14c GLANCE-INK GATE: on its HOST surfaces a glance voice's ink body
-      // must directly clear the ground (a casing cannot carry an invisible ink).
-      if(isHost && GLANCE_INK[key]) here = Math.min(here, inkVsBg);
-      if(DETAIL_TABLE[key]) perBg.push({ bg:b.name, host:isHost, ringSep:+ringSep.toFixed(2), inkVsCasing:+glyphVsInner.toFixed(2), inkVsBg:+inkVsBg.toFixed(2), score:+here.toFixed(2) });
+      perBg.push({ bg:b.name, host:isHost, inkVsCasing:+inkVsCasing.toFixed(2),
+                   casingVsBg:+casingVsBg.toFixed(2), inkVsBg:+inkVsBg.toFixed(2), score:+here.toFixed(2) });
       if(here < sMin){ sMin = here; sBg = b.name; }
       if(isHost && here < hMin){ hMin = here; hBg = b.name; }
     });
-    var row = { style:key, minRatio:+sMin.toFixed(2), worstBg:sBg, hostFam:hostFams,
-                hostMin:(hMin<1e9 ? +hMin.toFixed(2) : null), hostWorstBg:hBg };
-    if(DETAIL_TABLE[key]) row.perBg = perBg;
-    styles.push(row);
+    styles.push({ style:key, minRatio:+sMin.toFixed(2), worstBg:sBg, hostFam:hostFams,
+                  hostMin:(hMin<1e9 ? +hMin.toFixed(2) : null), hostWorstBg:hBg, perBg:perBg });
     if(sMin < worst.ratio){ worst = { style:key, bg:sBg, ratio:+sMin.toFixed(2) }; }
   });
-  // gate BOTH the all-background worst case (labels overhang their host) AND
-  // the host-family worst case (the operator's per-host pairing must clear).
+  // gate the ALL-background worst case for every voice (labels overhang their
+  // hosts; the palette-wide min is the stronger, honest gate) — the per-host
+  // minima are reported alongside for the operator's record.
   var bad = styles.filter(function(s){ return s.minRatio < GATE || (s.hostMin !== null && s.hostMin < GATE); });
   return { pass: bad.length===0, gate:GATE,
-           method:"per-style WCAG min over earth palette (ics14c: + roof greys) + per-host-family gate; glow:false voices = ink+casing only, sep=max(casingVsBg, inkVsBg); GLANCE voices (street/civic/lotNum/lotOwn) additionally take inkVsHost as a MIN on host backgrounds; water keeps the dual halo; street Bold shares Medium colors (one measurement, both weights)",
+           method:"ics14d uniform Maps-satellite model, every voice: score(bg)=min(inkVsCasing, max(casingVsBg, inkVsBg)) ≥3.0 over the FULL earth+roof palette; on light hosts the dark casing rim carries (casingVsBg ≥3.0 there — the operator's white-on-light rule, literal); on dark hosts the white ink is the boundary (a dark rim cannot clear a dark host — stated, not hidden); per-background tables reported for every voice; street Bold shares Medium colors (one measurement, both weights)",
            minContrastRatio: worst.ratio, worstCase: worst, styles: styles, bad: bad };
 });
 
