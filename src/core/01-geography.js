@@ -812,6 +812,28 @@ function dryLandEdgeXAt(z, edge){
   return edge[edge.length-1].x;
 }
 
+/* s110d BOOT ASSERTION — the Broadway Wharf foot anchors on DRY LAND
+   (terrain-edge-grounding-spec Rule 3). The authored foot (u=300.2 in
+   data/streets-geometry.json) was MEASURED against this transform: the
+   first isDryLand crossing landward along the pier line is u=302.65, and
+   the foot sits 2.45 m (~8 ft, operator default; dossier §1.2 documents a
+   warehouse adjoining the wharf at the shore end but no precise setback)
+   further inland. If the terrain, the tide constants, or the geodetic
+   frame is ever re-tuned so the authored foot goes marginal or wet, this
+   throws at boot instead of silently re-landing the old shore-edge defect
+   class (the standing spine.wharfFootDryInland audit gates the same rule
+   at the noon dates). Pure read of the release terrain at the pier's
+   first checkpoint day — no dice, rewind-irrelevant (boot-once). */
+(function assertBroadwayFootDry(){
+  var p = (typeof PIERS_RUNTIME_BY_ID !== "undefined") ? PIERS_RUNTIME_BY_ID["broadway-wharf"] : null;
+  if(!p || !p.checkpoints.length) return;                       // pier absent from the spine — nothing to assert
+  var f = gridToWorld(p.polyline[0].u, p.polyline[0].v);
+  if(!isDryLand(f.x, f.z, p.checkpoints[0].day))
+    throw new Error("Broadway Wharf foot is NOT on dry land (u=" + p.polyline[0].u +
+      ", h=" + terrainHeightAt(f.x, f.z, p.checkpoints[0].day).toFixed(3) +
+      " m <= dryLandY " + dryLandY().toFixed(2) + " m) — re-measure the foot anchor (terrain-edge-grounding-spec Rule 3)");
+})();
+
 /* =====================================================================
    THE PROGRAMMATIC ROAD DRAPE + CLAMP (terrain-edge-grounding-spec §0b) —
    roadDrawnExtentAt(road, day). A PURE f(authored XZ, dated terrain): the

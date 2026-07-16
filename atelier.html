@@ -3734,6 +3734,28 @@ function dryLandEdgeXAt(z, edge){
   return edge[edge.length-1].x;
 }
 
+/* s110d BOOT ASSERTION — the Broadway Wharf foot anchors on DRY LAND
+   (terrain-edge-grounding-spec Rule 3). The authored foot (u=300.2 in
+   data/streets-geometry.json) was MEASURED against this transform: the
+   first isDryLand crossing landward along the pier line is u=302.65, and
+   the foot sits 2.45 m (~8 ft, operator default; dossier §1.2 documents a
+   warehouse adjoining the wharf at the shore end but no precise setback)
+   further inland. If the terrain, the tide constants, or the geodetic
+   frame is ever re-tuned so the authored foot goes marginal or wet, this
+   throws at boot instead of silently re-landing the old shore-edge defect
+   class (the standing spine.wharfFootDryInland audit gates the same rule
+   at the noon dates). Pure read of the release terrain at the pier's
+   first checkpoint day — no dice, rewind-irrelevant (boot-once). */
+(function assertBroadwayFootDry(){
+  var p = (typeof PIERS_RUNTIME_BY_ID !== "undefined") ? PIERS_RUNTIME_BY_ID["broadway-wharf"] : null;
+  if(!p || !p.checkpoints.length) return;                       // pier absent from the spine — nothing to assert
+  var f = gridToWorld(p.polyline[0].u, p.polyline[0].v);
+  if(!isDryLand(f.x, f.z, p.checkpoints[0].day))
+    throw new Error("Broadway Wharf foot is NOT on dry land (u=" + p.polyline[0].u +
+      ", h=" + terrainHeightAt(f.x, f.z, p.checkpoints[0].day).toFixed(3) +
+      " m <= dryLandY " + dryLandY().toFixed(2) + " m) — re-measure the foot anchor (terrain-edge-grounding-spec Rule 3)");
+})();
+
 /* =====================================================================
    THE PROGRAMMATIC ROAD DRAPE + CLAMP (terrain-edge-grounding-spec §0b) —
    roadDrawnExtentAt(road, day). A PURE f(authored XZ, dated terrain): the
@@ -10136,17 +10158,21 @@ registerLayerVisibility("wharves", function(v){ WHARF_GROUP.visible = v; if(v){ 
     return out;
   });
 
-  /* spine.wharfFootDryInland — each pier/wharf foot anchors on DRY LAND and
-     is set back >= ~8 ft (2.4 m) INLAND of the dry-land edge (above high tide),
-     NEVER at the coastline/waterline; the deck then runs seaward over water.
-     The authored feet (Broadway, Central) sit on the Montgomery beach line —
-     dry at mean tide, under water at high tide — so they FLAG here (the proof
-     the rule works; re-anchoring inland is Phase 2). */
+  /* spine.wharfFootDryInland — GATING (s110d Phase 2c). Each pier/wharf foot
+     anchors on DRY LAND (isDryLand — above every tide plus the freeboard) and
+     is set back >= ~8 ft (2.4 m) INLAND of the dry-land edge, NEVER at the
+     coastline/waterline; the deck then runs seaward over water. A pier with
+     no active checkpoint at this date is skipped lawfully (date-gated, like
+     the rest of the pier family). Broadway's re-anchored foot (s110d, grid
+     u=300.2 — measured 2.45 m inland of the isDryLand crossing at u=302.65)
+     passes by construction; Central's foot sits ~82 m inland. The pre-s110d
+     Broadway foot (u=320, h~+0.05 m — dry at mean tide, submerged at high
+     tide) FAILS this rule: the proof it works. */
   registerAudit("spine", "wharfFootDryInland", function(){
-    var out = { pass:true, reportOnly:true, phase:1, wharvesChecked:0, misAnchored:0, misAnchoredIds:[], detail:[] };
+    var out = { pass:true, gating:true, wharvesChecked:0, misAnchored:0, misAnchoredIds:[], detail:[] };
     var edge = dryLandEdgeAt(simDay);
     livePiers().forEach(function(p){
-      var active = pierActiveCheckpoint(p, simDay); if(!active) return;   // absent/reaching at this date
+      var active = pierActiveCheckpoint(p, simDay); if(!active) return;   // absent/reaching at this date — lawful date-gated skip
       out.wharvesChecked++;
       var f = gridToWorld(p.polyline[active.extent[0]].u, p.polyline[active.extent[0]].v);
       var dry = isDryLand(f.x, f.z, simDay);
@@ -10157,7 +10183,8 @@ registerLayerVisibility("wharves", function(v){ WHARF_GROUP.visible = v; if(v){ 
       out.detail.push({ id:p.id, name:p.name, foot:{ x:+f.x.toFixed(1), z:+f.z.toFixed(1) },
         footDry:dry, setbackM:(setback==null?null:+setback.toFixed(1)), minSetbackM:FOOT_SETBACK_M, ok:ok });
     });
-    out.note = "REPORT-ONLY (Phase 1): "+out.misAnchored+" of "+out.wharvesChecked+" active wharf feet fail the dry-inland anchor rule.";
+    out.pass = out.misAnchored === 0;
+    out.note = "GATING (Phase 2c): "+out.misAnchored+" of "+out.wharvesChecked+" active wharf feet fail the dry-inland anchor rule.";
     return out;
   });
 })();
@@ -15517,7 +15544,7 @@ function updateHud(alt){
   makeFlat("audits", "AUDIT FAILURES",
     "Runs the full audit suite at the current date; a red marker at every violation coordinate. An empty overlay is the goal state.");
   makeFlat("dryland", "DRY-LAND EDGE + FLOATING ROADS (s110a)",
-    "terrain-edge-grounding-spec §0–§3, PHASE-1 SCOPE REVEAL. orange = the DRY-LAND EDGE (terrainHeightAt = +0.85 m, above every tide + freeboard) at this date. For each road whose authored centerline overhangs that edge: red = the RAW authored extent, green = the programmatic roadDrawnExtentAt CLAMP (draped + trimmed at the edge). magenta = too-steep segments (roadGrade > 31.5%). Wharf feet: green cross = dry & set back ≥8 ft inland; red cross = mis-anchored (below high tide or seaward of the edge). Read-only — nothing is moved this pass (clamp/re-anchor is Phase 2).");
+    "terrain-edge-grounding-spec §0–§3. orange = the DRY-LAND EDGE (terrainHeightAt = +0.85 m, above every tide + freeboard) at this date. For each road whose authored centerline overhangs that edge: red = the RAW authored extent, green = the programmatic roadDrawnExtentAt CLAMP (draped + trimmed at the edge). magenta = too-steep segments (roadGrade > 31.5%). Wharf feet: green cross = dry & set back ≥8 ft inland; red cross = mis-anchored (below high tide or seaward of the edge). Read-only — the clamp is live in the release render (s110b) and the wharf feet are re-anchored inland (s110d); an all-green overlay is the goal state.");
 
   function buildOverlay(key){
     if(key==="spine") return buildSpineOverlay();

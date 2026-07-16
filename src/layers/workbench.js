@@ -476,7 +476,7 @@
   makeFlat("audits", "AUDIT FAILURES",
     "Runs the full audit suite at the current date; a red marker at every violation coordinate. An empty overlay is the goal state.");
   makeFlat("dryland", "DRY-LAND EDGE + FLOATING ROADS (s110a)",
-    "terrain-edge-grounding-spec §0–§3, PHASE-1 SCOPE REVEAL. orange = the DRY-LAND EDGE (terrainHeightAt = +0.85 m, above every tide + freeboard) at this date. For each road whose authored centerline overhangs that edge: red = the RAW authored extent, green = the programmatic roadDrawnExtentAt CLAMP (draped + trimmed at the edge). magenta = too-steep segments (roadGrade > 31.5%). Wharf feet: green cross = dry & set back ≥8 ft inland; red cross = mis-anchored (below high tide or seaward of the edge). Read-only — nothing is moved this pass (clamp/re-anchor is Phase 2).");
+    "terrain-edge-grounding-spec §0–§3. orange = the DRY-LAND EDGE (terrainHeightAt = +0.85 m, above every tide + freeboard) at this date. For each road whose authored centerline overhangs that edge: red = the RAW authored extent, green = the programmatic roadDrawnExtentAt CLAMP (draped + trimmed at the edge). magenta = too-steep segments (roadGrade > 31.5%). Wharf feet: green cross = dry & set back ≥8 ft inland; red cross = mis-anchored (below high tide or seaward of the edge). Read-only — the clamp is live in the release render (s110b) and the wharf feet are re-anchored inland (s110d); an all-green overlay is the goal state.");
 
   function buildOverlay(key){
     if(key==="spine") return buildSpineOverlay();
