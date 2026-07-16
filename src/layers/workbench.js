@@ -251,7 +251,7 @@
      registry (__P1850_LAYER_VIS.labels). Present only when the labels layer is
      assembled in this build. ---- */
   if(typeof __P1850_LAYER_VIS.labels === "function" && typeof labelsSetSublayer === "function"){
-    beginSection("labels","LABELS", { desc:"The labels render-layer's category sublayers as a tri-state family (parent LABELS → LOTS / STREETS / ZONES & LANDMARKS). §11 zoom bands: regions own the high view; streets then lots fade in on descent." });
+    beginSection("labels","LABELS", { desc:"The labels render-layer's category sublayers as a tri-state family (parent LABELS → LOTS / STREETS / ZONES & LANDMARKS / POI SYMBOLS). §11 zoom bands: regions own the high view; streets then lots fade in on descent; POI pins ride the town band." });
     var lblParentVisible = true;                    // the registry parent (LABELS layer present)
     var lblGroupWrap = el("div","wb-ov-group");
     var lblHeadRow = el("div","wb-row wb-ov-parent", null, lblGroupWrap);
@@ -264,7 +264,8 @@
     var LBL_CHILDREN = [
       ["lots",    "LOTS — record lot number + owner (flat ground text, polylabel anchor)"],
       ["streets", "STREETS — era-correct names along the line (small-caps voice)"],
-      ["zones",   "ZONES & LANDMARKS — hills · waterways (blue italic) · plaza · outposts"]
+      ["zones",   "ZONES & LANDMARKS — hills · waterways (blue italic) · plaza · outposts"],
+      ["symbols", "POI SYMBOLS — category pins over named places (blue business · teal residence · green park · grey other)"]
     ];
     var lblChildCbs = {};
     function lblSyncParent(){
