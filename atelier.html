@@ -10478,7 +10478,8 @@ var LABELS_VIS = {
   parent:  LABELS_ON_AT_RELEASE,
   lots:    LABELS_ON_AT_RELEASE,
   streets: LABELS_ON_AT_RELEASE,
-  zones:   LABELS_ON_AT_RELEASE
+  zones:   LABELS_ON_AT_RELEASE,
+  symbols: LABELS_ON_AT_RELEASE   // ics13 POI symbols — release default ON (operator-requested map feature)
 };
 
 /* ---- §11 CATEGORY VOICES. One grammar so a reader never confuses types:
@@ -10933,6 +10934,153 @@ var LBL_PARCEL_LABELS = {   // cadastre parcel name -> { text, style, band, scre
   "presidio":         { text:"The Presidio",     style:"place", band:"place", screenPx:22 }
 };
 
+/* =====================================================================
+   ICS-13 — POI CATEGORY SYMBOLS (operator backlog, verbatim: "Create distinct
+   visual symbols for different point of interest (POI) categories such as
+   residences, businesses, parks, and others. Symbols should hover over each
+   POI using Google Maps color palette.").
+   A POI is a NAMED place only: the landmark-reservation registry
+   (window.LANDMARK_RESERVATIONS, the same records the buildings admission
+   spawns) + the plaza public ground (Portsmouth Square parcel). Anonymous
+   procedural fill (tents/shacks) NEVER gets a symbol.
+   Each POI gets a camera-facing map-pin sprite hovering above its roof: a
+   colored disc + white category glyph + stalk, dual-halo outlined (the same
+   any-background discipline as the text labels), rasterized DPR-aware with
+   mips into the shared label texture cache, joining the ics11 true-quad
+   declutter as sublayer "symbols" (atelier toggle POI SYMBOLS, default ON;
+   release default ON). Deterministic: pure function of date + camera — the
+   set is reservationsAt(day) order + the plaza, zero dice. ---- */
+
+/* THE CATEGORY MAPPING (derived from real data — the registry's business
+   `kind` field). Google-Maps palette family:
+     business  BLUE  #4285F4 (Maps primary blue; the one blue, used consistently)
+     residence TEAL  #00897B (Maps residential green-teal family)
+     park      GREEN #34A853 (Maps park green)
+     other     GREY  #9AA0A6 (Maps neutral grey)
+   Registry kinds observed (s95 batch 1): store/market/bank/manufactory/
+   hotel/newspaper_office — all commercial. No dwelling kind exists in the
+   registry today, so the residence bucket is EMPTY (honest; the machinery +
+   palette slot stand ready for when named residences join the registry). */
+var POI_KIND_CAT = {
+  store:"business", market:"business", bank:"business", manufactory:"business",
+  hotel:"business", newspaper_office:"business", tavern:"business",
+  saloon:"business", exchange:"business",
+  residence:"residence", dwelling:"residence",
+  park:"park", plaza:"park",
+  civic:"other", school:"other", church:"other", post_office:"other"
+};
+/* The 14 plaza-cluster records (s91/s94) predate the registry's entry-level
+   `kind` field. Their kinds are documented in the dossier notes each record
+   carries — mapped here explicitly, one line per record, never guessed:
+   hotels (City Hotel/Parker House/Portsmouth House), gambling saloons
+   (El Dorado/Dennison's/Bella Union), newspaper offices (Alta California/
+   California Star), Howard & Mellus store, Shades Tavern, Merchants'
+   Exchange; civic: Custom House, School House, Post Office. */
+var POI_LEGACY_KIND = {
+  "custom-house":"civic", "school-house":"school", "post-office":"post_office",
+  "city-hotel":"hotel", "parker-house":"hotel", "portsmouth-house":"hotel",
+  "el-dorado":"saloon", "dennisons-exchange":"saloon", "bella-union":"saloon",
+  "alta-california-office":"newspaper_office", "california-star-office":"newspaper_office",
+  "howard-mellus-store":"store", "shades-tavern":"tavern",
+  "merchants-exchange":"exchange"
+};
+/* landmarkId -> business kind, read once from the registry sidecar (the
+   cadastre's GROUND_RESERVATIONS records carry the ANCHOR kind, not the
+   business kind, so we index the source registry directly). */
+var _poiKindById = (function(){
+  var map = {}, REG = (typeof window!=="undefined" && window.LANDMARK_RESERVATIONS) ? window.LANDMARK_RESERVATIONS : null;
+  if(REG && REG.reservations) REG.reservations.forEach(function(r){
+    map[r.landmarkId] = r.kind || POI_LEGACY_KIND[r.landmarkId] || null;
+  });
+  return map;
+})();
+/* category of a live reservation record; null = unmapped kind (surfaced by
+   the poiSymbols audit rather than silently bucketed). */
+function poiCategory(landmarkId){
+  var kind = _poiKindById[landmarkId];
+  return (kind && POI_KIND_CAT[kind]) ? POI_KIND_CAT[kind] : null;
+}
+var POI_COLORS = { business:"#4285F4", residence:"#00897B", park:"#34A853", other:"#9AA0A6" };
+var POI_SS_PX  = 26;    // marker screen height (px) — readable at town zoom, never a billboard
+var POI_LIFT_M = 13;    // hover height above the terrain (clears the tallest landmark kit: hotel 6.6 m + ridge 2 m + plinth)
+
+/* ---- THE MARKER RASTER (labelTexture's discipline for a vector pin):
+   supersampled canvas at the label BAND ladder, mips + max aniso, cached in
+   the SHARED _lblTexCache (key "poi|cat|band") so the LRU budget/eviction
+   governs these too. Layout in a 100×130 unit box: disc r34 @ (50,46),
+   stalk tapering to the tip (50,126); dual halo (light outer glow + dark
+   inner ring) around the silhouette, thin white rim, white glyph. ---- */
+function _poiGlyph(ctx, cat){
+  ctx.fillStyle = "#ffffff"; ctx.strokeStyle = "#ffffff";
+  ctx.lineJoin = "round"; ctx.lineCap = "round";
+  if(cat==="business"){
+    // shopping bag: handle arc + body
+    ctx.lineWidth = 5;
+    ctx.beginPath(); ctx.arc(50, 40, 9, Math.PI, 0); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(35,40); ctx.lineTo(65,40); ctx.lineTo(63,63); ctx.lineTo(37,63); ctx.closePath(); ctx.fill();
+  } else if(cat==="residence"){
+    // house: roof gable + body
+    ctx.beginPath(); ctx.moveTo(50,28); ctx.lineTo(29,47); ctx.lineTo(71,47); ctx.closePath(); ctx.fill();
+    ctx.fillRect(35,47,30,17);
+  } else if(cat==="park"){
+    // tree: round canopy + trunk
+    ctx.beginPath(); ctx.arc(50,40,13,0,Math.PI*2); ctx.fill();
+    ctx.fillRect(46,50,8,14);
+  } else {
+    // other: pennant flag on a pole
+    ctx.fillRect(41,28,5,36);
+    ctx.beginPath(); ctx.moveTo(46,30); ctx.lineTo(68,37); ctx.lineTo(46,45); ctx.closePath(); ctx.fill();
+  }
+}
+function poiSymbolTexture(cat, band){
+  band = band || LBL_BAND_DEFAULT;
+  var key = "poi|" + cat + "|" + band;
+  if(_lblTexCache[key]){ _lblTexCache[key].lru = ++_lblTexClock; return _lblTexCache[key]; }
+  _lblEvictIfNeeded();
+  var UW = 100, UH = 130, s = band/UH;
+  var cw = Math.max(2, Math.round(UW*s)), ch = Math.max(2, Math.round(UH*s));
+  var cv = document.createElement("canvas"); cv.width = cw; cv.height = ch;
+  var ctx = cv.getContext("2d"); ctx.scale(s, s);
+  // pin silhouette: disc + tapering stalk (built once, stroked/filled in passes)
+  var silhouette = function(){
+    ctx.beginPath();
+    ctx.arc(50, 46, 34, 0, Math.PI*2);
+    ctx.moveTo(38, 74); ctx.lineTo(50, 126); ctx.lineTo(62, 74); ctx.closePath();
+  };
+  // [1] light outer glow (soft) — separates the pin from dark road-paint/shadow
+  silhouette(); ctx.lineWidth = 9; ctx.strokeStyle = LBL_HALO_LIGHT;
+  ctx.shadowColor = LBL_HALO_LIGHT; ctx.shadowBlur = 5; ctx.stroke();
+  ctx.shadowBlur = 0; ctx.shadowColor = "rgba(0,0,0,0)";
+  // [2] dark inner ring — separates it from the bright amber ground
+  silhouette(); ctx.lineWidth = 5; ctx.strokeStyle = LBL_HALO_DARK; ctx.stroke();
+  // [3] category color fill (stalk + disc)
+  ctx.beginPath(); ctx.moveTo(38, 74); ctx.lineTo(50, 126); ctx.lineTo(62, 74); ctx.closePath();
+  ctx.fillStyle = POI_COLORS[cat] || POI_COLORS.other; ctx.fill();
+  ctx.beginPath(); ctx.arc(50, 46, 34, 0, Math.PI*2); ctx.fill();
+  // [4] thin white rim inside the disc (the Maps pin read)
+  ctx.beginPath(); ctx.arc(50, 46, 30, 0, Math.PI*2);
+  ctx.lineWidth = 3; ctx.strokeStyle = "rgba(255,255,255,0.95)"; ctx.stroke();
+  // [5] white category glyph
+  _poiGlyph(ctx, cat);
+  var tex = new THREE.CanvasTexture(cv);
+  tex.minFilter = THREE.LinearMipmapLinearFilter; tex.magFilter = THREE.LinearFilter; tex.generateMipmaps = true;
+  tex.anisotropy = _lblAniso; tex.needsUpdate = true;
+  _lblTexBytes += cw*ch*4*1.34;
+  var e = { tex:tex, aspect: UW/UH, lines:1, band:band, texelH:ch, cw:cw, ch:ch, lru: ++_lblTexClock };
+  _lblTexCache[key] = e; return e;
+}
+/* camera-facing marker sprite (the zone-sprite pattern, POI texture). */
+function _poiSprite(cat, name, x, z, band){
+  var t = poiSymbolTexture(cat, band);
+  var mat = new THREE.SpriteMaterial({ map:t.tex, transparent:true, depthTest:false, depthWrite:false, opacity:0 });
+  var s = new THREE.Sprite(mat);
+  s.userData.aspect = t.aspect; s.userData.text = name;
+  s.userData.poi = true; s.userData.poiCat = cat; s.userData.band = t.band; s.userData.lines = 1;
+  s.position.set(x, terrainHeight(x,z)+POI_LIFT_M, z);
+  s.renderOrder = 26; s.frustumCulled = false;
+  return s;
+}
+
 /* ---- ZOOM-BAND OPACITY (alt in metres; lastKnownAlt). rampDown(a,b): 1 below
    a, 0 above b, linear between — a category "fades OUT as you climb". Regions
    own the high view and fade on descent (rampUp); streets then lots fade in as
@@ -10950,7 +11098,8 @@ var LBL_BANDS = {
   street:  function(a){ return _rDown(a, 1500, 2400); },                // fade in low, persist to the overview
   lotNum:  function(a){ return _rDown(a, 180, 270); },                  // fade in at the lot band
   lotOwn:  function(a){ return _rDown(a, 96, 158); },                   // owner: closer still
-  landmark:function(a){ return _rDown(a, 520, 780); }                   // s91/s92: reservation names — read earlier (higher) than lot numbers
+  landmark:function(a){ return _rDown(a, 520, 780); },                  // s91/s92: reservation names — read earlier (higher) than lot numbers
+  poi:     function(a){ return _rDown(a, 900, 1600); }                  // ics13: POI symbols — full through the town band, fading across the overview climb
 };
 /* s92 STREET PRIORITY (finding #2): main streets outrank cross streets in the
    declutter so altitude reveals the majors first. Lower number = placed first.
@@ -11085,11 +11234,42 @@ function rebuildLabels(){
     }
   }
 
+  /* --- ICS-13 POI SYMBOLS — one category pin per NAMED place: every live
+         reservation (built ≤ day, pre-burn — the exact reservationsAt(day) set
+         the buildings admission spawns) + the plaza public ground. Registry
+         order + plaza = deterministic (prio, seq). NEVER anonymous fill. --- */
+  if(LABELS_VIS.symbols){
+    var poiBand = _lblPickBand(POI_SS_PX * LBL_DPR);   // fixed screen size ⇒ the band is known up front
+    if(typeof reservationsAt==="function"){
+      reservationsAt(day).forEach(function(r){
+        if(!r.footprint) return;
+        var cat = poiCategory(r.landmarkId); if(!cat) return;   // unmapped kind — surfaced by the poiSymbols audit
+        var cx=r.footprint.cx, cz=r.footprint.cz;
+        if(terrainHeight(cx,cz) <= 0.3) return;                 // same water gate as the reservation name
+        _lblAdd(_poiSprite(cat, r.name, cx, cz, poiBand), LBL_BANDS.poi, "symbols", 33, POI_SS_PX, false);
+      });
+    }
+    // the plaza public ground — the park bucket (era-gated with the parcel).
+    // The pin is offset 24 m up-block (-v) from the pole: the zone label
+    // "Portsmouth Square" sits AT the pole with prio 14, and a co-anchored
+    // prio-33 pin would always lose the declutter and never show. The offset
+    // (deterministic, grid-basis) keeps the pin well inside the ~90 m square.
+    var plazaP = (typeof parcelByName==="function") ? parcelByName("portsmouth-square") : null;
+    if(plazaP && !(plazaP.birth!=null && plazaP.birth>day)){
+      var plazaRing = _lblParcelWorldRing(plazaP);
+      if(plazaRing){
+        var plazaPole = _lblPolePoint(plazaRing);
+        var ppx = plazaPole.x - _lblGrid.vx*24, ppz = plazaPole.z - _lblGrid.vz*24;
+        _lblAdd(_poiSprite("park", "Portsmouth Square", ppx, ppz, poiBand), LBL_BANDS.poi, "symbols", 33, POI_SS_PX, false);
+      }
+    }
+  }
+
   _lblLastDay = Math.floor(simDay);
   _lblLastVisKey = _lblVisKey();
   _lblFlipYaw = null;   // fresh meshes: force a flip recompute on the next frame
 }
-function _lblVisKey(){ return (LABELS_VIS.lots?"1":"0")+(LABELS_VIS.streets?"1":"0")+(LABELS_VIS.zones?"1":"0"); }
+function _lblVisKey(){ return (LABELS_VIS.lots?"1":"0")+(LABELS_VIS.streets?"1":"0")+(LABELS_VIS.zones?"1":"0")+(LABELS_VIS.symbols?"1":"0"); }
 
 /* ====================================================================
    PER-FRAME UPDATE — opacity by altitude (§11 bands) + priority DECLUTTER via
@@ -11154,7 +11334,7 @@ var _lblFlipYaw = null, _lblSettleAlt = -1;
 function _lblSetBand(it, band){
   var o = it.obj, ud = o.userData;
   if(ud.band === band) return;
-  var e = labelTexture(ud.text, ud.style, band);
+  var e = ud.poi ? poiSymbolTexture(ud.poiCat, band) : labelTexture(ud.text, ud.style, band);
   o.material.map = e.tex; o.material.needsUpdate = true; ud.band = band;
   if(!it.ground) o.userData.aspect = e.aspect;   // sprites size from userData.aspect
   it._texelH = e.texelH;
@@ -11547,6 +11727,60 @@ registerAudit("labels", "wrap", function(){
   }
   return { pass: bad.length===0, checked:checked,
            method:"style.wrap × LBL_FONT_PX layout-px limit; long multi-word labels must rasterize ≥2 balanced lines, each line ≤ limit (single unbreakable words exempt)",
+           bad: bad.slice(0,8) };
+});
+
+/* ---- AUDIT 7 — poiSymbols (ics13, operator verbatim: "distinct visual
+   symbols for different point of interest (POI) categories"). PROPERTIES:
+   [1] MAPPING COVERAGE — every registry reservation's business kind maps to a
+       category (unmapped kinds fail loudly, never silently bucketed);
+   [2] SET FIDELITY — with the sublayer on, the built symbol set equals the
+       expectation recomputed here from the same data (reservationsAt(day)
+       footprints on land + the era-gated plaza parcel): same total, same
+       per-category counts — date-aware existence + determinism in one check;
+   [3] PALETTE — every built symbol's category is in the POI_COLORS table.
+   FAILS BEFORE ics13 (no symbols built, expected > 0 at every canonical
+   date); PASSES after. Reports the per-bucket census + the residences-empty
+   honesty flag (no dwelling kind exists in the registry today). ---- */
+registerAudit("labels", "poiSymbols", function(){
+  var day = simDay, bad = [];
+  // [1] mapping coverage over the WHOLE registry (date-independent)
+  var unmapped = [];
+  Object.keys(_poiKindById).forEach(function(id){
+    if(!poiCategory(id)) unmapped.push({ landmarkId:id, kind:_poiKindById[id] });
+  });
+  if(unmapped.length) bad.push({ why:"unmapped registry kinds", list:unmapped.slice(0,6) });
+  // [2] expected set at the sim date (mirrors rebuildLabels' predicate exactly)
+  var expect = { business:0, residence:0, park:0, other:0 }, expectN = 0;
+  if(typeof reservationsAt==="function"){
+    reservationsAt(day).forEach(function(r){
+      if(!r.footprint) return;
+      var cat = poiCategory(r.landmarkId); if(!cat) return;
+      if(terrainHeight(r.footprint.cx, r.footprint.cz) <= 0.3) return;
+      expect[cat]++; expectN++;
+    });
+  }
+  var plazaP = (typeof parcelByName==="function") ? parcelByName("portsmouth-square") : null;
+  if(plazaP && !(plazaP.birth!=null && plazaP.birth>day) && _lblParcelWorldRing(plazaP)){ expect.park++; expectN++; }
+  // built census (sublayer "symbols" in the live label set)
+  var built = { business:0, residence:0, park:0, other:0 }, builtN = 0, paletteBad = [];
+  for(var i=0;i<_lblItems.length;i++){
+    var it = _lblItems[i]; if(it.sublayer!=="symbols") continue;
+    var cat = it.obj.userData.poiCat;
+    if(!POI_COLORS[cat]){ paletteBad.push({ text:it.obj.userData.text, cat:cat }); continue; }   // [3]
+    built[cat]++; builtN++;
+  }
+  if(paletteBad.length) bad.push({ why:"category not in POI_COLORS", list:paletteBad.slice(0,6) });
+  if(LABELS_VIS.symbols){
+    if(builtN !== expectN) bad.push({ why:"built count != expected", built:builtN, expected:expectN });
+    Object.keys(expect).forEach(function(c){
+      if(built[c] !== expect[c]) bad.push({ why:"bucket mismatch: "+c, built:built[c], expected:expect[c] });
+    });
+  }
+  return { pass: bad.length===0, date:simDateISO(dateFromSimDay(simDay)),
+           sublayerOn: !!LABELS_VIS.symbols, expected:expect, built:built,
+           residencesEmpty: expect.residence===0,
+           method:"mapping coverage over the registry + built-vs-recomputed set fidelity (reservationsAt(day) on-land footprints + era-gated plaza) + palette membership",
            bad: bad.slice(0,8) };
 });
 /* ---- 2b. STREET GRAPH — a waypoint graph over the real surveyed street
@@ -15051,7 +15285,7 @@ function updateHud(alt){
      registry (__P1850_LAYER_VIS.labels). Present only when the labels layer is
      assembled in this build. ---- */
   if(typeof __P1850_LAYER_VIS.labels === "function" && typeof labelsSetSublayer === "function"){
-    beginSection("labels","LABELS", { desc:"The labels render-layer's category sublayers as a tri-state family (parent LABELS → LOTS / STREETS / ZONES & LANDMARKS). §11 zoom bands: regions own the high view; streets then lots fade in on descent." });
+    beginSection("labels","LABELS", { desc:"The labels render-layer's category sublayers as a tri-state family (parent LABELS → LOTS / STREETS / ZONES & LANDMARKS / POI SYMBOLS). §11 zoom bands: regions own the high view; streets then lots fade in on descent; POI pins ride the town band." });
     var lblParentVisible = true;                    // the registry parent (LABELS layer present)
     var lblGroupWrap = el("div","wb-ov-group");
     var lblHeadRow = el("div","wb-row wb-ov-parent", null, lblGroupWrap);
@@ -15064,7 +15298,8 @@ function updateHud(alt){
     var LBL_CHILDREN = [
       ["lots",    "LOTS — record lot number + owner (flat ground text, polylabel anchor)"],
       ["streets", "STREETS — era-correct names along the line (small-caps voice)"],
-      ["zones",   "ZONES & LANDMARKS — hills · waterways (blue italic) · plaza · outposts"]
+      ["zones",   "ZONES & LANDMARKS — hills · waterways (blue italic) · plaza · outposts"],
+      ["symbols", "POI SYMBOLS — category pins over named places (blue business · teal residence · green park · grey other)"]
     ];
     var lblChildCbs = {};
     function lblSyncParent(){
