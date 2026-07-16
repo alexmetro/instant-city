@@ -61,10 +61,27 @@
     /* s64 CHROME DE-BOXING: the shared chrome halo — the same 4-way stroke +
        soft glow grammar as the world labels' .wlbl-loc voice (dark ink text
        carried by a light parchment halo), so plate-free chrome text survives
-       ANY background, day or night (QA-GATE #4). */
+       ANY background, day or night (QA-GATE #4).
+       ics14e: --halo-parch is retired from the floating chrome (kept only for
+       parchment-surface glyphs like the inspect panel's ✕); the chrome now
+       speaks the map-label street voice below. */
     --halo-parch:-1px -1px 0 rgba(241,230,201,0.88), 1px -1px 0 rgba(241,230,201,0.88),
       -1px 1px 0 rgba(241,230,201,0.88), 1px 1px 0 rgba(241,230,201,0.88),
       0 0 6px rgba(241,230,201,0.8);
+    /* ics14e HUD LEGIBILITY PASS (operator directive 2026-07-16, extending
+       the ics14d map-label treatment to the screen-edge chrome): every HUD
+       voice that floats over the 3D world = embedded Roboto (the SAME
+       base64 WOFF2 subset labels.js installs via document.fonts — zero
+       duplicated bytes; system fallbacks below cover the ms before it
+       resolves), WHITE ink + the Maps dark-grey CASING rgba(40,44,48,0.94)
+       as a 4-way text-shadow stroke, NO outer glow — the exact street-label
+       discipline. Era chrome styling returns as a later polish pass.
+       Surfaces with their own solid/near-solid background (paper pane,
+       inspect panel, menu sheet) keep plain high-contrast ink instead. */
+    --hud-font:'Roboto','Segoe UI',Arial,sans-serif;
+    --halo-dark:-1px -1px 0 rgba(40,44,48,0.94), 1px -1px 0 rgba(40,44,48,0.94),
+      -1px 1px 0 rgba(40,44,48,0.94), 1px 1px 0 rgba(40,44,48,0.94),
+      0 1px 2px rgba(0,0,0,0.55);
   }
   html,body{
     margin:0; padding:0; overflow:hidden; height:100%; background:#0a0a0a;
@@ -77,19 +94,21 @@
   }
   #hud{
     position:fixed; inset:0; pointer-events:none;
-    font-family:'Fraunces', Georgia, serif;
-    color:var(--ink);
+    font-family:var(--hud-font);
+    color:#ffffff;
     user-select:none;
   }
   /* s64 CHROME DE-BOXING (user directive): the opaque parchment plates are
-     GONE — edge chrome is haloed ink text floating directly on the world,
+     GONE — edge chrome is haloed text floating directly on the world,
      extending the plate-free world-label philosophy to the whole HUD. A
      translucent soft-faded scrim appears only where a block of copy needs
-     one (ticker / hint / scrubber / round buttons below). Parchment lives
-     in chrome as TINTS, never slabs (Earth Palette Law). */
+     one (ticker / scrubber / round buttons below) — ics14e: those scrims
+     are now DARK (they carry white ink, so a parchment tint would fight
+     the casing); parchment lives on in the document surfaces (paper pane /
+     inspect panel / menu sheet). */
   .panel{
     position:absolute;
-    text-shadow:var(--halo-parch);
+    text-shadow:var(--halo-dark);
     padding:0.5em 1em;
   }
   #hud-title{
@@ -97,21 +116,22 @@
     text-align:center; padding:0.4em 1.6em;
   }
   #hud-title h1{
-    margin:0; font-size:1.25rem; font-weight:600; letter-spacing:2px;
-    /* the one permitted ink-rule accent: a hairline under the masthead,
-       with a 1px parchment return so the rule itself reads at night */
-    padding-bottom:3px; border-bottom:1px solid rgba(43,29,14,0.6);
-    box-shadow:0 1px 0 rgba(241,230,201,0.55);
+    margin:0; font-size:1.25rem; font-weight:700; letter-spacing:2px;
+    /* the one permitted rule accent: a hairline under the masthead — white
+       like the ink, with a 1px dark return so the rule reads over pale sand
+       (ics14e: was ink + parchment return) */
+    padding-bottom:3px; border-bottom:1px solid rgba(255,255,255,0.7);
+    box-shadow:0 1px 0 rgba(40,44,48,0.7);
   }
   #hud-title .sub{
-    display:block; font-size:0.62rem; letter-spacing:3px; opacity:0.7; margin-top:2px;
-    font-style:italic;
+    display:block; font-size:0.62rem; letter-spacing:3px; opacity:0.85; margin-top:2px;
+    font-weight:500; /* ics14e: upright 500, not italic — only upright Roboto 500/700 are embedded */
   }
   #hud-altitude{
     /* s69: left 16->72px — clears the 44px ☰ button now at bottom-left 16px */
     bottom:16px; left:72px; font-size:0.85rem; letter-spacing:0.5px; min-width:150px;
   }
-  #hud-altitude .label{ font-size:0.6rem; letter-spacing:2px; opacity:0.65; display:block; }
+  #hud-altitude .label{ font-size:0.6rem; letter-spacing:2px; opacity:0.8; display:block; font-weight:500; }
   #btn-fullscreen{
     float:right; cursor:pointer; font-size:1.05rem; line-height:1; padding:2px 4px;
     opacity:0.6; user-select:none; -webkit-user-select:none;
@@ -231,14 +251,15 @@
   }
   #hud-loading{
     position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
-    background:#101418; color:#e8dcb8; font-family:'Fraunces',Georgia,serif;
+    background:#101418; color:#ffffff; font-family:var(--hud-font); font-weight:500;
     font-size:1rem; letter-spacing:3px; z-index:10;
+    /* solid dark veil = its own background; plain high-contrast text, no casing needed */
   }
   #hud-clock{
     top:16px; right:16px; text-align:right; min-width:190px;
     font-size:0.85rem; letter-spacing:0.5px;
   }
-  #hud-clock .date{ font-weight:600; }
+  #hud-clock .date{ font-weight:700; } /* ics14e: 700 — only 500/700 Roboto weights are embedded */
   #hud-clock .speed{
     display:block; font-size:0.6rem; letter-spacing:2px; opacity:0.7; margin-top:2px;
   }
@@ -248,13 +269,15 @@
     font-size:0.72rem; letter-spacing:0.4px; text-align:center;
     padding:0.45em 1.4em; opacity:0; transition:opacity .6s ease;
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
-    /* s64: no box — haloed text over a horizontal parchment scrim that
-       fades to nothing at both ends */
-    background:linear-gradient(90deg, rgba(241,230,201,0) 0%, rgba(241,230,201,0.32) 14%,
-      rgba(241,230,201,0.32) 86%, rgba(241,230,201,0) 100%);
+    /* s64: no box — haloed text over a horizontal scrim that fades to
+       nothing at both ends. ics14e: the scrim flips DARK — it now carries
+       white street-voice ink, and a parchment tint would sit between the
+       white ink and the dark casing. */
+    background:linear-gradient(90deg, rgba(18,20,24,0) 0%, rgba(18,20,24,0.5) 14%,
+      rgba(18,20,24,0.5) 86%, rgba(18,20,24,0) 100%);
   }
   #hud-ticker.on{ opacity:0.95; }
-  #hud-ticker .tdate{ font-weight:600; letter-spacing:1px; margin-right:0.6em; }
+  #hud-ticker .tdate{ font-weight:700; letter-spacing:1px; margin-right:0.6em; }
   #hud-ticker.clickable{ pointer-events:auto; cursor:pointer; }
 
   /* ---- PHASE 3: THE PAPER ---- */
@@ -262,8 +285,11 @@
     top:78px; right:16px; pointer-events:auto; cursor:pointer;
     font-size:0.66rem; letter-spacing:2px; text-align:right; user-select:none;
   }
-  #paper-toggle .pt-masthead{ display:block; font-family:'Playfair Display',Georgia,serif; font-weight:900; font-size:0.8rem; letter-spacing:1px; }
-  #paper-toggle .pt-hint{ display:block; opacity:0.6; font-size:0.55rem; margin-top:2px; }
+  /* ics14e: the floating masthead toggle takes the HUD street voice (it sits
+     over the world) — the Playfair-900 era masthead lives on INSIDE the
+     paper pane, which has its own parchment body */
+  #paper-toggle .pt-masthead{ display:block; font-weight:700; font-size:0.8rem; letter-spacing:1px; }
+  #paper-toggle .pt-hint{ display:block; opacity:0.8; font-size:0.55rem; margin-top:2px; }
 
   #paper-pane{
     position:fixed; top:0; right:0; bottom:0; width:min(430px,94vw);
@@ -387,9 +413,10 @@
     display:flex; flex-direction:column; align-items:center;
     padding:10px 14px 8px; text-align:center;
     background:linear-gradient(180deg, rgba(20,16,10,0.92), rgba(20,16,10,0.0));
-    color:#e9dcb4; font-family:'Fraunces', Georgia, serif;
-    /* s64: haloed text — items near the scrim's faded foot stay legible */
-    text-shadow:0 1px 2px rgba(0,0,0,0.8), 0 0 6px rgba(0,0,0,0.5);
+    color:#ffffff; font-family:var(--hud-font);
+    /* ics14e: street-voice casing (no glow) — items near the scrim's faded
+       foot stay legible over the world */
+    text-shadow:var(--halo-dark);
     opacity:0; transition:opacity 0.6s ease;
   }
   #horizon-ring.on{ opacity:0.97; }
@@ -405,11 +432,11 @@
   }
   #horizon-ring .hr-item{
     flex:1 1 0; min-width:0; padding:0 16px; max-width:220px; font-size:0.66rem; line-height:1.35;
-    border-left:1px solid rgba(233,220,180,0.3);
+    border-left:1px solid rgba(255,255,255,0.3);
   }
   #horizon-ring .hr-item:first-of-type{ border-left:none; }
   #horizon-ring .hr-headline{ overflow-wrap:anywhere; }
-  #horizon-ring .hr-pos{ display:block; font-weight:600; letter-spacing:1.5px; }
+  #horizon-ring .hr-pos{ display:block; font-weight:700; letter-spacing:1.5px; }
   #horizon-ring .hr-stale{ display:block; font-size:0.56rem; opacity:0.65; letter-spacing:1px; margin:1px 0 3px; }
   #horizon-ring .hr-headline{ opacity:0.9; }
 
@@ -465,28 +492,28 @@
        relying on an opaque plate to paint over it */
     position:fixed; left:50%; bottom:92px; transform:translateX(-50%) translateY(14px);
     max-width:min(640px,88vw); text-align:center; z-index:7;
-    /* s64 de-box: haloed ink text on a translucent scrim that fades to
-       nothing at both ends; hairline ink rules above/below (::before/
-       ::after) replace the border box + ink slab edge */
-    background:linear-gradient(90deg, rgba(241,230,201,0) 0%, rgba(241,230,201,0.55) 12%,
-      rgba(238,226,194,0.55) 88%, rgba(241,230,201,0) 100%);
+    /* s64 de-box kept; ics14e: white street-voice ink over a DARK scrim
+       that fades to nothing at both ends; hairline rules above/below
+       (::before/::after) flip light to read on the dark scrim */
+    background:linear-gradient(90deg, rgba(18,20,24,0) 0%, rgba(18,20,24,0.55) 12%,
+      rgba(18,20,24,0.55) 88%, rgba(18,20,24,0) 100%);
     padding:11px 30px 10px;
-    font-family:'Fraunces',Georgia,serif; color:var(--ink);
-    text-shadow:var(--halo-parch);
+    font-family:var(--hud-font); color:#ffffff;
+    text-shadow:var(--halo-dark);
     opacity:0; transition:opacity .5s ease, transform .5s ease; pointer-events:none;
   }
   #beat-card::before, #beat-card::after{
     content:""; position:absolute; left:0; right:0; height:1px;
-    background:linear-gradient(90deg, rgba(43,29,14,0) 0%, rgba(43,29,14,0.5) 15%,
-      rgba(43,29,14,0.5) 85%, rgba(43,29,14,0) 100%);
+    background:linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.45) 15%,
+      rgba(255,255,255,0.45) 85%, rgba(255,255,255,0) 100%);
   }
   #beat-card::before{ top:0; }
   #beat-card::after{ bottom:0; }
   #beat-card.on{ opacity:0.97; transform:translateX(-50%) translateY(0); pointer-events:auto; }
-  #beat-card .bc-class{ display:block; font-size:0.56rem; letter-spacing:3.5px; opacity:0.7; }
-  #beat-card .bc-quote{ display:block; font-size:0.95rem; font-weight:600; line-height:1.35; margin:3px 0 2px; }
-  #beat-card .bc-date{ display:inline-block; font-size:0.6rem; letter-spacing:2px; opacity:0.75; margin-right:1.1em; }
-  #beat-card a{ font-size:0.6rem; color:var(--ink); letter-spacing:0.8px; }
+  #beat-card .bc-class{ display:block; font-size:0.56rem; letter-spacing:3.5px; opacity:0.8; }
+  #beat-card .bc-quote{ display:block; font-size:0.95rem; font-weight:700; line-height:1.35; margin:3px 0 2px; }
+  #beat-card .bc-date{ display:inline-block; font-size:0.6rem; letter-spacing:2px; opacity:0.8; margin-right:1.1em; }
+  #beat-card a{ font-size:0.6rem; color:rgba(255,255,255,0.92); letter-spacing:0.8px; }
 
   /* ---- THE SCRUBBER — bottom timeline ribbon, above the ticker.
      jul 1846 -> dec 1849, drag/click to jump, diamond notches at the
@@ -503,59 +530,65 @@
     pointer-events:none;
     padding:7px 18px 10px; user-select:none;
     transition:opacity .3s ease, transform .3s ease;
+    /* ics14e: the ribbon takes the HUD street voice — white ink/marks on a
+       dark scrim (was ink marks on a parchment scrim) */
+    font-family:var(--hud-font); color:#ffffff;
   }
   #hud-scrubber .scr-tab, #hud-scrubber .scr-track{
     pointer-events:auto; touch-action:none;
     -webkit-user-select:none; user-select:none; -webkit-touch-callout:none;
   }
   #hud-scrubber.collapsed .scr-body{ display:none; }
-  /* s64: the ribbon plate becomes a faint parchment scrim, soft-faded on
-     every edge — track/ticks/notches read as ink drawn on the world.
+  /* s64 scrim kept; ics14e: it flips DARK, soft-faded on every edge —
+     track/ticks/notches now read as WHITE marks drawn on the world (the
+     street-voice polarity; a white mark on a parchment scrim would vanish).
      Negative margins push the scrim out over the container's padding. */
   #hud-scrubber .scr-body{
     margin:-7px -18px -10px; padding:7px 18px 10px;
-    background:radial-gradient(102% 170% at 50% 58%, rgba(241,230,201,0.32) 52%, rgba(241,230,201,0) 96%);
+    background:radial-gradient(102% 170% at 50% 58%, rgba(18,20,24,0.5) 52%, rgba(18,20,24,0) 96%);
   }
   #hud-scrubber .scr-tab{
     position:absolute; left:50%; top:-13px; transform:translateX(-50%);
-    background:radial-gradient(120% 160% at 50% 60%, rgba(241,230,201,0.38) 30%, rgba(241,230,201,0) 88%);
+    background:radial-gradient(120% 160% at 50% 60%, rgba(18,20,24,0.55) 30%, rgba(18,20,24,0) 88%);
     font-size:0.6rem; letter-spacing:2px; padding:2px 10px 1px; cursor:pointer; opacity:0.85;
+    text-shadow:var(--halo-dark);
   }
   #hud-scrubber .scr-tab:hover{ opacity:1; }
-  #hud-scrubber .scr-years{ position:relative; height:12px; font-size:0.56rem; letter-spacing:1px; opacity:0.75; }
+  #hud-scrubber .scr-years{ position:relative; height:12px; font-size:0.56rem; letter-spacing:1px; opacity:0.9; text-shadow:var(--halo-dark); }
   #hud-scrubber .scr-year{ position:absolute; transform:translateX(-50%); white-space:nowrap; }
   #hud-scrubber .scr-track{
     position:relative; height:20px; margin-top:2px;
-    border-top:1px solid rgba(43,29,14,0.5); cursor:pointer;
+    border-top:1px solid rgba(255,255,255,0.6); cursor:pointer;
   }
-  #hud-scrubber .scr-tick{ position:absolute; top:0; width:1px; height:5px; background:rgba(43,29,14,0.35); }
-  #hud-scrubber .scr-tick.year{ height:9px; background:rgba(43,29,14,0.65); }
+  #hud-scrubber .scr-tick{ position:absolute; top:0; width:1px; height:5px; background:rgba(255,255,255,0.4); }
+  #hud-scrubber .scr-tick.year{ height:9px; background:rgba(255,255,255,0.7); }
   #hud-scrubber .scr-notch{
     position:absolute; top:2px; width:7px; height:7px; transform:translateX(-50%) rotate(45deg);
-    background:var(--ink); opacity:0.75; cursor:pointer;
-    box-shadow:0 0 0 1px rgba(241,230,201,0.55); /* s64: parchment keyline — the ink diamond survives night ground */
+    background:#ffffff; opacity:0.85; cursor:pointer;
+    box-shadow:0 0 0 1px rgba(40,44,48,0.8); /* ics14e: dark casing keyline — the white diamond survives pale sand */
   }
-  #hud-scrubber .scr-notch:hover{ opacity:1; box-shadow:0 0 0 3px rgba(43,29,14,0.18); }
+  #hud-scrubber .scr-notch:hover{ opacity:1; box-shadow:0 0 0 3px rgba(255,255,255,0.3); }
   #hud-scrubber .scr-handle{
-    position:absolute; top:-4px; width:3px; height:24px; background:var(--ink);
+    position:absolute; top:-4px; width:3px; height:24px; background:#ffffff;
     transform:translateX(-50%); cursor:ew-resize;
-    box-shadow:0 0 0 1px rgba(241,230,201,0.6), 0 0 0 5px rgba(241,230,201,0.01); /* s64: parchment keyline for night */
+    box-shadow:0 0 0 1px rgba(40,44,48,0.8); /* ics14e: dark casing keyline for daytime sand */
   }
   #hud-scrubber .scr-handle::before{
     content:""; position:absolute; left:50%; top:-4px; transform:translateX(-50%);
-    width:9px; height:9px; border-radius:50%; background:var(--ink);
+    width:9px; height:9px; border-radius:50%; background:#ffffff;
+    box-shadow:0 0 0 1px rgba(40,44,48,0.8);
   }
   #hud-scrubber .scr-chip{
     position:absolute; bottom:100%; margin-bottom:6px; left:50%; transform:translateX(-50%);
-    background:rgba(20,16,10,0.82); color:#e9dcb4; font-size:0.62rem; letter-spacing:0.8px;
+    background:rgba(20,16,10,0.82); color:#ffffff; font-size:0.62rem; letter-spacing:0.8px;
     padding:4px 10px; white-space:nowrap; pointer-events:none; opacity:0; transition:opacity .12s ease;
     /* s64: border rectangle gone — the dark scrim's own color bleeds outward
-       as a soft edge; light text needs no parchment halo here */
+       as a soft edge; light text needs no casing halo here */
     border-radius:2px; box-shadow:0 0 10px 5px rgba(20,16,10,0.82);
     text-shadow:none;
   }
   #hud-scrubber .scr-chip.on{ opacity:0.97; }
-  #hud-scrubber .scr-chip .sc-head{ display:block; font-weight:600; font-size:0.66rem; margin-top:1px; }
+  #hud-scrubber .scr-chip .sc-head{ display:block; font-weight:700; font-size:0.66rem; margin-top:1px; }
   #seed-reshuffle{ pointer-events:auto; cursor:pointer; margin-left:0.5em; opacity:0.75; }
   #seed-reshuffle:hover{ opacity:1; }
 
@@ -596,16 +629,18 @@
     display:flex; bottom:16px; left:16px; pointer-events:auto; cursor:pointer;
     width:44px; height:44px; border-radius:50%; align-items:center; justify-content:center;
     font-size:1.15rem; padding:0; z-index:13; /* s54: >=44px thumb target */
-    background:radial-gradient(circle at 50% 50%, rgba(241,230,201,0.5) 48%, rgba(241,230,201,0) 72%); /* s64 soft round tint */
+    background:radial-gradient(circle at 50% 50%, rgba(18,20,24,0.55) 48%, rgba(18,20,24,0) 72%); /* ics14e: soft dark tint under the white glyph (was parchment under ink) */
   }
   #hud-menu-sheet{
     display:none; position:fixed; bottom:64px; left:16px; width:248px; z-index:13; /* s69: 210->248px — the two-column controls reference needs the room */
     /* s64: translucent, soft-faded top/bottom edges, hairline row rules kept */
-    background:linear-gradient(180deg, rgba(241,230,201,0.2) 0, rgba(241,230,201,0.82) 9px,
-      rgba(236,223,190,0.82) calc(100% - 9px), rgba(236,223,190,0.2) 100%);
-    box-shadow:0 2px 16px rgba(0,0,0,0.22); font-family:'Fraunces',Georgia,serif;
+    background:linear-gradient(180deg, rgba(241,230,201,0.2) 0, rgba(241,230,201,0.9) 9px,
+      rgba(236,223,190,0.9) calc(100% - 9px), rgba(236,223,190,0.2) 100%);
+    box-shadow:0 2px 16px rgba(0,0,0,0.22); font-family:var(--hud-font);
     color:var(--ink); pointer-events:auto;
-    text-shadow:var(--halo-parch);
+    /* ics14e: the sheet is a near-solid parchment surface — plain
+       high-contrast ink, no halo needed (per the panel rule); body
+       opacity 0.82→0.9 so the dark ink never fights world detail */
     max-height:calc(100vh - 84px); overflow-y:auto; /* s54: the grown row list must scroll, not overflow, in landscape */
     overscroll-behavior:contain;
   }
@@ -670,12 +705,12 @@
   #speed-pill{
     display:flex; justify-content:center; margin:2px auto 0;
     width:max-content; max-width:100%; pointer-events:auto; cursor:pointer;
-    /* s64 de-box: haloed ink text over a parchment scrim fading at both
-       ends; segment separators stay as hairlines */
-    background:linear-gradient(90deg, rgba(241,230,201,0) 0%, rgba(241,230,201,0.4) 9%,
-      rgba(241,230,201,0.4) 91%, rgba(241,230,201,0) 100%);
-    font-family:'Fraunces',Georgia,serif; color:var(--ink);
-    text-shadow:var(--halo-parch);
+    /* s64 de-box kept; ics14e: white street-voice ink over a DARK scrim
+       fading at both ends; segment separators stay as hairlines */
+    background:linear-gradient(90deg, rgba(18,20,24,0) 0%, rgba(18,20,24,0.5) 9%,
+      rgba(18,20,24,0.5) 91%, rgba(18,20,24,0) 100%);
+    font-family:var(--hud-font); color:#ffffff;
+    text-shadow:var(--halo-dark);
     user-select:none; -webkit-user-select:none; -webkit-touch-callout:none;
     transition:opacity .5s ease;
   }
@@ -683,12 +718,12 @@
     min-width:40px; min-height:32px; box-sizing:border-box; padding:0 8px;
     display:flex; align-items:center; justify-content:center;
     font-size:0.6rem; letter-spacing:1.2px; font-variant:small-caps;
-    border-left:1px solid rgba(43,29,14,0.25);
+    border-left:1px solid rgba(255,255,255,0.3);
   }
   #speed-pill .sp-seg:first-child{ border-left:none; }
-  #speed-pill .sp-seg:hover{ background:rgba(43,29,14,0.08); } /* fine-pointer affordance */
-  /* s64: active tier reads as ink WEIGHT — bold glyph + a 3px ink underbar — not a solid fill */
-  #speed-pill .sp-seg.active{ font-weight:700; box-shadow:inset 0 -3px 0 rgba(43,29,14,0.9); }
+  #speed-pill .sp-seg:hover{ background:rgba(255,255,255,0.12); } /* fine-pointer affordance */
+  /* s64: active tier reads as ink WEIGHT — bold glyph + a 3px underbar — not a solid fill */
+  #speed-pill .sp-seg.active{ font-weight:700; box-shadow:inset 0 -3px 0 rgba(255,255,255,0.92); }
   /* the transport is the single speed indicator everywhere now — the HUD
      clock's redundant speed line is hidden on every viewport (s66 decision) */
   #hud-clock .speed{ display:none; }
