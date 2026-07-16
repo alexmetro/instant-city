@@ -11166,6 +11166,23 @@ var LBL_STREET_CASE   = "rgba(40,44,48,0.94)";     // Maps dark-grey casing (#28
    end of the land host family (the glow used to carry that edge). */
 var LBL_DISTRICT_INK  = "#453f35";                 // dark warm-grey ink (engraved-plate read on tan land)
 var LBL_DISTRICT_CASE = "rgba(250,247,236,0.96)";  // light casing (opposite polarity; ics14b 0.90→0.96, no-glow contrast)
+/* ics14c LANDMARK/BUSINESS + LOT INK (operator: parchment-gold business names
+   unreadable over sand + grey placeholder roofs). Same polarity family as the
+   districts — these voices are hosted on LIGHT surfaces (sand/dirt ground AND
+   the placeholder roof greys), so dark ink + light casing — but the ink is
+   MEASURED one step darker than the district #453f35: glance voices must
+   clear raw ink-vs-host ≥3.0 (audit GLANCE rule) and #453f35 measures 2.69
+   on rocky, while WHITE street ink measures 1.83 on the light civic roof
+   tint 0xb7c1c7 — neither existing pairing serves this host set. #332e26
+   warm sepia-black clears ≥3.48 on every land AND roof background
+   (0xb7c1c7 / 0x9ea19c / 0x868984). Ink + casing only (ics14b no-glow law).
+   CASING WIDTH (screened, first ics14c pass): at glance sizes a halo:5 light
+   casing is as wide as the Georgia stems — the label rasters as a light-
+   rimmed emboss and the dark ink loses the mass. The name voices carry a
+   THIN casing (halo 3; lot numerals keep 4 — chunky bold digits screened
+   crisp) so the measured ink dominates the glyph; the casing's job here is
+   only to separate the dark ink on the rare dark-ground overhang. */
+var LBL_LANDMARK_INK  = "#332e26";                 // measured glance ink — civic/landmark names + both lot voices
 var LBL_STREET_BOLD_PX = 44;   // on-screen CSS px (apparent size, NOT device px): at/above → Roboto 700, below → 500. ~44px ⇒ bold kicks in under ~220 m altitude (plaza framings), town/overview stay Medium.
 function _lblStreetStyle(setKey){
   return { key:setKey+".street", family:LBL_STREET_FAMILY, weight:"500", weightNear:"700", weightNearPx:LBL_STREET_BOLD_PX,
@@ -11185,10 +11202,10 @@ var LBL_STYLE_SETS = {
     hill:    { key:"a.hill",    family:"Georgia, 'Times New Roman', serif", weight:"600", color:LBL_DISTRICT_INK, haloColor:LBL_DISTRICT_CASE, glow:false, halo:5, letterSpacing:0.30, smallCaps:true,  italic:false },
     water:   { key:"a.water",   family:"Georgia, 'Times New Roman', serif", weight:"600", color:"#9fc6dd", haloColor:LBL_HALO_DARK, halo:5, letterSpacing:0.18, smallCaps:false, italic:true  },
     place:   { key:"a.place",   family:"Georgia, 'Times New Roman', serif", weight:"600", color:LBL_DISTRICT_INK, haloColor:LBL_DISTRICT_CASE, glow:false, halo:5, letterSpacing:0.26, smallCaps:true,  italic:false },
-    civic:   { key:"a.civic",   family:"Georgia, 'Times New Roman', serif", weight:"700", color:"#f0d79a", haloColor:LBL_HALO_DARK, glow:false, halo:5, letterSpacing:0.24, smallCaps:true,  italic:false, wrap:8 },
+    civic:   { key:"a.civic",   family:"Georgia, 'Times New Roman', serif", weight:"700", color:LBL_LANDMARK_INK, haloColor:LBL_DISTRICT_CASE, glow:false, halo:3, letterSpacing:0.24, smallCaps:true,  italic:false, wrap:8 },
     street:  _lblStreetStyle("a"),
-    lotNum:  { key:"a.lotNum",  family:"Georgia, 'Times New Roman', serif", weight:"700", color:"#f4efe4", haloColor:LBL_HALO_DARK, halo:4, letterSpacing:0.02, smallCaps:false, italic:false },
-    lotOwn:  { key:"a.lotOwn",  family:"Georgia, 'Times New Roman', serif", weight:"500", color:"#dcd3c0", haloColor:LBL_HALO_DARK, halo:3, letterSpacing:0.04, smallCaps:false, italic:true, wrap:8  }
+    lotNum:  { key:"a.lotNum",  family:"Georgia, 'Times New Roman', serif", weight:"700", color:LBL_LANDMARK_INK, haloColor:LBL_DISTRICT_CASE, glow:false, halo:4, letterSpacing:0.02, smallCaps:false, italic:false },
+    lotOwn:  { key:"a.lotOwn",  family:"Georgia, 'Times New Roman', serif", weight:"500", color:LBL_LANDMARK_INK, haloColor:LBL_DISTRICT_CASE, glow:false, halo:3, letterSpacing:0.04, smallCaps:false, italic:true, wrap:8  }
   },
   b: {
     /* ics14 host-surface polarity applied here too (district ink law is
@@ -11197,20 +11214,20 @@ var LBL_STYLE_SETS = {
     hill:    { key:"b.hill",    family:"'Palatino Linotype','Book Antiqua',Palatino,'Times New Roman',serif", weight:"600", color:LBL_DISTRICT_INK, haloColor:LBL_DISTRICT_CASE, glow:false, halo:5, letterSpacing:0.36, smallCaps:true,  italic:false },
     water:   { key:"b.water",   family:"'Palatino Linotype','Book Antiqua',Palatino,'Times New Roman',serif", weight:"500", color:"#9fc6dd", haloColor:LBL_HALO_DARK, halo:5, letterSpacing:0.20, smallCaps:false, italic:true  },
     place:   { key:"b.place",   family:"'Palatino Linotype','Book Antiqua',Palatino,'Times New Roman',serif", weight:"600", color:LBL_DISTRICT_INK, haloColor:LBL_DISTRICT_CASE, glow:false, halo:5, letterSpacing:0.32, smallCaps:true,  italic:false },
-    civic:   { key:"b.civic",   family:"'Palatino Linotype','Book Antiqua',Palatino,'Times New Roman',serif", weight:"700", color:"#f0d79a", haloColor:LBL_HALO_DARK, glow:false, halo:5, letterSpacing:0.30, smallCaps:true,  italic:false, wrap:8 },
+    civic:   { key:"b.civic",   family:"'Palatino Linotype','Book Antiqua',Palatino,'Times New Roman',serif", weight:"700", color:LBL_LANDMARK_INK, haloColor:LBL_DISTRICT_CASE, glow:false, halo:3, letterSpacing:0.30, smallCaps:true,  italic:false, wrap:8 },
     street:  _lblStreetStyle("b"),   // ics14: the operator's Maps street voice overrides the era voice in every set
-    lotNum:  { key:"b.lotNum",  family:"'Palatino Linotype','Book Antiqua',Palatino,'Times New Roman',serif", weight:"700", color:"#f4efe4", haloColor:LBL_HALO_DARK, halo:4, letterSpacing:0.02, smallCaps:false, italic:false },
-    lotOwn:  { key:"b.lotOwn",  family:"'Palatino Linotype','Book Antiqua',Palatino,'Times New Roman',serif", weight:"500", color:"#dcd3c0", haloColor:LBL_HALO_DARK, halo:3, letterSpacing:0.04, smallCaps:false, italic:true, wrap:8  }
+    lotNum:  { key:"b.lotNum",  family:"'Palatino Linotype','Book Antiqua',Palatino,'Times New Roman',serif", weight:"700", color:LBL_LANDMARK_INK, haloColor:LBL_DISTRICT_CASE, glow:false, halo:4, letterSpacing:0.02, smallCaps:false, italic:false },
+    lotOwn:  { key:"b.lotOwn",  family:"'Palatino Linotype','Book Antiqua',Palatino,'Times New Roman',serif", weight:"500", color:LBL_LANDMARK_INK, haloColor:LBL_DISTRICT_CASE, glow:false, halo:3, letterSpacing:0.04, smallCaps:false, italic:true, wrap:8  }
   },
   c: {
     region:  { key:"c.region",  family:"Didot,'Bodoni MT','Times New Roman',serif", weight:"500", color:LBL_DISTRICT_INK, haloColor:LBL_DISTRICT_CASE, glow:false, halo:5, letterSpacing:0.20, smallCaps:true,  italic:false },
     hill:    { key:"c.hill",    family:"Didot,'Bodoni MT','Times New Roman',serif", weight:"500", color:LBL_DISTRICT_INK, haloColor:LBL_DISTRICT_CASE, glow:false, halo:5, letterSpacing:0.18, smallCaps:true,  italic:false },
     water:   { key:"c.water",   family:"Didot,'Bodoni MT','Times New Roman',serif", weight:"400", color:"#a9d0e6", haloColor:LBL_HALO_DARK, halo:5, letterSpacing:0.10, smallCaps:false, italic:true  },
     place:   { key:"c.place",   family:"Didot,'Bodoni MT','Times New Roman',serif", weight:"500", color:LBL_DISTRICT_INK, haloColor:LBL_DISTRICT_CASE, glow:false, halo:5, letterSpacing:0.16, smallCaps:true,  italic:false },
-    civic:   { key:"c.civic",   family:"Didot,'Bodoni MT','Times New Roman',serif", weight:"600", color:"#f6dda0", haloColor:LBL_HALO_DARK, glow:false, halo:5, letterSpacing:0.14, smallCaps:true,  italic:false, wrap:8 },
+    civic:   { key:"c.civic",   family:"Didot,'Bodoni MT','Times New Roman',serif", weight:"600", color:LBL_LANDMARK_INK, haloColor:LBL_DISTRICT_CASE, glow:false, halo:3, letterSpacing:0.14, smallCaps:true,  italic:false, wrap:8 },
     street:  _lblStreetStyle("c"),   // ics14: the operator's Maps street voice overrides the era voice in every set
-    lotNum:  { key:"c.lotNum",  family:"Didot,'Bodoni MT','Times New Roman',serif", weight:"600", color:"#f8f3ea", haloColor:LBL_HALO_DARK, halo:4, letterSpacing:0.02, smallCaps:false, italic:false },
-    lotOwn:  { key:"c.lotOwn",  family:"Didot,'Bodoni MT','Times New Roman',serif", weight:"400", color:"#e0d7c4", haloColor:LBL_HALO_DARK, halo:3, letterSpacing:0.03, smallCaps:false, italic:true, wrap:8  }
+    lotNum:  { key:"c.lotNum",  family:"Didot,'Bodoni MT','Times New Roman',serif", weight:"600", color:LBL_LANDMARK_INK, haloColor:LBL_DISTRICT_CASE, glow:false, halo:4, letterSpacing:0.02, smallCaps:false, italic:false },
+    lotOwn:  { key:"c.lotOwn",  family:"Didot,'Bodoni MT','Times New Roman',serif", weight:"400", color:LBL_LANDMARK_INK, haloColor:LBL_DISTRICT_CASE, glow:false, halo:3, letterSpacing:0.03, smallCaps:false, italic:true, wrap:8  }
   }
 };
 /* THE ONE KNOB. 'a' = current shipped look (default; unchanged this sprint).
@@ -11410,8 +11427,9 @@ function labelTexture(text, style, band, weight){
     }
   };
   // ics14b: glow:false voices (street/districts/civic — operator, oblique-angle
-  // fog finding) skip pass [1] entirely: ink + casing only, the Maps treatment.
-  // Voices still carrying the s92 dual halo (water/lot) keep the light glow.
+  // fog finding; ics14c adds both lot voices) skip pass [1] entirely: ink +
+  // casing only, the Maps treatment. The one voice still carrying the s92
+  // dual halo (water) keeps the light glow.
   if(!noGlow) drawPass("stroke", style.glowColor || LBL_HALO_LIGHT, glowW*2, style.halo*0.9);   // [1] outer glow (soft)
   drawPass("stroke", style.haloColor, style.halo*2, 0);          // [2] inner ring / casing (opposite polarity of the ink)
   drawPass("fill", style.color, 0, 0);                           // [3] ink
@@ -12458,8 +12476,25 @@ registerAudit("labels", "anchorsInside", function(){
    silhouette edge; on backgrounds MATCHING the casing (where the casing
    melts in) the visible boundary is the INK itself against the ground, and
    its direct contrast carries the read (white-on-dark road: exactly Maps'
-   satellite-mode streets). Voices still carrying the dual halo (water/lot)
-   keep the s92 two-ring formula unchanged. */
+   satellite-mode streets). The one voice still carrying the dual halo
+   (water) keeps the s92 two-ring formula unchanged.
+   ICS-14c — GLANCE-INK GATE + ROOF GREYS (operator screenshots: gold
+   business names unreadable over sand + grey placeholder roofs — yet the
+   audit PASSED them at 4.3, because ringSep's max() lets a strong casing
+   hide an ink body with no direct contrast of its own; the acceptance law
+   is read-at-a-GLANCE, and at glance sizes the ink body is the label).
+   Strengthened to measure that property: [1] the ROOF GREY family joins the
+   background palette (placeholder body 0x9ea19c — the operator's sampled
+   grey — flat cap 0x868984, civic tint 0xb7c1c7): landmark/business + lot
+   text sits OVER buildings, so roofs are those voices' host too; [2] HOST_FAM
+   values are now SETS (civic/lotNum/lotOwn host = land + roof); [3] GLANCE
+   voices (street, civic, lotNum, lotOwn — the small read-at-a-glance names)
+   take inkVsBg as a MIN component on their HOST backgrounds (not max):
+   score = min(ringSep, inkVsCasing, inkVsHost). Districts/regions/hills
+   render large + letter-spaced at altitude (silhouette-read, not glance-
+   read) and keep the ics14b model; water keeps the dual halo. FAILS BEFORE
+   (gold civic ink vs the light roof tint = 1.30); PASSES after (#332e26
+   landmark ink ≥3.48 on every host background). */
 function _lblSrgbToLin(c){ c/=255; return c<=0.03928 ? c/12.92 : Math.pow((c+0.055)/1.055, 2.4); }
 function _lblRelLum(rgb){ return 0.2126*_lblSrgbToLin(rgb[0]) + 0.7152*_lblSrgbToLin(rgb[1]) + 0.0722*_lblSrgbToLin(rgb[2]); }
 function _lblContrast(a,b){ var la=_lblRelLum(a), lb=_lblRelLum(b), hi=Math.max(la,lb), lo=Math.min(la,lb); return (hi+0.05)/(lo+0.05); }
@@ -12480,6 +12515,9 @@ registerAudit("labels", "contrast", function(){
     { name:"scrubDry",   fam:"land",  rgb:_lblHex(0x8c8a52) },
     { name:"rocky",      fam:"land",  rgb:_lblHex(0x977e55) },
     { name:"grassGreen", fam:"land",  rgb:_lblHex(0x6f8b4e) },  // ics14: green hill grass (district host)
+    { name:"roofLight",  fam:"roof",  rgb:_lblHex(0xb7c1c7) },  // ics14c: lightest placeholder tint (LM_TINT.civic)
+    { name:"roofBody",   fam:"roof",  rgb:_lblHex(0x9ea19c) },  // ics14c: placeholder body grey (the operator's sample)
+    { name:"roofCap",    fam:"roof",  rgb:_lblHex(0x868984) },  // ics14c: flat roof cap (LM_PLACEHOLDER.roof)
     { name:"plank",      fam:"road",  rgb:_lblHex(0x9c8560) },  // planked deck (street names cross wharves)
     { name:"road",       fam:"road",  rgb:_lblHex(0x6b5838) },  // road-paint band — the STREET-label host
     { name:"ghost",      fam:"road",  rgb:_lblHex(0x5c4e33) },  // surveyor ghost line
@@ -12487,36 +12525,45 @@ registerAudit("labels", "contrast", function(){
     { name:"waterLo",    fam:"water", rgb:_lblHex(0x8fc2c9) },  // bright shallow (cove label)
     { name:"waterHi",    fam:"water", rgb:_lblHex(0x2a5570) }
   ];
-  // ics14 — the surface family each voice is HOSTED on (operator's polarity
+  // ics14 — the surface families each voice is HOSTED on (operator's polarity
   // rule: ink is chosen per host surface; these are our known constants).
-  var HOST_FAM = { street:"road", region:"land", hill:"land", place:"land",
-                   civic:"land", lotNum:"land", lotOwn:"land", water:"water" };
-  var DETAIL_TABLE = { street:1, place:1 };   // the operator-decided voices report full per-bg tables
+  // ics14c: values are SETS — civic/landmark + lot text sits over sand ground
+  // AND the grey placeholder roofs (buildings occupy the named lots).
+  var HOST_FAM = { street:["road"], region:["land"], hill:["land"], place:["land"],
+                   civic:["land","roof"], lotNum:["land","roof"], lotOwn:["land","roof"], water:["water"] };
+  // ics14c GLANCE voices: small read-at-a-glance names whose INK BODY must
+  // itself clear the host surface (min component, not max — see doc above).
+  var GLANCE_INK = { street:1, civic:1, lotNum:1, lotOwn:1 };
+  var DETAIL_TABLE = { street:1, place:1, civic:1 };   // the operator-decided voices report full per-bg tables
   var GATE = 3.0, styles = [], worst = { style:null, bg:null, ratio:1e9 };
   Object.keys(LBL_STYLE).forEach(function(key){
     var st = LBL_STYLE[key], glyph = _lblParseCss(st.color);
-    // ics14: measure the style's OWN rings (street/districts/civic = ink +
-    // casing ONLY, no glow — ics14b; water/lot = the classic dark ring +
+    // ics14: measure the style's OWN rings (street/districts/civic/lots = ink
+    // + casing ONLY, no glow — ics14b/c; water = the classic dark ring +
     // light glow dual halo).
     var noGlow = st.glow === false;
     var inner = _lblParseCssA(st.haloColor), outer = noGlow ? null : _lblParseCssA(st.glowColor || LBL_HALO_LIGHT);
-    var hostFam = HOST_FAM[key] || null;
+    var hostFams = HOST_FAM[key] || null;
     var sMin = 1e9, sBg = null, hMin = 1e9, hBg = null, perBg = [];
     BG.forEach(function(b){
       var eInner = _lblComposite(inner.rgb, inner.a, b.rgb);
+      var inkVsBg = _lblContrast(glyph, b.rgb);
       // ics14b no-glow: no outer ring exists — where the casing melts into the
       // bg, the INK's own edge against the ground is the visible boundary.
-      var outerSep = noGlow ? _lblContrast(glyph, b.rgb)
+      var outerSep = noGlow ? inkVsBg
                             : _lblContrast(_lblComposite(outer.rgb, outer.a, b.rgb), b.rgb);
       var ringSep = Math.max(_lblContrast(eInner, b.rgb), outerSep);
       var glyphVsInner = _lblContrast(glyph, eInner);
       var here = Math.min(ringSep, glyphVsInner);
-      var isHost = hostFam !== null && b.fam === hostFam;
-      if(DETAIL_TABLE[key]) perBg.push({ bg:b.name, host:isHost, ringSep:+ringSep.toFixed(2), inkVsCasing:+glyphVsInner.toFixed(2), score:+here.toFixed(2) });
+      var isHost = hostFams !== null && hostFams.indexOf(b.fam) >= 0;
+      // ics14c GLANCE-INK GATE: on its HOST surfaces a glance voice's ink body
+      // must directly clear the ground (a casing cannot carry an invisible ink).
+      if(isHost && GLANCE_INK[key]) here = Math.min(here, inkVsBg);
+      if(DETAIL_TABLE[key]) perBg.push({ bg:b.name, host:isHost, ringSep:+ringSep.toFixed(2), inkVsCasing:+glyphVsInner.toFixed(2), inkVsBg:+inkVsBg.toFixed(2), score:+here.toFixed(2) });
       if(here < sMin){ sMin = here; sBg = b.name; }
       if(isHost && here < hMin){ hMin = here; hBg = b.name; }
     });
-    var row = { style:key, minRatio:+sMin.toFixed(2), worstBg:sBg, hostFam:hostFam,
+    var row = { style:key, minRatio:+sMin.toFixed(2), worstBg:sBg, hostFam:hostFams,
                 hostMin:(hMin<1e9 ? +hMin.toFixed(2) : null), hostWorstBg:hBg };
     if(DETAIL_TABLE[key]) row.perBg = perBg;
     styles.push(row);
@@ -12526,7 +12573,7 @@ registerAudit("labels", "contrast", function(){
   // the host-family worst case (the operator's per-host pairing must clear).
   var bad = styles.filter(function(s){ return s.minRatio < GATE || (s.hostMin !== null && s.hostMin < GATE); });
   return { pass: bad.length===0, gate:GATE,
-           method:"per-style WCAG min over earth palette + per-host-family gate; glow:false voices (street/districts/civic) = ink+casing only, sep=max(casingVsBg, inkVsBg); dual-halo voices (water/lot) = inner casing + light glow; street Bold shares Medium colors (one measurement, both weights)",
+           method:"per-style WCAG min over earth palette (ics14c: + roof greys) + per-host-family gate; glow:false voices = ink+casing only, sep=max(casingVsBg, inkVsBg); GLANCE voices (street/civic/lotNum/lotOwn) additionally take inkVsHost as a MIN on host backgrounds; water keeps the dual halo; street Bold shares Medium colors (one measurement, both weights)",
            minContrastRatio: worst.ratio, worstCase: worst, styles: styles, bad: bad };
 });
 
