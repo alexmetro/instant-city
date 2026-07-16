@@ -8586,19 +8586,291 @@ function lmStartDay(rec){
   if(csIso){ var d = eventDateToSimDay(csIso); if(isFinite(d) && d <= rec.built) return d; }
   return rec.built - lmLeadDays(rec);
 }
-/* the state + continuous height fraction at `day`. Pure function of the record +
-   day (zero dice) — the determinism / monotonic guarantees rest here. */
-function lmStateAt(rec, day){
-  var startDay = lmStartDay(rec), lead = rec.built - startDay;
-  var out = { state: 0, hFrac: 0, arc: 0, active: false, startDay: startDay, lead: lead };
-  if(rec.burned != null && day >= rec.burned) return out;      // burned -> absent (C0) from that day
-  if(day < startDay) return out;                                // before ground is broken -> absent
-  var arc = lead > 0 ? clamp((day - startDay) / lead, 0, 1) : 1;
-  if(day >= rec.built) arc = 1;                                 // completed: hold C4 until burned
-  var state = arc < 0.15 ? 1 : (arc < 0.5 ? 2 : (arc < 0.85 ? 3 : 4));
-  var hFrac = state === 1 ? 0 : (state === 2 ? 0.45 : (state === 3 ? 0.8 : 1.0));
-  out.state = state; out.hFrac = hFrac; out.arc = arc; out.active = true;
+
+/* =====================================================================
+   s108 — THE BUILDING LIFECYCLE STATE MACHINE (building-lifecycle-spec.md).
+   A building is not an object with a build date and a burn date — it is a
+   DATED TIMELINE (spec §1). The C0->C4 construction machine above is the
+   FIRST CHAPTER; this section generalizes it to the full lifecycle:
+
+     construct C0->C4 -> complete (fresh-wood sheen aging, §2a)
+       -> expand (annex growing) -> complete (new form)
+       -> burn (~1 day, SHARP) -> RUINS (persistent STATE — the ruins gate,
+          spec §2b: no construction on a lot in ruins) -> clearing -> cleared
+          -> rebuild C0->C4 (only after cleared) | gone
+       -> teardown (controlled deconstruct, the density/replacement path)
+          -> cleared -> rebuild | gone
+
+   TRIGGERS (spec §4): LANDMARKS carry AUTHORED arcs (LM_LIFECYCLE_ARCS below
+   + built/burned back-compat from the registry); FILL carries a SIMULATED
+   lifecycle (spec §4b) generated from pure seeded hashes of the building
+   identity — zero dice at query time, rewind-exact. WORLD EVENTS (spec §4/D1)
+   apply spatially: the Dec 24 1849 Great Fire is an authored perimeter that
+   burns EVERY building it covers (landmark AND fill) — a fill building burns
+   because it stood in the fire, never because a die said so.
+
+   The single query is buildingStateAt(spans, day) — a pure function returning
+   { phase, state(C0..C4), hFrac, constructT, agingT, transition, form }
+   (spec §6). The renderer maps each phase to a DISTINCT placeholder visual
+   (the operator's key steer: states readable at a glance in crude blocks —
+   see the LC legend at lmBuildMesh). ===================================== */
+
+/* ---- lifecycle durations (fill:true tunables; spec §3: gradual<->sharp is
+   ONE parameter — transition duration). ---- */
+var LC_BURN_DAYS          = 1;     // burn: ~hours-1 day (SHARP)
+var LC_RUINS_DEFAULT_DAYS = 21;    // un-authored ruins hold (a lot could sit burnt for months)
+var LC_CLEAR_DEFAULT_DAYS = 4;     // hauling off debris
+var LC_TEARDOWN_DAYS      = 4;     // controlled deconstruct (~days)
+var LC_CLEARED_HOLD_DAYS  = 14;    // a cleared lot with NO scheduled rebuild reads as bare ground this long, then 'gone'
+var LC_FRESH_DAYS         = 365;   // §2a fresh-wood sheen: bright ~first year -> weathered persists
+
+/* ---- QA knobs (per-system debug affordance; default OFF — used by the
+   rules-first fail-before probes; a version bump invalidates every lifecycle
+   cache so toggling is deterministic + rewind-exact either way). ---- */
+var LC_QA = { breakRuinsGate: false, disableWorldEvents: false, version: 0 };
+
+/* deterministic string-keyed hash -> [0,1) (hash1 over a rolled integer key).
+   NEVER an rng draw — the fill lifecycle is a pure function of the building
+   identity + salt (spec §4b determinism law). */
+function lcStrKey(s){ var k = 0; for(var i = 0; i < s.length; i++){ k = (k * 131 + s.charCodeAt(i)) >>> 0; } return k % 1000003; }
+function lcHash(id, salt){ return hash1(lcStrKey(String(id) + "|" + salt)); }
+
+/* =====================================================================
+   WORLD EVENTS (spec §4 / D1). THE DEC 24 1849 GREAT FIRE — the first great
+   fire, origin Dennison's Exchange ~6am (dossier §1.4; registry dates_note;
+   Annals of San Francisco: the east side of Portsmouth Square destroyed,
+   ~a million dollars lost). The AUTHORED PERIMETER is expressed in the
+   cadastre's own vocabulary (block + frontage edge + sub-interval + depth —
+   the same strips the reservations use) and resolved to world quads through
+   the SAME resolveReservationFootprint path, so the scope is grounded to the
+   record's blocks, not hand-typed world coordinates:
+     • the KEARNY frontage of B|kearny|montgomery|washington|clay (full edge,
+       26 m deep): Parker House + El Dorado — the east side of the Square.
+     • the KEARNY frontage of B|kearny|montgomery|jackson|washington (frac
+       0.20-1.00, 26 m deep): Dennison's Exchange (origin) + the adjoining
+       Kearny row (Colonnade House — undocumented either way; the perimeter
+       is the record's "east side" scope, so it burns WITH its row).
+     • the WASHINGTON frontage of B|dupont|kearny|jackson|washington at its
+       KEARNY end (frac 0.53-1.00, 24 m deep): Bella Union. The Alta
+       California office (frac 0.10-0.42) and the California Star rear-lot
+       slice (0.44-0.54) sit WEST of the strip — the record has both papers
+       publishing after the fire, so the perimeter stops short of them.
+   MEMBERSHIP RULE (one rule, engine + audit): a building is IN the fire iff
+   its footprint CENTROID lies inside a perimeter strip. Landmarks with an
+   authored burned:1849-12-24 CONFIRM the event (the record wins, D1). ===== */
+var WORLD_EVENTS = [{
+  id: "great-fire-1849", kind: "fire", dateISO: "1849-12-24",
+  perimeter: [
+    { block: "B|kearny|montgomery|washington|clay",    frontage: "west",  frac0: 0.00, frac1: 1.00, depthM: 26 },
+    { block: "B|kearny|montgomery|jackson|washington", frontage: "west",  frac0: 0.20, frac1: 1.00, depthM: 26 },
+    { block: "B|dupont|kearny|jackson|washington",     frontage: "south", frac0: 0.53, frac1: 1.00, depthM: 24 }
+  ]
+}];
+var _lcFireCache = null;
+function lcFireEvents(){
+  if(_lcFireCache) return _lcFireCache;
+  _lcFireCache = WORLD_EVENTS.map(function(ev){
+    var day = eventDateToSimDay(ev.dateISO), quads = [];
+    ev.perimeter.forEach(function(s){
+      var fp = resolveReservationFootprint({ anchor: { kind: "block-frontage", block: s.block,
+        frontage: s.frontage, frontFrac0: s.frac0, frontFrac1: s.frac1, depthM: s.depthM } }, day);
+      if(fp) quads.push(fp.quad);
+    });
+    return { id: ev.id, day: day, quads: quads };
+  });
+  return _lcFireCache;
+}
+function lcPointInQuad(q, x, z){                                // convex quad sign test
+  var sign = 0;
+  for(var i = 0; i < 4; i++){
+    var a = q[i], b = q[(i + 1) % 4];
+    var cr = (b.x - a.x) * (z - a.z) - (b.z - a.z) * (x - a.x);
+    if(cr !== 0){ var s = cr > 0 ? 1 : -1; if(sign === 0) sign = s; else if(s !== sign) return false; }
+  }
+  return true;
+}
+/* the fire event covering a centroid (or null). LC_QA.disableWorldEvents is the
+   fireScope fail-before knob: with the world event unwired, in-perimeter
+   buildings do not burn and the audit goes red. */
+function lcFireHit(cx, cz){
+  if(LC_QA.disableWorldEvents) return null;
+  var evs = lcFireEvents();
+  for(var i = 0; i < evs.length; i++)
+    for(var k = 0; k < evs[i].quads.length; k++)
+      if(lcPointInQuad(evs[i].quads[k], cx, cz)) return evs[i];
+  return null;
+}
+
+/* =====================================================================
+   AUTHORED LANDMARK ARCS (spec §4 SELF-AUTHORED / D2: author only where the
+   record gives an arc; every other landmark stays the degenerate built(/burned)
+   case). Dates from the dossier / registry notes:
+     • el-dorado — canvas tent (~15x25 ft) Apr 1849 -> 3-story building by fall
+       (dossier §1.3; spec §5's own example arc). Construct = the tent (canvas,
+       "as if by magic" lead); expand completes 1849-09-01.
+     • dennisons-exchange — burned Dec 24; "rebuilt in 16 days" (reopened
+       mid-Jan 1850, out of window): ruins cleared fast, rebuild starts in the
+       last days of Dec — its C1 site work is visible before the window ends.
+     • parker-house — burned Dec 24; rebuilt 1850 (out of window): slower
+       ruins->clear, rebuild completion far out of window.
+     • el-dorado — burned Dec 24; rebuilt quickly (reopened weeks later, out
+       of window).
+     • bella-union — burned Dec 24; rebuilt (and burned again May 4 1850, out
+       of window).
+   A landmark burned WITHOUT an authored postBurn arc (e.g. Colonnade House,
+   burned via the world event with no documented aftermath) takes the default
+   ruins/clear durations and NO rebuild (nothing invented, D2). ============ */
+var LM_LIFECYCLE_ARCS = {
+  "el-dorado": {
+    construct: { leadDays: 3, form: { cls: "canvas", hM: 3.0, stories: 1 } },
+    expand:    { onISO: "1849-09-01", durationDays: 30, form: { cls: "hotel", hM: 9.6, stories: 3 } },
+    postBurn:  { ruinsUntilISO: "1849-12-27", clearDays: 3, rebuild: { onISO: "1850-02-01", leadDays: 30 } }
+  },
+  "dennisons-exchange": {
+    postBurn: { ruinsUntilISO: "1849-12-26", clearDays: 2, rebuild: { onISO: "1850-01-09", leadDays: 12 } }
+  },
+  "parker-house": {
+    postBurn: { ruinsUntilISO: "1849-12-28", clearDays: 3, rebuild: { onISO: "1850-04-01", leadDays: 75 } }
+  },
+  "bella-union": {
+    postBurn: { ruinsUntilISO: "1849-12-28", clearDays: 3, rebuild: { onISO: "1850-03-01", leadDays: 45 } }
+  }
+};
+
+/* =====================================================================
+   THE EVENT LIST -> SPAN TIMELINE compiler. Events ({type, start, on, form,
+   via}) sorted by start compile to a CONTIGUOUS span list covering all time —
+   each span { from, to, phase, ...detail }. buildingStateAt() then answers any
+   day by locating its span. Both are pure; the compile is cached per building
+   (invalidated by LC_QA.version). ======================================== */
+function lcBuildSpans(evs){
+  var spans = [], t = -1e9, form = null, formDoneAt = null, prevType = null, prevVia = null;
+  function push(from, to, phase, extra){
+    if(to - from > 1e-9){ var s = extra || {}; s.from = from; s.to = to; s.phase = phase; spans.push(s); }
+  }
+  for(var i = 0; i <= evs.length; i++){
+    var ev = i < evs.length ? evs[i] : null;
+    var idleEnd = ev ? Math.max(ev.start, t) : 1e9;
+    if(idleEnd > t){                                            // the idle span the previous event left us in
+      if(prevType === null) push(t, idleEnd, "absent");
+      else if(prevType === "construct" || prevType === "rebuild" || prevType === "expand")
+        push(t, idleEnd, "complete", { form: form, formDoneAt: formDoneAt });
+      else if(prevType === "burn") push(t, idleEnd, "ruins", { via: prevVia });
+      else if(prevType === "clear" || prevType === "teardown"){
+        if(ev) push(t, idleEnd, "cleared");                     // rebuild scheduled: bare lot until it starts
+        else { var hold = Math.min(idleEnd, t + LC_CLEARED_HOLD_DAYS);
+               push(t, hold, "cleared"); push(hold, idleEnd, "gone"); }
+      }
+      t = idleEnd;
+    }
+    if(!ev) break;
+    var on = Math.max(ev.on, ev.start + 1e-6);
+    if(ev.type === "construct" || ev.type === "rebuild"){
+      push(ev.start, on, "constructing", { form: ev.form || form, rebuild: ev.type === "rebuild" });
+      form = ev.form || form; formDoneAt = on;
+    } else if(ev.type === "expand"){
+      push(ev.start, on, "expanding", { form: ev.form, prevForm: form, formDoneAt: formDoneAt });
+      form = ev.form; formDoneAt = on;
+    } else if(ev.type === "burn"){
+      push(ev.start, on, "burning", { form: form, via: ev.via });
+      form = null; formDoneAt = null; prevVia = ev.via;
+    } else if(ev.type === "teardown"){
+      push(ev.start, on, "teardown", { form: form });
+      form = null; formDoneAt = null;
+    } else if(ev.type === "clear"){
+      push(ev.start, on, "clearing", {});
+    }
+    t = Math.max(t, on);
+    prevType = ev.type;
+  }
+  return spans;
+}
+/* THE STATE QUERY (spec §6) — pure function of (compiled spans, day). */
+function buildingStateAt(spans, day){
+  var s = null;
+  for(var i = 0; i < spans.length; i++){ if(day >= spans[i].from && day < spans[i].to){ s = spans[i]; break; } }
+  if(!s) s = spans.length ? spans[spans.length - 1] : { phase: "absent", from: 0, to: 1 };
+  var out = { phase: s.phase, state: 0, hFrac: 0, constructT: 0, agingT: 1, transition: null,
+              form: s.form || null, prevForm: s.prevForm || null,
+              active: s.phase !== "absent" && s.phase !== "gone" };
+  var prog = (s.to - s.from) > 0 ? clamp((day - s.from) / (s.to - s.from), 0, 1) : 1;
+  switch(s.phase){
+    case "constructing":
+      out.constructT = prog;
+      out.state = prog < 0.15 ? 1 : (prog < 0.5 ? 2 : (prog < 0.85 ? 3 : 4));
+      out.hFrac = out.state === 1 ? 0 : (out.state === 2 ? 0.45 : (out.state === 3 ? 0.8 : 1.0));
+      out.transition = { type: s.rebuild ? "rebuild" : "construct", progress: prog };
+      break;
+    case "complete":
+      out.state = 4; out.hFrac = 1; out.constructT = 1;
+      out.agingT = (s.formDoneAt != null) ? clamp((day - s.formDoneAt) / LC_FRESH_DAYS, 0, 1) : 1;
+      break;
+    case "expanding":
+      out.state = 4; out.hFrac = 1; out.constructT = 1;
+      out.agingT = (s.formDoneAt != null) ? clamp((day - s.formDoneAt) / LC_FRESH_DAYS, 0, 1) : 1;
+      out.transition = { type: "expand", progress: prog };
+      break;
+    case "burning":
+      out.state = 4; out.hFrac = 1; out.constructT = 1;
+      out.transition = { type: "burn", progress: prog, via: s.via || null };
+      break;
+    case "ruins":    out.transition = { type: "ruins", progress: 0, via: s.via || null }; break;
+    case "clearing": out.transition = { type: "clear", progress: prog }; break;
+    case "teardown": out.transition = { type: "teardown", progress: prog }; break;
+  }
   return out;
+}
+
+/* ---- the LANDMARK lifecycle: authored events from the registry record +
+   LM_LIFECYCLE_ARCS + world-event participation. Cached per landmarkId. ---- */
+var _lmSpanCache = {}, _lmSpanCacheVer = 0;
+function lmLifecycleOf(rec){
+  if(_lmSpanCacheVer !== LC_QA.version){ _lmSpanCache = {}; _lmSpanCacheVer = LC_QA.version; }
+  var hit = _lmSpanCache[rec.landmarkId]; if(hit) return hit;
+  var arcs = LM_LIFECYCLE_ARCS[rec.landmarkId] || {};
+  var kit = lmKitOf(rec.landmarkId), evs = [];
+  var c = arcs.construct || null;
+  var cStart = (c && c.leadDays != null) ? rec.built - c.leadDays : lmStartDay(rec);
+  evs.push({ type: "construct", start: cStart, on: rec.built,
+             form: (c && c.form) || { cls: lmClassOf(rec.landmarkId), hM: kit.h } });
+  if(arcs.expand){
+    var xOn = eventDateToSimDay(arcs.expand.onISO);
+    evs.push({ type: "expand", start: xOn - (arcs.expand.durationDays || 21), on: xOn, form: arcs.expand.form });
+  }
+  // burn: the authored record CONFIRMS/overrides the world event (the record wins)
+  var fire = rec.footprint ? lcFireHit(rec.footprint.cx, rec.footprint.cz) : null;
+  var burnDay = rec.burned != null ? rec.burned : (fire ? fire.day : null);
+  if(burnDay != null){
+    var viaFire = fire && (rec.burned == null || Math.abs(rec.burned - fire.day) < 0.51);
+    evs.push({ type: "burn", start: burnDay, on: burnDay + LC_BURN_DAYS, via: viaFire ? fire.id : "authored" });
+    var pb = arcs.postBurn || {};
+    var ruinsEnd = pb.ruinsUntilISO ? eventDateToSimDay(pb.ruinsUntilISO) : burnDay + LC_BURN_DAYS + LC_RUINS_DEFAULT_DAYS;
+    if(ruinsEnd < burnDay + LC_BURN_DAYS) ruinsEnd = burnDay + LC_BURN_DAYS;
+    var clearOn = ruinsEnd + (pb.clearDays != null ? pb.clearDays : LC_CLEAR_DEFAULT_DAYS);
+    evs.push({ type: "clear", start: ruinsEnd, on: clearOn });
+    if(pb.rebuild){
+      var rOn = eventDateToSimDay(pb.rebuild.onISO);
+      var rStart = rOn - (pb.rebuild.leadDays != null ? pb.rebuild.leadDays : lmLeadDays(rec));
+      if(rStart < clearOn) rStart = clearOn;                    // THE RUINS GATE (spec §2b): rebuild only on cleared ground
+      if(LC_QA.breakRuinsGate) rStart = burnDay + 0.5;          // QA fail-before knob: rebuild while ruins uncleared
+      evs.push({ type: "rebuild", start: rStart, on: Math.max(rOn, rStart + 1),
+                 form: pb.rebuild.form || { cls: lmClassOf(rec.landmarkId), hM: kit.h } });
+    }
+  }
+  evs.sort(function(a, b){ return a.start - b.start; });
+  var out = { events: evs, spans: lcBuildSpans(evs) };
+  _lmSpanCache[rec.landmarkId] = out;
+  return out;
+}
+/* the state at `day` — the ONE query the renderer + audits read (legacy fields
+   state/hFrac/arc/active preserved; phase/transition/agingT/form are the s108
+   lifecycle read). Pure, zero dice, rewind-exact. */
+function lmStateAt(rec, day){
+  var lc = lmLifecycleOf(rec);
+  var s = buildingStateAt(lc.spans, day);
+  s.arc = s.constructT;
+  s.startDay = lc.events[0].start; s.lead = lc.events[0].on - lc.events[0].start;
+  return s;
 }
 
 /* =====================================================================
@@ -8840,9 +9112,13 @@ function deriveLandmarkSet(day){
     if(!fp) continue;                                           // block not born at `day` — skip, never force
     if(lmUnlandedAt(rec, fp)) continue;                         // s99 LAND-AT-DATE GATE: un-render unlanded landmarks (returns in step 2 when the cove-fill lands)
     var f = lmFootprint(rec, fp);
-    out.push({ id: rec.landmarkId, name: rec.name, cls: lmClassOf(rec.landmarkId),
+    var form = st.form || {}, kit = lmKitOf(rec.landmarkId);
+    out.push({ id: rec.landmarkId, name: rec.name, cls: form.cls || lmClassOf(rec.landmarkId),
                cx: f.cx, cz: f.cz, w: f.w, d: f.d, yaw: f.yaw, nx: f.nx, nz: f.nz,
                state: st.state, hFrac: st.hFrac, arc: st.arc,
+               phase: st.phase, transition: st.transition, agingT: st.agingT,
+               hM: form.hM != null ? form.hM : kit.h,
+               prevHM: st.prevForm && st.prevForm.hM != null ? st.prevForm.hM : null,
                overWater: lmExceptionOverWater(rec), stilted: lmExceptionStilted(rec),
                built: rec.built, burned: rec.burned });
   }
@@ -8870,6 +9146,83 @@ function lmBakeAt(geo, lx, ly, lz, yaw, wx, wy, wz){
   geo.translate(wx, wy, wz);
   return geo;
 }
+/* =====================================================================
+   THE PER-STATE PLACEHOLDER LEGEND (s108, the operator's key steer: every
+   lifecycle state gets its OWN DISTINCT look so a building's state reads at a
+   glance even as a crude grey block — functional diagram, not final art; the
+   front-face marker law stands wherever a structure is present):
+
+     C1 site           — pad + orange ground arrow (unchanged s94a read)
+     C2/C3 rising      — partial-height block in SCAFFOLD-TONE TINT STEPS
+                         (pale raw-lumber tone stepping toward the class tint)
+     C4/active         — the neutral class-tinted block + flat roof cap +
+                         orange front stripe; FRESH-WOOD SHEEN: brighter for
+                         ~the first year, fading to the standard tone (§2a)
+     expanding         — full old body + a scaffold-tone ANNEX slab visibly
+                         GROWING from the old roofline to the new height
+     burning           — CHARCOAL body + darker roof + EMBER-RED front
+                         stripe/arrow (the fire day only)
+     RUINS             — a LOW DARK RUBBLE SLAB + deterministic rubble
+                         boxlets + a charcoal debris wedge at the front (the
+                         orange markers are gone with the structure)
+     clearing          — the rubble slab + boxlets SHRINKING away
+     cleared           — the bare neutral site pad, nothing else
+     teardown          — the body SHRINKING back down in scaffold tone, roof
+                         already off (controlled deconstruct)
+     rebuild           — C0->C4 again (scaffold steps, same as construct)
+   ===================================================================== */
+var LC_TONES = {
+  scaffold: 0xd0c8b4,     // raw-lumber/scaffold pale tone (construction + teardown + annex)
+  charcoal: 0x39332e,     // burning body
+  charcoalRoof: 0x2a2622, // burning roof cap
+  ember: 0xe23a18,        // ember-red front markers during the burn
+  rubble: 0x4d463e,       // ruins slab
+  rubbleDark: 0x3a352f,   // rubble boxlets
+  debris: 0x241f1a,       // the ruins front debris wedge
+  freshBoost: 0.16        // fresh-wood sheen strength (lerp toward white at agingT=0)
+};
+/* class tint for an arbitrary form class (the id-keyed lmBodyColor stands for
+   the common case; expand/rebuild forms may carry a different class). */
+function lmBodyColorCls(cls){
+  var cat = LM_CATEGORY[cls] || "commercial";
+  return new THREE.Color(LM_TINT[cat] || LM_PLACEHOLDER.body);
+}
+/* construction scaffold-tone step: C2 mostly scaffold, C3 halfway, C4 = tint. */
+function lcScaffoldStep(finalTint, state){
+  var t = state >= 4 ? 1 : (state === 3 ? 0.55 : 0.25);
+  return new THREE.Color(LC_TONES.scaffold).lerp(finalTint, t);
+}
+/* fresh-wood sheen (§2a): brighter for ~the first year, then the standard tone. */
+function lcFreshTone(tint, agingT){
+  if(agingT == null || agingT >= 1) return tint;
+  return tint.clone().lerp(new THREE.Color(0xffffff), LC_TONES.freshBoost * (1 - agingT));
+}
+/* RUINS / CLEARING rubble kit: a low dark slab + deterministic boxlets +
+   a charcoal debris wedge at the front. frac 1 = full ruins, ->0 clearing. */
+function lcRubbleParts(parts, e, w, d, y, yaw, frac){
+  var hs = 0.12 + 0.5 * frac;
+  var slab = makeBoxLocal(w * (0.7 + 0.3 * frac), hs, d * (0.7 + 0.3 * frac), new THREE.Color(LC_TONES.rubble));
+  bake(slab, new THREE.Vector3(e.cx, y + 0.28, e.cz), yaw);
+  parts.push(slab);
+  var idKey = lcStrKey(String(e.id != null ? e.id : (e.code + "#" + e.rank)));
+  var n = Math.max(1, Math.round(3 * frac));
+  for(var i = 0; i < n; i++){
+    var rx = (hash1(idKey + i * 13) - 0.5) * w * 0.5, rz = (hash1(idKey + i * 13 + 5) - 0.5) * d * 0.5;
+    var bw = 0.8 + hash1(idKey + i * 13 + 9) * 1.6;
+    var bh = (0.5 + hash1(idKey + i * 13 + 11) * 0.8) * Math.max(frac, 0.25);
+    var bx = makeBoxLocal(bw, bh, bw * 0.8, new THREE.Color(LC_TONES.rubbleDark));
+    lmBakeAt(bx, rx, 0.28 + hs, rz, yaw, e.cx, y, e.cz);
+    parts.push(bx);
+  }
+  // debris wedge — a dark flat triangle pointing INTO the lot at the front edge
+  // (replaces the orange entrance arrow while the lot holds ruins; visibly NOT
+  // an entrance marker: dark, inverted).
+  var az0 = d / 2 + 0.4, aLen = Math.max(1.6, Math.min(w * 0.4, 3.0)) * Math.max(frac, 0.3);
+  var wedge = lmTriLocal(-aLen * 0.6, az0 + aLen, aLen * 0.6, az0 + aLen, 0, az0, 0.14, new THREE.Color(LC_TONES.debris));
+  var wy = terrainHeight(e.cx + Math.sin(yaw) * (d / 2 + 1.2), e.cz + Math.cos(yaw) * (d / 2 + 1.2));
+  lmBakeAt(wedge, 0, 0, 0, yaw, e.cx, wy, e.cz);
+  parts.push(wedge);
+}
 function lmBuildMesh(e){
   // UNIVERSAL GROUNDING (§3b): the floor sits on the highest footprint corner and
   // an auto foundation-plinth drops to grade at every corner — nothing floats or
@@ -8880,45 +9233,80 @@ function lmBuildMesh(e){
   var w = Math.max(e.w - LM_INSET, 1.2), d = Math.max(e.d - LM_INSET, 1.2);
   var parts = [];
   parts.push(groundPlinthGeo(g, new THREE.Color(LM_PLACEHOLDER.pad)));
-  // C1..C4: a low neutral site pad on the level floor — the "site" read
+  // the neutral site pad on the level floor — present in EVERY rendered state
+  // (site, structure base, ruins ground, cleared lot).
   var pad = makeBoxLocal(w, 0.3, d, new THREE.Color(LM_PLACEHOLDER.pad));
   bake(pad, new THREE.Vector3(e.cx, y, e.cz), e.yaw);
   parts.push(pad);
-  // GROUND ARROW — the front/entrance orientation aid, present from C1 so the
-  // facing reads even at the site stage. A flat high-contrast arrowhead just
-  // beyond the front (+z) edge, pointing OUT along the frontage normal — sat on
-  // the terrain under its own footprint (a ground decal follows grade, not the
-  // raised floor, so it never floats on the downhill side).
-  var arrowGroundY = terrainHeight(e.cx + e.nx * (e.d / 2 + 1.2), e.cz + e.nz * (e.d / 2 + 1.2));
-  var az0 = d / 2 + 0.4, aLen = Math.max(2.2, Math.min(w * 0.6, 4.2)), aHW = Math.max(1.0, Math.min(w * 0.28, 1.9));
-  var arrow = lmTriLocal(-aHW, az0, aHW, az0, 0, az0 + aLen, 0.14, new THREE.Color(LM_PLACEHOLDER.marker));
-  lmBakeAt(arrow, 0, 0, 0, e.yaw, e.cx, arrowGroundY, e.cz);
-  parts.push(arrow);
-  if(e.state >= 2){                                             // C2/C3/C4: the NEUTRAL massing, scaled by hFrac
-    var kit = lmKitOf(e.id);                                    // per-class HEIGHT only (skin is neutral)
-    var h = Math.max(kit.h * e.hFrac, 0.8);
-    var body = makeBoxLocal(w, h, d, lmBodyColor(e.id));        // Option B: one neutral material + a subtle class tint
+  var phase = e.phase || (e.state >= 4 ? "complete" : "constructing");
+  var structural = (phase === "constructing" || phase === "complete" || phase === "expanding" ||
+                    phase === "burning" || phase === "teardown");
+  if(structural){
+    // GROUND ARROW — the front/entrance orientation aid (front-face marker law),
+    // present whenever a structure stands or is being built/unbuilt. Ember-red
+    // during the burn; orange otherwise.
+    var mkCol = phase === "burning" ? LC_TONES.ember : LM_PLACEHOLDER.marker;
+    var arrowGroundY = terrainHeight(e.cx + e.nx * (e.d / 2 + 1.2), e.cz + e.nz * (e.d / 2 + 1.2));
+    var az0 = d / 2 + 0.4, aLen = Math.max(2.2, Math.min(w * 0.6, 4.2)), aHW = Math.max(1.0, Math.min(w * 0.28, 1.9));
+    var arrow = lmTriLocal(-aHW, az0, aHW, az0, 0, az0 + aLen, 0.14, new THREE.Color(mkCol));
+    lmBakeAt(arrow, 0, 0, 0, e.yaw, e.cx, arrowGroundY, e.cz);
+    parts.push(arrow);
+  }
+  var hFull = e.hM != null ? e.hM : lmKitOf(e.id).h;            // the current form's full height
+  var tint = lmBodyColorCls(e.cls || lmClassOf(e.id));
+  var prog = e.transition ? e.transition.progress : 0;
+  var h = null, bodyCol = null, roofOn = false, stripeCol = LM_PLACEHOLDER.marker;
+  if(phase === "constructing" && e.state >= 2){
+    h = Math.max(hFull * e.hFrac, 0.8); bodyCol = lcScaffoldStep(tint, e.state); roofOn = true;
+  } else if(phase === "complete"){
+    h = hFull; bodyCol = lcFreshTone(tint, e.agingT); roofOn = true;
+  } else if(phase === "expanding"){
+    h = Math.max(e.prevHM != null ? e.prevHM : hFull * 0.5, 0.8);
+    bodyCol = lcFreshTone(tint, e.agingT); roofOn = true;
+  } else if(phase === "burning"){
+    h = hFull; bodyCol = new THREE.Color(LC_TONES.charcoal); roofOn = true; stripeCol = LC_TONES.ember;
+  } else if(phase === "teardown"){
+    h = Math.max(hFull * (1 - prog), 0.5); bodyCol = new THREE.Color(LC_TONES.scaffold); roofOn = false;
+  }
+  if(h != null){
+    var body = makeBoxLocal(w, h, d, bodyCol);
     bake(body, new THREE.Vector3(e.cx, y + 0.28, e.cz), e.yaw);
     parts.push(body);
-    // FLAT ROOF CAP — a thin neutral slab (no gable: a pitched roof reads as a
-    // finished building; this must read as placeholder massing).
-    var roof = makeBoxLocal(w + 0.2, 0.28, d + 0.2, new THREE.Color(LM_PLACEHOLDER.roof));
-    bake(roof, new THREE.Vector3(e.cx, y + 0.28 + h, e.cz), e.yaw);
-    parts.push(roof);
-    // FRONT-FACE STRIPE (brief §2) — a bold high-contrast vertical bar centred on
-    // the +z (front) face, protruding a hair so it catches light. The instantly-
-    // readable entrance indicator; with the ground arrow, legible at plaza-150m
-    // and town-500m. It sits on the front face BY CONSTRUCTION (yaw = frontage
-    // normal), so it is also the visible proof of the corner-rule orientation fix.
+    var topY = y + 0.28 + h;
+    if(phase === "expanding"){
+      // THE ANNEX — a slightly-inset scaffold-tone slab growing from the old
+      // roofline toward the new full height (the operator's "annex block growing").
+      var newH = Math.max(hFull, h + 0.5);
+      var annexH = Math.max((newH - h) * prog, 0.3);
+      var annex = makeBoxLocal(Math.max(w - 1.2, 1.0), annexH, Math.max(d - 1.2, 1.0), new THREE.Color(LC_TONES.scaffold));
+      bake(annex, new THREE.Vector3(e.cx, topY, e.cz), e.yaw);
+      parts.push(annex);
+      topY += annexH;
+    }
+    if(roofOn){
+      // FLAT ROOF CAP — a thin neutral slab (no gable: a pitched roof reads as a
+      // finished building; this must read as placeholder massing).
+      var roofCol = phase === "burning" ? LC_TONES.charcoalRoof : LM_PLACEHOLDER.roof;
+      var roof = makeBoxLocal(w + 0.2, 0.28, d + 0.2, new THREE.Color(roofCol));
+      bake(roof, new THREE.Vector3(e.cx, topY, e.cz), e.yaw);
+      parts.push(roof);
+    }
+    // FRONT-FACE STRIPE — the bold vertical bar on the +z (front) face BY
+    // CONSTRUCTION (yaw = frontage normal): the entrance indicator and the
+    // visible proof of the corner-rule fix. Ember-red while burning.
     var stripeH = Math.max(h * 0.9, 0.8);
-    var stripe = makeBoxLocal(Math.min(0.9, w * 0.42), stripeH, 0.18, new THREE.Color(LM_PLACEHOLDER.marker));
+    var stripe = makeBoxLocal(Math.min(0.9, w * 0.42), stripeH, 0.18, new THREE.Color(stripeCol));
     lmBakeAt(stripe, 0, 0.28, d / 2 - 0.02, e.yaw, e.cx, y, e.cz);
     parts.push(stripe);
   }
+  if(phase === "ruins")    lcRubbleParts(parts, e, w, d, y, e.yaw, 1);
+  if(phase === "clearing") lcRubbleParts(parts, e, w, d, y, e.yaw, Math.max(1 - prog, 0.05));
+  // phase "cleared": the bare pad alone — nothing further.
   var mesh = new THREE.Mesh(mergeGeoms(parts), LM_MAT);
   mesh.frustumCulled = false;
   mesh.userData.landmarkId = e.id;
   mesh.userData.state = e.state;
+  mesh.userData.phase = phase;
   return mesh;
 }
 function lmClear(){
@@ -9140,30 +9528,51 @@ registerLayerVisibility("buildings", function(v){ LM_GROUP.visible = v; if(v){ _
              pairSample: pairViol.slice(0, 6) };
   });
 
-  /* ---- 3. constructionMonotonic — for each landmark, sample its lead window:
-     state is non-decreasing (C0<=C1<=...<=C4) up to `built`, holds C4, then
-     absent after `burned`. Nothing at state > C0 before startDay. ---- */
+  /* ---- 3. constructionMonotonic — s108 EPISODE-AWARE rewrite (the brief's
+     "state-monotonic within an episode"). Two clauses per landmark:
+     (a) SPAN-CHAIN LEGALITY: the compiled lifecycle span sequence follows the
+         legal machine — absent->constructing->complete; complete may only go
+         expanding/burning/teardown; burning->RUINS->clearing->cleared->
+         (constructing|gone); teardown->cleared. Any other transition (e.g. a
+         burn that skips ruins, a rebuild landing mid-ruins) FAILS.
+     (b) C-STATE MONOTONIC within every constructing episode (C0<=C1<=..<=C4,
+         sampled), absent before ground is broken, C4 held while complete. ---- */
   registerAudit("buildings", "constructionMonotonic", function(){
     var recs = resolvedRecs(), viol = [], rows = [];
+    var LEGAL = { absent: { constructing: 1 }, constructing: { complete: 1 },
+                  complete: { expanding: 1, burning: 1, teardown: 1 },
+                  expanding: { complete: 1 }, burning: { ruins: 1 }, ruins: { clearing: 1 },
+                  // a rebuild may start the moment clearing completes (the cleared
+                  // span is then zero-length) — the ruins gate itself is enforced
+                  // by lifecycleRuinsGate on the event timeline.
+                  clearing: { cleared: 1, constructing: 1 }, cleared: { constructing: 1, gone: 1 },
+                  teardown: { cleared: 1, constructing: 1 }, gone: {} };
     recs.forEach(function(rec){
-      var start = lmStartDay(rec), lead = rec.built - start;
-      var lo = start - 6, hi = (rec.burned != null ? rec.burned : rec.built) + 30;
-      var N = 80, prev = -1, ok = true, sawC4 = false;
-      for(var k = 0; k <= N; k++){
-        var day = lo + (hi - lo) * (k / N);
-        var st = lmStateAt(rec, day).state;
-        // before startDay OR at/after burn => must be C0
-        if(day < start - 1e-6 && st !== 0){ viol.push({ id: rec.landmarkId, why: "built-before-start", day: +day.toFixed(1), state: st }); ok = false; }
-        if(rec.burned != null && day >= rec.burned && st !== 0){ viol.push({ id: rec.landmarkId, why: "not-absent-after-burn", day: +day.toFixed(1), state: st }); ok = false; }
-        // monotonic non-decreasing across the RISING arc (up to built)
-        if(day <= rec.built + 1e-6 && day >= start){
-          if(st < prev){ viol.push({ id: rec.landmarkId, why: "state-decreased", day: +day.toFixed(1), from: prev, to: st }); ok = false; }
-          prev = Math.max(prev, st);
-        }
-        // holds C4 between built and burn
-        if(day >= rec.built && (rec.burned == null || day < rec.burned)){ if(st !== 4){ viol.push({ id: rec.landmarkId, why: "not-C4-after-built", day: +day.toFixed(1), state: st }); ok = false; } else sawC4 = true; }
+      var lc = lmLifecycleOf(rec), ok = true, sawC4 = false;
+      for(var i = 0; i < lc.spans.length - 1; i++){
+        var a = lc.spans[i].phase, b = lc.spans[i + 1].phase;
+        if(!(LEGAL[a] && LEGAL[a][b])){ viol.push({ id: rec.landmarkId, why: "illegal-transition", from: a, to: b, day: +lc.spans[i + 1].from.toFixed(1) }); ok = false; }
       }
-      rows.push({ id: rec.landmarkId, cls: lmClassOf(rec.landmarkId), leadDays: +lead.toFixed(0), reachedC4: sawC4, ok: ok });
+      lc.spans.forEach(function(sp){
+        if(sp.phase === "constructing"){
+          var prev = -1;
+          for(var k = 0; k <= 24; k++){
+            var d = sp.from + (sp.to - sp.from) * (k / 24);
+            var st = buildingStateAt(lc.spans, Math.min(d, sp.to - 1e-6)).state;
+            if(st < prev){ viol.push({ id: rec.landmarkId, why: "state-decreased", day: +d.toFixed(1), from: prev, to: st }); ok = false; }
+            prev = Math.max(prev, st);
+          }
+        }
+        if(sp.phase === "complete"){
+          var mid = buildingStateAt(lc.spans, (sp.from + Math.min(sp.to, sp.from + 60)) / 2);
+          if(mid.state !== 4){ viol.push({ id: rec.landmarkId, why: "not-C4-while-complete", day: +sp.from.toFixed(1), state: mid.state }); ok = false; }
+          else sawC4 = true;
+        }
+      });
+      var st0 = lmStateAt(rec, lc.events[0].start - 3);
+      if(st0.phase !== "absent"){ viol.push({ id: rec.landmarkId, why: "present-before-start", phase: st0.phase }); ok = false; }
+      rows.push({ id: rec.landmarkId, cls: lmClassOf(rec.landmarkId), spans: lc.spans.length,
+                  events: lc.events.map(function(ev){ return ev.type; }).join(">"), reachedC4: sawC4, ok: ok });
     });
     return { pass: viol.length === 0, landmarks: recs.length, violations: viol.length, sample: viol.slice(0, 8), perLandmark: rows };
   });
@@ -9174,7 +9583,8 @@ registerLayerVisibility("buildings", function(v){ LM_GROUP.visible = v; if(v){ _
   registerAudit("buildings", "reservationDeterminism", function(){
     function fp(day){
       return deriveLandmarkSet(day).map(function(e){
-        return e.id + "|" + e.cx.toFixed(4) + "|" + e.cz.toFixed(4) + "|" + e.state + "|" + e.hFrac.toFixed(4) + "|" + e.yaw.toFixed(6);
+        return e.id + "|" + e.cx.toFixed(4) + "|" + e.cz.toFixed(4) + "|" + e.state + "|" + e.hFrac.toFixed(4) + "|" + e.yaw.toFixed(6)
+             + "|" + e.phase + "|" + (e.transition ? e.transition.type + ":" + e.transition.progress.toFixed(5) : "-") + "|" + (e.agingT != null ? e.agingT.toFixed(5) : "-");
       }).join("\n");
     }
     var A = eventDateToSimDay("1848-04-01"), B = eventDateToSimDay("1849-12-20");
@@ -9523,16 +9933,71 @@ function fillLeadDays(e){
     default:      return 21;                              // frame
   }
 }
-/* C0->C4 state + height fraction at `day` (reuses the s94a ramp shape). Complete
-   (C4) at/after appearDay; absent before the lead window opens. */
+/* =====================================================================
+   s108 THE SIMULATED FILL LIFECYCLE (building-lifecycle-spec §4b). Every fill
+   building carries the SAME event-list/span schema as the landmarks — only the
+   SOURCE differs: seeded laws instead of authored dates. All parameters are
+   pure hashes of the building identity (lcHash — zero dice at query time; the
+   master placement stream is NEVER re-drawn, so the village layout is
+   byte-identical to s96). The laws (shape per spec §4b):
+     • BIRTH — construct at appearDay with the material lead (unchanged s96).
+     • FRESH-WOOD AGING — automatic (§2a) via the complete span's formDoneAt.
+     • THE 1849 UPGRADE WAVE (teardown-for-replacement, the operator's density
+       path): a seeded ~30% of shanty-class buildings NOT in the fire perimeter
+       are torn down (controlled deconstruct) on a seeded day in Mar-Aug 1849
+       and replaced by an upgraded FRAME building on the same lot. Scheduled
+       strictly AFTER the 1848-04 census gate (the audited tranche is never
+       perturbed; the 1849 checks are informational by design).
+     • WORLD-EVENT PARTICIPATION — a fill building inside the great-fire-1849
+       perimeter BURNS on the fire date (no dice — it stood in the fire) ->
+       ruins (seeded 3-10 days) -> clearing (seeded 2-4 days) -> ~75% rapid
+       period rebuild, UPGRADED to frame (the wood->better-material fire
+       response), rebuild lead seeded 14-27 days.
+   Events are cached on the master entry (the master itself is cached + pure);
+   LC_QA.version invalidates for the QA fail-before probes. ================ */
+function fillLifecycleOf(e){
+  if(e._lc && e._lcVer === LC_QA.version) return e._lc;
+  var id = e.code + "#" + e.rank, evs = [];
+  var lead = fillLeadDays(e);
+  evs.push({ type: "construct", start: e.appearDay - lead, on: e.appearDay,
+             form: { cls: e.cat, stories: (e.storyRange && e.storyRange[1]) || 1 } });
+  var fire = lcFireHit(e.cx, e.cz);
+  if(!fire && e.cat === "shanty" && lcHash(id, "upg") < 0.30){
+    var t0 = eventDateToSimDay("1849-03-01") + Math.floor(lcHash(id, "upgday") * 180);   // Mar-Aug 1849
+    if(t0 > e.appearDay + 30){
+      var tOn = t0 + LC_TEARDOWN_DAYS;
+      evs.push({ type: "teardown", start: t0, on: tOn });
+      var rStart = tOn + 2;
+      if(LC_QA.breakRuinsGate) rStart = t0 + 0.5;               // QA: rebuild before the lot is cleared
+      evs.push({ type: "rebuild", start: rStart, on: rStart + 21,
+                 form: { cls: "frame", stories: (e.storyRange && e.storyRange[1]) || 1 } });
+    }
+  }
+  if(fire){
+    var b = fire.day;
+    evs.push({ type: "burn", start: b, on: b + LC_BURN_DAYS, via: fire.id });
+    var ruinsDays = 3 + Math.floor(lcHash(id, "ruins") * 8);    // 3-10 days of ruins
+    var clearDays = 2 + Math.floor(lcHash(id, "clr") * 3);      // 2-4 days of clearing
+    var clearStart = b + LC_BURN_DAYS + ruinsDays, clearOn = clearStart + clearDays;
+    evs.push({ type: "clear", start: clearStart, on: clearOn });
+    if(lcHash(id, "rb") < 0.75){                                // the rapid period rebuild, upgraded to frame
+      var rs = clearOn;
+      if(LC_QA.breakRuinsGate) rs = b + 0.5;                    // QA: rebuild while ruins uncleared
+      evs.push({ type: "rebuild", start: rs, on: rs + 14 + Math.floor(lcHash(id, "rblead") * 14),
+                 form: { cls: "frame", stories: (e.storyRange && e.storyRange[1]) || 1 } });
+    }
+  }
+  evs.sort(function(a, b2){ return a.start - b2.start; });
+  e._lc = { events: evs, spans: lcBuildSpans(evs) };
+  e._lcVer = LC_QA.version;
+  return e._lc;
+}
+/* the fill state query — same buildingStateAt engine as the landmarks (legacy
+   state/hFrac/active preserved). Pure filter over cached pure data. */
 function fillStateAt(e, day){
-  var lead = fillLeadDays(e), start = e.appearDay - lead;
-  if(day >= e.appearDay) return { state: 4, hFrac: 1, active: true };
-  if(day < start)        return { state: 0, hFrac: 0, active: false };
-  var arc = lead > 0 ? clamp((day - start) / lead, 0, 1) : 1;
-  var state = arc < 0.15 ? 1 : (arc < 0.5 ? 2 : (arc < 0.85 ? 3 : 4));
-  var hFrac = state === 1 ? 0 : (state === 2 ? 0.45 : (state === 3 ? 0.8 : 1.0));
-  return { state: state, hFrac: hFrac, active: true };
+  var s = buildingStateAt(fillLifecycleOf(e).spans, day);
+  s.arc = s.constructT;
+  return s;
 }
 
 /* =====================================================================
@@ -9550,13 +10015,16 @@ function deriveFillSet(day){
     var st = fillStateAt(e, day);
     if(!counted){
       if(i >= fc + FILL_LOOKAHEAD) break;                // ranks are plaza/appear-ordered — nothing further is active
-      if(!st.active || st.state >= 4) continue;          // only show the genuinely-under-construction look-ahead
+      if(!(st.phase === "constructing" && st.state < 4)) continue;   // only the genuinely-under-construction look-ahead
     }
-    out.push({ code: e.code, cat: e.cat, material: e.material, subtype: e.subtype,
+    var form = st.form || {};
+    out.push({ code: e.code, cat: e.cat, cls: form.cls || e.cat, material: e.material, subtype: e.subtype,
                cx: e.cx, cz: e.cz, w: e.w, d: e.d, yaw: e.yaw, nx: e.nx, nz: e.nz,
-               storyRange: e.storyRange, edgeId: e.edgeId, edgeLen: e.edgeLen, rank: e.rank,
+               storyRange: e.storyRange, stories: form.stories || (e.storyRange && e.storyRange[1]) || 1,
+               edgeId: e.edgeId, edgeLen: e.edgeLen, rank: e.rank,
                overWater: !!e.overWater, stilted: !!e.stilted,
-               appearDay: e.appearDay, state: st.state, hFrac: st.hFrac, counted: counted });
+               appearDay: e.appearDay, state: st.state, hFrac: st.hFrac, counted: counted,
+               phase: st.phase, transition: st.transition, agingT: st.agingT });
   }
   return out;
 }
@@ -9573,42 +10041,66 @@ var FILL_TINT = { shanty: 0xb4ad9f, frame: 0x9ea19c, adobe: 0xb8b2a4 };   // a h
 function fillBuildMesh(e){
   // UNIVERSAL GROUNDING (§3b) — identical default as the landmarks: floor on the
   // highest corner + an auto foundation-plinth to grade, so slope fill never
-  // floats or buries.
+  // floats or buries. Per-state visuals follow the s108 lifecycle legend
+  // (see lmBuildMesh): scaffold-step construction, fresh-wood sheen, charcoal
+  // burn, rubble ruins/clearing, bare cleared pad, shrinking teardown.
   var g = groundStructureAt(e.cx, e.cz, e.w, e.d, e.yaw);
   var y = g.floorY;
   var w = Math.max(e.w - FILL_INSET, 1.0), d = Math.max(e.d - FILL_INSET, 1.0);
   var parts = [];
   parts.push(groundPlinthGeo(g, new THREE.Color(LM_PLACEHOLDER.pad)));
-  // C1..C4 site pad on the level floor
   var pad = makeBoxLocal(w, 0.25, d, new THREE.Color(LM_PLACEHOLDER.pad));
   bake(pad, new THREE.Vector3(e.cx, y, e.cz), e.yaw);
   parts.push(pad);
-  // ground arrow (front/entrance aid) — smaller than the landmark's, sat on grade
-  var arrowGroundY = terrainHeight(e.cx + e.nx * (e.d / 2 + 1.0), e.cz + e.nz * (e.d / 2 + 1.0));
-  var az0 = d / 2 + 0.3, aLen = Math.max(1.4, Math.min(w * 0.6, 2.8)), aHW = Math.max(0.6, Math.min(w * 0.3, 1.2));
-  var arrow = lmTriLocal(-aHW, az0, aHW, az0, 0, az0 + aLen, 0.12, new THREE.Color(LM_PLACEHOLDER.marker));
-  lmBakeAt(arrow, 0, 0, 0, e.yaw, e.cx, arrowGroundY, e.cz);
-  parts.push(arrow);
-  if(e.state >= 2){
-    var storeys = (e.storyRange && e.storyRange[1]) ? e.storyRange[1] : 1;
-    var full = Math.max(storeys * FILL_STORY_H_M, 2.4);
-    var h = Math.max(full * e.hFrac, 0.7);
-    var body = makeBoxLocal(w, h, d, new THREE.Color(FILL_TINT[e.cat] || LM_PLACEHOLDER.body));
+  var phase = e.phase || (e.state >= 4 ? "complete" : "constructing");
+  var structural = (phase === "constructing" || phase === "complete" || phase === "expanding" ||
+                    phase === "burning" || phase === "teardown");
+  if(structural){
+    // ground arrow (front/entrance aid) — smaller than the landmark's, sat on grade
+    var mkCol = phase === "burning" ? LC_TONES.ember : LM_PLACEHOLDER.marker;
+    var arrowGroundY = terrainHeight(e.cx + e.nx * (e.d / 2 + 1.0), e.cz + e.nz * (e.d / 2 + 1.0));
+    var az0 = d / 2 + 0.3, aLen = Math.max(1.4, Math.min(w * 0.6, 2.8)), aHW = Math.max(0.6, Math.min(w * 0.3, 1.2));
+    var arrow = lmTriLocal(-aHW, az0, aHW, az0, 0, az0 + aLen, 0.12, new THREE.Color(mkCol));
+    lmBakeAt(arrow, 0, 0, 0, e.yaw, e.cx, arrowGroundY, e.cz);
+    parts.push(arrow);
+  }
+  var storeys = e.stories || (e.storyRange && e.storyRange[1]) || 1;
+  var full = Math.max(storeys * FILL_STORY_H_M, 2.4);
+  var tint = new THREE.Color(FILL_TINT[e.cls || e.cat] || LM_PLACEHOLDER.body);
+  var prog = e.transition ? e.transition.progress : 0;
+  var h = null, bodyCol = null, roofOn = false, stripeCol = LM_PLACEHOLDER.marker;
+  if(phase === "constructing" && e.state >= 2){
+    h = Math.max(full * e.hFrac, 0.7); bodyCol = lcScaffoldStep(tint, e.state); roofOn = true;
+  } else if(phase === "complete" || phase === "expanding"){
+    h = full; bodyCol = lcFreshTone(tint, e.agingT); roofOn = true;
+  } else if(phase === "burning"){
+    h = full; bodyCol = new THREE.Color(LC_TONES.charcoal); roofOn = true; stripeCol = LC_TONES.ember;
+  } else if(phase === "teardown"){
+    h = Math.max(full * (1 - prog), 0.4); bodyCol = new THREE.Color(LC_TONES.scaffold); roofOn = false;
+  }
+  if(h != null){
+    var body = makeBoxLocal(w, h, d, bodyCol);
     bake(body, new THREE.Vector3(e.cx, y + 0.23, e.cz), e.yaw);
     parts.push(body);
-    var roof = makeBoxLocal(w + 0.15, 0.22, d + 0.15, new THREE.Color(LM_PLACEHOLDER.roof));
-    bake(roof, new THREE.Vector3(e.cx, y + 0.23 + h, e.cz), e.yaw);
-    parts.push(roof);
+    if(roofOn){
+      var roofCol = phase === "burning" ? LC_TONES.charcoalRoof : LM_PLACEHOLDER.roof;
+      var roof = makeBoxLocal(w + 0.15, 0.22, d + 0.15, new THREE.Color(roofCol));
+      bake(roof, new THREE.Vector3(e.cx, y + 0.23 + h, e.cz), e.yaw);
+      parts.push(roof);
+    }
     // front-face stripe (the corner-rule proof — on the +z face BY CONSTRUCTION)
     var stripeH = Math.max(h * 0.9, 0.6);
-    var stripe = makeBoxLocal(Math.min(0.7, w * 0.4), stripeH, 0.15, new THREE.Color(LM_PLACEHOLDER.marker));
+    var stripe = makeBoxLocal(Math.min(0.7, w * 0.4), stripeH, 0.15, new THREE.Color(stripeCol));
     lmBakeAt(stripe, 0, 0.23, d / 2 - 0.02, e.yaw, e.cx, y, e.cz);
     parts.push(stripe);
   }
+  if(phase === "ruins")    lcRubbleParts(parts, e, w, d, y, e.yaw, 1);
+  if(phase === "clearing") lcRubbleParts(parts, e, w, d, y, e.yaw, Math.max(1 - prog, 0.05));
   var mesh = new THREE.Mesh(mergeGeoms(parts), LM_MAT);
   mesh.frustumCulled = false;
   mesh.userData.fillCode = e.code;
   mesh.userData.fillRank = e.rank;
+  mesh.userData.phase = phase;
   return mesh;
 }
 function fillClear(){
@@ -9619,7 +10111,10 @@ function fillClear(){
 function rebuildFill(){
   fillClear();
   var set = deriveFillSet(simDay);
-  for(var i = 0; i < set.length; i++) FILL_GROUP.add(fillBuildMesh(set[i]));
+  for(var i = 0; i < set.length; i++){
+    if(set[i].phase === "absent" || set[i].phase === "gone") continue;   // nothing on the lot to draw
+    FILL_GROUP.add(fillBuildMesh(set[i]));
+  }
   _fillLastDay = Math.floor(simDay);
 }
 function updateFill(){
@@ -9799,7 +10294,8 @@ registerLayerVisibility("buildings-fill", function(v){ FILL_GROUP.visible = v; i
   registerAudit("buildings", "fillDeterminism", function(){
     function fp(day){
       return deriveFillSet(day).map(function(e){
-        return e.code + "|" + e.cx.toFixed(3) + "|" + e.cz.toFixed(3) + "|" + e.state + "|" + e.hFrac.toFixed(3) + "|" + e.yaw.toFixed(5) + "|" + (e.counted ? 1 : 0);
+        return e.code + "|" + e.cx.toFixed(3) + "|" + e.cz.toFixed(3) + "|" + e.state + "|" + e.hFrac.toFixed(3) + "|" + e.yaw.toFixed(5) + "|" + (e.counted ? 1 : 0)
+             + "|" + e.phase + "|" + (e.transition ? e.transition.type + ":" + e.transition.progress.toFixed(5) : "-");
       }).join("\n");
     }
     var A = eventDateToSimDay("1847-04-01"), B = eventDateToSimDay("1848-04-01");
@@ -9956,10 +10452,213 @@ registerLayerVisibility("buildings-fill", function(v){ FILL_GROUP.visible = v; i
   });
 })();
 
+/* =====================================================================
+   THE s108 LIFECYCLE AUDITS (rules-first: the ruins gate, the fire's scope,
+   and lifecycle determinism become STANDING RULES with executable audits —
+   never one-off patches). Registered under __P1850_AUDITS.buildings.*; each
+   is a framing-independent pure function over the SAME compiled lifecycle
+   timelines the renderer draws (measurement law).
+
+   FAIL-BEFORE / PASS-AFTER (proven by tools/verify/probe-s108.js):
+     • lifecycleRuinsGate — fail-before: __P1850_LC_QA({breakRuinsGate:true})
+       forces every rebuild to start the evening of the burn (the pre-s108
+       world had NO ruins state at all: burn -> instant absent); the audit
+       goes RED on rebuild-before-cleared. Pass-after: knob off, the gate
+       ordering (burn->ruins->clearing->cleared->rebuild) holds everywhere.
+     • fireScope — fail-before: __P1850_LC_QA({disableWorldEvents:true})
+       unwires the world event (the pre-s108 state: only the 4 authored
+       burned: fields did anything; in-perimeter fill and un-annotated
+       landmarks did NOT burn); the audit goes RED on in-perimeter-not-burned.
+       Pass-after: every building the perimeter covers burns on the date,
+       none outside it burns via the event, and the record's four documented
+       burns + named survivors are confirmed.
+     • lifecycleDeterminism — the full phase/transition fingerprint is
+       byte-identical same-day and across an A->B->...->A rewind (zero dice
+       at query time; seeded-hash fill laws; cached pure compiles). ======== */
+(function registerLifecycleAudits(){
+  function lcResolvedRecs(){
+    var R = (typeof GROUND_RESERVATIONS !== "undefined") ? GROUND_RESERVATIONS : [];
+    return R.filter(function(r){ return r.resolved; });
+  }
+  function lcAllTimelines(){
+    var out = [];
+    lcResolvedRecs().forEach(function(rec){
+      var lc = lmLifecycleOf(rec);
+      out.push({ id: rec.landmarkId, kind: "landmark", cx: rec.footprint.cx, cz: rec.footprint.cz,
+                 events: lc.events, spans: lc.spans });
+    });
+    buildFillMaster().forEach(function(e){
+      var lc = fillLifecycleOf(e);
+      out.push({ id: e.code + "#" + e.rank, kind: "fill", cx: e.cx, cz: e.cz,
+                 events: lc.events, spans: lc.spans });
+    });
+    return out;
+  }
+
+  /* ---- lifecycleRuinsGate — THE RUINS GATE (spec §2b): uncontrolled
+     destruction leaves RUINS; the lot STAYS in ruins until actively CLEARED;
+     no construct/rebuild may begin before the clear completes. Teardown (the
+     controlled path) must still reach `cleared` before its replacement starts.
+     Measured on the EVENT timelines (the law's own terms), for every landmark
+     and every fill building. ---- */
+  registerAudit("buildings", "lifecycleRuinsGate", function(){
+    var viol = [], burnEvents = 0, teardownEvents = 0, rebuilds = 0;
+    lcAllTimelines().forEach(function(t){
+      t.events.forEach(function(ev){
+        if(ev.type !== "burn" && ev.type !== "teardown") return;
+        if(ev.type === "burn") burnEvents++; else teardownEvents++;
+        var clear = null, nextBuild = null;
+        t.events.forEach(function(o){
+          if(o.type === "clear" && o.start >= ev.on - 1e-6 && (!clear || o.start < clear.start)) clear = o;
+          if((o.type === "rebuild" || o.type === "construct") && o.start > ev.start && (!nextBuild || o.start < nextBuild.start)) nextBuild = o;
+        });
+        if(ev.type === "burn"){
+          // a ruins SPAN must exist between the burn and whatever follows
+          var hasRuins = t.spans.some(function(s){ return s.phase === "ruins" && s.from >= ev.start - 1e-6 && (!nextBuild || s.from < nextBuild.start); });
+          if(!hasRuins) viol.push({ id: t.id, kind: t.kind, why: "no-ruins-after-burn" });
+        }
+        if(nextBuild){
+          rebuilds++;
+          var clearedAt = ev.type === "teardown" ? ev.on : (clear ? clear.on : null);   // teardown clears AS it goes (spec §2b)
+          if(ev.type === "burn" && !clear) viol.push({ id: t.id, kind: t.kind, why: "rebuild-without-clear" });
+          else if(clearedAt != null && nextBuild.start < clearedAt - 1e-6)
+            viol.push({ id: t.id, kind: t.kind, why: "rebuild-before-cleared",
+                        rebuildStart: +nextBuild.start.toFixed(1), clearedAt: +clearedAt.toFixed(1) });
+        }
+      });
+    });
+    return { pass: viol.length === 0, burnEvents: burnEvents, teardownEvents: teardownEvents,
+             rebuildsChecked: rebuilds, violations: viol.length, sample: viol.slice(0, 8),
+             qaKnobs: { breakRuinsGate: LC_QA.breakRuinsGate, disableWorldEvents: LC_QA.disableWorldEvents } };
+  });
+
+  /* ---- fireScope — THE DEC 24 1849 WORLD EVENT'S SCOPE (spec §4/D1): the
+     authored perimeter resolves; EVERY building whose footprint centroid the
+     perimeter covers (landmark AND fill) burns via great-fire-1849 on the
+     date; NO building outside it burns via the event; the record's four
+     documented burns are inside and burn; the documented survivors flanking
+     the perimeter are outside and stand. ---- */
+  registerAudit("buildings", "fireScope", function(){
+    var evs = lcFireEvents();
+    if(!evs.length || evs[0].quads.length !== WORLD_EVENTS[0].perimeter.length)
+      return { pass: false, why: "perimeter-unresolved", resolvedStrips: evs.length ? evs[0].quads.length : 0 };
+    var fire = evs[0], viol = [], inside = 0, burnedInside = 0;
+    function check(id, kind, cx, cz, events){
+      var inScope = fire.quads.some(function(q){ return lcPointInQuad(q, cx, cz); });
+      var burnViaFire = events.some(function(ev){ return ev.type === "burn" && ev.via === fire.id && Math.abs(ev.start - fire.day) < 0.51; });
+      if(inScope){ inside++; if(burnViaFire) burnedInside++; else viol.push({ id: id, kind: kind, why: "in-perimeter-not-burned" }); }
+      else if(burnViaFire) viol.push({ id: id, kind: kind, why: "burned-outside-perimeter" });
+      return inScope;
+    }
+    var scopeById = {};
+    lcAllTimelines().forEach(function(t){ scopeById[t.id] = check(t.id, t.kind, t.cx, t.cz, t.events); });
+    // the record's confirmations (dossier/registry dates_note)
+    var mustBurn = ["parker-house", "el-dorado", "dennisons-exchange", "bella-union"];
+    var mustSurvive = ["alta-california-office", "california-star-office", "merchants-exchange",
+                       "custom-house", "school-house", "city-hotel", "howard-mellus-store", "new-york-store-ross"];
+    mustBurn.forEach(function(id){ if(!scopeById[id]) viol.push({ id: id, why: "documented-burn-outside-perimeter" }); });
+    mustSurvive.forEach(function(id){ if(scopeById[id]) viol.push({ id: id, why: "documented-survivor-inside-perimeter" }); });
+    return { pass: viol.length === 0, fireDay: +fire.day.toFixed(1), strips: fire.quads.length,
+             inPerimeter: inside, burnedInPerimeter: burnedInside,
+             violations: viol.length, sample: viol.slice(0, 10),
+             qaKnobs: { disableWorldEvents: LC_QA.disableWorldEvents } };
+  });
+
+  /* ---- lifecycleDeterminism — the FULL lifecycle read (phase + C-state +
+     transition progress + aging) is byte-identical when derived twice at the
+     same day, and across an A->B->C->D->A rewind. Probes the loud days: the
+     El Dorado expand, the fire morning, deep ruins, the rebuild window, and
+     the fill upgrade wave. ---- */
+  registerAudit("buildings", "lifecycleDeterminism", function(){
+    function fp(day){
+      var rows = [];
+      deriveLandmarkSet(day).forEach(function(e){
+        rows.push("L|" + e.id + "|" + e.phase + "|" + e.state + "|" + e.hFrac.toFixed(4)
+          + "|" + (e.transition ? e.transition.type + ":" + e.transition.progress.toFixed(5) : "-")
+          + "|" + (e.agingT != null ? e.agingT.toFixed(5) : "-"));
+      });
+      deriveFillSet(day).forEach(function(e){
+        rows.push("F|" + e.code + "#" + e.rank + "|" + e.phase + "|" + e.state + "|" + e.hFrac.toFixed(4)
+          + "|" + (e.transition ? e.transition.type + ":" + e.transition.progress.toFixed(5) : "-"));
+      });
+      return rows.join("\n");
+    }
+    var days = ["1849-07-15", "1849-08-15", "1849-12-26", "1849-12-30"].map(eventDateToSimDay);
+    days.push(eventDateToSimDay("1849-12-24") + 0.5);            // mid-burn
+    var first = days.map(fp);
+    var second = days.map(fp);                                   // same days again (cache-warm second read)
+    var rewound = fp(days[0]);                                   // ...and back to A after the walk
+    var sameDay = first.every(function(s, i){ return s === second[i]; });
+    var rewindExact = first[0] === rewound;
+    return { pass: sameDay && rewindExact, sameDayIdentical: sameDay, rewindExact: rewindExact,
+             daysProbed: days.length, rows: first[0].split("\n").length };
+  });
+})();
+
+/* ---- s108 QA + probe hooks (dev/verify affordances; pure toggles, default
+   off — a version bump invalidates every lifecycle cache so the derived world
+   stays deterministic on either side of a toggle). ---- */
+if(typeof window !== "undefined"){
+  window.__P1850_LC_QA = function(opts){
+    opts = opts || {};
+    if(opts.breakRuinsGate != null)     LC_QA.breakRuinsGate = !!opts.breakRuinsGate;
+    if(opts.disableWorldEvents != null) LC_QA.disableWorldEvents = !!opts.disableWorldEvents;
+    LC_QA.version++;
+    _lmSpanCache = {}; _lmSpanCacheVer = LC_QA.version;
+    _lmLastDay = null; _fillLastDay = null;                      // force a re-render at the current day
+    return { breakRuinsGate: LC_QA.breakRuinsGate, disableWorldEvents: LC_QA.disableWorldEvents, version: LC_QA.version };
+  };
+  /* every lifecycle event day (landmark + fill) — consumed by the atelier's
+     coordinate-timeline inspector so transitions report on their true dates. */
+  window.__P1850_LIFECYCLE_DAYS = function(){
+    var out = [];
+    var R = (typeof GROUND_RESERVATIONS !== "undefined") ? GROUND_RESERVATIONS : [];
+    R.forEach(function(rec){
+      if(!rec.resolved) return;
+      lmLifecycleOf(rec).events.forEach(function(ev){ out.push(ev.start); out.push(ev.on); });
+    });
+    buildFillMaster().forEach(function(e){
+      fillLifecycleOf(e).events.forEach(function(ev){ out.push(ev.start); out.push(ev.on); });
+    });
+    return out;
+  };
+}
+
 /* driving hooks for the verify harness / Atelier — the derived fill set + a
    numbers table, exposed over the pure derive (zero new geometry). */
 setTimeout(function(){
   if(typeof window !== "undefined" && window.__P1850){
+    window.__P1850.buildingLifecycle = function(id, day){
+      var d = day == null ? simDay : day;
+      var rec = reservationById(id);
+      if(rec && rec.resolved){
+        var lc = lmLifecycleOf(rec);
+        return { id: id, kind: "landmark", state: lmStateAt(rec, d),
+                 events: lc.events, spans: lc.spans.map(function(s){ return { from: +s.from.toFixed(1), to: +(Math.min(s.to, 9e8)).toFixed(1), phase: s.phase }; }) };
+      }
+      var m = buildFillMaster();
+      for(var i = 0; i < m.length; i++){
+        if(m[i].code + "#" + m[i].rank === id || m[i].code === id){
+          var flc = fillLifecycleOf(m[i]);
+          return { id: m[i].code + "#" + m[i].rank, kind: "fill", state: fillStateAt(m[i], d),
+                   events: flc.events, spans: flc.spans.map(function(s){ return { from: +s.from.toFixed(1), to: +(Math.min(s.to, 9e8)).toFixed(1), phase: s.phase }; }) };
+        }
+      }
+      return null;
+    };
+    window.__P1850.fireScopeInfo = function(){
+      var evs = lcFireEvents(); if(!evs.length) return null;
+      var fire = evs[0], burned = [], standing = [];
+      var R = (typeof GROUND_RESERVATIONS !== "undefined") ? GROUND_RESERVATIONS : [];
+      R.forEach(function(rec){
+        if(!rec.resolved) return;
+        var inScope = fire.quads.some(function(q){ return lcPointInQuad(q, rec.footprint.cx, rec.footprint.cz); });
+        (inScope ? burned : standing).push(rec.landmarkId);
+      });
+      var fillIn = buildFillMaster().filter(function(e){ return fire.quads.some(function(q){ return lcPointInQuad(q, e.cx, e.cz); }); });
+      return { id: fire.id, day: +fire.day.toFixed(1), strips: fire.quads.length,
+               landmarksInPerimeter: burned, fillInPerimeter: fillIn.map(function(e){ return e.code + "#" + e.rank; }) };
+    };
     window.__P1850.fillAt = function(day){ return deriveFillSet(day == null ? simDay : day); };
     window.__P1850.fillCount = function(day){ return deriveFillSet(day == null ? simDay : day).filter(function(e){ return e.counted; }).length; };
     window.__P1850.fillMasterSize = function(){ return buildFillMaster().length; };

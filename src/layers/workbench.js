@@ -113,7 +113,7 @@
     muted: {},            // layerName -> true when hidden
     solo: null,           // layerName | null
     probe: false,
-    overlays: { spine:false, row:false, lots:false, parcels:false, wharf:false, keepout:false, zones:false, audits:false, dryland:false },
+    overlays: { spine:false, row:false, lots:false, parcels:false, wharf:false, keepout:false, zones:false, audits:false, dryland:false, lifecycle:false },
     tl: false,            // coordinate timeline inspector armed
     morph: { demo:false, patch:false, regions:false, island:false }, // s102 terrain-morph viz toggles
     knobs: { sunMul:1, hemiMul:1, ambientMul:1, nightLift:0, detailAmp:null, doodadMul:1, streetAlphaMul:1 }
@@ -160,7 +160,7 @@
     // frame — there is one frame; only the date-gated birth/extent changes.
     if(Math.floor(simDay)!==_overlayDay){
       _overlayDay = Math.floor(simDay);
-      ["spine","row","lots","parcels","reservations","wharf","keepout","zonelaw","dryland"].forEach(function(key){
+      ["spine","row","lots","parcels","reservations","wharf","keepout","zonelaw","dryland","lifecycle"].forEach(function(key){
         if(!WB.overlays[key]) return;
         if(overlayObjs[key]){ scene.remove(overlayObjs[key]); }
         overlayObjs[key] = buildOverlay(key);
@@ -366,7 +366,7 @@
      (walk keep-out · ecology zones · audit failures). Copy is Director-authored
      verbatim; each row is a name + a small legend line. ---- */
   beginSection("overlays","RULE OVERLAYS", { desc:"Overlays inspect the LAW and DATA behind the render — the survey spine, rights-of-way, plat lots, parcels, landmark reservations, walk keep-out mask, zones, and live audit failures. Each row's ? reveals its legend; active overlays are highlighted." });
-  var overlayObjs = { spine:null, row:null, lots:null, parcels:null, reservations:null, wharf:null, keepout:null, zones:null, zonelaw:null, audits:null, dryland:null };
+  var overlayObjs = { spine:null, row:null, lots:null, parcels:null, reservations:null, wharf:null, keepout:null, zones:null, zonelaw:null, audits:null, dryland:null, lifecycle:null };
   var overlayRowEls = {};
   var auditStatusEl = null, keepoutStatusEl = null;
 
@@ -476,6 +476,8 @@
     "The zoneAt classification tinted over the domain: which ground class governs placement and vegetation at each point. Hydrology reconciliation pending — creek network incomplete.");
   makeFlat("audits", "AUDIT FAILURES",
     "Runs the full audit suite at the current date; a red marker at every violation coordinate. An empty overlay is the goal state.");
+  makeFlat("lifecycle", "BUILDING LIFECYCLE (s108)",
+    "building-lifecycle-spec: every rendered building (landmark + fill) tinted by its LIFECYCLE STATE at the current date, with a state GLYPH floated above it. amber C1-C4 = constructing/rebuilding (glyph = the C-stage) · green A = active (A* = fresh wood, first-year sheen) · orange EX = expanding · red BRN = burning (Dec 24 1849 only) · dark-red RUIN = ruins (must be CLEARED before any rebuild — the ruins gate) · violet CLR = clearing · grey CLD = cleared lot · blue TDN = teardown (replacement path). Scrub across Dec 24 1849 to watch the authored Great Fire sweep the Kearny-side plaza cluster: burn -> ruins -> clearing -> rebuild sites.");
   makeFlat("dryland", "DRY-LAND EDGE + FLOATING ROADS (s110a)",
     "terrain-edge-grounding-spec §0–§3. orange = the DRY-LAND EDGE (terrainHeightAt = +0.85 m, above every tide + freeboard) at this date. For each road whose authored centerline overhangs that edge: red = the RAW authored extent, green = the programmatic roadDrawnExtentAt CLAMP (draped + trimmed at the edge). magenta = too-steep segments (roadGrade > 31.5%). Wharf feet: green cross = dry & set back ≥8 ft inland; red cross = mis-anchored (below high tide or seaward of the edge). Read-only — the clamp is live in the release render (s110b) and the wharf feet are re-anchored inland (s110d); an all-green overlay is the goal state.");
 
@@ -491,7 +493,79 @@
     if(key==="reservations") return buildReservationOverlay();
     if(key==="wharf") return buildWharfOverlay();
     if(key==="dryland") return buildDrylandOverlay();
+    if(key==="lifecycle") return buildLifecycleOverlay();
     return null;
+  }
+
+  /* s108 BUILDING LIFECYCLE overlay — every rendered building (landmark + fill)
+     gets a footprint tint quad in its lifecycle-state colour + a floating state
+     GLYPH sprite (the operator's at-a-glance read). Pure read of the SAME
+     derived sets the renderer draws; date-gated (rebuilds on day change while
+     enabled, like every overlay). */
+  var WB_LC_STYLE = {
+    constructing: { col:0xffd23e, glyph:function(e){ return "C"+e.state; } },
+    complete:     { col:0x35d07f, glyph:function(e){ return (e.agingT!=null && e.agingT<1) ? "A*" : "A"; } },
+    expanding:    { col:0xff8c1a, glyph:function(){ return "EX"; } },
+    burning:      { col:0xff2020, glyph:function(){ return "BRN"; } },
+    ruins:        { col:0x8a2b18, glyph:function(){ return "RUIN"; } },
+    clearing:     { col:0xb05cd8, glyph:function(){ return "CLR"; } },
+    cleared:      { col:0x9aa0a6, glyph:function(){ return "CLD"; } },
+    teardown:     { col:0x3ba7ff, glyph:function(){ return "TDN"; } }
+  };
+  var _wbGlyphTexCache = {};
+  function wbGlyphSprite(text, colHex){
+    var key = text + "|" + colHex;
+    var tex = _wbGlyphTexCache[key];
+    if(!tex){
+      var cv = document.createElement("canvas"); cv.width = 128; cv.height = 64;
+      var ctx = cv.getContext("2d");
+      ctx.fillStyle = "rgba(8,8,10,0.78)"; ctx.fillRect(4, 4, 120, 56);
+      ctx.font = "bold 38px monospace"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillStyle = "#" + ("000000" + colHex.toString(16)).slice(-6);
+      ctx.fillText(text, 64, 34);
+      tex = new THREE.CanvasTexture(cv);
+      _wbGlyphTexCache[key] = tex;
+    }
+    var sp = new THREE.Sprite(new THREE.SpriteMaterial({ map:tex, depthTest:false, transparent:true }));
+    sp.scale.set(9, 4.5, 1); sp.renderOrder = 1004; sp.frustumCulled = false;
+    return sp;
+  }
+  function buildLifecycleOverlay(){
+    _overlayDay = Math.floor(simDay);
+    var grp = new THREE.Group(); grp.frustumCulled = false;
+    var fillPos = [], fillCol = [];
+    function quadOf(e){
+      var nx = Math.sin(e.yaw), nz = Math.cos(e.yaw), tx = nz, tz = -nx, hw = e.w/2, hd = e.d/2;
+      function P(sw, sd){ return { x:e.cx + tx*sw + nx*sd, z:e.cz + tz*sw + nz*sd }; }
+      return [ P(-hw,-hd), P(hw,-hd), P(hw,hd), P(-hw,hd) ];
+    }
+    function addEntry(e, hM){
+      var st = WB_LC_STYLE[e.phase]; if(!st) return;
+      var q = quadOf(e), c = new THREE.Color(st.col), before = fillPos.length;
+      wbPushDrapedTri(fillPos, q[0], q[1], q[2], 0.5, 1);
+      wbPushDrapedTri(fillPos, q[0], q[2], q[3], 0.5, 1);
+      for(var f = 0, added = (fillPos.length - before)/3; f < added; f++) fillCol.push(c.r, c.g, c.b);
+      var sp = wbGlyphSprite(st.glyph(e), st.col);
+      sp.position.set(e.cx, terrainHeight(e.cx, e.cz) + (hM || 4) + 5, e.cz);
+      grp.add(sp);
+    }
+    try{
+      if(typeof deriveLandmarkSet === "function")
+        deriveLandmarkSet(simDay).forEach(function(e){ addEntry(e, e.hM); });
+      if(typeof deriveFillSet === "function")
+        deriveFillSet(simDay).forEach(function(e){
+          if(e.phase === "absent" || e.phase === "gone") return;
+          addEntry(e, (e.stories || 1) * 3.1);
+        });
+    }catch(err){ console.warn("[wb] lifecycle overlay failed", err); }
+    if(fillPos.length){
+      var fg = new THREE.BufferGeometry();
+      fg.setAttribute("position", new THREE.Float32BufferAttribute(fillPos, 3));
+      fg.setAttribute("color", new THREE.Float32BufferAttribute(fillCol, 3));
+      var fm = new THREE.Mesh(fg, new THREE.MeshBasicMaterial({ vertexColors:true, transparent:true, opacity:0.38, depthTest:false, depthWrite:false, side:THREE.DoubleSide }));
+      fm.renderOrder = 998; fm.frustumCulled = false; grp.add(fm);
+    }
+    return grp;
   }
 
   /* s110a DRY-LAND EDGE + FLOATING-ROADS overlay (terrain-edge-grounding-spec
@@ -1089,9 +1163,12 @@
   function wbBuildingAt(x, z, day){
     try{
       if(typeof deriveLandmarkSet === "function"){ var L = deriveLandmarkSet(day);
-        for(var i = 0; i < L.length; i++){ var e = L[i]; if(wbInBox(x, z, e.cx, e.cz, e.w, e.d, e.yaw)) return "landmark "+(e.name||e.id)+" ["+e.state+"]"; } }
+        for(var i = 0; i < L.length; i++){ var e = L[i]; if(wbInBox(x, z, e.cx, e.cz, e.w, e.d, e.yaw))
+          return "landmark "+(e.name||e.id)+" ["+(e.phase||"?")+" C"+e.state+(e.transition?" "+e.transition.type+" "+Math.round(e.transition.progress*100)+"%":"")+"]"; } }
       if(typeof deriveFillSet === "function"){ var F = deriveFillSet(day);
-        for(var j = 0; j < F.length; j++){ var f = F[j]; if(wbInBox(x, z, f.cx, f.cz, f.w, f.d, f.yaw)) return "fill "+f.code+" ["+f.state+"]"; } }
+        for(var j = 0; j < F.length; j++){ var f = F[j]; if(f.phase==="absent"||f.phase==="gone") continue;
+          if(wbInBox(x, z, f.cx, f.cz, f.w, f.d, f.yaw))
+            return "fill "+f.code+" ["+(f.phase||"?")+" C"+f.state+(f.transition?" "+f.transition.type+" "+Math.round(f.transition.progress*100)+"%":"")+"]"; } }
     }catch(e){}
     return null;
   }
@@ -1128,6 +1205,9 @@
     add(0); add(SIM_END_DAY);
     try{ (GROUND_PLAN.blocks||[]).forEach(function(b){ add(b.birth); }); }catch(e){}
     try{ (typeof GROUND_RESERVATIONS !== "undefined" ? GROUND_RESERVATIONS : []).forEach(function(r){ add(r.built); add(r.burned); }); }catch(e){}
+    // s108: every lifecycle event day (landmark arcs + fire aftermath + fill
+    // upgrade wave) so burn/ruins/clear/rebuild transitions report exactly.
+    try{ if(typeof window.__P1850_LIFECYCLE_DAYS === "function") window.__P1850_LIFECYCLE_DAYS().forEach(add); }catch(e){}
     try{ (typeof PIERS_RUNTIME !== "undefined" ? PIERS_RUNTIME : []).forEach(function(p){ add(p.birthDay); (p.checkpoints||[]).forEach(function(c){ add(c.day); }); }); }catch(e){}
     try{ (typeof STREETS_RUNTIME !== "undefined" ? STREETS_RUNTIME : []).forEach(function(s){ (s.checkpoints||[]).forEach(function(c){ add(c.day); }); add(s.surveyedDay); }); }catch(e){}
     return Object.keys(set).map(Number).sort(function(a, b){ return a-b; });
