@@ -643,6 +643,23 @@ function _morphDistToEdge(x,z,poly){
   }
   return best;
 }
+/* min/max of a region polygon along one world axis ('x' or 'z') — the front's
+   travel span for the directional-advance fill (below). */
+function _morphAxisBounds(poly, axis){
+  var lo=Infinity, hi=-Infinity;
+  for(var i=0;i<poly.length;i++){ var c=poly[i][axis]; if(c<lo)lo=c; if(c>hi)hi=c; }
+  return { lo:lo, hi:hi };
+}
+/* the moving front's position along the advance axis at `day` (§2b): starts at
+   the shore-side region edge and marches to the far edge as the op ramps. Pure
+   of `day`. Shared by morphOpDeltaAt and the atelier's advancing-front overlay. */
+function morphAdvanceFront(op, day){
+  var adv = op.advance; if(!adv) return null;
+  var axis = adv.axis==="z" ? "z" : "x";
+  var ab = _morphAxisBounds(op.region, axis), span = ab.hi-ab.lo, ramp = morphOpRamp(op, day);
+  return { axis:axis, dir:(adv.dir<0?-1:1), lo:ab.lo, hi:ab.hi,
+           front: adv.dir<0 ? (ab.hi - ramp*span) : (ab.lo + ramp*span) };
+}
 /* the annual-checkpoint ramp (§2b): the delta eases in LINEARLY across the
    op's dated arc, so the cove visibly fills over time. Undated op = fully
    applied (a static edit). Pure of `day`. */
@@ -652,9 +669,23 @@ function morphOpRamp(op, day){
   if(day >= a.completeDay) return 1;
   return (a.completeDay===a.startDay) ? 1 : (day-a.startDay)/(a.completeDay-a.startDay);
 }
-/* one op's shaped, ramped delta at (x,z,day): full targetDeltaM in the region
+/* one op's shaped, ramped delta at (x,z,day). Two shape models:
+
+   UNIFORM (no `advance`, the original): full targetDeltaM in the region
    interior, tapered to 0 across the last edgeFalloffM before the boundary (the
-   graded bank), zero outside the region (bounded/surgical). */
+   graded bank), zero outside — the whole region rises together, ramp scaling
+   HEIGHT. Unchanged.
+
+   DIRECTIONAL SHORE-ANCHORED (fill op with `advance:{axis,dir,frontFalloffM}`,
+   s102b — the reclamation model): a FRONT sweeps along axis*dir as the op ramps
+   (ramp scales the front POSITION, not the height). Behind the front (the shore
+   side) the ground is raised to the FULL targetDeltaM; ahead of it 0; the moving
+   front tapers over frontFalloffM (the graded advancing bank). Only the CROSS-
+   axis (lateral) region edges feather by edgeFalloffM — the shore-side (back)
+   edge is NOT feathered, so the fill butts hard against the anchored waterfront
+   land and can never leave a water gap (the disjoint mid-cove-slab defect the
+   uniform model produced when its region floated off the shore). Pure of `day`;
+   rewind-exact; ramp 0 -> no fill. */
 function morphOpDeltaAt(op, x, z, day){
   var prof = op.profile || {}, target = prof.targetDeltaM || 0;
   if(!target) return 0;
@@ -663,6 +694,18 @@ function morphOpDeltaAt(op, x, z, day){
   var poly = op.region;
   if(!poly || poly.length < 3 || !_morphPointInPoly(x,z,poly)) return 0;
   var fall = prof.edgeFalloffM || 0;
+  if(op.advance && op.kind==="fill"){
+    var f = morphAdvanceFront(op, day), ff = op.advance.frontFalloffM || 0;
+    var coord = f.axis==="x" ? x : z;
+    var frontShape = f.dir<0
+      ? (ff>0 ? smoothstep(f.front, f.front+ff, coord) : (coord>=f.front?1:0))   // shore on +axis side
+      : (ff>0 ? (1 - smoothstep(f.front-ff, f.front, coord)) : (coord<=f.front?1:0)); // shore on -axis side
+    if(frontShape <= 0) return 0;
+    var crossAxis = f.axis==="x" ? "z" : "x", cb = _morphAxisBounds(poly, crossAxis);
+    var cc = crossAxis==="x" ? x : z;
+    var lateral = fall>0 ? smoothstep(0, fall, Math.min(cc-cb.lo, cb.hi-cc)) : 1;
+    return target * frontShape * lateral;
+  }
   var shape = fall > 0 ? smoothstep(0, fall, _morphDistToEdge(x,z,poly)) : 1;
   return target * ramp * shape;
 }
@@ -685,18 +728,25 @@ function terrainHeightAt(x, z, day, ops){
 function isLandAt(x, z, day, ops){
   return terrainHeightAt(x, z, day, ops) > TERRAIN_WATERLINE_Y + TERRAIN_LAND_MARGIN;
 }
-/* shorelineAt(day): the DERIVED coast (§4) — a coarse contour sample, not a
-   full trace. Marches seaward across the cove z-span and records the outermost
-   land->water crossing per row, so as fill raises the cove the sampled shore
-   advances seaward on its own. */
+/* shorelineAt(day): the DERIVED coast (§4) — a coarse contour sample of the
+   CONTIGUOUS mainland's seaward edge, not the outermost crossing. Per z-row it
+   marches from a known-inland start (far west, on the peninsula) seaward: it
+   skips any leading water, LATCHES on the first land, then records the FIRST
+   land->water crossing of that contiguous land run and STOPS. An OFFSHORE body
+   (a detached fill island in open water) therefore never moves the shore — the
+   defect where the old outermost-crossing contour snapped to a disjoint slab's
+   far edge and zigzagged is closed by construction. The result is a function of
+   z (one x per row), so it is monotone in z and cannot self-cross; as a shore-
+   CONNECTED fill raises the cove the contiguous run extends and the sampled
+   shore advances seaward on its own. */
 function shorelineAt(day, ops){
   var pts=[];
   for(var z=-360; z<=1180; z+=30){
-    var prev=null, found=null;
-    for(var x=-200; x<=1500; x+=12){
+    var onLand=false, found=null;
+    for(var x=-200; x<=1500 && found===null; x+=12){
       var land = isLandAt(x, z, day, ops);
-      if(prev===true && land===false) found = x;   // outermost land->water edge = the shore
-      prev = land;
+      if(!onLand){ if(land) onLand=true; }          // skip leading water; latch the mainland
+      else if(!land){ found = x; }                   // first land->water of that run = the coast
     }
     if(found!==null) pts.push({ x:found, z:z });
   }

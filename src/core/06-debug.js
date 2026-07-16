@@ -16,6 +16,19 @@ window.__P1850 = {
   get terrainMesh(){ return TERRAIN_MESH_STATS; },
   get westFauna(){ return window._westFauna; },
   zoneAt: function(x,z){ return zoneAt(x,z); },
+  /* s102 terrain-morph QA hooks — pure reads of the date-editable heightfield
+     (terrain-morphing-spec §1/§2/§4). `ops` defaults to the release list
+     (window.TERRAIN_MORPH_OPS, empty) unless callers pass the atelier demo op.
+     Used by the verify driver to probe shore anchors + land/water at date. */
+  morph: {
+    shoreAnchorsX: function(z){ return shoreAnchorsX(z); },
+    shorelineX: function(z){ return shorelineX(z); },
+    heightAt: function(x,z,day,ops){ return terrainHeightAt(x,z,day,ops); },
+    isLandAt: function(x,z,day,ops){ return isLandAt(x,z,day,ops); },
+    deltaAt: function(x,z,day,ops){ return morphDeltaAt(x,z,day,ops); },
+    ramp: function(op,day){ return morphOpRamp(op,day); },
+    shorelineAt: function(day,ops){ return shorelineAt(day,ops); }
+  },
   get layerVis(){ return Object.keys(__P1850_LAYER_VIS); }, // dev-tooling interface (layers-spec.md §15): registered per-layer visibility toggles
   invalidatePaint: function(){ invalidateGroundPaint(); return "redraped + repaint queued"; },
   _scene: function(){ return scene; },
@@ -1339,4 +1352,90 @@ registerAudit("core", "geodeticLock", function(){
     controlPoints: n,
     gates: "fitRms<=2, e2eRms<=2, azDrift<=0.1deg, roundTrip<=1e-3m"
   };
+});
+
+/* =========================================================================
+   s102b TERRAIN-MORPH RULES-FIRST AUDITS (terrain-morphing-spec §2/§4, the
+   RECLAMATION rules). Both run on BOTH targets. With the RELEASE morph-op list
+   empty they are trivially green (no active fill ops / the natural baseline
+   coast). The atelier wires its armed demo op in through
+   window.__P1850_MORPH_AUDIT_OPS so the SAME rules gate the demo, and the
+   fail-before/pass-after demonstration calls the audit with an explicit ops
+   list (old floating rect vs new shore-anchored op). NEVER returns a string
+   `skipped` — the noon protocol reds string skips, and an empty op list is a
+   real pass, not a skip.
+   ========================================================================= */
+function morphAuditOps(){
+  var ov = window.__P1850_MORPH_AUDIT_OPS;
+  var ops = (typeof ov==="function") ? ov() : ov;
+  return (ops && ops.length) ? ops : (window.TERRAIN_MORPH_OPS||[]);
+}
+/* fillShoreConnected — RULE: at full ramp, every fill op's newly-created land is
+   CONTIGUOUS with the 1846 baseline land (no disjoint mid-cove slab). Rasterizes
+   the op region (+ margin) at CELL m, 4-connected-floods the solid (land-at-full-
+   ramp) grid, and FAILS if any fill-created cell (solid now, water on the 1846
+   baseline) sits in a component holding NO baseline-land cell — an island
+   detached from the waterfront. The old uniform floating rectangle fails this;
+   the new shore-anchored advance op passes. */
+registerAudit("terrain", "fillShoreConnected", function(opsArg){
+  var ops = opsArg || morphAuditOps();
+  var fills = ops.filter(function(o){ return o && o.kind==="fill" && o.region && o.region.length>=3; });
+  var CELL = 8, MARGIN = 64, worst = 0, report = [];
+  fills.forEach(function(op){
+    var bx=_morphAxisBounds(op.region,"x"), bz=_morphAxisBounds(op.region,"z");
+    var x0=bx.lo-MARGIN, z0=bz.lo-MARGIN;
+    var nx=Math.max(2,Math.ceil((bx.hi-bx.lo+2*MARGIN)/CELL))+1;
+    var nz=Math.max(2,Math.ceil((bz.hi-bz.lo+2*MARGIN)/CELL))+1;
+    var day=(op.arc && op.arc.completeDay!=null) ? op.arc.completeDay : 0;   // full ramp
+    var solid=new Uint8Array(nx*nz), baseLand=new Uint8Array(nx*nz), i,j;
+    for(j=0;j<nz;j++) for(i=0;i<nx;i++){
+      var x=x0+i*CELL, z=z0+j*CELL, k=j*nx+i;
+      solid[k]=isLandAt(x,z,day,[op])?1:0;
+      baseLand[k]=isLandAt(x,z,day,[])?1:0;             // 1846 baseline (no ops)
+    }
+    var comp=new Int32Array(nx*nz); for(i=0;i<comp.length;i++) comp[i]=-1;
+    var anchored=[], stack=[], nc=0;
+    for(var s=0;s<solid.length;s++){
+      if(!solid[s]||comp[s]>=0) continue;
+      var id=nc++; anchored[id]=false; stack.length=0; stack.push(s); comp[s]=id;
+      while(stack.length){
+        var c=stack.pop(); if(baseLand[c]) anchored[id]=true;
+        var ci=c%nx, cj=(c-ci)/nx;
+        if(ci>0 && solid[c-1] && comp[c-1]<0){ comp[c-1]=id; stack.push(c-1); }
+        if(ci<nx-1 && solid[c+1] && comp[c+1]<0){ comp[c+1]=id; stack.push(c+1); }
+        if(cj>0 && solid[c-nx] && comp[c-nx]<0){ comp[c-nx]=id; stack.push(c-nx); }
+        if(cj<nz-1 && solid[c+nx] && comp[c+nx]<0){ comp[c+nx]=id; stack.push(c+nx); }
+      }
+    }
+    var created=0, disjoint=0;
+    for(var m=0;m<solid.length;m++) if(solid[m] && !baseLand[m]){ created++; if(!anchored[comp[m]]) disjoint++; }
+    if(disjoint>worst) worst=disjoint;
+    report.push({ id:op.id, advance:!!op.advance, atDay:day, createdCells:created,
+      disjointCells:disjoint, connected:(disjoint===0) });
+  });
+  return { pass:(worst===0), fills:fills.length, disjointCells:worst, ops:report,
+    rule:"every active fill's new land is contiguous with 1846 baseline land (no disjoint slab)" };
+});
+/* shorelineSimple — RULE: the derived coast shorelineAt(day) is a SIMPLE
+   polyline: strictly monotone in z (one x per row -> a function of z, which
+   cannot self-cross) with no jump between ADJACENT rows beyond JUMP_M (a large
+   adjacent x-jump is the signature of the contour snapping onto a detached
+   island — the zigzag the old outermost-crossing tracer produced). */
+registerAudit("terrain", "shorelineSimple", function(opsArg){
+  var ops = opsArg || morphAuditOps();
+  var JUMP_M = 250, STEP_Z = 30;
+  var pts = shorelineAt(simDay, ops), monoViol=0, jumpViol=0, maxJump=0, prev=null;
+  for(var i=0;i<pts.length;i++){
+    var p=pts[i];
+    if(prev){
+      if(p.z<=prev.z) monoViol++;
+      if(Math.abs(p.z-prev.z) <= STEP_Z*1.5){          // adjacent rows only (skip contour gaps)
+        var dx=Math.abs(p.x-prev.x); if(dx>maxJump) maxJump=dx; if(dx>JUMP_M) jumpViol++;
+      }
+    }
+    prev=p;
+  }
+  return { pass:(monoViol===0 && jumpViol===0), points:pts.length,
+    monotoneViolations:monoViol, jumpViolations:jumpViol, maxAdjacentJump_m:+maxJump.toFixed(1),
+    rule:"shorelineAt monotone in z with no adjacent-row x-jump > "+JUMP_M+"m" };
 });

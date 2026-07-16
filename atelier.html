@@ -3565,6 +3565,23 @@ function _morphDistToEdge(x,z,poly){
   }
   return best;
 }
+/* min/max of a region polygon along one world axis ('x' or 'z') — the front's
+   travel span for the directional-advance fill (below). */
+function _morphAxisBounds(poly, axis){
+  var lo=Infinity, hi=-Infinity;
+  for(var i=0;i<poly.length;i++){ var c=poly[i][axis]; if(c<lo)lo=c; if(c>hi)hi=c; }
+  return { lo:lo, hi:hi };
+}
+/* the moving front's position along the advance axis at `day` (§2b): starts at
+   the shore-side region edge and marches to the far edge as the op ramps. Pure
+   of `day`. Shared by morphOpDeltaAt and the atelier's advancing-front overlay. */
+function morphAdvanceFront(op, day){
+  var adv = op.advance; if(!adv) return null;
+  var axis = adv.axis==="z" ? "z" : "x";
+  var ab = _morphAxisBounds(op.region, axis), span = ab.hi-ab.lo, ramp = morphOpRamp(op, day);
+  return { axis:axis, dir:(adv.dir<0?-1:1), lo:ab.lo, hi:ab.hi,
+           front: adv.dir<0 ? (ab.hi - ramp*span) : (ab.lo + ramp*span) };
+}
 /* the annual-checkpoint ramp (§2b): the delta eases in LINEARLY across the
    op's dated arc, so the cove visibly fills over time. Undated op = fully
    applied (a static edit). Pure of `day`. */
@@ -3574,9 +3591,23 @@ function morphOpRamp(op, day){
   if(day >= a.completeDay) return 1;
   return (a.completeDay===a.startDay) ? 1 : (day-a.startDay)/(a.completeDay-a.startDay);
 }
-/* one op's shaped, ramped delta at (x,z,day): full targetDeltaM in the region
+/* one op's shaped, ramped delta at (x,z,day). Two shape models:
+
+   UNIFORM (no `advance`, the original): full targetDeltaM in the region
    interior, tapered to 0 across the last edgeFalloffM before the boundary (the
-   graded bank), zero outside the region (bounded/surgical). */
+   graded bank), zero outside — the whole region rises together, ramp scaling
+   HEIGHT. Unchanged.
+
+   DIRECTIONAL SHORE-ANCHORED (fill op with `advance:{axis,dir,frontFalloffM}`,
+   s102b — the reclamation model): a FRONT sweeps along axis*dir as the op ramps
+   (ramp scales the front POSITION, not the height). Behind the front (the shore
+   side) the ground is raised to the FULL targetDeltaM; ahead of it 0; the moving
+   front tapers over frontFalloffM (the graded advancing bank). Only the CROSS-
+   axis (lateral) region edges feather by edgeFalloffM — the shore-side (back)
+   edge is NOT feathered, so the fill butts hard against the anchored waterfront
+   land and can never leave a water gap (the disjoint mid-cove-slab defect the
+   uniform model produced when its region floated off the shore). Pure of `day`;
+   rewind-exact; ramp 0 -> no fill. */
 function morphOpDeltaAt(op, x, z, day){
   var prof = op.profile || {}, target = prof.targetDeltaM || 0;
   if(!target) return 0;
@@ -3585,6 +3616,18 @@ function morphOpDeltaAt(op, x, z, day){
   var poly = op.region;
   if(!poly || poly.length < 3 || !_morphPointInPoly(x,z,poly)) return 0;
   var fall = prof.edgeFalloffM || 0;
+  if(op.advance && op.kind==="fill"){
+    var f = morphAdvanceFront(op, day), ff = op.advance.frontFalloffM || 0;
+    var coord = f.axis==="x" ? x : z;
+    var frontShape = f.dir<0
+      ? (ff>0 ? smoothstep(f.front, f.front+ff, coord) : (coord>=f.front?1:0))   // shore on +axis side
+      : (ff>0 ? (1 - smoothstep(f.front-ff, f.front, coord)) : (coord<=f.front?1:0)); // shore on -axis side
+    if(frontShape <= 0) return 0;
+    var crossAxis = f.axis==="x" ? "z" : "x", cb = _morphAxisBounds(poly, crossAxis);
+    var cc = crossAxis==="x" ? x : z;
+    var lateral = fall>0 ? smoothstep(0, fall, Math.min(cc-cb.lo, cb.hi-cc)) : 1;
+    return target * frontShape * lateral;
+  }
   var shape = fall > 0 ? smoothstep(0, fall, _morphDistToEdge(x,z,poly)) : 1;
   return target * ramp * shape;
 }
@@ -3607,18 +3650,25 @@ function terrainHeightAt(x, z, day, ops){
 function isLandAt(x, z, day, ops){
   return terrainHeightAt(x, z, day, ops) > TERRAIN_WATERLINE_Y + TERRAIN_LAND_MARGIN;
 }
-/* shorelineAt(day): the DERIVED coast (§4) — a coarse contour sample, not a
-   full trace. Marches seaward across the cove z-span and records the outermost
-   land->water crossing per row, so as fill raises the cove the sampled shore
-   advances seaward on its own. */
+/* shorelineAt(day): the DERIVED coast (§4) — a coarse contour sample of the
+   CONTIGUOUS mainland's seaward edge, not the outermost crossing. Per z-row it
+   marches from a known-inland start (far west, on the peninsula) seaward: it
+   skips any leading water, LATCHES on the first land, then records the FIRST
+   land->water crossing of that contiguous land run and STOPS. An OFFSHORE body
+   (a detached fill island in open water) therefore never moves the shore — the
+   defect where the old outermost-crossing contour snapped to a disjoint slab's
+   far edge and zigzagged is closed by construction. The result is a function of
+   z (one x per row), so it is monotone in z and cannot self-cross; as a shore-
+   CONNECTED fill raises the cove the contiguous run extends and the sampled
+   shore advances seaward on its own. */
 function shorelineAt(day, ops){
   var pts=[];
   for(var z=-360; z<=1180; z+=30){
-    var prev=null, found=null;
-    for(var x=-200; x<=1500; x+=12){
+    var onLand=false, found=null;
+    for(var x=-200; x<=1500 && found===null; x+=12){
       var land = isLandAt(x, z, day, ops);
-      if(prev===true && land===false) found = x;   // outermost land->water edge = the shore
-      prev = land;
+      if(!onLand){ if(land) onLand=true; }          // skip leading water; latch the mainland
+      else if(!land){ found = x; }                   // first land->water of that run = the coast
     }
     if(found!==null) pts.push({ x:found, z:z });
   }
@@ -12473,6 +12523,19 @@ window.__P1850 = {
   get terrainMesh(){ return TERRAIN_MESH_STATS; },
   get westFauna(){ return window._westFauna; },
   zoneAt: function(x,z){ return zoneAt(x,z); },
+  /* s102 terrain-morph QA hooks — pure reads of the date-editable heightfield
+     (terrain-morphing-spec §1/§2/§4). `ops` defaults to the release list
+     (window.TERRAIN_MORPH_OPS, empty) unless callers pass the atelier demo op.
+     Used by the verify driver to probe shore anchors + land/water at date. */
+  morph: {
+    shoreAnchorsX: function(z){ return shoreAnchorsX(z); },
+    shorelineX: function(z){ return shorelineX(z); },
+    heightAt: function(x,z,day,ops){ return terrainHeightAt(x,z,day,ops); },
+    isLandAt: function(x,z,day,ops){ return isLandAt(x,z,day,ops); },
+    deltaAt: function(x,z,day,ops){ return morphDeltaAt(x,z,day,ops); },
+    ramp: function(op,day){ return morphOpRamp(op,day); },
+    shorelineAt: function(day,ops){ return shorelineAt(day,ops); }
+  },
   get layerVis(){ return Object.keys(__P1850_LAYER_VIS); }, // dev-tooling interface (layers-spec.md §15): registered per-layer visibility toggles
   invalidatePaint: function(){ invalidateGroundPaint(); return "redraped + repaint queued"; },
   _scene: function(){ return scene; },
@@ -13796,6 +13859,92 @@ registerAudit("core", "geodeticLock", function(){
     controlPoints: n,
     gates: "fitRms<=2, e2eRms<=2, azDrift<=0.1deg, roundTrip<=1e-3m"
   };
+});
+
+/* =========================================================================
+   s102b TERRAIN-MORPH RULES-FIRST AUDITS (terrain-morphing-spec §2/§4, the
+   RECLAMATION rules). Both run on BOTH targets. With the RELEASE morph-op list
+   empty they are trivially green (no active fill ops / the natural baseline
+   coast). The atelier wires its armed demo op in through
+   window.__P1850_MORPH_AUDIT_OPS so the SAME rules gate the demo, and the
+   fail-before/pass-after demonstration calls the audit with an explicit ops
+   list (old floating rect vs new shore-anchored op). NEVER returns a string
+   `skipped` — the noon protocol reds string skips, and an empty op list is a
+   real pass, not a skip.
+   ========================================================================= */
+function morphAuditOps(){
+  var ov = window.__P1850_MORPH_AUDIT_OPS;
+  var ops = (typeof ov==="function") ? ov() : ov;
+  return (ops && ops.length) ? ops : (window.TERRAIN_MORPH_OPS||[]);
+}
+/* fillShoreConnected — RULE: at full ramp, every fill op's newly-created land is
+   CONTIGUOUS with the 1846 baseline land (no disjoint mid-cove slab). Rasterizes
+   the op region (+ margin) at CELL m, 4-connected-floods the solid (land-at-full-
+   ramp) grid, and FAILS if any fill-created cell (solid now, water on the 1846
+   baseline) sits in a component holding NO baseline-land cell — an island
+   detached from the waterfront. The old uniform floating rectangle fails this;
+   the new shore-anchored advance op passes. */
+registerAudit("terrain", "fillShoreConnected", function(opsArg){
+  var ops = opsArg || morphAuditOps();
+  var fills = ops.filter(function(o){ return o && o.kind==="fill" && o.region && o.region.length>=3; });
+  var CELL = 8, MARGIN = 64, worst = 0, report = [];
+  fills.forEach(function(op){
+    var bx=_morphAxisBounds(op.region,"x"), bz=_morphAxisBounds(op.region,"z");
+    var x0=bx.lo-MARGIN, z0=bz.lo-MARGIN;
+    var nx=Math.max(2,Math.ceil((bx.hi-bx.lo+2*MARGIN)/CELL))+1;
+    var nz=Math.max(2,Math.ceil((bz.hi-bz.lo+2*MARGIN)/CELL))+1;
+    var day=(op.arc && op.arc.completeDay!=null) ? op.arc.completeDay : 0;   // full ramp
+    var solid=new Uint8Array(nx*nz), baseLand=new Uint8Array(nx*nz), i,j;
+    for(j=0;j<nz;j++) for(i=0;i<nx;i++){
+      var x=x0+i*CELL, z=z0+j*CELL, k=j*nx+i;
+      solid[k]=isLandAt(x,z,day,[op])?1:0;
+      baseLand[k]=isLandAt(x,z,day,[])?1:0;             // 1846 baseline (no ops)
+    }
+    var comp=new Int32Array(nx*nz); for(i=0;i<comp.length;i++) comp[i]=-1;
+    var anchored=[], stack=[], nc=0;
+    for(var s=0;s<solid.length;s++){
+      if(!solid[s]||comp[s]>=0) continue;
+      var id=nc++; anchored[id]=false; stack.length=0; stack.push(s); comp[s]=id;
+      while(stack.length){
+        var c=stack.pop(); if(baseLand[c]) anchored[id]=true;
+        var ci=c%nx, cj=(c-ci)/nx;
+        if(ci>0 && solid[c-1] && comp[c-1]<0){ comp[c-1]=id; stack.push(c-1); }
+        if(ci<nx-1 && solid[c+1] && comp[c+1]<0){ comp[c+1]=id; stack.push(c+1); }
+        if(cj>0 && solid[c-nx] && comp[c-nx]<0){ comp[c-nx]=id; stack.push(c-nx); }
+        if(cj<nz-1 && solid[c+nx] && comp[c+nx]<0){ comp[c+nx]=id; stack.push(c+nx); }
+      }
+    }
+    var created=0, disjoint=0;
+    for(var m=0;m<solid.length;m++) if(solid[m] && !baseLand[m]){ created++; if(!anchored[comp[m]]) disjoint++; }
+    if(disjoint>worst) worst=disjoint;
+    report.push({ id:op.id, advance:!!op.advance, atDay:day, createdCells:created,
+      disjointCells:disjoint, connected:(disjoint===0) });
+  });
+  return { pass:(worst===0), fills:fills.length, disjointCells:worst, ops:report,
+    rule:"every active fill's new land is contiguous with 1846 baseline land (no disjoint slab)" };
+});
+/* shorelineSimple — RULE: the derived coast shorelineAt(day) is a SIMPLE
+   polyline: strictly monotone in z (one x per row -> a function of z, which
+   cannot self-cross) with no jump between ADJACENT rows beyond JUMP_M (a large
+   adjacent x-jump is the signature of the contour snapping onto a detached
+   island — the zigzag the old outermost-crossing tracer produced). */
+registerAudit("terrain", "shorelineSimple", function(opsArg){
+  var ops = opsArg || morphAuditOps();
+  var JUMP_M = 250, STEP_Z = 30;
+  var pts = shorelineAt(simDay, ops), monoViol=0, jumpViol=0, maxJump=0, prev=null;
+  for(var i=0;i<pts.length;i++){
+    var p=pts[i];
+    if(prev){
+      if(p.z<=prev.z) monoViol++;
+      if(Math.abs(p.z-prev.z) <= STEP_Z*1.5){          // adjacent rows only (skip contour gaps)
+        var dx=Math.abs(p.x-prev.x); if(dx>maxJump) maxJump=dx; if(dx>JUMP_M) jumpViol++;
+      }
+    }
+    prev=p;
+  }
+  return { pass:(monoViol===0 && jumpViol===0), points:pts.length,
+    monotoneViolations:monoViol, jumpViolations:jumpViol, maxAdjacentJump_m:+maxJump.toFixed(1),
+    rule:"shorelineAt monotone in z with no adjacent-row x-jump > "+JUMP_M+"m" };
 });
 /* =====================================================================
    CAMERA RIG + INPUT — Annals-kingdom architecture (ported verbatim from
@@ -15195,6 +15344,28 @@ function updateHud(alt){
     wbPushDrapedTri(pos,a,ab,ca,lift,depth-1); wbPushDrapedTri(pos,ab,b,bc,lift,depth-1);
     wbPushDrapedTri(pos,ca,bc,c,lift,depth-1); wbPushDrapedTri(pos,ab,bc,ca,lift,depth-1);
   }
+  /* triangulate + drape a simple ring, pushing one flat colour `c` per emitted
+     triangle (shared by the morph-region fill + its two-tone advancing front). */
+  function wbFillRing(pos, col, ring, c, lift, depth){
+    if(!ring || ring.length<3) return;
+    wbEarClip(ring).forEach(function(t){
+      var A=ring[t[0]], B=ring[t[1]], C=ring[t[2]], before=pos.length;
+      wbPushDrapedTri(pos, A, B, C, lift, depth);
+      for(var q=0,added=(pos.length-before)/3;q<added;q++) col.push(c.r,c.g,c.b);
+    });
+  }
+  /* Sutherland-Hodgman clip of a ring against one axis-aligned line (coord=cut):
+     keepLE true keeps the coord<=cut half, false the coord>=cut half. Used to
+     split a fill region at its advancing front into filled/not-yet-filled. */
+  function wbClipRingAxis(ring, axis, cut, keepLE){
+    var out=[], n=ring.length;
+    function inside(p){ var c=axis==="x"?p.x:p.z; return keepLE ? (c<=cut) : (c>=cut); }
+    function isect(a,b){ var ca=axis==="x"?a.x:a.z, cb=axis==="x"?b.x:b.z, t=(cut-ca)/((cb-ca)||1e-9);
+      return { x:a.x+(b.x-a.x)*t, z:a.z+(b.z-a.z)*t }; }
+    for(var i=0;i<n;i++){ var A=ring[i], B=ring[(i+1)%n], iA=inside(A), iB=inside(B);
+      if(iA) out.push(A); if(iA!==iB) out.push(isect(A,B)); }
+    return out;
+  }
   function wbParcelWorldRing(p){                            // parcel ring → world XZ (uv → day frame)
     if(!p.poly) return null;
     if(p.space==="uv") return p.poly.map(function(pt){ var w=gridToWorldAt(pt.u, pt.v, cadSkewAt(simDay)); return {x:w.x,z:w.z}; });
@@ -15429,6 +15600,12 @@ function updateHud(alt){
     return WB_MORPH.demo ? (window.TERRAIN_MORPH_OPS||[]).concat([WB_DEMO_OP]) : (window.TERRAIN_MORPH_OPS||[]);
   }
   function wbIsLandAt(x, z, day){ return isLandAt(x, z, day, wbActiveMorphOps()); }
+  /* s102b: expose the atelier's active morph ops to the terrain-morph audits
+     (fillShoreConnected / shorelineSimple in core/06-debug). When the demo is
+     disarmed this returns the empty release list -> the audits are trivially
+     green; armed, the SAME rules gate the demo op. Release build never sets this
+     (workbench is atelier-only) so the audits read window.TERRAIN_MORPH_OPS. */
+  window.__P1850_MORPH_AUDIT_OPS = wbActiveMorphOps;
 
   /* oriented-footprint hit test (same width/depth axis convention as the buildings
      layer's poseQuad): is (x,z) inside a building's drawn box. */
@@ -15544,17 +15721,38 @@ function updateHud(alt){
      the derived shoreline), and the isLand/BUILDABLE overlay. Scrub the
      timeline and watch the cove patch fill from water to land.
      ===================================================================== */
-  /* THE DEMO OP (terrain-morphing §2 model) — a small FILL over a Yerba Buena
-     Cove test patch with a dated ramp. Region is authored in WORLD coords (no
-     grid frame involved). The ramp dates are chosen to be SCRUBBABLE inside the
-     sim window (1848-06 -> 1849-10) to prove the mechanism; the real, historically
-     dated cove fill is s103 and lives in the release op list, not here. */
-  var WB_DEMO_OP = {
-    id:"demo-cove-fill", kind:"fill",
-    region:[ {x:300,z:-90}, {x:480,z:-90}, {x:480,z:90}, {x:300,z:90} ],
-    profile:{ targetDeltaM:8, edgeFalloffM:40 },
-    arc:{ startDay: eventDateToSimDay("1848-06-01"), completeDay: eventDateToSimDay("1849-10-01") }
-  };
+  /* THE DEMO OP (terrain-morphing §2 model, s102b RECLAMATION fix) — a shore-
+     anchored FILL over a Yerba Buena Cove test patch with a dated ramp. The west
+     (shore) edge is PINNED to the real 1846 coast (shoreAnchorsX) a few metres
+     INLAND so it abuts baseline land; the east edge extends ~220 m SEAWARD into
+     the cove (baseline water); `advance` marches the fill FRONT east (+x, seaward)
+     as the op ramps, so land grows FROM THE WATERFRONT — not a mid-cove slab. The
+     z-span sits in the waterfront mid-section (around the Clay/Washington beach),
+     built from the anchor table (not a hardcoded floating box). The ramp dates are
+     SCRUBBABLE inside the sim window (1848-06 -> 1849-10) to prove the mechanism;
+     the real, historically dated cove fill is s103 and lives in the release op
+     list, not here. */
+  var WB_DEMO_OP = (function(){
+    var zs=[-120,-90,-60,-30,0,30,60,90], west=[], east=[];
+    zs.forEach(function(z){ var sx=shoreAnchorsX(z);
+      west.push({ x:sx-6,   z:z });     // a few m inland of the natural shore -> abuts baseline land
+      east.push({ x:sx+220, z:z }); });  // ~220 m seaward into the cove -> baseline water
+    return { id:"demo-cove-fill", kind:"fill",
+      region: west.concat(east.reverse()),
+      profile:{ targetDeltaM:8, edgeFalloffM:40 },
+      advance:{ axis:"x", dir:1, frontFalloffM:25 },
+      arc:{ startDay: eventDateToSimDay("1848-06-01"), completeDay: eventDateToSimDay("1849-10-01") } };
+  })();
+  /* BELT-AND-SUSPENDERS ANCHOR PROOF (s102b) — assert at boot that the demo op's
+     west edge sits on baseline LAND and its east edge in baseline WATER, so it can
+     never float off the shore again. Logged (atelier diagnostic), not thrown. */
+  (function assertDemoAnchor(){
+    var day0=eventDateToSimDay("1846-07-01"), sx0=shoreAnchorsX(0);
+    var wLand=isLandAt(sx0-6, 0, day0, []), eLand=isLandAt(sx0+220, 0, day0, []);
+    console.log("[s102b] demo-cove-fill anchor @z=0: west x="+(sx0-6).toFixed(1)+" isLand@1846="+wLand+
+      " (want true); east x="+(sx0+220).toFixed(1)+" isLand@1846="+eLand+" (want false) -> "+
+      ((wLand && !eLand) ? "ANCHORED" : "FLOATING (BUG)"));
+  })();
 
   var morphObjs = { patch:null, regions:null, island:null };
   var morphStatusEl = null;
@@ -15604,18 +15802,30 @@ function updateHud(alt){
   function wbBuildMorphRegions(day){
     var ops=wbActiveMorphOps();
     var grp=new THREE.Group(); grp.frustumCulled=false;
-    var fillPos=[], fillCol=[], strokePos=[], strokeCol=[];
+    var fillPos=[], fillCol=[], strokePos=[], strokeCol=[], frontPos=[], frontCol=[];
     ops.forEach(function(op){
       var poly=op.region; if(!poly||poly.length<3) return;
-      var ramp=morphOpRamp(op,day), br=0.4+0.6*ramp;
+      var ramp=morphOpRamp(op,day);
       var base=(op.kind==="cut")?[0.92,0.36,0.30]:[0.28,0.68,0.96];
-      var c={ r:base[0]*br, g:base[1]*br, b:base[2]*br };
       var ring=poly.map(function(p){ return {x:p.x,z:p.z}; });
-      wbEarClip(ring).forEach(function(t){
-        var A=ring[t[0]],B=ring[t[1]],C=ring[t[2]], before=fillPos.length;
-        wbPushDrapedTri(fillPos, A, B, C, 0.5, 2);
-        for(var q=0,added=(fillPos.length-before)/3;q<added;q++) fillCol.push(c.r,c.g,c.b);
-      });
+      if(op.advance && op.kind==="fill"){
+        // TWO-TONE ADVANCING FRONT (s102b): the filled sub-region behind the
+        // moving front is bright (raised land), the not-yet-filled remainder dim
+        // (cove still to reclaim), so the front visibly sweeps seaward on scrub.
+        var f=morphAdvanceFront(op,day);
+        var behind=wbClipRingAxis(ring, f.axis, f.front, f.dir>0);   // dir>0: filled = coord<=front
+        var ahead =wbClipRingAxis(ring, f.axis, f.front, f.dir<0);
+        wbFillRing(fillPos, fillCol, ahead,  { r:base[0]*0.30, g:base[1]*0.30, b:base[2]*0.30 }, 0.5, 2);
+        wbFillRing(fillPos, fillCol, behind, { r:base[0], g:base[1], b:base[2] }, 0.5, 2);
+        // the moving front, drawn across the region's cross-axis extent (white)
+        var cross=_morphAxisBounds(poly, f.axis==="x"?"z":"x");
+        var fa=f.axis==="x"?{x:f.front,z:cross.lo}:{x:cross.lo,z:f.front};
+        var fb=f.axis==="x"?{x:f.front,z:cross.hi}:{x:cross.hi,z:f.front};
+        wbPushDrapedRun(frontPos, frontCol, [fa,fb], new THREE.Color(0xffffff), 0.95, false, 9);
+      } else {
+        var br=0.4+0.6*ramp;
+        wbFillRing(fillPos, fillCol, ring, { r:base[0]*br, g:base[1]*br, b:base[2]*br }, 0.5, 2);
+      }
       wbPushDrapedRun(strokePos, strokeCol, ring.concat([ring[0]]), new THREE.Color(base[0],base[1],base[2]), 0.7, false, 9);
     });
     if(fillPos.length){
@@ -15626,6 +15836,7 @@ function updateHud(alt){
       fm.renderOrder=997; fm.frustumCulled=false; grp.add(fm);
     }
     if(strokePos.length) grp.add(wbLineSegs(strokePos, strokeCol, 0.95, 1000));
+    if(frontPos.length) grp.add(wbLineSegs(frontPos, frontCol, 0.98, 1002));   // the advancing fill front
     // the derived coast at date (shorelineAt) — a thin gold contour
     var sh=shorelineAt(day, ops), shPos=[], shCol=[], GOLD=new THREE.Color(0xffd75e);
     for(var s=0;s<sh.length-1;s++){
@@ -15695,11 +15906,27 @@ function updateHud(alt){
     cb.addEventListener("change", function(){ WB.morph[key]=cb.checked; wbRefreshMorph(); });
     return cb;
   }
-  morphToggleRow("patch",   "terrain-at-date patch (re-mesh on scrub)");
-  morphToggleRow("regions", "morph regions + derived shoreline");
-  morphToggleRow("island",  "isLand / buildable overlay");
+  var morphCbs = {
+    patch:   morphToggleRow("patch",   "terrain-at-date patch (re-mesh on scrub)"),
+    regions: morphToggleRow("regions", "morph regions + derived shoreline"),
+    island:  morphToggleRow("island",  "isLand / buildable overlay")
+  };
   morphStatusEl = el("div","wb-ov-status","(arm the demo op, then scrub the timeline)");
   wbMorphStatus();
+  /* s102b QA hook (atelier-only — never in the release build) — arms the demo op
+     + morph overlays and reports the current ramp, so the verify driver can
+     capture the ramp screenshots deterministically. Mirrors the button/checkbox
+     handlers exactly (same WB.morph writes + wbRefreshMorph). */
+  window.__P1850_WBMORPH = function(o){
+    o = o || {};
+    if(o.demo!=null){ WB.morph.demo=!!o.demo;
+      demoBtn.textContent = WB.morph.demo ? "demo cove-fill op: ON" : "demo cove-fill op: OFF";
+      demoBtn.classList.toggle("on", WB.morph.demo); markSectionActive("s102", WB.morph.demo); }
+    ["patch","regions","island"].forEach(function(k){ if(o[k]!=null){ WB.morph[k]=!!o[k]; morphCbs[k].checked=!!o[k]; } });
+    wbRefreshMorph();
+    return { demo:WB.morph.demo, patch:WB.morph.patch, regions:WB.morph.regions, island:WB.morph.island,
+             ramp:+morphOpRamp(WB_DEMO_OP, simDay).toFixed(3) };
+  };
 
   /* ---- 2. PROVENANCE PROBE ---- */
   beginSection("probe","PROVENANCE PROBE", { desc:"Arm, then click any world point for a full provenance card at the current date — terrain, ground-paint, cadastre lot/block/parcel/zone-law, landmark reservation, buildings, doodads, people, walk mask, and the real pick hit." });
