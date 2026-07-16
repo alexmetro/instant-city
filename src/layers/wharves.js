@@ -300,6 +300,13 @@ registerLayerVisibility("wharves", function(v){ WHARF_GROUP.visible = v; if(v){ 
   var STEEP_SUSPECT = 0.315;   // 31.5% — SF's period-typical steepest (Filbert St)
   var STEEP_FAIL    = 0.41;    // 41% — Bradford above Tompkins, the single real-world outlier
   var FOOT_SETBACK_M = 2.4;    // ~8 ft inland of the dry-land edge (operator-set within the 5-10 ft band)
+  /* roadGrade allow-list (s110c). A road here does not fail the gate, but its
+     grade is STILL measured + reported — the fail is acknowledged, not silenced.
+     Reserved for a segment crossing REAL terrain too steep for a walkable street
+     (needs a terrain grading pass — out of scope for a road-side fix). */
+  var GRADE_ALLOWLIST = {
+    "numbered-streets-first-eighth:First": "First St descends Rincon Hill's real ~45-59% face to Mission Bay (sustained in the terrain, not a coarse-bake spike — grade-easing the spine cannot lawfully flatten a genuine hill this steep). The historical fix was the Second-Street cut; that is a terrain grading pass, out of scope here."
+  };
 
   function liveStreets(){ return (typeof STREETS_RUNTIME !== "undefined") ? STREETS_RUNTIME : []; }
   function livePiers(){ return (typeof PIERS_RUNTIME !== "undefined") ? PIERS_RUNTIME : []; }
@@ -365,17 +372,27 @@ registerLayerVisibility("wharves", function(v){ WHARF_GROUP.visible = v; if(v){ 
     return out;
   });
 
-  /* spine.roadGrade — a road is always walkable: per grounded (clamped) segment
-     the grade stays under SF's real-world ceiling. suspect > 31.5% (steeper than
-     any period street), fail-level > 41% (the single real-world outlier). Graded
-     on the CLAMPED extent (the on-land road); the coast/cliff drop past the edge
-     is roadGrounded's concern, not grade. */
+  /* spine.roadGrade — GATING (s110c Phase 2b). A road is always walkable: per
+     grounded (clamped) segment the grade stays under SF's real-world ceiling.
+     suspect > 31.5% (steeper than any period street, reported but LEGAL — SF has
+     streets this steep), FAIL > 41% (steeper than Bradford, the single real-world
+     outlier — no street ever existed steeper). Graded on the CLAMPED, GRADE-EASED
+     extent (roadDrawnExtentAt.clamped — the same drawn spine ground-paint renders
+     and roadGrounded reads); the coast/cliff drop past the edge is roadGrounded's
+     concern, not grade. The Phase-1 counts (Montgomery 67 %, Clay 43 %, Presidio
+     49 %) were coarse-bake quantization aliased into single 15 m drape segments;
+     the spine grade-ease (§2) collapses them to their real macro-grades, all
+     under the cap. The gate fails on any >41 % segment OUTSIDE the allow-list;
+     allow-listed roads (real terrain too steep for a walkable street — a terrain
+     grading pass, out of scope) are still measured + reported, never silenced. */
   registerAudit("spine", "roadGrade", function(){
-    var out = { pass:true, reportOnly:true, phase:1, roadsChecked:0, segments:0, suspectSegments:0, failSegments:0, worstGradePct:0, detail:[] };
+    var out = { pass:true, gating:true, roadsChecked:0, segments:0, suspectSegments:0,
+                failSegments:0, unlistedFailSegments:0, allowlistedRoads:0, worstGradePct:0, detail:[] };
     liveStreets().forEach(function(s){
       var road = activeStreetRoad(s, simDay); if(!road || road.polyline.length<2) return;
       out.roadsChecked++;
       var pts = roadDrawnExtentAt(road, simDay).clamped;
+      var allowed = !!GRADE_ALLOWLIST[road.id];
       var sSuspect=0, sFail=0, worst=0, worstAt=null;
       for(var k=0;k<pts.length-1;k++){
         var a=pts[k], b=pts[k+1], run=Math.hypot(b.x-a.x, b.z-a.z);
@@ -386,11 +403,17 @@ registerLayerVisibility("wharves", function(v){ WHARF_GROUP.visible = v; if(v){ 
         if(grade>STEEP_FAIL) sFail++; else if(grade>STEEP_SUSPECT) sSuspect++;
       }
       out.suspectSegments+=sSuspect; out.failSegments+=sFail;
+      if(allowed && sFail){ out.allowlistedRoads++; } else { out.unlistedFailSegments+=sFail; }
       if(worst>out.worstGradePct/100) out.worstGradePct=+(worst*100).toFixed(1);
       if((sSuspect||sFail) && out.detail.length<40)
-        out.detail.push({ id:road.id, name:road.name, suspect:sSuspect, fail:sFail, worstGradePct:+(worst*100).toFixed(1), worstAt:worstAt });
+        out.detail.push({ id:road.id, name:road.name, suspect:sSuspect, fail:sFail,
+          worstGradePct:+(worst*100).toFixed(1), worstAt:worstAt,
+          allowlisted:allowed||undefined, reason: allowed?GRADE_ALLOWLIST[road.id]:undefined });
     });
-    out.note = "REPORT-ONLY (Phase 1): "+out.failSegments+" fail-level (>41%) + "+out.suspectSegments+" suspect (>31.5%) segments across "+out.roadsChecked+" active roads.";
+    out.pass = out.unlistedFailSegments === 0;
+    out.note = "GATING (Phase 2b): "+out.unlistedFailSegments+" gating fail (>41%) + "+out.suspectSegments
+             +" suspect (>31.5%, legal) segments across "+out.roadsChecked+" active roads; "
+             +out.allowlistedRoads+" allow-listed road(s) with real-terrain steep faces (reported, not gated).";
     return out;
   });
 

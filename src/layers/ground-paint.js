@@ -190,6 +190,16 @@ function renderGroundSplat(){
     var cls = new Array(wpts.length - 1);
     for(var si = 0; si < wpts.length - 1; si++){
       var A = wpts[si], B = wpts[si+1], mx = (A.x+B.x)/2, mz = (A.z+B.z)/2;
+      // SAFETY VALVE (terrain-edge-grounding-spec §1b): a render-time altitude
+      // cull under the position clamp — no ROAD paint below the high-water mark
+      // (dated terrain, so it is morph-aware: a street rises into view exactly
+      // when fill lifts its ground above the highest tide). The +0.85 m dry-land
+      // clamp already trims everything here in normal operation, so this floor is
+      // dormant and only fires on a clamp miss; it HIDES, it never FIXES — the
+      // roadGrounded/roadGrade audits read roadDrawnExtentAt directly, upstream of
+      // paint, so the valve cannot silence them. Roads only (pier decks + hulls
+      // legitimately sit below the line and are painted elsewhere).
+      if(terrainHeightAt(mx, mz, simDay) < highWaterY()){ cls[si] = 0; continue; }
       if(terrainHeight(mx, mz) <= 0.5){ cls[si] = 0; continue; } // WET: a platted line over the tide flats is a water lot, never a street
       var st = roadPieceState(s, mx, mz, simDay, viogetFloor).st;
       cls[si] = st <= 0 ? 0 : (st === 1 ? 1 : 2);

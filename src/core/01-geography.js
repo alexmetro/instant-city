@@ -772,6 +772,11 @@ var DRY_LAND_FREEBOARD = 0.5;    // operator-set visible freeboard above the hig
 function dryLandTideHigh(){ return (typeof TIDE !== "undefined" && TIDE && TIDE.amp != null) ? TIDE.amp : 0.35; }
 function dryLandY(){ return TERRAIN_WATERLINE_Y + dryLandTideHigh() + DRY_LAND_FREEBOARD; }
 function isDryLand(x, z, day, ops){ return terrainHeightAt(x, z, day, ops) > dryLandY(); }
+/* HIGH-WATER MARK altitude (terrain-edge-grounding-spec §1b) — the absolute
+   floor the render-time SAFETY VALVE enforces: no non-terrain ROAD asset paints
+   below the highest tide. Looser than the +0.85 m dry-land edge the clamp uses;
+   the valve is the backstop that fires only where the clamp ever misses. */
+function highWaterY(){ return TERRAIN_WATERLINE_Y + dryLandTideHigh(); }
 /* dryLandEdgeAt(day): the DERIVED dry-land coast — one x per z-row, marched
    exactly like shorelineAt (skip leading water, latch the contiguous
    mainland, record its first dry->not-dry crossing, stop). One x per row, so
@@ -822,8 +827,34 @@ function dryLandEdgeXAt(z, edge){
    into the release render: ground-paint strokes the built road to this extent
    and records it as the road's drawn spine, so paint and walk-graph agree. The
    survey plat/cadastre is NOT routed through here — it stays drawn over the
-   water as the plan (atelier spine/lot/ROW overlays). ===================================================================== */
+   water as the plan (atelier spine/lot/ROW overlays).
+
+   s110c (§2 walkability) also GRADE-EASES the clamped spine's Y. The terrain is
+   a coarse heightfield (~31 m cells → bilinear plateaus with sharp per-cell
+   risers); draping at ROAD_DRAPE_STEP samples those risers, so a hill whose real
+   macro-grade is ~37 % aliases into a single 15 m segment reading 50-67 %. A few
+   binomial (1-2-1) passes over the Y sequence attenuate that quantization
+   curvature while preserving a constant slope EXACTLY (a genuine linear grade is
+   a fixed point of 1-2-1), so a truly steep street stays steep and only the
+   coarse-bake spike collapses toward the underlying macro-grade — the road-side
+   "grade-aware resample of the drawn spine" the spec calls for (no authored XZ
+   moved, no terrain edited). Endpoints are pinned so the termini still meet the
+   ground exactly (roadGrounded reads them). The eased Y feeds roadGrade and the
+   walk-graph; the release paint is a top-down canvas draped on the terrain mesh,
+   so easing changes no rendered pixel. ===================================================================== */
 var ROAD_DRAPE_STEP = 15;        // ~half the terrain cell (~31 m) — hugs the mesh relief
+var ROAD_GRADE_EASE_PASSES = 2;  // binomial Y-smoothing passes — clears the coarse-bake grade aliasing, keeps genuine slopes
+function _easeSpineGrade(pts){
+  if(pts.length < 3 || ROAD_GRADE_EASE_PASSES <= 0) return pts;
+  var y = new Array(pts.length);
+  for(var i=0;i<pts.length;i++) y[i] = pts[i].y;
+  for(var pass=0; pass<ROAD_GRADE_EASE_PASSES; pass++){
+    var ny = y.slice();
+    for(var k=1;k<pts.length-1;k++) ny[k] = (y[k-1] + 2*y[k] + y[k+1]) / 4;  // 1-2-1: linear-preserving, endpoints pinned
+    y = ny;
+  }
+  return pts.map(function(p, j){ return { x:p.x, z:p.z, y:y[j] }; });
+}
 function _roadWorldPolyline(road){
   var poly = road.polyline || [], out = [];
   for(var i=0;i<poly.length;i++){
@@ -884,7 +915,7 @@ function roadDrawnExtentAt(road, day, ops){
   var clamped, trimmedAt = null;
   if(firstGrounded < 0){ clamped = []; trimmedAt = { x:raw[0].x, z:raw[0].z }; }   // no grounded sample: the whole drawn extent floats — nothing built
   else {
-    clamped = raw.slice(firstGrounded, lastGrounded + 1);
+    clamped = _easeSpineGrade(raw.slice(firstGrounded, lastGrounded + 1));          // drape + grade-ease the built extent (§2)
     if(firstGrounded > 0) trimmedAt = { x:raw[firstGrounded-1].x, z:raw[firstGrounded-1].z };            // trimmed a leading overhang
     else if(lastGrounded < raw.length - 1) trimmedAt = { x:raw[lastGrounded+1].x, z:raw[lastGrounded+1].z }; // trimmed a trailing overhang
   }
