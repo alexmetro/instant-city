@@ -11230,9 +11230,29 @@ function _lblRobotoVoices(setKey){
     civic:   _lblVoice(setKey+".civic",  { weight:"700", letterSpacing:0.06, smallCaps:true, wrap:8 }),
     street:  _lblStreetStyle(setKey),
     lotNum:  _lblVoice(setKey+".lotNum", { weight:"700", letterSpacing:0.02 }),
-    lotOwn:  _lblVoice(setKey+".lotOwn", { weight:"500", letterSpacing:0.04, wrap:8 })
+    lotOwn:  _lblVoice(setKey+".lotOwn", { weight:"500", letterSpacing:0.04, wrap:8 }),
+    /* RES-3 R2 (ICS-16 typography core) — the POI SUBTITLE voice: the kind
+       line under a reservation name at the closest zoom (Maps close-zoom
+       "4-star hotel" pattern, operator screenshots in ICS-16). 0.75× the
+       title em (LBL_SUB_EM), weight 500 (ics14e locked the palette to
+       {500,700}), same dark casing; ink is WHITE at 0.85 ALPHA for the
+       lighter secondary read — the alpha was chosen by MEASUREMENT, not
+       taste: the contrast audit's ics14d model scores white@0.85 over this
+       casing at min 3.39 (rocky, carried by the casing rim — the same
+       limiting background as the solid-ink voices), clearing the ≥3.0 gate;
+       0.85 is the lightest value in the report's 85-90% range and it
+       already passes, so the measurement picked the floor. Rendered INTO
+       THE SAME sprite texture as the name (labelTexture `sub` block) so
+       the declutter sees ONE quad. */
+    poiSub:  _lblVoice(setKey+".poiSub", { weight:"500", letterSpacing:0.03, color:"rgba(255,255,255,0.85)", wrap:8 })
   };
 }
+/* R2 metrics: subtitle em ratio + the TIGHT two-line leading. 1.18 em sits in
+   the canon's 1.15-1.2 band (Mapbox text-line-height default 1.2; Imhof: tight
+   leading makes a multi-line label read as ONE object) — the composite POI
+   block ONLY; single-voice labels keep the shipped 1.36. */
+var LBL_SUB_EM    = 0.75;   // subtitle em = 0.75 × title em
+var LBL_SUB_LINEH = 1.18;   // line height (em ×) inside a name+subtitle block
 /* ics14d: sets b/c ALIAS the same Roboto voices while the era override
    stands (the type-set knob + labelsSetTypeSet API keep working; distinct
    keys per set keep the texture cache namespaced as before). */
@@ -11250,9 +11270,12 @@ var LBL_FONT_PX = 60;        // layout font height (CSS px) — the on-screen si
 var _lblTexCache = {};
 var _lblMeasureCtx = document.createElement("canvas").getContext("2d");
 function _lblFontStr(style, px){ return (style.italic?"italic ":"") + style.weight + " " + px + "px " + style.family; }
-function _lblAdvances(disp, style){
-  _lblMeasureCtx.font = _lblFontStr(style, LBL_FONT_PX);
-  var ls = style.letterSpacing * LBL_FONT_PX, adv = [], total = 0;
+/* RES-3: optional `px` (defaults to the layout em) — the R2 subtitle block
+   measures at LBL_FONT_PX×LBL_SUB_EM; every existing caller is unchanged. */
+function _lblAdvances(disp, style, px){
+  px = px || LBL_FONT_PX;
+  _lblMeasureCtx.font = _lblFontStr(style, px);
+  var ls = style.letterSpacing * px, adv = [], total = 0;
   for(var i=0;i<disp.length;i++){ var w = _lblMeasureCtx.measureText(disp[i]).width; adv.push(w); total += w + (i<disp.length-1?ls:0); }
   return { adv:adv, total:total, ls:ls };
 }
@@ -11373,11 +11396,36 @@ function _lblEvictIfNeeded(){
    A. PARKER'S / STORE (ADOBE HOUSE)", not a long line over a stub). A single
    overlong word never breaks mid-word. Streets carry no `wrap` — they stay one
    line along the road. Deterministic: no measurement of anything but the text. */
-function _lblWrapLines(disp, style, wrapPx){
-  if(!wrapPx || _lblAdvances(disp, style).total <= wrapPx) return [disp];
+/* RES-3 R2 — LINGUISTIC-BOUNDARY SPLIT (Imhof/canon: break a multi-line label
+   at natural linguistic boundaries, not just at balanced widths). A label that
+   must wrap first tries splitting at " (" (the paren opens the next line) and
+   ", " (the comma closes its line); the split is accepted only when every
+   resulting line fits the wrap limit, else the width-balanced greedy wrap
+   below stands. FOLDED INTO _lblWrapLines itself (report risk #3: the wrap
+   audit asserts built lines == this function's output, so the split must live
+   here, not beside it). Pure + deterministic like the rest. */
+function _lblLinguSplit(disp){
+  var parts = [], cur = "";
+  for(var i=0;i<disp.length;i++){
+    if(disp[i]===" " && disp[i+1]==="("){ if(cur) parts.push(cur); cur=""; continue; }        // break BEFORE "("
+    cur += disp[i];
+    if(disp[i]==="," && disp[i+1]===" "){ parts.push(cur); cur=""; i++; }                     // break AFTER ", "
+  }
+  if(cur) parts.push(cur);
+  return parts.length>=2 ? parts : null;
+}
+function _lblWrapLines(disp, style, wrapPx, px){
+  px = px || LBL_FONT_PX;
+  if(!wrapPx || _lblAdvances(disp, style, px).total <= wrapPx) return [disp];
+  var lingu = _lblLinguSplit(disp);
+  if(lingu){
+    var fits = true;
+    for(var lg=0; lg<lingu.length && fits; lg++){ if(_lblAdvances(lingu[lg], style, px).total > wrapPx) fits = false; }
+    if(fits) return lingu;
+  }
   var words = disp.split(" ").filter(function(w){ return w.length>0; });
   if(words.length < 2) return [disp];
-  var lineW = function(ws){ return _lblAdvances(ws.join(" "), style).total; };
+  var lineW = function(ws){ return _lblAdvances(ws.join(" "), style, px).total; };
   var greedy = function(maxW){
     var out=[], cur=[];
     for(var i=0;i<words.length;i++){
@@ -11388,12 +11436,17 @@ function _lblWrapLines(disp, style, wrapPx){
     return out;
   };
   var lines = greedy(wrapPx);
-  var total = _lblAdvances(disp, style).total;
+  var total = _lblAdvances(disp, style, px).total;
   var target = Math.min(wrapPx, Math.max(total/lines.length*1.08, wrapPx*0.55));
   var balanced = greedy(target);
   return (balanced.length===lines.length) ? balanced : lines;
 }
-function labelTexture(text, style, band, weight){
+/* RES-3 R2: optional `sub` = { text, style } appends the ICS-16 SUBTITLE BLOCK
+   (kind line, poiSub voice, LBL_SUB_EM × em) UNDER the title lines, in the
+   SAME texture — the declutter keeps seeing one quad, nothing new is invented.
+   A composite block uses the TIGHT LBL_SUB_LINEH leading (1.18, canon 1.15-1.2)
+   so the two lines read as one object; plain labels keep the shipped 1.36. */
+function labelTexture(text, style, band, weight, sub){
   band = band || LBL_BAND_DEFAULT;
   // ics14 WEIGHT VARIANT (street zoom weight-step): a non-base weight derives a
   // clone style whose key carries the weight, so cache entries + advances +
@@ -11402,14 +11455,23 @@ function labelTexture(text, style, band, weight){
     var s2 = {}; for(var sk in style){ if(style.hasOwnProperty(sk)) s2[sk] = style[sk]; }
     s2.weight = weight; s2.key = style.key + "@" + weight; style = s2;
   }
-  var key = style.key + "|" + band + "|" + text;
+  var key = style.key + "|" + band + "|" + text + (sub ? "|sub:" + sub.style.key + ":" + sub.text : "");
   if(_lblTexCache[key]){ _lblTexCache[key].lru = ++_lblTexClock; return _lblTexCache[key]; }
   _lblEvictIfNeeded();
   var disp = style.smallCaps ? text.toUpperCase() : text;
+  var lineHK = sub ? LBL_SUB_LINEH : 1.36;   // R2: tight leading inside the composite block only
   // ics11 goal 3: wrap long labels (style.wrap = max line width, LBL_FONT_PX ×)
   var lines = _lblWrapLines(disp, style, style.wrap ? style.wrap*LBL_FONT_PX : 0);
   var ms = lines.map(function(L){ return _lblAdvances(L, style); });
+  // R2 subtitle block — measured/wrapped at its own em (LBL_SUB_EM × title)
+  var subPx = Math.round(LBL_FONT_PX*LBL_SUB_EM), subLines = [], subMs = [];
+  if(sub){
+    var sdisp = sub.style.smallCaps ? sub.text.toUpperCase() : sub.text;
+    subLines = _lblWrapLines(sdisp, sub.style, sub.style.wrap ? sub.style.wrap*subPx : 0, subPx);
+    subMs = subLines.map(function(L){ return _lblAdvances(L, sub.style, subPx); });
+  }
   var maxW = 0; for(var mi=0; mi<ms.length; mi++) if(ms[mi].total > maxW) maxW = ms[mi].total;
+  for(var si=0; si<subMs.length; si++) if(subMs[si].total > maxW) maxW = subMs[si].total;
   // pad must clear the WIDEST ring — the light outer glow (halo + glow, both
   // sides) plus the soft blur, else the glow clips at the texture edge.
   // ics14b: glow:false voices (street/districts/civic) have no glow pass —
@@ -11417,42 +11479,50 @@ function labelTexture(text, style, band, weight){
   var noGlow = style.glow === false;
   var glowW = noGlow ? style.halo : style.halo + LBL_GLOW_EXTRA;
   var pad = Math.ceil(LBL_FONT_PX*0.42 + glowW*2 + style.halo);
-  var lineH = LBL_FONT_PX*1.36;
-  var W = Math.ceil(maxW) + pad*2, H = Math.ceil(lineH*lines.length) + pad*2;
+  var lineH = LBL_FONT_PX*lineHK, subLineH = subPx*lineHK;
+  var W = Math.ceil(maxW) + pad*2, H = Math.ceil(lineH*lines.length + subLineH*subLines.length) + pad*2;
   // BAND SUPERSAMPLE: choose ss so the rasterized canvas box height ≈ band px
   // (texel≈screen at that band). Replaces the old fixed LBL_SS=3.
   var ss = band / H;
   var cw = Math.max(2, Math.round(W*ss)), ch = Math.max(2, Math.round(H*ss));
   var cv = document.createElement("canvas"); cv.width = cw; cv.height = ch;
   var ctx = cv.getContext("2d"); ctx.scale(ss, ss);
-  ctx.font = _lblFontStr(style, LBL_FONT_PX);
   ctx.textBaseline = "middle"; ctx.textAlign = "left"; ctx.lineJoin = "round"; ctx.miterLimit = 2;
   // DUAL-HALO, widest→narrowest→fill so the rings nest concentrically around
   // each glyph: [1] light outer glow (with a soft blur) reads on dark scene
   // shadow/road-paint; [2] dark inner stroke reads on the bright amber ground;
   // [3] the ink fill covers the glyph body. Painting wide-then-narrow leaves a
   // light ring OUTSIDE the dark ring OUTSIDE the ink — §11's any-background halo.
-  // Each pass walks EVERY line (centered) so the rings nest across the block.
-  var drawPass = function(mode, color, lw, blur){
-    if(mode==="stroke"){ ctx.lineWidth = lw; ctx.strokeStyle = color;
-      ctx.shadowColor = blur ? color : "rgba(0,0,0,0)"; ctx.shadowBlur = blur || 0; }
-    else { ctx.shadowBlur = 0; ctx.shadowColor = "rgba(0,0,0,0)"; ctx.fillStyle = color; }
-    for(var li=0; li<lines.length; li++){
-      var L = lines[li], mL = ms[li];
-      var y = pad + lineH*li + lineH/2, x = pad + (maxW - mL.total)/2;   // center each line
-      for(var i=0;i<L.length;i++){
-        if(mode==="stroke") ctx.strokeText(L[i], x, y); else ctx.fillText(L[i], x, y);
-        x += mL.adv[i] + mL.ls;
+  // Each pass walks EVERY block/line (centered); the R2 subtitle block draws at
+  // its own em with proportionally scaled casing, its own ink (poiSub 0.85α
+  // white), the SAME nesting order — one texture, two voices.
+  var blocks = [{ lines:lines, ms:ms, px:LBL_FONT_PX, lh:lineH, st:style, y0:pad }];
+  if(sub) blocks.push({ lines:subLines, ms:subMs, px:subPx, lh:subLineH, st:sub.style, y0:pad + lineH*lines.length });
+  var drawPass = function(mode){
+    for(var bi=0; bi<blocks.length; bi++){
+      var B = blocks[bi], k = B.px/LBL_FONT_PX;
+      ctx.font = _lblFontStr(B.st, B.px);
+      if(mode==="glow"){ ctx.lineWidth = glowW*2*k; ctx.strokeStyle = B.st.glowColor || LBL_HALO_LIGHT;
+        ctx.shadowColor = ctx.strokeStyle; ctx.shadowBlur = B.st.halo*0.9*k; }
+      else if(mode==="casing"){ ctx.lineWidth = B.st.halo*2*k; ctx.strokeStyle = B.st.haloColor;
+        ctx.shadowBlur = 0; ctx.shadowColor = "rgba(0,0,0,0)"; }
+      else { ctx.shadowBlur = 0; ctx.shadowColor = "rgba(0,0,0,0)"; ctx.fillStyle = B.st.color; }
+      for(var li=0; li<B.lines.length; li++){
+        var L = B.lines[li], mL = B.ms[li];
+        var y = B.y0 + B.lh*li + B.lh/2, x = pad + (maxW - mL.total)/2;   // center each line
+        for(var i=0;i<L.length;i++){
+          if(mode==="ink") ctx.fillText(L[i], x, y); else ctx.strokeText(L[i], x, y);
+          x += mL.adv[i] + mL.ls;
+        }
       }
     }
   };
   // ics14b: glow:false voices (street/districts/civic — operator, oblique-angle
   // fog finding; ics14c adds both lot voices) skip pass [1] entirely: ink +
-  // casing only, the Maps treatment. The one voice still carrying the s92
-  // dual halo (water) keeps the light glow.
-  if(!noGlow) drawPass("stroke", style.glowColor || LBL_HALO_LIGHT, glowW*2, style.halo*0.9);   // [1] outer glow (soft)
-  drawPass("stroke", style.haloColor, style.halo*2, 0);          // [2] inner ring / casing (opposite polarity of the ink)
-  drawPass("fill", style.color, 0, 0);                           // [3] ink
+  // casing only, the Maps treatment.
+  if(!noGlow) drawPass("glow");    // [1] outer glow (soft)
+  drawPass("casing");              // [2] inner ring / casing (opposite polarity of the ink)
+  drawPass("ink");                 // [3] ink
   var tex = new THREE.CanvasTexture(cv);
   tex.minFilter = THREE.LinearMipmapLinearFilter; tex.magFilter = THREE.LinearFilter; tex.generateMipmaps = true;
   tex.anisotropy = _lblAniso;
@@ -11462,7 +11532,12 @@ function labelTexture(text, style, band, weight){
   // audit reads this to form texel/screen without re-deriving the raster.
   // lines/aspect are band-independent (wrap works in layout px), so a band swap
   // never changes a label's geometry.
-  var e = { tex:tex, aspect: W/H, lines:lines.length, band:band, texelH:ch, cw:cw, ch:ch, lru: ++_lblTexClock }; _lblTexCache[key] = e; return e;
+  // RES-3: titleLines/subLines + em fractions (em ÷ layout box H) let the
+  // poiSubtitle audit verify the RENDERED em per line without re-deriving
+  // the layout; lines = the TOTAL line count (drives sprite box + declutter).
+  var e = { tex:tex, aspect: W/H, lines:lines.length + subLines.length, titleLines:lines.length, subLines:subLines.length,
+            emTitleFrac: LBL_FONT_PX/H, emSubFrac: (sub ? subPx/H : 0),
+            band:band, texelH:ch, cw:cw, ch:ch, lru: ++_lblTexClock }; _lblTexCache[key] = e; return e;
 }
 /* live texture-memory report (QA/audit + budget check). */
 function labelsTexBudget(){
@@ -11646,6 +11721,31 @@ function _lblStreetDisplay(name){
   return (cut>0 ? n.slice(0,cut) : n).trim();
 }
 
+/* ---- RES-3 R1 — STREET SUFFIX ABBREVIATION, a SPACE-PRESSURE FALLBACK ONLY
+   (operator decision 2026-07-16: abbreviation is the fallback, never the
+   default — the full name renders whenever it fits; this is also exactly the
+   Maps behavior, research F2, and keeps the 1840s survey-plat voice at close
+   zoom where space is plentiful). The ladder: full name → abbreviated → hidden.
+   WHARF NEVER ABBREVIATES — it is the identity of the feature in this sim.
+   Only a TRAILING suffix word abbreviates ("Clay Street Wharf" ends in Wharf,
+   untouched). NO ELLIPSIS — see the leave-alones block (nobody's basemap
+   truncates street names with "…").
+   THE OSCILLATION HAZARD (report §"The problem, decomposed"): a per-frame
+   form choice could flip-flop (abbrev fits → placed → frees no space → expands
+   → collides → abbreviates). So the FORM decision is SETTLE-CACHED: resolved
+   only on settle frames inside the declutter pass (full first, abbreviated
+   retry once), cached until the next settle. DELIBERATE EXCEPTION to the
+   RES-3 continuous-declutter override: text CONTENT swapping mid-pan reads
+   as a glitch, so R1 stays settle-cached while placement (R3) is continuous.
+   LBL_ABBR_ENABLED is the harness/debug toggle (fail-before/pass-after
+   evidence for the streetAbbrev audit + atelier experiments). ---- */
+var LBL_STREET_ABBR = { Street:"St", Avenue:"Ave", Road:"Rd", Place:"Pl", Boulevard:"Blvd" };
+var LBL_ABBR_ENABLED = true;
+function _lblAbbrevName(name){
+  var m = String(name||"").match(/^(.*\S)\s+(Street|Avenue|Road|Place|Boulevard)$/);
+  return m ? (m[1] + " " + LBL_STREET_ABBR[m[2]]) : null;
+}
+
 /* ---- ZONE / LANDMARK ANCHORS. Parcels (cove/plaza/camp/mission/presidio) →
    polylabel pole of their world ring. Hills → the highest baked terrain vertex
    inside a named search box (data-grounded, not invented; skipped if the box is
@@ -11776,6 +11876,30 @@ function poiCategory(landmarkId){
   return (kind && POI_KIND_CAT[kind]) ? POI_KIND_CAT[kind] : null;
 }
 var POI_COLORS = { business:"#4285F4", residence:"#00897B", park:"#34A853", other:"#9AA0A6" };
+/* RES-3 R2 — the SUBTITLE text per registry kind (ICS-16's "4-star hotel"
+   slot, ours is the business KIND from window.LANDMARK_RESERVATIONS). Plain
+   ASCII (ics14e charset covers it outright). An unmapped kind falls back to
+   the kind string humanized — never silently blank. */
+var LBL_POI_KIND_LABEL = {
+  store:"Store", market:"Market", bank:"Bank", manufactory:"Manufactory",
+  hotel:"Hotel", newspaper_office:"Newspaper office", tavern:"Tavern",
+  saloon:"Saloon", exchange:"Exchange", civic:"Civic building", school:"School",
+  post_office:"Post office", residence:"Residence", dwelling:"Dwelling",
+  park:"Park", plaza:"Plaza"
+};
+function _lblPoiSubText(landmarkId){
+  var k = _poiKindById[landmarkId];
+  if(!k) return null;
+  return LBL_POI_KIND_LABEL[k] || (k.charAt(0).toUpperCase() + k.slice(1).replace(/_/g, " "));
+}
+/* R2 reveal: CLOSEST ZOOM BAND ONLY — the subtitle joins the name texture when
+   the settled altitude is at/below this (the report's ~150-220 m window, gated
+   at its midpoint; the 150 m plaza framing shows subtitles, the 500 m town
+   framing does not). SETTLE-GATED texture swap (same cadence as the band/
+   weight swaps — never per frame, no re-raster in motion). LBL_POISUB_ENABLED
+   is the harness/debug toggle (fail-before evidence for the poiSubtitle audit). */
+var LBL_POI_SUB_ALT_M = 200;
+var LBL_POISUB_ENABLED = true;
 /* ics14 item 6.1 — PROGRESSIVE EMBLEM REVEAL (Maps altitude LOD for POIs: high
    zoom shows only the top-tier landmarks; descending reveals the business
    diversity; close shows all). Deterministic KIND→TIER priority:
@@ -11992,8 +12116,14 @@ function _lblAdd(obj, bandFn, sublayer, prio, screenPx, ground){
   // seq = build order — the DETERMINISTIC declutter tiebreak within a priority
   // class (ics11 goal 2): rebuild order is a pure function of date + toggles,
   // so (prio, seq) ordering is identical every frame at the same camera+date.
-  _lblItems.push({ obj:obj, band:bandFn, sublayer:sublayer, prio:prio, seq:_lblItems.length, ss:screenPx||0, ground:!!ground, cur:0 });
+  // RES-3: returns the item so builders can flag it (varAnchor, _abbr state).
+  var it = { obj:obj, band:bandFn, sublayer:sublayer, prio:prio, seq:_lblItems.length, ss:screenPx||0, ground:!!ground, cur:0 };
+  _lblItems.push(it);
+  return it;
 }
+/* RES-3 R4 — pairId → EMBLEM item index (rebuilt with the label set); the
+   pairing contract gate + audit look an emblem up by its reservation id. */
+var _lblPairEmblems = {};
 
 function rebuildLabels(){
   _lblClear();
@@ -12043,7 +12173,13 @@ function rebuildLabels(){
         var rib = _lblStreetRibbon(name, LBL_STYLE.street, pl.pts, pl.cum, pl.total, sc, 10, LBL_BAND_DEFAULT);
         var obj = rib || _lblGroundMesh(name, LBL_STYLE.street, ac.x, ac.z, 10, Math.atan2(ac.tz, ac.tx), true, LBL_BAND_DEFAULT);
         obj.userData.growMax = LBL_ZF_STREET_MAX;              // ics14 LOD: far street text stays small
-        _lblAdd(obj, LBL_STREET_LOD[tier], "streets", prio, 0, true);   // ics14 LOD: class-tier altitude ramp
+        // RES-3 R1: carry both forms; the settle-cached declutter ladder swaps
+        // between them under space pressure (full whenever it fits).
+        obj.userData.textFull = name;
+        var abbr = _lblAbbrevName(name);
+        if(abbr) obj.userData.textAbbr = abbr;
+        var itS = _lblAdd(obj, LBL_STREET_LOD[tier], "streets", prio, 0, true);   // ics14 LOD: class-tier altitude ramp
+        itS._abbr = false;
       });
     });
   }
@@ -12088,7 +12224,20 @@ function rebuildLabels(){
         if(!r.footprint) return;
         var cx=r.footprint.cx, cz=r.footprint.cz;
         if(terrainHeight(cx,cz) <= 0.3) return;               // don't float a name over water
-        _lblAdd(_lblSprite(r.name, LBL_STYLE.civic, cx, cz, 8), LBL_BANDS.landmark, "lots", 34, 30, false);
+        var sp = _lblSprite(r.name, LBL_STYLE.civic, cx, cz, 8);
+        // RES-3 R4: pair the name to its emblem (a name never places while its
+        // eligible emblem is declutter-suppressed; the emblem may stand alone).
+        sp.userData.pairId = r.landmarkId;
+        // RES-3 R2: the kind subtitle rides the SAME texture at the closest
+        // zoom band (settle-gated swap; see _lblSetSub). subActive starts
+        // false — the first settle applies the altitude predicate.
+        var subT = _lblPoiSubText(r.landmarkId);
+        if(subT) sp.userData.sub = { text:subT, style:LBL_STYLE.poiSub };
+        sp.userData.subActive = false;
+        var itN = _lblAdd(sp, LBL_BANDS.landmark, "lots", 34, 30, false);
+        // RES-3 R3: POI name sprites take the variable-anchor candidate ladder
+        // (below/above/right/left of the emblem) in the continuous declutter.
+        itN.varAnchor = true;
       });
     }
   }
@@ -12108,7 +12257,9 @@ function rebuildLabels(){
         // ics14 item 6.1: reveal tier from the record's kind — band ramp +
         // declutter priority step (32+tier ⇒ 33/34/35) in one place.
         var tier = poiTier(_poiKindById[r.landmarkId]);
-        _lblAdd(_poiSprite(cat, r.name, cx, cz, poiBand), LBL_POI_TIER_BANDS[tier], "symbols", 32+tier, POI_SS_PX, false);
+        var em = _poiSprite(cat, r.name, cx, cz, poiBand);
+        em.userData.pairId = r.landmarkId;                      // RES-3 R4: the name side looks this up
+        _lblAdd(em, LBL_POI_TIER_BANDS[tier], "symbols", 32+tier, POI_SS_PX, false);
       });
     }
     // the plaza public ground — the park bucket (era-gated with the parcel).
@@ -12126,6 +12277,13 @@ function rebuildLabels(){
         _lblAdd(_poiSprite("park", "Portsmouth Square", ppx, ppz, poiBand), LBL_POI_TIER_BANDS[poiTier("plaza")], "symbols", 32+poiTier("plaza"), POI_SS_PX, false);
       }
     }
+  }
+
+  /* RES-3 R4 — index the emblems by pairId for the pairing gate + audit. */
+  _lblPairEmblems = {};
+  for(var pe=0; pe<_lblItems.length; pe++){
+    var pit = _lblItems[pe];
+    if(pit.sublayer==="symbols" && pit.obj.userData.pairId) _lblPairEmblems[pit.obj.userData.pairId] = pit;
   }
 
   _lblLastDay = Math.floor(simDay);
@@ -12191,6 +12349,8 @@ function _lblZoomFactor(alt){ var zf = alt/LBL_ZF_REF; return zf<1?1:(zf>LBL_ZF_
    only when the camera yaw has settled to a new heading (or on rebuild), never
    per frame. Zone SPRITES are camera-facing billboards → skipped (no dirX). */
 var _lblFlipYaw = null, _lblSettleAlt = -1;
+var _lblSubOn = false;        // RES-3 R2: subtitle reveal state at the last settle (poiSubtitle audit reads this)
+var _lblPairGatesFrame = 0;   // RES-3 R4: names gated by the pairing contract in the last frame (report/audit)
 /* s93 item 1 — re-raster a label to a new resolution band by swapping its
    material map (cached by style+text+band). Geometry/aspect are band-independent
    so only the texture changes; sprites keep their (band-independent) aspect. */
@@ -12198,7 +12358,8 @@ function _lblSetBand(it, band, weight){
   var o = it.obj, ud = o.userData;
   var wv = weight || null;
   if(ud.band === band && (ud.weightVar || null) === wv) return;
-  var e = ud.poi ? poiSymbolTexture(ud.poiCat, band) : labelTexture(ud.text, ud.style, band, wv);
+  // RES-3 R2: an active subtitle rides every band re-raster (same composite key)
+  var e = ud.poi ? poiSymbolTexture(ud.poiCat, band) : labelTexture(ud.text, ud.style, band, wv, (ud.subActive && ud.sub) ? ud.sub : null);
   o.material.map = e.tex; o.material.needsUpdate = true; ud.band = band; ud.weightVar = wv;
   if(!it.ground) o.userData.aspect = e.aspect;   // sprites size from userData.aspect
   // ics14 weight step: a weight variant changes glyph advances → the texture
@@ -12207,6 +12368,34 @@ function _lblSetBand(it, band, weight){
   // Settle-gated (same cadence as the band swap), never per frame.
   if(it.ground && e.aspect && ud.aspect && Math.abs(e.aspect - ud.aspect) > 0.002) _lblGroundReshape(it, e.aspect);
   it._texelH = e.texelH;
+}
+/* RES-3 R2 — SETTLE-GATED SUBTITLE SWAP: rebuild this sprite's texture with or
+   without the kind-subtitle block (same band/weight), refresh the line count +
+   aspect the declutter and the sprite scaler read. Never per frame. */
+function _lblSetSub(it, on){
+  var ud = it.obj.userData;
+  if(!ud.sub || ud.subActive === !!on) return;
+  var e = labelTexture(ud.text, ud.style, ud.band, ud.weightVar || null, on ? ud.sub : null);
+  it.obj.material.map = e.tex; it.obj.material.needsUpdate = true;
+  ud.aspect = e.aspect; ud.lines = e.lines; ud.titleLines = e.titleLines; ud.subLines = e.subLines;
+  ud.emTitleFrac = e.emTitleFrac; ud.emSubFrac = e.emSubFrac;
+  ud.subActive = !!on;
+}
+/* RES-3 R1 — SETTLE-CACHED FORM SWAP (full name ⇄ suffix abbreviation): swap
+   the street label's texture to the chosen form and reshape its ground
+   geometry for the new aspect (ribbon re-spans about its arc centre — the
+   abbreviated span only SHRINKS, so the accepted curvature can only ease;
+   reverting restores the span the ribbon was originally accepted at). Only
+   ever called on settle frames from the declutter ladder. */
+function _lblSetForm(it, abbr){
+  var ud = it.obj.userData;
+  if((it._abbr || false) === !!abbr) return;
+  ud.text = abbr ? ud.textAbbr : ud.textFull;
+  var e = labelTexture(ud.text, ud.style, ud.band, ud.weightVar || null);
+  it.obj.material.map = e.tex; it.obj.material.needsUpdate = true;
+  if(it.ground && e.aspect && ud.aspect && Math.abs(e.aspect - ud.aspect) > 0.002) _lblGroundReshape(it, e.aspect);
+  ud.aspect = e.aspect; ud.lines = e.lines;
+  it._abbr = !!abbr;
 }
 /* rebuild a ground label's geometry for a new texture aspect (ics14 weight
    step). Ribbon: re-span s0/s1 about the same arc centre (the ±4-6% span change
@@ -12252,6 +12441,127 @@ function _lblComputeFlips(){
     }
   }
 }
+/* ---- RES-3 shared quad helpers (step 1, the R1 settle ladder, the R3
+   variable-anchor pass and the streetAbbrev audit all need the SAME exact
+   quad math — one source, no approximations drifting apart). ---- */
+function _lblAabbOf(quad){
+  var mnX=1e18,mnY=1e18,mxX=-1e18,mxY=-1e18;
+  for(var k=0;k<4;k++){ var p=quad[k]; if(p.x<mnX)mnX=p.x; if(p.x>mxX)mxX=p.x; if(p.y<mnY)mnY=p.y; if(p.y>mxY)mxY=p.y; }
+  return { minX:mnX, minY:mnY, maxX:mxX, maxY:mxY };
+}
+/* exact projected ground quad for an item at an ARBITRARY texture aspect —
+   the R1 ladder asks "would the abbreviated/full form fit HERE, NOW" without
+   touching the live geometry. aspect=null reads the live geometry (identical
+   to what step 1 always computed inline). Returns null when a corner is
+   behind the near plane (caller falls back / skips). */
+function _lblGroundQuadFor(it, aspect){
+  var o = it.obj, ud = o.userData;
+  if(ud.dirX===undefined) return null;
+  var gp = it.ground ? o.geometry.parameters : null;
+  var gH = gp ? gp.height : ud.worldH;
+  var asp = (aspect!=null) ? aspect : (gp ? gp.width/gp.height : ud.aspect);
+  var vpH = window.innerHeight, fovK = 2*Math.tan(camera.fov*Math.PI/360)/vpH;
+  var dpk = camera.position.distanceTo(o.position)*fovK;
+  var padW = LBL_DECL_PAD * dpk;
+  var hwd = (gH*asp*o.scale.y)/2 + padW, hhd = (gH*o.scale.y)/2 + padW;
+  var px0=o.position.x, py0=o.position.y, pz0=o.position.z;
+  var qs=[], sgn=[[-1,-1],[1,-1],[1,1],[-1,1]];
+  for(var cq=0;cq<4;cq++){
+    var cxw = px0 + ud.dirX*hwd*sgn[cq][0] - ud.dirZ*hhd*sgn[cq][1];
+    var czw = pz0 + ud.dirZ*hwd*sgn[cq][0] + ud.dirX*hhd*sgn[cq][1];
+    var pc = _lblProject(cxw, py0, czw);
+    if(!pc.front) return null;
+    qs.push({x:pc.x, y:pc.y});
+  }
+  return qs;
+}
+/* SAT a quad against everything already reserved in the tree (plus one
+   optional extra quad — the R3 pass pre-avoids the item's own emblem). */
+function _lblQuadBlocked(quad, box, extraQuad){
+  if(extraQuad && _lblQuadOverlap(quad, extraQuad)) return true;
+  var hits = _lblTree.search(box);
+  for(var h=0; h<hits.length; h++){
+    if(!hits[h].quad || _lblQuadOverlap(quad, hits[h].quad)) return true;   // null quad = the horizon bar
+  }
+  return false;
+}
+
+/* ---- RES-3 R3 — VARIABLE-ANCHOR for POI name sprites, CONTINUOUS with
+   HYSTERESIS (operator override 2026-07-16 on the settle-gated draft: labels
+   re-evaluate and MOVE during camera motion, zero flicker, no dice).
+   Candidates in fixed order (Mapbox text-variable-anchor / Imhof's ordered
+   positions): [0] below the emblem (the shipped spot), [1] above, [2] right,
+   [3] left — all pure SCREEN offsets rendered via THREE.Sprite.center, so no
+   world reposition and NO re-raster is ever involved; the continuous pass is
+   collision math only over the already-projected quad.
+   FLICKER DISCIPLINE:
+     • stickiness — a label KEEPS its current anchor while that anchor fits;
+       it moves DOWN the ladder immediately only when genuinely forced out;
+     • return-home hysteresis — moving back UP to a better (earlier) candidate
+       requires that candidate to test free for LBL_ANCHOR_HOME_FRAMES
+       CONSECUTIVE evaluated frames (~0.5 s at 60 fps) before the move;
+     • eased transitions — the anchor offset (sprite.center) is EASED per
+       frame at the standard 0.28 factor (a short position slide), and every
+       show/hide keeps the standard opacity easing; a label mid-fade that is
+       re-approved fades back in from its current alpha (that has always been
+       how `cur` eases).
+   Deterministic: fixed candidate order, (prio,seq) outer order, and a frame
+   counter — a pure function of the camera trajectory. ---- */
+var LBL_ANCHOR_HOME_FRAMES = 30;   // consecutive free evaluations before returning to a better anchor (~0.5 s @ 60 fps)
+function _lblAnchorOffsets(w, h){
+  var E = POI_SS_PX;   // the emblem's screen size — offsets clear it with a small margin
+  return [ { dx:0,                dy:0 },
+           { dx:0,                dy:-(h + E) },
+           { dx: (w*0.55 + E*0.7), dy:-E*0.5 },
+           { dx:-(w*0.55 + E*0.7), dy:-E*0.5 } ];
+}
+function _lblShiftQuad(quad, dx, dy){
+  return [ {x:quad[0].x+dx, y:quad[0].y+dy}, {x:quad[1].x+dx, y:quad[1].y+dy},
+           {x:quad[2].x+dx, y:quad[2].y+dy}, {x:quad[3].x+dx, y:quad[3].y+dy} ];
+}
+/* place one variable-anchor name in the declutter pass. emQuad = the paired
+   emblem's projected quad when the emblem is band-eligible this frame — the
+   name PRE-AVOIDS its own emblem's ground even though the emblem (tier prio
+   34/35) may be processed later, so the pair never deadlocks into mutual
+   suppression (R4: the emblem outranks its name by contract). */
+function _lblPlaceVarAnchor(it, emQuad){
+  var ud = it.obj.userData;
+  var w = Math.max(1, it._hPx * (ud.aspect||1)), h = Math.max(1, it._hPx);
+  var offs = _lblAnchorOffsets(w, h);
+  var cur = (it._anchor||0);
+  var quadAt = function(a){ return _lblShiftQuad(it._quad, offs[a].dx, offs[a].dy); };
+  var freeAt = function(a){ var q = quadAt(a); return _lblQuadBlocked(q, _lblAabbOf(q), emQuad) ? -1 : a; };
+  var chosen = -1;
+  if(freeAt(cur) >= 0){
+    chosen = cur;
+    if(cur > 0){
+      // return-home hysteresis: a better candidate must be free for a
+      // sustained window before we move back (never the instant it frees).
+      var home = -1;
+      for(var a=0; a<cur && home<0; a++) home = freeAt(a);
+      if(home >= 0){
+        it._homeCnt = (it._homeCnt||0) + 1;
+        if(it._homeCnt >= LBL_ANCHOR_HOME_FRAMES){ chosen = home; it._homeCnt = 0; }
+      } else it._homeCnt = 0;
+    }
+  } else {
+    // forced out: take the FIRST free candidate in ladder order (immediate —
+    // staying put would overlap; the slide+fade makes the move read smooth).
+    it._homeCnt = 0;
+    for(var a2=0; a2<offs.length && chosen<0; a2++){ if(a2!==cur) chosen = freeAt(a2); }
+  }
+  if(chosen < 0){ it._target = 0; return false; }   // no candidate fits — suppressed (anchor kept for stability)
+  it._anchor = chosen;
+  var q = quadAt(chosen), bx = _lblAabbOf(q);
+  it._quad = q; it._box = bx;                        // audits re-prove against the RESERVED quad
+  _lblTree.insert({ minX:bx.minX, minY:bx.minY, maxX:bx.maxX, maxY:bx.maxY, quad:q });
+  // eased screen slide: sprite.center target for this anchor (screen +y is
+  // down; center y is up → cy = 0.5 + dy/h; cx = 0.5 - dx/w).
+  it._ctrTX = 0.5 - offs[chosen].dx / w;
+  it._ctrTY = 0.5 + offs[chosen].dy / h;
+  return true;
+}
+
 function updateLabels(){
   if(!LABELS_VIS.parent){ for(var q=0;q<_lblItems.length;q++){ var it0=_lblItems[q]; it0.cur+= (0-it0.cur)*0.3; it0.obj.material.opacity=it0.cur; it0.obj.visible=it0.cur>0.01; } return; }
   // rebuild the label set when the date or sublayer selection changed
@@ -12298,20 +12608,9 @@ function updateLabels(){
       // (reading dir × ground perpendicular, inflated by the pad in world metres)
       // instead of pretending the strip is screen-axis-aligned. A ribbon is
       // approximated by its straight chord box (curvature capped at LBL_CURV_MAX).
-      var ud2 = it.obj.userData;
-      if(ud2.dirX!==undefined){
-        var padW = LBL_DECL_PAD * dpk;
-        var hwd = (gH*aspect*it.obj.scale.y)/2 + padW, hhd = (gH*it.obj.scale.y)/2 + padW;
-        var px0=it.obj.position.x, py0=it.obj.position.y, pz0=it.obj.position.z;
-        var qs=[], sgn=[[-1,-1],[1,-1],[1,1],[-1,1]], okQ=true;
-        for(var cq=0;cq<4 && okQ;cq++){
-          var cxw = px0 + ud2.dirX*hwd*sgn[cq][0] - ud2.dirZ*hhd*sgn[cq][1];
-          var czw = pz0 + ud2.dirZ*hwd*sgn[cq][0] + ud2.dirX*hhd*sgn[cq][1];
-          var pc = _lblProject(cxw, py0, czw);
-          if(!pc.front) okQ=false; else qs.push({x:pc.x, y:pc.y});
-        }
-        if(okQ) quad = qs;
-      }
+      // RES-3: extracted to _lblGroundQuadFor — the R1 ladder + streetAbbrev
+      // audit reuse the SAME exact math at alternate texture aspects.
+      quad = _lblGroundQuadFor(it, null);
     } else {
       hPx = it.ss * (it.obj.userData.lines||1); hPxRaw = hPx;            // sprite: constant on-screen px (scaled below)
     }
@@ -12338,6 +12637,15 @@ function updateLabels(){
     // weightNear (streets) picks Bold when its APPARENT size (CSS px, not
     // device px: weight is a zoom-style choice, not a raster-density one)
     // reaches weightNearPx. Maps behavior: bold white close up.
+    // RES-3 R2: the kind-subtitle reveal rides the settle gate too — closest
+    // zoom band only (settled altitude ≤ LBL_POI_SUB_ALT_M). Applied to EVERY
+    // subtitle-bearing item (not just on-screen candidates) so a name panned
+    // into frame between settles already carries the right block; the swap
+    // happens BEFORE the band pass so composites re-raster at the right band.
+    _lblSubOn = LBL_POISUB_ENABLED && alt <= LBL_POI_SUB_ALT_M;
+    for(var si=0; si<_lblItems.length; si++){
+      if(_lblItems[si].obj.userData.sub) _lblSetSub(_lblItems[si], _lblSubOn);
+    }
     for(var bi=0; bi<cands.length; bi++){
       var itb=cands[bi], stb=itb.obj.userData.style, wv=null;
       if(stb && stb.weightNear && itb._hPxRaw >= stb.weightNearPx) wv = stb.weightNear;
@@ -12357,13 +12665,65 @@ function updateLabels(){
     _lblTree.insert({ minX:0, minY:0, maxX:window.innerWidth, maxY:LBL_HORIZON_H, quad:null });
     cands.sort(function(a,b){ return a.prio-b.prio || a.seq-b.seq; });
     for(var c=0;c<cands.length;c++){
-      var it2 = cands[c], bx = it2._box;
-      var hits = _lblTree.search(bx), blocked = false;
-      for(var h=0; h<hits.length && !blocked; h++){
-        blocked = !hits[h].quad || _lblQuadOverlap(it2._quad, hits[h].quad);   // null quad = the horizon bar (AABB hit is enough)
+      var it2 = cands[c];
+      /* RES-3 R3 — POI name sprites: continuous variable-anchor with
+         hysteresis (own placement path; pre-avoids the paired emblem). */
+      if(it2.varAnchor){
+        var emIt = it2.obj.userData.pairId ? _lblPairEmblems[it2.obj.userData.pairId] : null;
+        var emQuad = (emIt && LABELS_VIS.symbols && emIt.band(alt) > 0.02 && emIt._quad) ? emIt._quad : null;
+        _lblPlaceVarAnchor(it2, emQuad);
+        continue;
+      }
+      var bx = it2._box;
+      var blocked = _lblQuadBlocked(it2._quad, bx, null);
+      /* RES-3 R1 — the SETTLE-CACHED abbreviation ladder (streets only; see
+         the R1 block by _lblAbbrevName). Resolved ONLY on settle frames, in
+         (prio,seq) order inside this very pass; between settles the cached
+         form is tested as-is, so the text can never oscillate mid-pan:
+           • FULL and blocked → retry ONCE at the abbreviated aspect; fits →
+             swap (cached) + place;
+           • ABBREVIATED → offer the FULL form back FIRST (the operator's
+             stance: the full name renders whenever it fits); else keep the
+             abbreviation if it still fits; else suppressed. */
+      if(LBL_ABBR_ENABLED && settle && it2.obj.userData.textAbbr){
+        var udS = it2.obj.userData;
+        if(!it2._abbr && blocked){
+          var eA = labelTexture(udS.textAbbr, udS.style, udS.band, udS.weightVar || null);
+          var qA = _lblGroundQuadFor(it2, eA.aspect);
+          if(qA && !_lblQuadBlocked(qA, _lblAabbOf(qA), null)){
+            _lblSetForm(it2, true);
+            it2._quad = qA; it2._box = bx = _lblAabbOf(qA); blocked = false;
+          }
+        } else if(it2._abbr){
+          var eF = labelTexture(udS.textFull, udS.style, udS.band, udS.weightVar || null);
+          var qF = _lblGroundQuadFor(it2, eF.aspect);
+          if(qF && !_lblQuadBlocked(qF, _lblAabbOf(qF), null)){
+            _lblSetForm(it2, false);
+            it2._quad = qF; it2._box = bx = _lblAabbOf(qF); blocked = false;
+          }
+        }
       }
       if(blocked){ it2._target = 0; }
       else _lblTree.insert({ minX:bx.minX, minY:bx.minY, maxX:bx.maxX, maxY:bx.maxY, quad:it2._quad });
+    }
+    /* RES-3 R4 — PAIRING CONTRACT RECONCILIATION (text-optional semantics,
+       Mapbox icon-optional/text-optional; the operator's contract verbatim:
+       an emblem may place without its name; a NAME must NEVER place without
+       its emblem). This runs AFTER the whole pass, so every emblem's decision
+       is final here (tier-2/3 emblems carry prio 34/35 and are processed
+       after the prio-34 names); any placed name whose BAND-ELIGIBLE emblem
+       lost the declutter is gated. Its reserved quad stays in the tree (greedy
+       order is never re-opened mid-frame — determinism over greed), and the
+       standard easing fades it, so this can never pop or flicker. */
+    _lblPairGatesFrame = 0;
+    for(var pg=0; pg<cands.length; pg++){
+      var itg = cands[pg];
+      if(!itg.varAnchor || !(itg._target > 0)) continue;
+      var pid = itg.obj.userData.pairId; if(!pid) continue;
+      var emg = _lblPairEmblems[pid];
+      if(emg && LABELS_VIS.symbols && emg.band(alt) > 0.02 && emg._quad && !(emg._target > 0.02)){
+        itg._target = 0; _lblPairGatesFrame++;
+      }
     }
   }
 
@@ -12379,6 +12739,15 @@ function updateLabels(){
       var dist2 = camera.position.distanceTo(itf.obj.position);
       var wH = Math.max(1, dist2*fovK*itf.ss*(itf.obj.userData.lines||1)); // world height for the target screen px (per line)
       itf.obj.scale.set(wH*itf.obj.userData.aspect, wH, 1);
+    }
+    // RES-3 R3: EASED ANCHOR SLIDE — sprite.center glides toward the chosen
+    // anchor's offset at the standard easing factor (screen-space only; the
+    // texture, world position and declutter quad are untouched by the ease).
+    if(itf.varAnchor){
+      var tx = (itf._ctrTX != null) ? itf._ctrTX : 0.5, ty = (itf._ctrTY != null) ? itf._ctrTY : 0.5;
+      itf._ctrX = (itf._ctrX == null) ? tx : itf._ctrX + (tx - itf._ctrX) * 0.28;
+      itf._ctrY = (itf._ctrY == null) ? ty : itf._ctrY + (ty - itf._ctrY) * 0.28;
+      itf.obj.center.set(itf._ctrX, itf._ctrY);
     }
   }
 }
@@ -12412,6 +12781,36 @@ setTimeout(function(){
     window.__P1850.labelsSetTypeSet = labelsSetTypeSet;
     window.__P1850.labelsGetTypeSet = labelsGetTypeSet;
     window.__P1850.labelsTexBudget  = labelsTexBudget;
+    /* RES-3 harness/debug affordances (per-system debug toggles; also the
+       fail-before/pass-after evidence path for the new audits — disabling a
+       mechanism must turn its audit RED because the audit measures the
+       PROPERTY, not the mechanism's presence): */
+    window.__P1850.labelsSetAbbrev = function(on){
+      LBL_ABBR_ENABLED = !!on;
+      if(!LBL_ABBR_ENABLED){ for(var i=0;i<_lblItems.length;i++){ if(_lblItems[i]._abbr) _lblSetForm(_lblItems[i], false); } }
+      _lblFlipYaw = null;   // force a fresh settle resolution
+      return LBL_ABBR_ENABLED;
+    };
+    window.__P1850.labelsSetPoiSub = function(on){
+      LBL_POISUB_ENABLED = !!on;
+      if(!LBL_POISUB_ENABLED){ for(var i=0;i<_lblItems.length;i++){ if(_lblItems[i].obj.userData.subActive) _lblSetSub(_lblItems[i], false); } _lblSubOn = false; }
+      _lblFlipYaw = null;
+      return LBL_POISUB_ENABLED;
+    };
+    window.__P1850.labelsUpdate = updateLabels;   // pure label pass (frame-cost probes time this without a GL draw)
+    window.__P1850.labelsResState = function(){   // RES-3 live state census for probes/reports
+      var abbr=0, abbrPlaced=0, anchors={0:0,1:0,2:0,3:0}, subs=0, names=0, abbrTexts=[], displaced=[];
+      for(var i=0;i<_lblItems.length;i++){ var it=_lblItems[i];
+        if(it._abbr){ abbr++; if(it._target>0.02){ abbrPlaced++; abbrTexts.push(it.obj.userData.text); } }
+        if(it.varAnchor){ names++; anchors[it._anchor||0]++;
+          if((it._anchor||0)>0 && it._target>0.02) displaced.push({ name:it.obj.userData.text, anchor:it._anchor }); }
+        if(it.obj.userData.subActive) subs++;
+      }
+      return { abbrForms:abbr, abbrPlaced:abbrPlaced, abbrPlacedTexts:abbrTexts.slice(0,10),
+               poiNames:names, anchorCensus:anchors, displaced:displaced.slice(0,10),
+               subActive:subs, subOn:_lblSubOn, pairGatesLastFrame:_lblPairGatesFrame,
+               abbrEnabled:LBL_ABBR_ENABLED, poiSubEnabled:LBL_POISUB_ENABLED };
+    };
   }
 }, 0);
 
@@ -12595,18 +12994,26 @@ registerAudit("labels", "contrast", function(){
   // ics14 — the surface families each voice is HOSTED on (retained for the
   // per-host reporting; every voice now shares the same white-ink/dark-casing
   // pairing, so hosts inform the REPORT rather than choose an ink).
+  // RES-3 R2: poiSub joins as its own voice — the subtitle is hosted where the
+  // civic names are (land + roofs). Its 0.85α white ink is the audit's charge.
   var HOST_FAM = { street:["road"], region:["land"], hill:["land"], place:["land"],
-                   civic:["land","roof"], lotNum:["land","roof"], lotOwn:["land","roof"], water:["water"] };
+                   civic:["land","roof"], lotNum:["land","roof"], lotOwn:["land","roof"],
+                   poiSub:["land","roof"], water:["water"] };
   var GATE = 3.0, styles = [], worst = { style:null, bg:null, ratio:1e9 };
   Object.keys(LBL_STYLE).forEach(function(key){
-    var st = LBL_STYLE[key], ink = _lblParseCss(st.color), casing = _lblParseCssA(st.haloColor);
+    var st = LBL_STYLE[key], ink = _lblParseCssA(st.color), casing = _lblParseCssA(st.haloColor);
     var hostFams = HOST_FAM[key] || null;
     var sMin = 1e9, sBg = null, hMin = 1e9, hBg = null, perBg = [];
     BG.forEach(function(b){
       var eCase = _lblComposite(casing.rgb, casing.a, b.rgb);
-      var inkVsCasing = _lblContrast(ink, eCase);    // glyph body vs its own rim (white/dark-grey ≈ 12-13:1)
+      // RES-3: a SEMI-TRANSPARENT ink (poiSub 0.85α white) composites over its
+      // own casing first — the glyph body paints ON the casing stroke, so the
+      // effective ink is ink⊕casing⊕bg. Opaque inks reduce to the old math
+      // exactly (a=1 ⇒ effInk = ink) — no voice's score moved.
+      var effInk = _lblComposite(ink.rgb, ink.a, eCase);
+      var inkVsCasing = _lblContrast(effInk, eCase); // glyph body vs its own rim (white/dark-grey ≈ 12-13:1)
       var casingVsBg  = _lblContrast(eCase, b.rgb);  // rim edge vs host — the carrier on LIGHT surfaces
-      var inkVsBg     = _lblContrast(ink, b.rgb);    // ink edge vs host — the carrier on DARK surfaces (Maps satellite mode)
+      var inkVsBg     = _lblContrast(effInk, b.rgb); // ink edge vs host — the carrier on DARK surfaces (Maps satellite mode)
       var carrier = Math.max(casingVsBg, inkVsBg);
       var here = Math.min(inkVsCasing, carrier);
       var isHost = hostFams !== null && hostFams.indexOf(b.fam) >= 0;
@@ -12714,24 +13121,40 @@ registerAudit("labels", "wrap", function(){
     var ud = _lblItems[i].obj.userData, st = ud.style;
     if(!st || !st.wrap) continue;
     checked++;
+    // RES-3 R2: a composite (name+subtitle) texture reports its TITLE line
+    // count separately — the title block is what this audit's wrap law binds;
+    // the subtitle block is proved against the SAME wrap fn at its own em.
+    var builtTitle = (ud.subActive && ud.titleLines) ? ud.titleLines : (ud.lines||1);
     var disp = st.smallCaps ? String(ud.text).toUpperCase() : String(ud.text);
     var limit = st.wrap * LBL_FONT_PX;
     var total = _lblAdvances(disp, st).total;
     var lines = _lblWrapLines(disp, st, limit);
-    if(total > limit && disp.indexOf(" ")>=0 && (ud.lines||1) < 2){
+    if(total > limit && disp.indexOf(" ")>=0 && builtTitle < 2){
       bad.push({ text:ud.text, layoutPx:Math.round(total), limitPx:Math.round(limit), why:"needs wrap, rendered 1 line" }); continue;
     }
-    if((ud.lines||1) !== lines.length){
-      bad.push({ text:ud.text, why:"built lines "+(ud.lines||1)+" != wrap fn "+lines.length }); continue;
+    if(builtTitle !== lines.length){
+      bad.push({ text:ud.text, why:"built lines "+builtTitle+" != wrap fn "+lines.length }); continue;
     }
-    for(var L=0; L<lines.length; L++){
+    var overflow = false;
+    for(var L=0; L<lines.length && !overflow; L++){
       if(lines[L].indexOf(" ")>=0 && _lblAdvances(lines[L], st).total > limit*1.01){
-        bad.push({ text:ud.text, line:lines[L], why:"line overflows wrap limit" }); break;
+        bad.push({ text:ud.text, line:lines[L], why:"line overflows wrap limit" }); overflow = true;
       }
+    }
+    if(overflow) continue;
+    if(ud.subActive && ud.sub){
+      var sst = ud.sub.style, subPx = Math.round(LBL_FONT_PX*LBL_SUB_EM);
+      var sdisp = sst.smallCaps ? String(ud.sub.text).toUpperCase() : String(ud.sub.text);
+      var sLimit = sst.wrap ? sst.wrap*subPx : 0;
+      var sLines = _lblWrapLines(sdisp, sst, sLimit, subPx);
+      if((ud.subLines||0) !== sLines.length)
+        bad.push({ text:ud.text, sub:ud.sub.text, why:"built sub lines "+(ud.subLines||0)+" != wrap fn "+sLines.length });
+      else if((ud.lines||1) !== lines.length + sLines.length)
+        bad.push({ text:ud.text, why:"total lines "+(ud.lines||1)+" != title "+lines.length+" + sub "+sLines.length });
     }
   }
   return { pass: bad.length===0, checked:checked,
-           method:"style.wrap × LBL_FONT_PX layout-px limit; long multi-word labels must rasterize ≥2 balanced lines, each line ≤ limit (single unbreakable words exempt)",
+           method:"style.wrap × LBL_FONT_PX layout-px limit; long multi-word labels must rasterize ≥2 balanced lines (linguistic-boundary split first, RES-3), each line ≤ limit (single unbreakable words exempt); composite name+subtitle blocks prove title AND subtitle line counts against the same wrap fn",
            bad: bad.slice(0,8) };
 });
 
@@ -12796,6 +13219,194 @@ registerAudit("labels", "poiSymbols", function(){
            method:"mapping coverage over the registry + built-vs-recomputed set fidelity (reservationsAt(day) on-land footprints + era-gated plaza) + palette membership",
            bad: bad.slice(0,8) };
 });
+
+/* ---- AUDIT 8 — streetAbbrev (RES-3 R1, rules-first). PROPERTY (both
+   directions of the operator's stance "abbreviate ONLY under pressure; full
+   whenever it fits"):
+     [a] JUSTIFIED — every street label PLACED in its abbreviated form has a
+         full-width form that GENUINELY collides right now: its exact
+         full-aspect projected quad (same _lblGroundQuadFor math the placer
+         uses) SAT-intersects ≥1 OTHER placed quad or the horizon bar. No
+         abbreviation while the full name fits.
+     [b] EXHAUSTED — every street label the declutter SUPPRESSED that carries
+         an abbreviation had no way out: BOTH its current-form quad AND its
+         abbreviated-form quad collide with the placed set. (If the
+         abbreviated quad were free, the settle ladder must have taken it.)
+   METHOD for [b]: a full GREEDY REPLAY of the placement pass over every item
+   the streets can see (prio < 33 — zones + streets; the POI names/emblems
+   come later in (prio,seq) order and cannot influence a street's turn), with
+   the ladder applied at each street's turn against a fresh rbush, using the
+   SAME _lblGroundQuadFor quads. The live street outcomes (placed?, which
+   form?) must MATCH the replay — this is the declutter audit's consistency-
+   proof pattern extended to the form ladder. A weaker "is the abbreviated
+   quad free in the FINAL placed set" check cannot fail-before: once a name
+   is suppressed, later labels take its space, so the hole closes (measured;
+   first draft of this audit had exactly that defect).
+   [a] stays a direct check on the final set (belt to the replay).
+   FAILS BEFORE the ladder exists (__P1850.labelsSetAbbrev(false) reproduces
+   the pre-RES-3 behavior: the replay places abbreviated forms the live pass
+   suppressed → mismatch → red); PASSES after. Deterministic; assumes the
+   settled camera the harness guarantees. ---- */
+registerAudit("labels", "streetAbbrev", function(){
+  var alt = (typeof lastKnownAlt==="number" && lastKnownAlt>0) ? lastKnownAlt : 800;
+  var bad = [], abbrPlaced = 0, streetsChecked = 0;
+  // ---- [b] the greedy replay (prio < 33, (prio,seq) order, fresh tree) ----
+  var tree = (typeof RBush!=="undefined") ? new RBush() : null;
+  if(tree){
+    tree.insert({ minX:0, minY:0, maxX:window.innerWidth, maxY:LBL_HORIZON_H, quad:null });
+    var blockedIn = function(quad){
+      var bx = _lblAabbOf(quad), hits = tree.search(bx);
+      for(var h=0;h<hits.length;h++){ if(!hits[h].quad || _lblQuadOverlap(quad, hits[h].quad)) return true; }
+      return false;
+    };
+    var put = function(quad){ var bx=_lblAabbOf(quad); tree.insert({ minX:bx.minX, minY:bx.minY, maxX:bx.maxX, maxY:bx.maxY, quad:quad }); };
+    var vis = [];
+    for(var v=0;v<_lblItems.length;v++){ var iv=_lblItems[v];
+      if(iv.prio < 33 && iv._quad && iv.band(alt)*(LABELS_VIS[iv.sublayer]?1:0) > 0.02) vis.push(iv); }
+    vis.sort(function(a,b){ return a.prio-b.prio || a.seq-b.seq; });
+    for(var r=0;r<vis.length;r++){
+      var it = vis[r], ud = it.obj.userData;
+      if(it.sublayer==="streets" && ud.textAbbr){
+        streetsChecked++;
+        var eF = labelTexture(ud.textFull, ud.style, ud.band, ud.weightVar||null);
+        var qF = _lblGroundQuadFor(it, eF.aspect);
+        var wantPlaced = false, wantAbbr = false, wantQuad = null;
+        if(qF && !blockedIn(qF)){ wantPlaced = true; wantAbbr = false; wantQuad = qF; }
+        else {
+          var eA = labelTexture(ud.textAbbr, ud.style, ud.band, ud.weightVar||null);
+          var qA = _lblGroundQuadFor(it, eA.aspect);
+          if(qA && !blockedIn(qA)){ wantPlaced = true; wantAbbr = true; wantQuad = qA; }
+        }
+        if(wantPlaced) put(wantQuad);
+        var livePlaced = it._target>0.02, liveAbbr = !!it._abbr;
+        if(livePlaced !== wantPlaced || (wantPlaced && liveAbbr !== wantAbbr))
+          bad.push({ text:ud.textFull, live:(livePlaced?(liveAbbr?"abbrev":"full"):"hidden"),
+                     replay:(wantPlaced?(wantAbbr?"abbrev":"full"):"hidden"), why:"[b] live outcome != ladder replay" });
+      } else {
+        // fixed-form item (zones + non-abbreviable streets): replay its turn as-is
+        if(!blockedIn(it._quad)) put(it._quad);
+      }
+    }
+  }
+  // ---- [a] no abbreviation while the full name fits (final-set belt) ----
+  var placed = [], horizon = [{x:0,y:0},{x:window.innerWidth,y:0},{x:window.innerWidth,y:LBL_HORIZON_H},{x:0,y:LBL_HORIZON_H}];
+  for(var i=0;i<_lblItems.length;i++){ var ip=_lblItems[i]; if(ip._target>0.02 && ip._quad) placed.push(ip); }
+  for(var s=0;s<_lblItems.length;s++){
+    var st = _lblItems[s], uds = st.obj.userData;
+    if(st.sublayer!=="streets" || !uds.textAbbr || !st._abbr || !(st._target>0.02) || !st._quad) continue;
+    abbrPlaced++;
+    var eF2 = labelTexture(uds.textFull, uds.style, uds.band, uds.weightVar||null);
+    var qF2 = _lblGroundQuadFor(st, eF2.aspect);
+    if(qF2){
+      var coll = _lblQuadOverlap(qF2, horizon);
+      for(var p=0;p<placed.length && !coll;p++){ if(placed[p]!==st && _lblQuadOverlap(qF2, placed[p]._quad)) coll = true; }
+      if(!coll) bad.push({ text:uds.textFull, why:"[a] abbreviated while the full form fits" });
+    }
+  }
+  return { pass: bad.length===0, abbrPlaced:abbrPlaced, streetsChecked:streetsChecked,
+           enabled:LBL_ABBR_ENABLED,
+           method:"[b] greedy replay of the prio<33 placement pass WITH the ladder (fresh rbush, exact _lblGroundQuadFor quads) — live street outcomes must match; [a] every placed abbreviation's full-aspect quad must still SAT-collide with the placed set/horizon; settled camera",
+           bad: bad.slice(0,8) };
+});
+
+/* ---- AUDIT 9 — poiPairing (RES-3 R4, the text-optional contract, operator
+   verbatim: "an emblem may place without its name; a name must NEVER place
+   without its emblem"). PROPERTY: no reservation NAME is placed while its
+   paired EMBLEM is band-eligible at the current altitude yet lost the
+   declutter (the emblem may be band-faded by altitude LOD — Maps mid-zoom
+   names-without-pins — that is NOT a violation; the contract binds the
+   declutter, not the LOD ladder). The reconciliation pass in updateLabels
+   ENFORCES this; the audit independently re-proves it from the frame state
+   (catches regressions when priorities are next tuned — the report's stated
+   purpose). No behavior change was expected and none was observed at the
+   canonical framings (pairGatesLastFrame stays 0 there); the gate exists as
+   the contract's guarantee. ---- */
+registerAudit("labels", "poiPairing", function(){
+  var alt = (typeof lastKnownAlt==="number" && lastKnownAlt>0) ? lastKnownAlt : 800;
+  var bad = [], namesPlaced = 0, emblemsChecked = 0;
+  for(var i=0;i<_lblItems.length;i++){
+    var it = _lblItems[i], ud = it.obj.userData;
+    if(!it.varAnchor || !ud.pairId) continue;
+    if(!(it._target>0.02)) continue;
+    namesPlaced++;
+    var em = _lblPairEmblems[ud.pairId];
+    if(!em || !LABELS_VIS.symbols) continue;
+    emblemsChecked++;
+    if(em.band(alt)>0.02 && em._quad && !(em._target>0.02))
+      bad.push({ name:ud.text, why:"name placed while its band-eligible emblem lost the declutter" });
+  }
+  return { pass: bad.length===0, namesPlaced:namesPlaced, pairsChecked:emblemsChecked,
+           pairGatesLastFrame:_lblPairGatesFrame,
+           method:"every placed reservation name with a paired emblem: the emblem must not be declutter-suppressed while band-eligible (emblem-without-name allowed; name-without-emblem never)",
+           bad: bad.slice(0,8) };
+});
+
+/* ---- AUDIT 10 — poiSubtitle (RES-3 R2 / ICS-16 typography core). PROPERTIES,
+   measured against the LAST SETTLE state (the reveal is settle-gated by
+   design):
+     [1] REVEAL — when the settled altitude is at/below LBL_POI_SUB_ALT_M,
+         EVERY reservation-name sprite that has registry kind data carries its
+         subtitle IN THE SAME TEXTURE (subActive, subLines ≥ 1); above the
+         gate, NONE does (the subtitle is a closest-zoom read only);
+     [2] CONTENT — the subtitle text equals the kind display recomputed from
+         window.LANDMARK_RESERVATIONS via _lblPoiSubText (never invented);
+     [3] LEGIBILITY FLOOR — at the sprite's on-screen box (ss × lines), the
+         RENDERED em of BOTH the title and the subtitle lines clears ~11 px
+         (the ICS-14d minimum-legible-em rule, applied per line of the block).
+   FAILS BEFORE R2 (__P1850.labelsSetPoiSub(false) reproduces the pre-RES-3
+   close-zoom state: at a settled ≤200 m framing, [1] red — names carry no
+   subtitle); PASSES after. Above the reveal altitude the audit still proves
+   the negative direction of [1] (no premature subtitles). ---- */
+registerAudit("labels", "poiSubtitle", function(){
+  var expectOn = _lblSettleAlt>0 && _lblSettleAlt <= LBL_POI_SUB_ALT_M;   // the property, NOT the mechanism flag
+  var EM_GATE = 11;
+  var bad = [], names = 0, withSub = 0;
+  for(var i=0;i<_lblItems.length;i++){
+    var it = _lblItems[i], ud = it.obj.userData;
+    if(!it.varAnchor) continue;   // reservation-name sprites
+    names++;
+    var expected = _lblPoiSubText(ud.pairId);
+    if(expectOn && expected){
+      if(!ud.subActive || !(ud.subLines>=1)){ bad.push({ name:ud.text, why:"[1] no subtitle at the closest zoom band" }); continue; }
+      if(ud.sub.text !== expected){ bad.push({ name:ud.text, got:ud.sub.text, want:expected, why:"[2] subtitle != registry kind" }); continue; }
+      var boxPx = it.ss * (ud.lines||1);
+      var emT = boxPx * (ud.emTitleFrac||0), emS = boxPx * (ud.emSubFrac||0);
+      if(emT < EM_GATE || emS < EM_GATE)
+        bad.push({ name:ud.text, emTitle:+emT.toFixed(1), emSub:+emS.toFixed(1), why:"[3] rendered em below the "+EM_GATE+"px floor" });
+      else withSub++;
+    } else if(ud.subActive){
+      bad.push({ name:ud.text, why:"[1] subtitle rendered above the reveal band (settled "+Math.round(_lblSettleAlt)+" m)" });
+    }
+  }
+  return { pass: bad.length===0, namesChecked:names, withSubtitle:withSub,
+           settleAlt:Math.round(_lblSettleAlt), revealAltM:LBL_POI_SUB_ALT_M, expectOn:expectOn,
+           method:"settle-gated reveal (≤"+LBL_POI_SUB_ALT_M+" m): subtitle present+correct (registry kind via _lblPoiSubText) in the SAME texture, rendered em ≥ "+EM_GATE+"px per line (box × emFrac); above the gate: no subtitles",
+           bad: bad.slice(0,8) };
+});
+
+/* =====================================================================
+   RES-3 R5 — LEAVE-ALONES, REASONS ON RECORD (research/map-label-typography-
+   prior-art.md; so nobody "fixes" these into regressions):
+   • NO ELLIPSIS anywhere on the basemap — ellipsis is a list-UI convention,
+     not cartography; Maps abbreviates or hides a street name, never
+     "Sacramen…" (finding F2). The R1 ladder is the sanctioned fallback.
+   • NO SDF MIGRATION — the per-band canvas re-raster already holds
+     texel≈screen (crispness audit) under the single-file/no-asset law;
+     SDF buys nothing here unless texture memory becomes the binding
+     constraint (F6; budget currently 96 MB, LRU-evicted).
+   • REPEAT SPACING STAYS WORLD-SPACE (LBL_REPEAT_M 240 m vs Mapbox's 250
+     SCREEN px) — surplus far instances are eaten by the declutter, so the
+     observable density matches; the wasted items are cheap at our label
+     counts (F5).
+   • THE DETERMINISTIC (prio, seq) DECLUTTER ORDER + PER-FRAME OPACITY EASING
+     STAY EXACTLY AS-IS — order determinism (not the fade) is what prevents
+     rotation shimmer; Mapbox converged on the same architecture (F4). The
+     RES-3 continuous variable-anchor rides INSIDE this order and adds only
+     hysteresis state, never randomness.
+   • ITALIC WATER VOICE stays deferred to the era-typography sprint — only
+     upright Roboto 500/700 are embedded, and canvas font-matching would
+     silently substitute a fallback face for an italic request (F3).
+   ===================================================================== */
 /* ---- 2b. STREET GRAPH — a waypoint graph over the real surveyed street
    grid (every streetsU x streetsV intersection), plus the Plaza (wired to
    its four bounding corners), the Clay St wharf/landing, the Mission-road

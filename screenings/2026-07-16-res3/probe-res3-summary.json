@@ -1,0 +1,414 @@
+{
+  "framings": {
+    "overview-1500m": {
+      "state": {
+        "abbrForms": 0,
+        "abbrPlaced": 0,
+        "abbrPlacedTexts": [],
+        "poiNames": 48,
+        "anchorCensus": {
+          "0": 48,
+          "1": 0,
+          "2": 0,
+          "3": 0
+        },
+        "displaced": [],
+        "subActive": 0,
+        "subOn": false,
+        "pairGatesLastFrame": 0,
+        "abbrEnabled": true,
+        "poiSubEnabled": true
+      },
+      "updateMs": 0.259,
+      "streetAbbrev": {
+        "pass": true,
+        "abbrPlaced": 0
+      },
+      "poiPairing": {
+        "pass": true,
+        "namesPlaced": 0,
+        "pairsChecked": 0,
+        "gates": 0
+      },
+      "poiSubtitle": {
+        "pass": true,
+        "expectOn": false,
+        "withSubtitle": 0,
+        "namesChecked": 48
+      },
+      "declutter": {
+        "pass": true,
+        "placed": 57,
+        "suppressed": 10
+      }
+    },
+    "town-500m": {
+      "state": {
+        "abbrForms": 2,
+        "abbrPlaced": 2,
+        "abbrPlacedTexts": [
+          "Post St",
+          "Post St"
+        ],
+        "poiNames": 48,
+        "anchorCensus": {
+          "0": 20,
+          "1": 6,
+          "2": 14,
+          "3": 8
+        },
+        "displaced": [
+          {
+            "name": "Custom House",
+            "anchor": 3
+          },
+          {
+            "name": "School House",
+            "anchor": 3
+          },
+          {
+            "name": "City Hotel",
+            "anchor": 2
+          },
+          {
+            "name": "Parker House",
+            "anchor": 2
+          },
+          {
+            "name": "El Dorado",
+            "anchor": 2
+          },
+          {
+            "name": "Howard & Mellus store",
+            "anchor": 1
+          },
+          {
+            "name": "Shades Tavern",
+            "anchor": 2
+          },
+          {
+            "name": "Portsmouth House",
+            "anchor": 3
+          },
+          {
+            "name": "Post Office",
+            "anchor": 2
+          },
+          {
+            "name": "Ward & Smith / Ward & Co",
+            "anchor": 3
+          }
+        ],
+        "subActive": 0,
+        "subOn": false,
+        "pairGatesLastFrame": 7,
+        "abbrEnabled": true,
+        "poiSubEnabled": true
+      },
+      "updateMs": 0.863,
+      "streetAbbrev": {
+        "pass": true,
+        "abbrPlaced": 2
+      },
+      "poiPairing": {
+        "pass": true,
+        "namesPlaced": 21,
+        "pairsChecked": 21,
+        "gates": 7
+      },
+      "poiSubtitle": {
+        "pass": true,
+        "expectOn": false,
+        "withSubtitle": 0,
+        "namesChecked": 48
+      },
+      "declutter": {
+        "pass": true,
+        "placed": 127,
+        "suppressed": 56
+      }
+    },
+    "plaza-150m": {
+      "state": {
+        "abbrForms": 0,
+        "abbrPlaced": 0,
+        "abbrPlacedTexts": [],
+        "poiNames": 49,
+        "anchorCensus": {
+          "0": 17,
+          "1": 23,
+          "2": 3,
+          "3": 6
+        },
+        "displaced": [
+          {
+            "name": "Custom House",
+            "anchor": 1
+          },
+          {
+            "name": "School House",
+            "anchor": 1
+          },
+          {
+            "name": "City Hotel",
+            "anchor": 1
+          },
+          {
+            "name": "Parker House",
+            "anchor": 1
+          },
+          {
+            "name": "El Dorado",
+            "anchor": 1
+          },
+          {
+            "name": "Bella Union",
+            "anchor": 1
+          },
+          {
+            "name": "Alta California office",
+            "anchor": 2
+          },
+          {
+            "name": "Shades Tavern",
+            "anchor": 2
+          },
+          {
+            "name": "Portsmouth House",
+            "anchor": 1
+          },
+          {
+            "name": "Merchants' Exchange",
+            "anchor": 1
+          }
+        ],
+        "subActive": 49,
+        "subOn": true,
+        "pairGatesLastFrame": 3,
+        "abbrEnabled": true,
+        "poiSubEnabled": true
+      },
+      "updateMs": 0.844,
+      "streetAbbrev": {
+        "pass": true,
+        "abbrPlaced": 0
+      },
+      "poiPairing": {
+        "pass": true,
+        "namesPlaced": 38,
+        "pairsChecked": 38,
+        "gates": 3
+      },
+      "poiSubtitle": {
+        "pass": true,
+        "expectOn": true,
+        "withSubtitle": 49,
+        "namesChecked": 49
+      },
+      "declutter": {
+        "pass": true,
+        "placed": 140,
+        "suppressed": 28
+      }
+    }
+  },
+  "failBefore": {
+    "streetAbbrev": {
+      "before": {
+        "pass": false,
+        "bad": [
+          {
+            "text": "Post Street",
+            "live": "hidden",
+            "replay": "abbrev",
+            "why": "[b] live outcome != ladder replay"
+          },
+          {
+            "text": "Post Street",
+            "live": "hidden",
+            "replay": "abbrev",
+            "why": "[b] live outcome != ladder replay"
+          }
+        ]
+      },
+      "after": {
+        "pass": true,
+        "abbrPlaced": 2,
+        "abbrTexts": [
+          "Post St",
+          "Post St"
+        ]
+      }
+    },
+    "streetAbbrevPlaza": {
+      "beforePass": true,
+      "beforeBad": 0,
+      "afterPass": true,
+      "abbrPlaced": 0
+    },
+    "poiSubtitle": {
+      "before": {
+        "pass": false,
+        "bad": [
+          {
+            "name": "Custom House",
+            "why": "[1] no subtitle at the closest zoom band"
+          },
+          {
+            "name": "School House",
+            "why": "[1] no subtitle at the closest zoom band"
+          },
+          {
+            "name": "City Hotel",
+            "why": "[1] no subtitle at the closest zoom band"
+          }
+        ],
+        "expectOn": true
+      },
+      "after": {
+        "pass": true,
+        "withSubtitle": 49,
+        "namesChecked": 49
+      }
+    }
+  },
+  "poiSubContrast": {
+    "style": "poiSub",
+    "minRatio": 3.39,
+    "worstBg": "rocky",
+    "hostFam": [
+      "land",
+      "roof"
+    ],
+    "hostMin": 3.39,
+    "hostWorstBg": "rocky",
+    "perBg": [
+      {
+        "bg": "sand",
+        "host": true,
+        "inkVsCasing": 9.67,
+        "casingVsBg": 5.01,
+        "inkVsBg": 1.93,
+        "score": 5.01
+      },
+      {
+        "bg": "duneGold",
+        "host": true,
+        "inkVsCasing": 9.8,
+        "casingVsBg": 4.12,
+        "inkVsBg": 2.38,
+        "score": 4.12
+      },
+      {
+        "bg": "village",
+        "host": true,
+        "inkVsCasing": 9.79,
+        "casingVsBg": 4.19,
+        "inkVsBg": 2.34,
+        "score": 4.19
+      },
+      {
+        "bg": "scrubDry",
+        "host": true,
+        "inkVsCasing": 9.87,
+        "casingVsBg": 3.64,
+        "inkVsBg": 2.71,
+        "score": 3.64
+      },
+      {
+        "bg": "rocky",
+        "host": true,
+        "inkVsCasing": 9.92,
+        "casingVsBg": 3.39,
+        "inkVsBg": 2.93,
+        "score": 3.39
+      },
+      {
+        "bg": "grassGreen",
+        "host": true,
+        "inkVsCasing": 9.91,
+        "casingVsBg": 3.41,
+        "inkVsBg": 2.9,
+        "score": 3.41
+      },
+      {
+        "bg": "roofLight",
+        "host": true,
+        "inkVsCasing": 9.43,
+        "casingVsBg": 6.76,
+        "inkVsBg": 1.4,
+        "score": 6.76
+      },
+      {
+        "bg": "roofBody",
+        "host": true,
+        "inkVsCasing": 9.67,
+        "casingVsBg": 4.87,
+        "inkVsBg": 1.99,
+        "score": 4.87
+      },
+      {
+        "bg": "roofCap",
+        "host": true,
+        "inkVsCasing": 9.86,
+        "casingVsBg": 3.67,
+        "inkVsBg": 2.69,
+        "score": 3.67
+      },
+      {
+        "bg": "plank",
+        "host": false,
+        "inkVsCasing": 9.87,
+        "casingVsBg": 3.68,
+        "inkVsBg": 2.68,
+        "score": 3.68
+      },
+      {
+        "bg": "road",
+        "host": false,
+        "inkVsCasing": 10.22,
+        "casingVsBg": 1.98,
+        "inkVsBg": 5.15,
+        "score": 5.15
+      },
+      {
+        "bg": "ghost",
+        "host": false,
+        "inkVsCasing": 10.31,
+        "casingVsBg": 1.69,
+        "inkVsBg": 6.11,
+        "score": 6.11
+      },
+      {
+        "bg": "shadow",
+        "host": false,
+        "inkVsCasing": 10.58,
+        "casingVsBg": 1.02,
+        "inkVsBg": 10.39,
+        "score": 10.39
+      },
+      {
+        "bg": "waterLo",
+        "host": false,
+        "inkVsCasing": 9.48,
+        "casingVsBg": 6.36,
+        "inkVsBg": 1.49,
+        "score": 6.36
+      },
+      {
+        "bg": "waterHi",
+        "host": false,
+        "inkVsCasing": 10.3,
+        "casingVsBg": 1.71,
+        "inkVsBg": 6.02,
+        "score": 6.02
+      }
+    ]
+  },
+  "contrastPass": true,
+  "contrastWorst": {
+    "style": "poiSub",
+    "bg": "rocky",
+    "ratio": 3.39
+  }
+}
