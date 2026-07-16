@@ -5645,6 +5645,77 @@ registerAudit("spine", "pierAnchors", function(){
     out.pass=out.violations.length===0;
     return out;
   });
+
+  /* spine.pierOverWater — the wharf-must-be-over-water guard (s105). A wharf is a
+     deck on piles OVER WATER: at each canonical noon date, every pier ACTIVE at
+     that date must extend its deck over the bay, not sit on the bank. The landward
+     APPROACH (the deck's contiguous run from the foot until it first reaches water
+     — the beach/shore the wharf crosses to get off the land, e.g. Central Wharf's
+     ~90 m over the Montgomery-St shore) is tolerated; SEAWARD of that first water
+     crossing every deck sample must stay over water (isLandAt=false), and the deck
+     END (the berth) must be over water. A deck that never reaches water — sits
+     entirely on land, like the pre-s105 Broadway slab parked ~320 m inland on the
+     Telegraph Hill bank — or that re-emerges onto land seaward of the water it
+     reached, FAILS. Date-gated: a pier not yet built at a noon date has no deck and
+     is skipped (matches the existing pier date-gating), so the 1850 City wharves
+     are untested in the <=1849 window. Pure of wall-clock/RNG and of the current
+     simDay — it sweeps a fixed canonical noon set and reads the release terrain
+     (empty morph ops) — so it is rewind-exact and target-independent. Samples the
+     deck centreline densely (the pier spine the app renders as centreline +/-
+     width/2). A report-only full-extent scan of ALL piers rides in the detail so
+     an out-of-window wharf that sits on land surfaces as a follow-up without
+     failing the in-window gate. */
+  registerAudit("spine","pierOverWater", function(){
+    var out={ pass:true, piers:0, checks:0, violations:[], detail:[] };
+    var piers=livePiers();
+    if(!piers.length) return { pass:true, piers:0, note:"no piers in spine" };
+    var DATES=["1846-07-01","1848-04-01","1849-09-15","1849-12-20"];   // the canonical noon dates
+    var days=DATES.map(function(d){ return eventDateToSimDay(d); });
+    var STEP=4;   // deck-centreline sample spacing (m)
+    function scanDeck(p, day){
+      var active=pierActiveCheckpoint(p, day);
+      if(!active) return null;                       // not built yet — no deck to test
+      var e=pierEdgesAt(p, day);
+      if(!e.active || e.centerline.length<2) return null;
+      var cl=e.centerline, reachedWater=false, landAfterWater=0, firstWaterM=null, acc=0, deckLen=0, prev=null;
+      for(var i=1;i<cl.length;i++) deckLen+=Math.hypot(cl[i].x-cl[i-1].x, cl[i].z-cl[i-1].z);
+      for(var s=0;s<cl.length-1;s++){
+        var a=cl[s], b=cl[s+1], seg=Math.hypot(b.x-a.x,b.z-a.z), n=Math.max(1,Math.round(seg/STEP));
+        for(var k=(s===0?0:1);k<=n;k++){
+          var t=k/n, x=a.x+(b.x-a.x)*t, z=a.z+(b.z-a.z)*t;
+          if(prev) acc+=Math.hypot(x-prev.x, z-prev.z);
+          prev={ x:x, z:z };
+          var land=isLandAt(x,z,day);
+          if(!reachedWater){ if(!land){ reachedWater=true; firstWaterM=+acc.toFixed(1); } }
+          else if(land){ landAfterWater++; }
+        }
+      }
+      var end=cl[cl.length-1];
+      return { lengthFt:active.lengthFt, deckLenM:+deckLen.toFixed(1), approachM:firstWaterM,
+               reachedWater:reachedWater, endOverWater:!isLandAt(end.x,end.z,day), landSamplesAfterWater:landAfterWater };
+    }
+    piers.forEach(function(p){
+      out.piers++;
+      var d={ id:p.id, perDate:[] };
+      DATES.forEach(function(iso,di){
+        var r=scanDeck(p, days[di]);
+        if(!r){ d.perDate.push({ date:iso, active:false }); return; }
+        out.checks++;
+        r.date=iso; r.active=true;
+        if(!r.reachedWater) out.violations.push({ id:p.id, date:iso, reason:"deck-never-reaches-water(sits-on-land)" });
+        if(!r.endOverWater) out.violations.push({ id:p.id, date:iso, reason:"deck-end-on-land" });
+        if(r.landSamplesAfterWater>0) out.violations.push({ id:p.id, date:iso, reason:"deck-re-emerges-onto-land", landSamples:r.landSamplesAfterWater });
+        d.perDate.push(r);
+      });
+      var full=scanDeck(p, 1e9);   // report-only full-extent scan (all 6 piers, incl. out-of-window 1850 wharves)
+      d.fullExtent = full ? { reachedWater:full.reachedWater, endOverWater:full.endOverWater,
+                              landSamplesAfterWater:full.landSamplesAfterWater, deckLenM:full.deckLenM, approachM:full.approachM,
+                              onLand:(!full.reachedWater || !full.endOverWater || full.landSamplesAfterWater>0) } : null;
+      out.detail.push(d);
+    });
+    out.pass=out.violations.length===0;
+    return out;
+  });
 })();
 /* =====================================================================
    GEOMETRY / MERGE HELPERS  (no BufferGeometryUtils dependency — manual)
