@@ -280,6 +280,115 @@ patchGroundDetailMaterial(terrainMat, "terrain", null);
 var terrainMesh = new THREE.Mesh(terrainGeo, terrainMat);
 scene.add(terrainMesh);
 
+/* =====================================================================
+   TERRAIN-COLOR V2 (TCV2) — shader-side surface upgrade. Targets the
+   operator's ranked complaints about the flat baked vertex-color ground:
+     #1 BLUR (smooth color smeared across the 31 m triangles, zero high-
+        frequency detail) -> crisp world-space procedural grain + a
+        partial value-step so the ground reads sharp, not gradient-soft.
+     1-NOTE  -> value-ladder stepping into readable tonal tiers.
+     SHARP SEAMS -> the two-scale grain dithers biome edges.
+     FLAT / NO 3D -> detail-normal relief from the noise gradient, so
+        light plays across the surface below the triangle scale.
+   Plus DYNAMIC seasonal green<->golden (uTSeason, a pure function of
+   simDay). All behind uTerrainV2: 0 => the shader is skipped and the
+   ground is byte-identical to the baked v1 (A/B + rollback + parity).
+   World-space noise => deterministic, never crawls on zoom; everything
+   camera-distance faded so the overview stays clean and the close view
+   gets the detail. Reuses the baked vColor (the ecology-zone earth
+   palette) as the albedo anchor and the aSurf material weights already
+   on the geometry — a redesign of the RENDER, not of the spatial law. */
+var TERRAIN_QA = { on: 1, detail: 1, season: -1 }; // season<0 => live (simDay); >=0 => forced phase for QA
+var TCV2_UNIFORMS = null;
+(function applyTerrainColorV2(){
+  var prevOBC = terrainMat.onBeforeCompile;
+  terrainMat.onBeforeCompile = function(shader){
+    if(typeof prevOBC === "function") prevOBC(shader);
+    shader.uniforms.uTerrainV2 = { value: TERRAIN_QA.on };
+    shader.uniforms.uTDetail   = { value: TERRAIN_QA.detail };
+    shader.uniforms.uTSeason   = { value: 0.5 };
+    shader.uniforms.uTDay      = { value: 0.0 };
+    TCV2_UNIFORMS = shader.uniforms;
+    shader.vertexShader =
+      "attribute vec4 aSurf;\nvarying vec4 vTSurf;\nvarying vec3 vTW;\n" +
+      shader.vertexShader.replace(
+        "#include <begin_vertex>",
+        "#include <begin_vertex>\n  vTSurf = aSurf;\n  vTW = position;");
+    shader.fragmentShader =
+      [ "uniform float uTerrainV2;", "uniform float uTDetail;",
+        "uniform float uTSeason;",  "uniform float uTDay;",
+        "varying vec4 vTSurf;",     "varying vec3 vTW;",
+        // analytic-derivative value noise: vec3(signed value, d/dx, d/dy)
+        "vec3 tnoise(vec2 p){",
+        "  vec2 ip=floor(p), f=fract(p);",
+        "  vec2 u=f*f*(3.0-2.0*f), du=6.0*f*(1.0-f);",
+        "  float a=fract(sin(dot(ip,vec2(127.1,311.7)))*43758.5453);",
+        "  float b=fract(sin(dot(ip+vec2(1.0,0.0),vec2(127.1,311.7)))*43758.5453);",
+        "  float c=fract(sin(dot(ip+vec2(0.0,1.0),vec2(127.1,311.7)))*43758.5453);",
+        "  float d=fract(sin(dot(ip+vec2(1.0,1.0),vec2(127.1,311.7)))*43758.5453);",
+        "  float k1=b-a,k2=c-a,k3=a-b-c+d;",
+        "  float n=a+k1*u.x+k2*u.y+k3*u.x*u.y;",
+        "  vec2 g=du*(vec2(k1,k2)+k3*u.yx);",
+        "  return vec3(n*2.0-1.0, g*2.0);",
+        "}",
+        "vec3 tfbm(vec2 p){",
+        "  vec3 s=vec3(0.0); float amp=0.5; mat2 rot=mat2(0.80,0.60,-0.60,0.80); vec2 q=p;",
+        "  for(int i=0;i<4;i++){ vec3 nn=tnoise(q); s.x+=amp*nn.x; s.yz+=amp*nn.yz; q=rot*q*2.03; amp*=0.5; }",
+        "  return s;",
+        "}"
+      ].join("\n") + "\n" + shader.fragmentShader.replace(
+        "#include <color_fragment>",
+        [ "#include <color_fragment>",
+          "if(uTerrainV2 > 0.5){",
+          "  vec3 base = diffuseColor.rgb;",
+          "  vec3 v2 = base;",
+          "  float camDist = length(vViewPosition);",
+          "  float fade = 1.0 - smoothstep(90.0, 380.0, camDist);",
+          "  vec2 gp = vTW.xz;",
+          "  vec3 nB = tfbm(gp * 0.13);",              // broad mottle (~8 m)
+          "  vec3 nF = tfbm(gp * 1.15);",              // fine grain (~0.9 m)
+          "  float grain = nB.x*0.55 + nF.x*0.45;",
+          "  float sand=vTSurf.x, dirt=vTSurf.y, grass=vTSurf.z, mud=vTSurf.w;",
+          "  float amp = 0.09*sand + 0.13*dirt + 0.17*grass + 0.07*mud + 0.05;",
+          "  float luma = dot(base, vec3(0.299,0.587,0.114));",
+          "  v2 *= (1.0 + grain*amp*(0.4+0.6*fade)*uTDetail);",   // 1) grain kills the smear (zero-mean, value only)
+          "  float ql = floor(luma*7.0 + 0.5)/7.0;",              // 2) partial value-step -> crisp tiers
+          "  float stepMix = 0.35*(1.0 - smoothstep(160.0,520.0,camDist));",
+          "  float tl = mix(luma, ql, stepMix);",
+          "  v2 *= (luma>0.001 ? tl/luma : 1.0);",
+          "  vec3 gn = normalize(vec3(-(nB.y*0.5+nF.y), 1.2, -(nB.z*0.5+nF.z)));", // 3) detail-normal relief -> 3D
+          "  float ndl = clamp(dot(gn, normalize(vec3(-0.5,0.8,-0.35)))*0.5+0.5, 0.0, 1.0);",
+          "  v2 *= mix(1.0, mix(0.86,1.13,ndl), 0.35+0.45*fade);",
+          "  float veg = clamp(grass + 0.4*dirt, 0.0, 1.0);",     // 4) seasonal green<->golden (dynamic)
+          "  vec3 season = mix(vec3(1.09,1.01,0.79), vec3(0.87,1.05,0.83), clamp(uTSeason,0.0,1.0));",
+          "  v2 = mix(v2, v2*season, veg*0.45);",
+          "  diffuseColor.rgb = v2;",
+          "}"
+        ].join("\n"));
+  };
+  terrainMat.needsUpdate = true;
+})();
+/* per-frame: drive the TCV2 time uniforms (mirror labels/buildings' render
+   wrap). uTSeason is a pure function of simDay -> deterministic + rewindable. */
+var _tcv2PrevRender = renderer.render.bind(renderer);
+renderer.render = function(s, c){
+  if(TCV2_UNIFORMS){
+    var day = (typeof simDay === "number") ? simDay : 0, season;
+    if(TERRAIN_QA.season >= 0){ season = TERRAIN_QA.season; }
+    else {
+      // SF Mediterranean: wettest ~late Jan (green), driest ~late Jul (golden)
+      var dt = dateFromSimDay(day);
+      var doy = (Date.UTC(dt.getUTCFullYear(), dt.getUTCMonth(), dt.getUTCDate()) - Date.UTC(dt.getUTCFullYear(),0,1))/86400000;
+      season = 0.5 + 0.5*Math.cos((doy - 20)/365.25 * 2*Math.PI);
+    }
+    TCV2_UNIFORMS.uTerrainV2.value = TERRAIN_QA.on;
+    TCV2_UNIFORMS.uTDetail.value   = TERRAIN_QA.detail;
+    TCV2_UNIFORMS.uTSeason.value   = season;
+    TCV2_UNIFORMS.uTDay.value      = day;
+  }
+  _tcv2PrevRender(s, c);
+};
+
 /* @P1850-CHUNK 12 — horizon skirt, water, shoreline foam */
 /* =====================================================================
    HORIZON SKIRT — a big, cheap, low-poly disc well below the terrain,
@@ -711,6 +820,15 @@ var LUM_PROBES = [
 ];
 // canonical internal readback framing: over the probe centroid, town scale
 var LUM_CAM = { fx:-250, fz:-120, radius:420, yaw:0.65, elev:62*Math.PI/180 };
+/* TCV2 wiring guard: the shader-side terrain upgrade must be compiled and
+   active (default on). Catches a silent onBeforeCompile break that would
+   drop the ground back to flat baked v1 without any other audit noticing.
+   Skips (pass) when A/B-toggled off or before first compile. */
+registerAudit("terrain", "v2Active", function(){
+  if(!TCV2_UNIFORMS) return { pass:true, skipped:"TCV2 shader not yet compiled" };
+  if(!(TCV2_UNIFORMS.uTerrainV2.value > 0.5)) return { pass:true, skipped:"terrainV2 toggled off (A/B)" };
+  return { pass:true, detail:"TCV2 active (season="+(+TCV2_UNIFORMS.uTSeason.value).toFixed(2)+", detail="+(+TCV2_UNIFORMS.uTDetail.value).toFixed(2)+")" };
+});
 registerAudit("terrain", "luminance", function(){
   if(typeof nightFactor==="number" && nightFactor>0.05)
     return { pass:true, skipped:"not midday (nightFactor="+nightFactor.toFixed(2)+")" };

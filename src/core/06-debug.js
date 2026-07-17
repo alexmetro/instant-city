@@ -74,6 +74,16 @@ window.__P1850 = {
   get detailSets(){ return DETAIL_UNIFORM_SETS.length; },
   get detailAmp(){ return DETAIL_AMP_DEFAULT; },
   set detailAmp(v){ DETAIL_AMP_DEFAULT = +v; for(var i=0;i<DETAIL_UNIFORM_SETS.length;i++) DETAIL_UNIFORM_SETS[i].uDetailAmp.value = +v; },
+  // TCV2 (terrain-color v2) A/B + QA hooks: terrainV2 0/1 flips the whole
+  // shader upgrade off/on live (0 => byte-identical baked v1); terrainDetail
+  // scales the grain/detail amplitude (0 proves the fade); terrainSeason
+  // forces a season phase 0..1 (green..golden) for QA, null => live simDay.
+  get terrainV2(){ return TERRAIN_QA.on; },
+  set terrainV2(v){ TERRAIN_QA.on = v ? 1 : 0; },
+  get terrainDetail(){ return TERRAIN_QA.detail; },
+  set terrainDetail(v){ TERRAIN_QA.detail = +v; },
+  get terrainSeason(){ return TERRAIN_QA.season; },
+  set terrainSeason(v){ TERRAIN_QA.season = (v == null ? -1 : +v); },
   // s60 PAINTERLY GROUND KIT QA hooks: tile-kit census, doodad-ring census,
   // and a wet override (forces the mud-winter wet state for closeup QA
   // regardless of the current weatherState — null returns it to weather)
