@@ -10173,6 +10173,27 @@ function fillSegsIntersect(a, b, c, d){
   var o1 = o(a,b,c), o2 = o(a,b,d), o3 = o(c,d,a), o4 = o(c,d,b);
   return ((o1 > 0) !== (o2 > 0)) && ((o3 > 0) !== (o4 > 0));
 }
+/* s106e — OBB (quad) SAT penetration in metres, 0 if separated (0.05 slack —
+   the same measure the fill audits use). Module-level because the expansion
+   post-pass in buildFillMaster must prove an annex claim legal against every
+   other footprint at master-build time (packing law). */
+function fillQuadPen(A, B){
+  var polys = [A, B], best = 1e9, p, i, k;
+  for(p = 0; p < 2; p++){ var poly = polys[p];
+    for(i = 0; i < 4; i++){ var a = poly[i], b = poly[(i+1)%4];
+      var ax = -(b.z - a.z), az = (b.x - a.x), l = Math.hypot(ax, az) || 1; ax /= l; az /= l;
+      var minA = 1e9, maxA = -1e9, minB = 1e9, maxB = -1e9;
+      for(k = 0; k < 4; k++){
+        var dA = A[k].x*ax + A[k].z*az; if(dA < minA) minA = dA; if(dA > maxA) maxA = dA;
+        var dB = B[k].x*ax + B[k].z*az; if(dB < minB) minB = dB; if(dB > maxB) maxB = dB;
+      }
+      var ov = Math.min(maxA, maxB) - Math.max(minA, minB);
+      if(ov <= 0.05) return 0;
+      if(ov < best) best = ov;
+    }
+  }
+  return best;
+}
 function fillQuadCrossesRow(q, cx, cz){
   var segs = (typeof PLACEMENT_STREET_SEGS !== "undefined") ? PLACEMENT_STREET_SEGS : [];
   for(var j = 0; j < segs.length; j++){
@@ -10190,7 +10211,7 @@ function fillQuadCrossesRow(q, cx, cz){
    curb setback) so wave fill lands in streets/water/documented-camp ground
    and buildings.inTownFill goes RED; knob off → GREEN (the gates are real).
    The v1 1846-48 village build is NEVER touched by the knob. */
-var FILL_QA = { ignoreInTownGates: false, uncapCoreCanvas: false, version: 0 };
+var FILL_QA = { ignoreInTownGates: false, uncapCoreCanvas: false, ignoreSlotGates: false, version: 0 };
 /* s106c tunables — the in-town 1849 tent-first densification wave. */
 var FILL_1849_START_ISO = "1849-06-15";   // wave ramp start (operator: "ramping mid-1849 -> Dec 1849")
 var FILL_1849_CAP_ISO   = "1849-12-20";   // wave cap = the boom-peak canonical noon
@@ -10208,6 +10229,70 @@ var FILL_1849_BAND_SEP  = [380, 640];     // gating band for the Sept-15 in-town
    authored canvas phase on the plaza, torn down for its frame expansion). */
 var FILL_CORE_CONV_MIN_D = 60;            // earliest seeded canvas->frame conversion after spawn (~2 months)
 var FILL_CORE_CONV_MAX_D = 150;           // latest (~5 months): a Dec-20 spawn is torn down by ~mid-May 1850 — zero core canvas stands by mid-1850
+/* s106e (ICS-25) tunables — CANVAS-FIRST LOT ARCS + SLOTS (fill:true, operator
+   design). TWO mechanics, ONE system:
+   (1) CANVAS-FIRST ARCS — a boom-era fill lot's development is an ARC:
+       empty -> canvas (short) -> its final form. A seeded fraction of the
+       1849 wave's RESIDENTIAL-band placements (never the core — the core
+       keeps the s106d 60-150d law; never the encampment zones — their own
+       record-wins law is untouched) BEGIN as canvas and HARDEN into their
+       final catalog form via the existing s108 teardown-for-replacement
+       machinery, a zone-modulated interval after THEIR OWN spawn. This
+       changes the PATH a structure takes, never its destination: the
+       master's counts/mix at the noon dates are untouched by construction
+       (the entry's rank/cat/footprint are placement-time facts; the canvas
+       phase is a lifecycle read).
+   (2) SLOTS — a wave fill lot is a small set of POSITIONS by size class:
+       the street-front slot (the wave placement itself) + 1-2 rear tandem
+       slots reaching into the block (rear-court texture, fill-density-model
+       §3: "one street building + several smaller buildings on an internal
+       court"). Each slot runs its OWN seeded lifecycle arc; rear occupants
+       are TENTS (canvas) drawn from the wave's shanty bucket — a rear
+       placement CONSUMES a shanty turn, so the wave's total and its 55/45
+       mix stay exact (rebalance by construction, never net-new count). A
+       frame front may EXPAND (s108 expand) rearward, consuming its first
+       rear slot — the occupant gets a teardown arc that COMPLETES before
+       the annex breaks ground (the ruins-gate discipline holds). */
+var FILL_CVF_FRAC         = 0.35;         // seeded fraction of non-tent, non-core 1849-wave fronts that BEGIN as canvas
+var FILL_TENT_HARDEN_FRAC = 0.30;         // seeded fraction of residential-band 1849-wave TENT fronts that HARDEN into frame on the band interval (fill-density-model §4: the tent->frame single-year replacement cycle, peak 1849 — the s106d core arc at band pace; the rest persist as canvas through the window)
+var FILL_RES_CONV_MIN_D   = 60;           // residential-band canvas->final hardening: earliest (~2 months after ITS spawn)
+var FILL_RES_CONV_MAX_D   = 240;          // ...latest (~8 months) — the residential band sheds canvas SLOWER than the core's 60-150d
+var FILL_REAR_FRAC        = 0.25;         // cap: rear-slot placements <= ceil(frac x shanty-bucket placements) (streaming, like the core-canvas cap)
+var FILL_REAR_GAP_M       = 1.5;          // front-occupant -> rear-occupant spacing inside a lot (tandem pitch)
+var FILL_REAR_CAP_WIDE_M  = 5.0;          // a front at least this wide anchors 2 rear slots; narrower lots host 1
+var FILL_REAR_MIN_STAND_D = 20;           // a consumed rear tent must have STOOD at least this long before its teardown
+var FILL_EXP_FRAC         = 0.60;         // seeded fraction of eligible lots (frame-formed front + rear occupant) whose front expands — eligibility itself is scarce (the front must STAND AS FRAME first), so the fraction runs high to keep the mechanic visible
+var FILL_EXP_DUR_D        = 25;           // annex construction duration (frame-annex scale work)
+var FILL_EXP_START_ISO    = "1849-10-01"; // expansion window (seeded within): consolidation follows the boom's fall money
+var FILL_EXP_END_ISO      = "1850-03-01";
+/* the canvas-first arc numbers for ONE entry — a pure lcHash function of the
+   entry identity, used by BOTH fillLifecycleOf (the events) and the expansion
+   post-pass in buildFillMaster (front-readiness), so the two never disagree
+   (measurement law). */
+function fillCvfArc(e){
+  var id = e.code + "#" + e.rank;
+  var tdStart = e.appearDay + FILL_RES_CONV_MIN_D + lcHash(id, "cvfday") * (FILL_RES_CONV_MAX_D - FILL_RES_CONV_MIN_D);
+  var tdOn = tdStart + LC_TEARDOWN_DAYS;
+  var rbStart = tdOn + 2;
+  var lead = 14 + Math.floor(lcHash(id, "cvfrb") * 10);
+  return { tdStart: tdStart, tdOn: tdOn, rbStart: rbStart, rbOn: rbStart + lead, lead: lead };
+}
+/* the s108 ~30% shanty UPGRADE-WAVE arc for one entry (teardown-for-
+   replacement -> FRAME rebuild, Mar-Aug 1849) — the EXACT law fillLifecycleOf
+   has carried since s108, factored to a pure helper because the s106e
+   expansion post-pass must know whether a lot's front STANDS AS FRAME by the
+   expansion window (an upgraded shanty front is a frame building thereafter).
+   Returns null when the entry takes no upgrade arc. Same lcHash salts, same
+   thresholds — the compiled lifecycles are event-identical to s106d. */
+function fillUpgradeArc(e){
+  if(e.cat !== "shanty" || e.coreCanvas || e.rearOf != null || e.canvasFirst || e.tentHarden) return null;
+  var id = e.code + "#" + e.rank;
+  if(lcHash(id, "upg") >= 0.30) return null;
+  var t0 = eventDateToSimDay("1849-03-01") + Math.floor(lcHash(id, "upgday") * 180);   // Mar-Aug 1849
+  if(t0 <= e.appearDay + 30) return null;
+  var tOn = t0 + LC_TEARDOWN_DAYS, rbStart = tOn + 2;
+  return { t0: t0, tOn: tOn, rbStart: rbStart, rbOn: rbStart + 21 };
+}
 /* s106d — ONE core-ground measure shared by the wave spawner and the
    zoneCoreCanvas audit (measurement law): a point is CORE-BLOCK ground when
    the cadastre's GOVERNING zone there is the era-grown commercial-core. */
@@ -10370,6 +10455,16 @@ function buildFillMaster(){
      admitting canvas throughout the ramp. QA: uncapCoreCanvas drops the
      fraction cap (fail-before for zoneCoreCanvas, probe-s106d). */
   var coreWaveN = 0, coreCanvasN = 0, coreCursor = 0, coreCanvasDone = false;
+  /* s106e (ICS-25) — THE LOT/SLOT REGISTRY. Every non-core wave FRONT
+     placement registers a LOT: the front occupant + 1-2 rear tandem slot
+     positions reaching into the block (capacity by front width — the size
+     class the catalog footprint implies). A rear slot is filled by routing
+     a shanty-bucket turn to it (the sub-walk below), so rear tents are a
+     RESHUFFLE of the wave's shanty share, never net-new count. depthUsed
+     tracks how deep the lot's tandem column has grown; slotBad memoizes a
+     slot position whose gates can never pass (static geometry — a failed
+     slot never un-fails). */
+  var lots = [], rearN = 0;
   while(waveN < need2){
     var cat2 = wavePickCat();
     if(!cat2) break;                                      // every category out of legal ground
@@ -10417,6 +10512,77 @@ function buildFillMaster(){
       if(ci >= slots2.length) coreCanvasDone = true;      // the core slot supply is spent — reported, never silently hidden
       if(placedCore) continue;                            // this shanty turn went to the core under the window cap
     }
+    /* s106e (ICS-25) — THE REAR-SLOT SUB-WALK. A shanty turn the core did
+       not take may be routed to a REAR slot of an already-placed lot under
+       the streaming cap rearN+1 <= ceil(FILL_REAR_FRAC x (shanty+1)) — the
+       same discipline as the core-canvas cap. The occupant is a TENT (the
+       rear-court texture; canvas, never the scrap tier), posed in tandem
+       behind the lot's front occupant, same yaw (facing the lot's street),
+       a seeded lateral tuck within the front's width band. EVERY wave gate
+       holds: no core ground (the rear-tent texture is residential; the core
+       has its own capped canvas law), no documented-camp ground, dry land at
+       the wave start, the canPlace tent law rows (corner-level), no mid-block
+       ROW crossing, no reserved landmark ground, detached vs ALL fill. No
+       frontage budget is booked (a rear tent stands OFF the street edge; its
+       edgeId carries a #rear suffix so the openness measures never conflate
+       it with frontage). QA: ignoreSlotGates poses the tent on the STREET
+       side of the front and skips the gates, so rear tents straddle rights-
+       of-way and the lotSlots packing clause goes RED (fail-before). */
+    if(cat2 === "shanty" && lots.length &&
+       rearN + 1 <= Math.ceil(FILL_REAR_FRAC * (counts2.shanty + 1))){
+      var rt = fillPickCode("shanty", waveCap, rng2, "1849", true);   // rear occupants are CANVAS
+      var placedRear = false;
+      for(var li = 0; rt && li < lots.length && !placedRear; li++){
+        var lot = lots[li];
+        if(lot.rearUsed >= lot.rearCap) continue;
+        var slotK = lot.rearUsed + 1;
+        if(lot.slotBad[slotK]) continue;
+        var fe = master[lot.frontIdx];
+        var rw = rt.footprint.w * FILL_FT_M, rd = rt.footprint.d * FILL_FT_M;
+        /* tandem pose: behind the column's current depth; lateral tuck seeded
+           within the front's width band (pure hash — no stream draw, so a
+           failed slot costs zero dice and stays deterministic). Knob-on
+           mirrors the pose to the STREET side (the fail-before offense). */
+        var rDir = FILL_QA.ignoreSlotGates ? 1 : -1;      // -n = into the block; +n = onto the street (QA)
+        var rBack = lot.depthUsed + FILL_REAR_GAP_M + rd / 2;
+        var rLat  = (lcHash("LOT#" + fe.rank, "rlat" + slotK) - 0.5) * Math.max(0, fe.w - rw);
+        var rtx = fe.nz, rtz = -fe.nx;                    // width axis (same frame as fillPoseQuad)
+        var rcx = fe.cx + rDir * fe.nx * rBack + rtx * rLat;
+        var rcz = fe.cz + rDir * fe.nz * rBack + rtz * rLat;
+        var rB = Math.hypot(rw, rd) / 2, rBad = false;
+        if(!FILL_QA.ignoreSlotGates){
+          if(fillCoreBlockAt(rcx, rcz, waveCap)) rBad = true;                                        // rear tents are residential texture
+          else if(typeof encampmentZoneAt === "function" && encampmentZoneAt(rcx, rcz, waveCap)) rBad = true;
+          else if(typeof isDryLand === "function" && !isDryLand(rcx, rcz, waveStart)) rBad = true;
+          else {
+            var rcp = canPlace("tent", { x: rcx, z: rcz, yaw: fe.yaw, footprint: rB, footprintW: rw, footprintD: rd },
+                               { day: waveCap, zoneClass: "tent" });
+            if(!rcp.ok) rBad = true;
+            else if(fillQuadCrossesRow(fillPoseQuad(rcx, rcz, rw, rd, fe.yaw), rcx, rcz)) rBad = true;
+            else {
+              for(var rpi = 0; rpi < PLACEMENT_INDEX.length; rpi++){
+                var rq = PLACEMENT_INDEX[rpi], rqx = rcx - rq.x, rqz = rcz - rq.z, rqm = rB + rq.r;
+                if(rqx*rqx + rqz*rqz < rqm*rqm){ rBad = true; break; }
+              }
+            }
+          }
+          if(rBad){ lot.slotBad[slotK] = true; continue; }   // static geometry — this slot never un-fails
+        }
+        if(fillOverlapsLocal(placed, rcx, rcz, rB)){ lot.slotBad[slotK] = true; continue; }
+        counts2.shanty++; waveN++; rearN++;
+        placed.push({ x: rcx, z: rcz, r: rB });
+        master.push({ code: rt.code, cat: "shanty", material: rt.material, subtype: rt.subtype,
+                      cx: rcx, cz: rcz, w: rw, d: rd, yaw: fe.yaw, nx: fe.nx, nz: fe.nz,
+                      storyRange: rt.storyRange || [1, 1], edgeId: fe.edgeId + "#rear", edgeLen: fe.edgeLen,
+                      overWater: !!rt.overWater, stilted: !!rt.stilted,
+                      rank: master.length, appearDay: waveCap, wave: 1849,
+                      rearOf: fe.rank, slot: slotK });
+        lot.rearUsed++; lot.rearIdxs.push(master.length - 1);
+        lot.depthUsed = rBack + rd / 2;
+        placedRear = true;
+      }
+      if(placedRear) continue;                            // this shanty turn seated a rear-court tent
+    }
     var placedOne = false, idx2 = cursors2[cat2];
     for(; idx2 < slots2.length; idx2++){
       var slot2 = slots2[idx2];
@@ -10453,7 +10619,8 @@ function buildFillMaster(){
       }
       if(fillOverlapsLocal(placed, cx2, cz2, rB2)){ rej2.overlap++; continue; }
       counts2[cat2]++; waveN++;
-      if(fillCoreBlockAt(cx2, cz2, waveCap)) coreWaveN++;   // s106d: core-block placements feed the streaming canvas cap (same ground measure as the audit)
+      var onCore2 = fillCoreBlockAt(cx2, cz2, waveCap);
+      if(onCore2) coreWaveN++;   // s106d: core-block placements feed the streaming canvas cap (same ground measure as the audit)
       edgeBuilt[slot2.edgeId] = built2 + wM2 + FILL_GAP_M;
       placed.push({ x: cx2, z: cz2, r: rB2 });
       master.push({ code: t2.code, cat: cat2, material: t2.material, subtype: t2.subtype,
@@ -10461,6 +10628,17 @@ function buildFillMaster(){
                     storyRange: t2.storyRange || [1, 1], edgeId: slot2.edgeId, edgeLen: slot2.edgeLen,
                     overWater: !!t2.overWater, stilted: !!t2.stilted,
                     rank: master.length, appearDay: waveCap, wave: 1849 });
+      /* s106e — register the LOT this front anchors (non-core ground only:
+         the rear-tent texture is residential; core blocks keep the s106d
+         capped canvas law). Capacity by size class: a wide front (the
+         medium-class 18-ft cottage tier) anchors 2 tandem rear slots, a
+         narrow one (small class / tents) anchors 1. depthUsed starts at the
+         front's own half-depth — the tandem column grows from its rear face. */
+      if(!onCore2){
+        lots.push({ frontIdx: master.length - 1,
+                    rearCap: wM2 >= FILL_REAR_CAP_WIDE_M ? 2 : 1,
+                    rearUsed: 0, rearIdxs: [], slotBad: {}, depthUsed: dM2 / 2 });
+      }
       placedOne = true; idx2++;
       break;
     }
@@ -10481,13 +10659,146 @@ function buildFillMaster(){
     while(k2 < fc2 && k2 < master.length){ var ad2 = Math.max(d2, prev2); master[k2].appearDay = ad2; prev2 = ad2; k2++; }
   }
   for(; k2 < master.length; k2++) master[k2].appearDay = waveCap;
+
+  /* ===================================================================
+     s106e (ICS-25) — CANVAS-FIRST MARKING (mechanic 1). A seeded fraction
+     of the wave's RESIDENTIAL-band FRONT placements (never a tent — it IS
+     canvas; never a rear occupant — rear slots have their own stay-canvas
+     law; never core ground — the core keeps the s106d capped exception)
+     BEGIN as canvas and harden into their final catalog form. The decision
+     is a pure lcHash of the entry identity (zero stream draws — the wave
+     layout above is untouched by the marking) and the fields live on the
+     master entry so fillLifecycleOf and the expansion pass below read ONE
+     record. This is a PATH change only: rank/cat/footprint (the census +
+     mix + placement facts) are already fixed above. ===================== */
+  var cvfN = 0, thN = 0;
+  for(var mi = v1Len; mi < master.length; mi++){
+    var me = master[mi];
+    if(me.coreCanvas || me.rearOf != null) continue;
+    if(fillCoreBlockAt(me.cx, me.cz, waveCap)) continue;
+    if(me.subtype === "tent"){
+      /* a TENT front already IS canvas — its canvas-first arc is the OTHER
+         side of the same law: a seeded fraction HARDEN into FRAME on the band
+         interval (fill-density-model §4's tent->frame single-year cycle; the
+         s106d core arc at 60-240d band pace). The rest persist as canvas —
+         the band sheds slower than the core, by design. */
+      if(lcHash(me.code + "#" + me.rank, "cvf") < FILL_TENT_HARDEN_FRAC){ me.tentHarden = 1; thN++; }
+    } else if(lcHash(me.code + "#" + me.rank, "cvf") < FILL_CVF_FRAC){ me.canvasFirst = 1; cvfN++; }
+  }
+
+  /* ===================================================================
+     s106e (ICS-25) — THE EXPANSION POST-PASS (mechanic 2's interaction).
+     A seeded fraction of eligible lots (FRAME front + at least one rear
+     occupant) EXPAND: the front's footprint grows rearward over its first
+     tandem slot via the existing s108 expand machinery; the consumed rear
+     occupant is torn down FIRST (teardown completes 0.5d before the annex
+     breaks ground — the ruins-gate discipline, spec §2b). The claim is
+     proven LEGAL at master-build time: the expanded quad crosses no ROW,
+     stands on dry non-camp ground, overlaps no reserved landmark ground and
+     no OTHER footprint (SAT vs every master entry except the front and its
+     consumed occupants). Scheduling: seeded within the expansion window,
+     never before the front is ready (a canvas-first front must have
+     HARDENED first) and never before every consumed tent has stood
+     FILL_REAR_MIN_STAND_D. A lot whose constraints cannot fit the window
+     simply does not expand (opportunistic, never forced). QA:
+     ignoreSlotGates skips the legality proof AND the consumption teardown
+     (the annex rises over a STANDING tent) — the lotSlots expansion clause
+     goes RED (fail-before). ============================================ */
+  var expWinA = eventDateToSimDay(FILL_EXP_START_ISO), expWinB = eventDateToSimDay(FILL_EXP_END_ISO);
+  var expN = 0, lotsWithRear = 0;
+  for(var lx = 0; lx < lots.length; lx++){
+    var L = lots[lx];
+    if(!L.rearIdxs.length) continue;
+    lotsWithRear++;
+    var fE = master[L.frontIdx];
+    /* annex expansion is a FRAME-BUILDING behaviour (building-types §5). The
+       front qualifies when it STANDS AS FRAME by the expansion window: born
+       frame-cat, OR a shanty front the s108 upgrade wave rebuilds as frame
+       (fillUpgradeArc — the shared law; in this world every frame-cat wave
+       placement sits on core blocks, so the residential band's expanding
+       fronts are precisely the upgraded ones — the boom's own densification
+       path: shanty -> frame -> annex). frontReadyDay = the day its frame
+       form is complete + a settling margin. */
+    var frontReady;
+    if(fE.cat === "frame"){
+      frontReady = fE.canvasFirst ? fillCvfArc(fE).rbOn + 15 : fE.appearDay + 30;
+    } else if(fE.tentHarden){
+      frontReady = fillCvfArc(fE).rbOn + 15;              // a hardened tent stands as frame from its rebuild
+    } else {
+      var upgF = fillUpgradeArc(fE);
+      if(!upgF) continue;                                 // this front never becomes frame — no annex
+      frontReady = upgF.rbOn + 15;
+    }
+    var lotKey = "LOT#" + fE.rank;
+    if(lcHash(lotKey, "exp") >= FILL_EXP_FRAC) continue;
+    var rear1 = master[L.rearIdxs[0]];
+    var dExp = fE.d + FILL_REAR_GAP_M + rear1.d + 0.3;    // the annex reaches over the first tandem slot (+0.3 m working slack, clear of any deeper slot by a full FILL_REAR_GAP_M)
+    var ecx = fE.cx - fE.nx * (dExp - fE.d) / 2;          // street face FIXED; the body grows into the block
+    var ecz = fE.cz - fE.nz * (dExp - fE.d) / 2;
+    var expQuad = fillPoseQuad(ecx, ecz, fE.w, dExp, fE.yaw);
+    /* consumed = the first tandem slot ALWAYS + any other lot occupant the
+       expanded quad actually reaches (a deeper slot survives by geometry). */
+    var consumed = [L.rearIdxs[0]];
+    for(var ri = 1; ri < L.rearIdxs.length; ri++){
+      var rE = master[L.rearIdxs[ri]];
+      if(fillQuadPen(expQuad, fillPoseQuad(rE.cx, rE.cz, rE.w, rE.d, rE.yaw)) > 0) consumed.push(L.rearIdxs[ri]);
+    }
+    if(!FILL_QA.ignoreSlotGates){
+      var expBad = false;
+      if(fillQuadCrossesRow(expQuad, ecx, ecz)) expBad = true;
+      else if(typeof encampmentZoneAt === "function" && encampmentZoneAt(ecx, ecz, waveCap)) expBad = true;
+      else if(typeof isDryLand === "function" && !isDryLand(ecx, ecz, waveStart)) expBad = true;
+      else {
+        var eRB = Math.hypot(fE.w, dExp) / 2;
+        for(var epi = 0; epi < PLACEMENT_INDEX.length; epi++){
+          var eq = PLACEMENT_INDEX[epi], edx = ecx - eq.x, edz = ecz - eq.z, emd = eRB + eq.r;
+          if(edx*edx + edz*edz < emd*emd){ expBad = true; break; }
+        }
+        if(!expBad){
+          for(var emi = 0; emi < master.length; emi++){
+            if(emi === L.frontIdx || consumed.indexOf(emi) >= 0) continue;
+            var oE = master[emi];
+            if(Math.hypot(oE.cx - ecx, oE.cz - ecz) > eRB + Math.hypot(oE.w, oE.d) / 2 + 0.5) continue;
+            if(fillQuadPen(expQuad, fillPoseQuad(oE.cx, oE.cz, oE.w, oE.d, oE.yaw)) > 0){ expBad = true; break; }
+          }
+        }
+      }
+      if(expBad) continue;                                // the claim is not legal — no expansion here
+    }
+    /* scheduling — the front must be READY (frame-formed, computed above)
+       and every consumed tent must have STOOD; seed the start inside what
+       remains of the window, FRONT-LOADED (hash² — fill:true reasoned: the
+       consolidation pressure peaked with the boom itself, so most annexes
+       break ground early in the window and the mechanic is visible at the
+       Dec-20 noon). */
+    var standBy = 0;
+    for(var ci2 = 0; ci2 < consumed.length; ci2++)
+      standBy = Math.max(standBy, master[consumed[ci2]].appearDay + FILL_REAR_MIN_STAND_D);
+    var startMin = Math.max(expWinA, frontReady, standBy + LC_TEARDOWN_DAYS + 1);
+    if(startMin >= expWinB - 1) continue;                 // no room left in the window — skip
+    var expSeed = lcHash(lotKey, "expday");
+    var expStart = startMin + expSeed * expSeed * (expWinB - startMin);
+    fE.exp = { start: expStart, on: expStart + FILL_EXP_DUR_D, dExp: dExp, consumes: consumed.map(function(cix){ return master[cix].rank; }) };
+    for(var ci3 = 0; ci3 < consumed.length; ci3++){
+      if(!FILL_QA.ignoreSlotGates)                        // QA fail-before: the annex rises over a STANDING tent
+        master[consumed[ci3]].consumedAt = expStart - LC_TEARDOWN_DAYS - 0.5;
+      master[consumed[ci3]].consumedBy = fE.rank;
+    }
+    expN++;
+  }
+
   master._wave = { v1: v1Len, placed: waveN, need: need2, startDay: waveStart, capDay: waveCap,
                    mix: counts2, rejects: rej2, slots: slots2.length, qaIgnoreGates: FILL_QA.ignoreInTownGates,
                    /* s106d — the boom-window core-canvas exception ledger */
                    coreWave: coreWaveN, coreCanvas: coreCanvasN,
                    coreCanvasCap: Math.ceil(CAD_CORE_CANVAS_FRAC * coreWaveN),
                    coreCanvasFrac: coreWaveN ? +(coreCanvasN / coreWaveN).toFixed(3) : 0,
-                   qaUncapCoreCanvas: FILL_QA.uncapCoreCanvas };
+                   qaUncapCoreCanvas: FILL_QA.uncapCoreCanvas,
+                   /* s106e — the slots/arcs ledger (canvas-first + rear-court + expansion) */
+                   lots: lots.length, lotsWithRear: lotsWithRear, rearSlots: rearN,
+                   rearCap: Math.ceil(FILL_REAR_FRAC * counts2.shanty),
+                   canvasFirst: cvfN, tentHarden: thN, expansions: expN,
+                   qaIgnoreSlotGates: FILL_QA.ignoreSlotGates };
   if(waveN < need2 && typeof console !== "undefined")
     console.warn("[fill] 1849 WAVE PLACEMENT STARVED: " + waveN + "/" + need2 +
                  " owed units fit under the placement laws (reported, not silently capped).");
@@ -10545,9 +10856,13 @@ function fillLeadDays(e){
 function fillLifecycleOf(e){
   if(e._lc && e._lcVer === LC_QA.version) return e._lc;
   var id = e.code + "#" + e.rank, evs = [];
-  var lead = fillLeadDays(e);
+  /* s106e — a CANVAS-FIRST entry is born as canvas (overnight lead, Taylor's
+     "as if by magic"), not as its final form; the hardening arc below
+     replaces it with the catalog form it was always destined for. */
+  var lead = e.canvasFirst ? 2 : fillLeadDays(e);
   evs.push({ type: "construct", start: e.appearDay - lead, on: e.appearDay,
-             form: { cls: e.cat, stories: (e.storyRange && e.storyRange[1]) || 1 } });
+             form: e.canvasFirst ? { cls: "canvas", stories: 1 }
+                                 : { cls: e.cat, stories: (e.storyRange && e.storyRange[1]) || 1 } });
   var fire = lcFireHit(e.cx, e.cz);
   /* s106d (ICS-24) — THE CORE-CANVAS SHORT ARC. A boom-window core tent is
      the FIRST torn down and replaced by FRAME on the same lot (the existing
@@ -10573,16 +10888,78 @@ function fillLifecycleOf(e){
       evs.push({ type: "rebuild", start: cvrS, on: cvrS + cvLead,
                  form: { cls: "frame", stories: (e.storyRange && e.storyRange[1]) || 1 } });
     }
-  } else if(!fire && e.cat === "shanty" && lcHash(id, "upg") < 0.30){
-    var t0 = eventDateToSimDay("1849-03-01") + Math.floor(lcHash(id, "upgday") * 180);   // Mar-Aug 1849
-    if(t0 > e.appearDay + 30){
-      var tOn = t0 + LC_TEARDOWN_DAYS;
-      evs.push({ type: "teardown", start: t0, on: tOn });
-      var rStart = tOn + 2;
-      if(LC_QA.breakRuinsGate) rStart = t0 + 0.5;               // QA: rebuild before the lot is cleared
+  } else if(e.rearOf != null){
+    /* s106e — THE REAR-SLOT LAW (mechanic 2). A rear-court tent runs its own
+       arc: it appears with its lot's demand rank and STAYS CANVAS through the
+       window (rear slots lag — the operator's texture; it never takes the
+       generic ~30% shanty upgrade below and never a canvas-first arc: it IS
+       canvas). Its only in-window exit is CONSUMPTION — the front building's
+       expansion claims its ground: a teardown that COMPLETES 0.5d before the
+       annex breaks ground (scheduled by the expansion post-pass; the ruins-
+       gate discipline holds — teardown clears as it goes, spec §2b), then
+       cleared -> gone: the annex takes the ground, the tent is not rebuilt.
+       A consumed tent standing in a fire perimeter whose teardown would not
+       complete first skips the arc — the fire is its end (unreachable today:
+       rear tents are never core ground and the Dec-24 perimeter is; kept as
+       the same defensive guard the core arc carries). */
+    if(e.consumedAt != null && (!fire || e.consumedAt + LC_TEARDOWN_DAYS < fire.day - 1)){
+      evs.push({ type: "teardown", start: e.consumedAt, on: e.consumedAt + LC_TEARDOWN_DAYS });
+    }
+  } else if(e.canvasFirst){
+    /* s106e — THE CANVAS-FIRST HARDENING ARC (mechanic 1). The residential-
+       band generalization of the s106d core arc: the canvas the entry was
+       born as is torn down and its FINAL catalog form rises on the same lot
+       (the s108 teardown-for-replacement machinery), seeded FILL_RES_CONV_
+       MIN..MAX_D days after ITS OWN spawn — months, slower than the core's
+       60-150d (the core sheds canvas fastest; the band hardens through
+       winter into spring 1850). Zone-modulated by construction: core entries
+       take the s106d branch above, encampment-zone tents are the tent
+       master's (never this master's), rear slots stay canvas (above). */
+    var arcCvf = fillCvfArc(e);
+    if(!fire || arcCvf.rbOn < fire.day - 1){
+      var cvfRbS = arcCvf.rbStart;
+      if(LC_QA.breakRuinsGate) cvfRbS = arcCvf.tdStart + 0.5;   // QA: rebuild before the lot is cleared (ruins-gate fail-before)
+      evs.push({ type: "teardown", start: arcCvf.tdStart, on: arcCvf.tdOn });
+      evs.push({ type: "rebuild", start: cvfRbS, on: cvfRbS + arcCvf.lead,
+                 form: { cls: e.cat, stories: (e.storyRange && e.storyRange[1]) || 1 } });
+    }
+  } else if(e.tentHarden){
+    /* s106e — THE BAND TENT->FRAME HARDENING ARC (mechanic 1, the tent side).
+       The same fillCvfArc numbers (60-240d after ITS OWN spawn), the same
+       teardown-for-replacement machinery, rebuilt as FRAME (the documented
+       tent->frame replacement cycle, fill-density-model §4). The core's
+       tents keep the s106d 60-150d law (branch above); the band hardens
+       slower, and only a seeded fraction at all. */
+    var arcTh = fillCvfArc(e);
+    if(!fire || arcTh.rbOn < fire.day - 1){
+      var thRbS = arcTh.rbStart;
+      if(LC_QA.breakRuinsGate) thRbS = arcTh.tdStart + 0.5;     // QA: rebuild before the lot is cleared (ruins-gate fail-before)
+      evs.push({ type: "teardown", start: arcTh.tdStart, on: arcTh.tdOn });
+      evs.push({ type: "rebuild", start: thRbS, on: thRbS + arcTh.lead,
+                 form: { cls: "frame", stories: (e.storyRange && e.storyRange[1]) || 1 } });
+    }
+  } else if(!fire){
+    /* the s108 ~30% shanty upgrade wave — the SAME law as ever, read through
+       the shared fillUpgradeArc helper (s106e factored it out so the
+       expansion post-pass and this compiler never disagree about who becomes
+       frame — measurement law). Event-identical to the inline original. */
+    var upg = fillUpgradeArc(e);
+    if(upg){
+      evs.push({ type: "teardown", start: upg.t0, on: upg.tOn });
+      var rStart = upg.rbStart;
+      if(LC_QA.breakRuinsGate) rStart = upg.t0 + 0.5;           // QA: rebuild before the lot is cleared
       evs.push({ type: "rebuild", start: rStart, on: rStart + 21,
                  form: { cls: "frame", stories: (e.storyRange && e.storyRange[1]) || 1 } });
     }
+  }
+  /* s106e — THE FRONT EXPANSION (mechanic 2's interaction). The annex the
+     post-pass granted: an s108 expand event over the consumed rear slot's
+     cleared ground (the consumed occupant's teardown completed first — its
+     own arc above). The renderer + audits read the expanded footprint from
+     the derive (deriveFillSet applies e.exp from expand start). */
+  if(e.exp && !fire){
+    evs.push({ type: "expand", start: e.exp.start, on: e.exp.on,
+               form: { cls: "frame", stories: (e.storyRange && e.storyRange[1]) || 1 } });   // an expanding front stands as FRAME by grant (post-pass eligibility)
   }
   if(fire){
     var b = fire.day;
@@ -10629,11 +11006,27 @@ function deriveFillSet(day){
       if(!(st.phase === "constructing" && st.state < 4)) continue;   // only the genuinely-under-construction look-ahead
     }
     var form = st.form || {};
+    /* s106e — the EXPANDED footprint: from the annex's break-ground day the
+       front occupies its grown claim (street face fixed, body deeper into
+       the block — over the consumed rear slot's cleared ground). The derive
+       is the ONE pose source for the renderer AND the drawn-OBB audits, so
+       the measured box is the drawn box (measurement law). */
+    var dd = e.d, dcx = e.cx, dcz = e.cz, expanded = false;
+    if(e.exp && day >= e.exp.start - 1e-9){
+      dd = e.exp.dExp;
+      dcx = e.cx - e.nx * (e.exp.dExp - e.d) / 2;
+      dcz = e.cz - e.nz * (e.exp.dExp - e.d) / 2;
+      expanded = true;
+    }
     out.push({ code: e.code, cat: e.cat, cls: form.cls || e.cat, material: e.material, subtype: e.subtype,
-               cx: e.cx, cz: e.cz, w: e.w, d: e.d, yaw: e.yaw, nx: e.nx, nz: e.nz,
+               cx: dcx, cz: dcz, w: e.w, d: dd, yaw: e.yaw, nx: e.nx, nz: e.nz,
                storyRange: e.storyRange, stories: form.stories || (e.storyRange && e.storyRange[1]) || 1,
                edgeId: e.edgeId, edgeLen: e.edgeLen, rank: e.rank, wave: e.wave || 0,
                coreCanvas: e.coreCanvas || 0,             // s106d: boom-window core-canvas exception entry
+               canvasFirst: e.canvasFirst || 0,           // s106e: canvas-first hardening arc entry
+               tentHarden: e.tentHarden || 0,             // s106e: band tent->frame hardening arc entry
+               rearOf: e.rearOf != null ? e.rearOf : null, slot: e.slot || 0,   // s106e: rear-court slot occupant
+               expanded: expanded, consumedBy: e.consumedBy != null ? e.consumedBy : null,
                overWater: !!e.overWater, stilted: !!e.stilted,
                appearDay: e.appearDay, state: st.state, hFrac: st.hFrac, counted: counted,
                phase: st.phase, transition: st.transition, agingT: st.agingT });
@@ -10735,7 +11128,13 @@ function rebuildFill(){
        core-canvas conversion rebuild, or any tent->frame arc) draws as the
        box massing of what now stands, not as canvas — the tent vocabulary
        covers only the canvas phases (construct/stand/teardown/cleared). */
-    if(set[i].subtype === "tent" && set[i].cls !== "frame" && typeof TENT_VARIANTS !== "undefined"){ tentPartsInto(tentParts, set[i]); continue; }
+    /* s106e: a CANVAS-FIRST entry draws with the tent vocabulary while its
+       current lifecycle form is still canvas (construct/stand/teardown of
+       the canvas phase) — the same routing rule the core-canvas conversion
+       established: the tent vocabulary covers exactly the canvas phases;
+       once the hardening rebuild's form takes over, the box massing does. */
+    if(((set[i].subtype === "tent" && set[i].cls !== "frame") || set[i].cls === "canvas") &&
+       typeof TENT_VARIANTS !== "undefined"){ tentPartsInto(tentParts, set[i]); continue; }
     FILL_GROUP.add(fillBuildMesh(set[i]));
   }
   if(tentParts.length){
@@ -10867,7 +11266,18 @@ registerLayerVisibility("buildings-fill", function(v){ FILL_GROUP.visible = v; i
     var segs = (typeof PLACEMENT_STREET_SEGS !== "undefined") ? PLACEMENT_STREET_SEGS : [];
     var pairViol = 0, lmViol = 0, rowViol = 0, maxPair = 0, sample = [], perDay = [];
     days.forEach(function(day){
-      var set = deriveFillSet(day), quads = set.map(fillQuad);
+      /* s106e scope amendment: the DETACHED law governs what physically
+         STANDS — bodies and their rubble (constructing/complete/expanding/
+         burning/teardown/ruins/clearing). A lot at cleared/gone/absent has
+         NOTHING standing to be detached from, and the s106e expansion
+         lawfully claims a consumed rear slot's cleared ground — measuring a
+         gone tent's empty pad against the annex that replaced it would gate
+         on a structure that no longer exists. The expansion's own packing
+         legality (vs everything NOT consumed) is gated by buildings.lotSlots. */
+      var set = deriveFillSet(day).filter(function(e){
+        return e.phase !== "cleared" && e.phase !== "gone" && e.phase !== "absent";
+      });
+      var quads = set.map(fillQuad);
       var lmq = landmarkQuadsAt(day), i, j;
       var dPair = 0, dLm = 0, dRow = 0;
       for(i = 0; i < quads.length; i++){
@@ -11158,6 +11568,218 @@ registerLayerVisibility("buildings-fill", function(v){ FILL_GROUP.visible = v; i
                      standingAt1850_06: standingMid1850 },
              problems: problems.slice(0, 10),
              qaKnobs: { uncapCoreCanvas: FILL_QA.uncapCoreCanvas } };
+  });
+
+  /* ---- lotSlots (s106e, ICS-25) — CANVAS-FIRST LOT ARCS + SLOTS: the
+     operator's two mechanics made standing rules (rules-first):
+       (1) PACKING LEGALITY — every rear-slot occupant is a TENT posed in its
+           lot's rear court (behind its front, inside the front's width band,
+           within the tandem depth), on dry non-core non-camp ground, crossing
+           no ROW, on no reserved landmark ground, detached from every other
+           footprint. Measured on the MASTER with the same geometry measures
+           the spawner gated on (fillCoreBlockAt / segCrossesQuad / SAT —
+           measurement law).
+       (2) ARC LEGALITY PER ZONE — canvas-first arcs stand ONLY on
+           residential-band ground (the core keeps the s106d 60-150d law —
+           zoneCoreCanvas gates it; the encampment zones' tents belong to the
+           tent master, never this wave): born as canvas, hardening teardown
+           seeded FILL_RES_CONV_MIN..MAX_D days after ITS spawn, rebuilt as
+           the entry's own final catalog form. A rear tent STAYS canvas — no
+           upgrade/hardening arc ever; its only exit is consumption.
+       (3) EXPANSION CONSUMES THE SLOT — every expanding front is frame, its
+           consumed occupants' teardowns COMPLETE before the annex breaks
+           ground (the ruins-gate discipline), each consumed tent STOOD at
+           least FILL_REAR_MIN_STAND_D first, a canvas-first front HARDENED
+           first, and the expanded claim is itself legal (no ROW / reserved /
+           other-footprint overlap). At least one expansion breaks ground by
+           the Dec-20 noon (the mechanic is visible in-window, not vacuous).
+       (4) THE RAILS — no slot/arc entry pre-dates the wave (the 1847/48
+           censuses cannot be touched), and the rear-slot count respects the
+           streaming cap ceil(FILL_REAR_FRAC x shanty placements) — rear
+           tents are a RESHUFFLE of the wave's shanty share, never net-new.
+     Fail-before: __P1850_FILL_QA({ignoreSlotGates:true}) poses rear tents on
+     the STREET side of their fronts with every gate skipped AND grants
+     expansions without scheduling the consumption teardowns — (1) and (3) go
+     RED; knob off -> GREEN (proven in probe-s106e). ---- */
+  registerAudit("buildings", "lotSlots", function(){
+    var master = buildFillMaster(), wv = master._wave || { v1: master.length };
+    var capDay = wv.capDay != null ? wv.capDay : eventDateToSimDay(FILL_1849_CAP_ISO);
+    var startDay = wv.startDay != null ? wv.startDay : eventDateToSimDay(FILL_1849_START_ISO);
+    var dec20 = eventDateToSimDay("1849-12-20");
+    var segs = (typeof PLACEMENT_STREET_SEGS !== "undefined") ? PLACEMENT_STREET_SEGS : [];
+    var lmq = landmarkQuadsAt(capDay);
+    var problems = [], rears = [], cvfs = [], ths = [], exps = [];
+    for(var i = (wv.v1 || 0); i < master.length; i++){
+      var e = master[i];
+      if(e.rearOf != null) rears.push(e);
+      if(e.canvasFirst) cvfs.push(e);
+      if(e.tentHarden) ths.push(e);
+      if(e.exp) exps.push(e);
+    }
+    // (0) the mechanics are REAL, not vacuous
+    if(!rears.length) problems.push("ZERO rear-slot occupants placed — the slot mechanic is vacuous");
+    if(!cvfs.length)  problems.push("ZERO canvas-first arcs seeded — the arc mechanic is vacuous");
+    if(!ths.length)   problems.push("ZERO band tent-harden arcs seeded — the tent side of the arc mechanic is vacuous");
+    if(!exps.length)  problems.push("ZERO expansions granted — the consumption mechanic is vacuous");
+    // (1) PACKING LEGALITY — every rear occupant, on the master's own geometry
+    var packViol = 0, packSample = [];
+    function packBad(e2, why){ packViol++; if(packSample.length < 8) packSample.push({ rank: e2.rank, code: e2.code, why: why }); }
+    rears.forEach(function(re){
+      var f = master[re.rearOf];
+      if(!f || f.wave !== 1849 || f.rearOf != null){ packBad(re, "front-unresolvable"); return; }
+      if(re.subtype !== "tent"){ packBad(re, "rear-occupant-not-canvas"); return; }
+      var rvx = re.cx - f.cx, rvz = re.cz - f.cz;
+      var projIn = -(rvx * f.nx + rvz * f.nz);                       // + = into the block (behind the front)
+      var projT  = rvx * f.nz + rvz * (-f.nx);                       // lateral, along the frontage
+      if(projIn <= 0) packBad(re, "not-behind-front (street side)");
+      else if(projIn > f.d / 2 + 2 * (FILL_REAR_GAP_M + 4.5)) packBad(re, "beyond-the-lot-rear-court");
+      /* width band: the rear centreline stays inside the front's width band —
+         a rear tent WIDER than a narrow front is centred (lat 0) and its own
+         detached/ROW/overlap clauses govern its sides, so the band term
+         floors at zero (Math.max), never a negative impossibility. */
+      if(Math.abs(projT) > Math.max(0, (f.w - re.w) / 2) + 0.3) packBad(re, "outside-front-width-band");
+      if(re.appearDay < f.appearDay - 1e-6) packBad(re, "rear-develops-before-front");
+      if(fillCoreBlockAt(re.cx, re.cz, capDay)) packBad(re, "on-core-ground");
+      if(typeof encampmentZoneAt === "function" && encampmentZoneAt(re.cx, re.cz, capDay)) packBad(re, "on-documented-camp-ground");
+      if(typeof isDryLand === "function" && !isDryLand(re.cx, re.cz, startDay)) packBad(re, "on-water");
+      var q = fillQuad(re);
+      for(var sj = 0; sj < segs.length; sj++){
+        var mx = (segs[sj].x0 + segs[sj].x1) / 2, mz = (segs[sj].z0 + segs[sj].z1) / 2;
+        if(Math.hypot(mx - re.cx, mz - re.cz) > 90) continue;
+        if(segCrossesQuad(q, segs[sj])){ packBad(re, "crosses-row:" + segs[sj].id); break; }
+      }
+      for(var lj = 0; lj < lmq.length; lj++)
+        if(penetration(q, lmq[lj]) > 0.05){ packBad(re, "on-reserved-landmark-ground"); break; }
+      for(var oj = 0; oj < master.length; oj++){
+        if(oj === re.rank) continue;
+        var oE = master[oj];
+        if(Math.hypot(oE.cx - re.cx, oE.cz - re.cz) > Math.hypot(re.w, re.d) / 2 + Math.hypot(oE.w, oE.d) / 2 + 0.5) continue;
+        if(penetration(q, fillQuad(oE)) > 0.05){ packBad(re, "overlaps:" + oE.code + "#" + oE.rank); break; }
+      }
+    });
+    if(packViol) problems.push(packViol + " rear-slot packing violations");
+    // (2) ARC LEGALITY PER ZONE
+    var arcViol = 0, arcSample = [], delays = [];
+    cvfs.forEach(function(ce){
+      var id = ce.code + "#" + ce.rank;
+      if(fillCoreBlockAt(ce.cx, ce.cz, capDay)){ arcViol++; if(arcSample.length < 8) arcSample.push({ id: id, why: "canvas-first-on-core (the core keeps the s106d law)" }); }
+      if(ce.subtype === "tent"){ arcViol++; if(arcSample.length < 8) arcSample.push({ id: id, why: "canvas-first-tent (a tent IS canvas)" }); }
+      var evs = fillLifecycleOf(ce).events, con = evs[0], td = null, rb = null;
+      for(var k = 0; k < evs.length; k++){
+        if(evs[k].type === "teardown" && !td) td = evs[k];
+        if(evs[k].type === "rebuild" && td && !rb) rb = evs[k];
+      }
+      if(!con || con.type !== "construct" || !con.form || con.form.cls !== "canvas"){
+        arcViol++; if(arcSample.length < 8) arcSample.push({ id: id, why: "not-born-as-canvas" });
+      }
+      if(!td){ arcViol++; if(arcSample.length < 8) arcSample.push({ id: id, why: "no-hardening-teardown" }); return; }
+      var dly = td.start - ce.appearDay;
+      delays.push(+dly.toFixed(1));
+      if(dly < FILL_RES_CONV_MIN_D - 0.5 || dly > FILL_RES_CONV_MAX_D + 0.5){
+        arcViol++; if(arcSample.length < 8) arcSample.push({ id: id, why: "hardening-delay " + dly.toFixed(1) + "d outside [" + FILL_RES_CONV_MIN_D + "," + FILL_RES_CONV_MAX_D + "]" });
+      }
+      if(!rb || !rb.form || rb.form.cls !== ce.cat){
+        arcViol++; if(arcSample.length < 8) arcSample.push({ id: id, why: "hardening-not-to-final-form" });
+      }
+    });
+    ths.forEach(function(te){
+      var id = te.code + "#" + te.rank;
+      if(fillCoreBlockAt(te.cx, te.cz, capDay)){ arcViol++; if(arcSample.length < 8) arcSample.push({ id: id, why: "tent-harden-on-core (the core keeps the s106d law)" }); }
+      if(te.subtype !== "tent"){ arcViol++; if(arcSample.length < 8) arcSample.push({ id: id, why: "tent-harden-on-a-non-tent" }); }
+      var evs2 = fillLifecycleOf(te).events, td3 = null, rb3 = null;
+      for(var k3 = 0; k3 < evs2.length; k3++){
+        if(evs2[k3].type === "teardown" && !td3) td3 = evs2[k3];
+        if(evs2[k3].type === "rebuild" && td3 && !rb3) rb3 = evs2[k3];
+      }
+      if(!td3){ arcViol++; if(arcSample.length < 8) arcSample.push({ id: id, why: "no-hardening-teardown" }); return; }
+      var dly2 = td3.start - te.appearDay;
+      delays.push(+dly2.toFixed(1));
+      if(dly2 < FILL_RES_CONV_MIN_D - 0.5 || dly2 > FILL_RES_CONV_MAX_D + 0.5){
+        arcViol++; if(arcSample.length < 8) arcSample.push({ id: id, why: "hardening-delay " + dly2.toFixed(1) + "d outside [" + FILL_RES_CONV_MIN_D + "," + FILL_RES_CONV_MAX_D + "]" });
+      }
+      if(!rb3 || !rb3.form || rb3.form.cls !== "frame"){
+        arcViol++; if(arcSample.length < 8) arcSample.push({ id: id, why: "tent-hardening-not-to-frame (the §4 replacement law)" });
+      }
+    });
+    rears.forEach(function(re){
+      var id = re.code + "#" + re.rank;
+      var evs = fillLifecycleOf(re).events, hasRb = false, hasTd = false;
+      for(var k = 0; k < evs.length; k++){
+        if(evs[k].type === "rebuild") hasRb = true;
+        if(evs[k].type === "teardown") hasTd = true;
+      }
+      if(hasRb){ arcViol++; if(arcSample.length < 8) arcSample.push({ id: id, why: "rear-tent-rebuilds (rear slots stay canvas)" }); }
+      if(hasTd && re.consumedAt == null){ arcViol++; if(arcSample.length < 8) arcSample.push({ id: id, why: "rear-teardown-without-consumption" }); }
+      if(re.canvasFirst || re.tentHarden){ arcViol++; if(arcSample.length < 8) arcSample.push({ id: id, why: "rear-marked-for-a-hardening-arc (rear slots stay canvas)" }); }
+    });
+    if(arcViol) problems.push(arcViol + " arc-legality violations");
+    // (3) EXPANSION CONSUMES THE SLOT (the ruins-gate discipline holds)
+    var expViol = 0, expSample = [], expByDec20 = 0;
+    function expBad(f2, why){ expViol++; if(expSample.length < 8) expSample.push({ front: f2.code + "#" + f2.rank, why: why }); }
+    exps.forEach(function(fe){
+      /* the expanding front must STAND AS FRAME when the annex breaks ground
+         — measured on its OWN compiled events (the law's terms): some
+         construct/rebuild whose form is frame completes on or before
+         exp.start (covers frame-cat fronts AND upgraded shanty fronts). */
+      var fevs = fillLifecycleOf(fe).events, frameBy = false;
+      for(var fk = 0; fk < fevs.length; fk++){
+        var fv = fevs[fk];
+        if((fv.type === "construct" || fv.type === "rebuild") && fv.form && fv.form.cls === "frame" && fv.on <= fe.exp.start + 1e-6){ frameBy = true; break; }
+      }
+      if(!frameBy) expBad(fe, "front-not-frame-formed-by-expansion");
+      if(!fe.exp.consumes || !fe.exp.consumes.length) expBad(fe, "expansion-consumes-nothing");
+      if(fe.exp.start <= dec20) expByDec20++;
+      if(fe.canvasFirst && fe.exp.start < fillCvfArc(fe).rbOn - 1e-6) expBad(fe, "expands-before-hardening-completes");
+      var dExp = fe.exp.dExp;
+      var ecx = fe.cx - fe.nx * (dExp - fe.d) / 2, ecz = fe.cz - fe.nz * (dExp - fe.d) / 2;
+      var eq2 = fillQuad({ cx: ecx, cz: ecz, w: fe.w, d: dExp, yaw: fe.yaw });
+      (fe.exp.consumes || []).forEach(function(cr){
+        var ce2 = master[cr];
+        if(!ce2 || ce2.rearOf !== fe.rank){ expBad(fe, "consumed#" + cr + "-not-this-lot's-rear"); return; }
+        var evs2 = fillLifecycleOf(ce2).events, td2 = null;
+        for(var k2 = 0; k2 < evs2.length; k2++) if(evs2[k2].type === "teardown"){ td2 = evs2[k2]; break; }
+        if(!td2){ expBad(fe, "consumed#" + cr + "-never-torn-down (annex over a standing tent)"); return; }
+        if(td2.on > fe.exp.start + 1e-6) expBad(fe, "consumed#" + cr + "-teardown-completes-after-annex-breaks-ground");
+        if(td2.start < ce2.appearDay + FILL_REAR_MIN_STAND_D - 0.5) expBad(fe, "consumed#" + cr + "-torn-down-before-it-stood " + FILL_REAR_MIN_STAND_D + "d");
+      });
+      for(var sj2 = 0; sj2 < segs.length; sj2++){
+        var mx2 = (segs[sj2].x0 + segs[sj2].x1) / 2, mz2 = (segs[sj2].z0 + segs[sj2].z1) / 2;
+        if(Math.hypot(mx2 - ecx, mz2 - ecz) > 90) continue;
+        if(segCrossesQuad(eq2, segs[sj2])){ expBad(fe, "annex-crosses-row:" + segs[sj2].id); break; }
+      }
+      for(var lj2 = 0; lj2 < lmq.length; lj2++)
+        if(penetration(eq2, lmq[lj2]) > 0.05){ expBad(fe, "annex-on-reserved-landmark-ground"); break; }
+      for(var oj2 = 0; oj2 < master.length; oj2++){
+        if(oj2 === fe.rank || (fe.exp.consumes || []).indexOf(oj2) >= 0) continue;
+        var oE2 = master[oj2];
+        if(Math.hypot(oE2.cx - ecx, oE2.cz - ecz) > Math.hypot(fe.w, dExp) / 2 + Math.hypot(oE2.w, oE2.d) / 2 + 0.5) continue;
+        if(penetration(eq2, fillQuad(oE2)) > 0.05){ expBad(fe, "annex-overlaps:" + oE2.code + "#" + oE2.rank); break; }
+      }
+    });
+    if(exps.length && expByDec20 < 1) problems.push("no expansion breaks ground by Dec-20 — the consumption mechanic is invisible in-window");
+    if(expViol) problems.push(expViol + " expansion-law violations");
+    // (4) THE RAILS — nothing pre-dates the wave; the rear share is capped
+    var railViol = 0;
+    rears.concat(cvfs).concat(ths).forEach(function(e3){
+      if(e3.appearDay < startDay - 0.5) railViol++;
+    });
+    if(railViol) problems.push(railViol + " slot/arc entries pre-date the wave (census-gate hazard)");
+    var shantyWave = 0;
+    for(var m2 = (wv.v1 || 0); m2 < master.length; m2++) if(master[m2].cat === "shanty") shantyWave++;
+    var rearCapN = Math.ceil(FILL_REAR_FRAC * shantyWave);
+    if(rears.length > rearCapN) problems.push("rear slots " + rears.length + " over the cap ceil(" + FILL_REAR_FRAC + " x " + shantyWave + ") = " + rearCapN);
+    return { pass: problems.length === 0, law: "lotSlots (canvas-first lot arcs + slots, s106e)",
+             counts: { lots: wv.lots, lotsWithRear: wv.lotsWithRear, rearSlots: rears.length, rearCap: rearCapN,
+                       canvasFirst: cvfs.length, tentHarden: ths.length,
+                       expansions: exps.length, expansionsByDec20: expByDec20,
+                       waveShanty: shantyWave, wavePlaced: master.length - (wv.v1 || 0) },
+             packing: { violations: packViol, sample: packSample },
+             arcs: { violations: arcViol, sample: arcSample,
+                     hardenDelaysD: { min: delays.length ? Math.min.apply(null, delays) : null,
+                                      max: delays.length ? Math.max.apply(null, delays) : null } },
+             expansion: { violations: expViol, sample: expSample },
+             problems: problems.slice(0, 10),
+             qaKnobs: { ignoreSlotGates: FILL_QA.ignoreSlotGates } };
   });
 })();
 
@@ -11742,9 +12364,14 @@ function buildTentMaster(){
         if(dx*dx + dz*dz < md*md){ bad = true; break; }
       }
       if(bad) continue;
-      // (5) the fill village (local master check — fill is not in PLACEMENT_INDEX)
+      // (5) the fill village (local master check — fill is not in PLACEMENT_INDEX).
+      //     s106e: an EXPANDING front's avoid circle covers its full annex claim
+      //     (the expanded depth, centre-shifted into the block) — a tent never
+      //     seeds on ground an expansion will lawfully take.
       for(pi = 0; pi < fillM.length; pi++){
-        var f = fillM[pi], fdx = x - f.cx, fdz = z - f.cz, fr = rB + Math.hypot(f.w, f.d)/2 + 0.5;
+        var f = fillM[pi], fdx = x - f.cx, fdz = z - f.cz;
+        var fD = f.exp ? f.exp.dExp : f.d;
+        var fr = rB + Math.hypot(f.w, fD)/2 + (f.exp ? (fD - f.d)/2 : 0) + 0.5;
         if(fdx*fdx + fdz*fdz < fr*fr){ bad = true; break; }
       }
       if(bad) continue;
@@ -11866,7 +12493,11 @@ function tentCountsByZoneAt(day){
 var TENT_GROUP = new THREE.Group(); TENT_GROUP.frustumCulled = false; TENT_GROUP.visible = TENT_ON_AT_RELEASE; scene.add(TENT_GROUP);
 var _tentLastDay = null;
 function tentPartsInto(parts, e){
-  var v = TENT_VARIANTS[e.code] || { wallH: 0.8, ridgeH: 1.2, tone: TENT_TONE_DEFAULT };
+  /* s106e: a CANVAS-FIRST fill entry (a non-tent catalog code in its canvas
+     phase) draws with the TNT-3 framed-cloth-house silhouette — the record's
+     own proto-building canvas form (canvas over a frame skeleton, bible §2) —
+     never a bespoke new shape. Tent codes keep their own variants. */
+  var v = TENT_VARIANTS[e.code] || (e.canvasFirst && TENT_VARIANTS["TNT-3"]) || { wallH: 0.8, ridgeH: 1.2, tone: TENT_TONE_DEFAULT };
   var g = groundStructureAt(e.cx, e.cz, e.w, e.d, e.yaw);
   var y = g.floorY;
   parts.push(groundPlinthGeo(g, new THREE.Color(LM_PLACEHOLDER.pad)));
@@ -12085,9 +12716,11 @@ if(typeof window !== "undefined"){
     opts = opts || {};
     if(opts.ignoreInTownGates != null) FILL_QA.ignoreInTownGates = !!opts.ignoreInTownGates;
     if(opts.uncapCoreCanvas != null)   FILL_QA.uncapCoreCanvas = !!opts.uncapCoreCanvas;   // s106d: drop the core-canvas fraction cap (zoneCoreCanvas fail-before)
+    if(opts.ignoreSlotGates != null)   FILL_QA.ignoreSlotGates = !!opts.ignoreSlotGates;   // s106e: rear tents posed street-side gateless + expansions without consumption teardowns (lotSlots fail-before)
     FILL_QA.version++;
     FILL_MASTER = null; TENT_MASTER = null; _fillLastDay = null; _tentLastDay = null;
-    return { ignoreInTownGates: FILL_QA.ignoreInTownGates, uncapCoreCanvas: FILL_QA.uncapCoreCanvas, version: FILL_QA.version };
+    return { ignoreInTownGates: FILL_QA.ignoreInTownGates, uncapCoreCanvas: FILL_QA.uncapCoreCanvas,
+             ignoreSlotGates: FILL_QA.ignoreSlotGates, version: FILL_QA.version };
   };
 }
 setTimeout(function(){
@@ -12182,6 +12815,27 @@ setTimeout(function(){
       }
       return { frac: CAD_CORE_CANVAS_FRAC, windowISO: [CAD_CORE_CANVAS_START_ISO, CAD_CORE_CANVAS_END_ISO],
                coreWave: wv.coreWave, coreCanvas: wv.coreCanvas, cap: wv.coreCanvasCap, entries: list };
+    };
+    /* s106e — the slots/arcs ledger, machine-readable (probes/shots). */
+    window.__P1850.lotSlots = function(){
+      var m = buildFillMaster(), wv = m._wave || {};
+      var rears = [], cvfs = 0, ths = 0, exps = [];
+      for(var i = (wv.v1 || 0); i < m.length; i++){
+        var e = m[i];
+        if(e.canvasFirst) cvfs++;
+        if(e.tentHarden) ths++;
+        if(e.rearOf != null) rears.push({ id: e.code + "#" + e.rank, rearOf: e.rearOf, slot: e.slot,
+                                          x: +e.cx.toFixed(1), z: +e.cz.toFixed(1),
+                                          appearDay: +e.appearDay.toFixed(1),
+                                          consumedAt: e.consumedAt != null ? +e.consumedAt.toFixed(1) : null });
+        if(e.exp) exps.push({ id: e.code + "#" + e.rank, x: +e.cx.toFixed(1), z: +e.cz.toFixed(1),
+                              start: +e.exp.start.toFixed(1), on: +e.exp.on.toFixed(1),
+                              dExp: +e.exp.dExp.toFixed(2), consumes: e.exp.consumes });
+      }
+      return { lots: wv.lots, lotsWithRear: wv.lotsWithRear, rearSlots: wv.rearSlots, rearCap: wv.rearCap,
+               canvasFirst: cvfs, tentHarden: ths, expansions: exps.length, rears: rears, exps: exps,
+               cvfWindowD: [FILL_RES_CONV_MIN_D, FILL_RES_CONV_MAX_D], cvfFrac: FILL_CVF_FRAC,
+               tentHardenFrac: FILL_TENT_HARDEN_FRAC, rearFrac: FILL_REAR_FRAC, expFrac: FILL_EXP_FRAC };
     };
     window.__P1850.fillCensus = function(iso){
       var day = eventDateToSimDay(iso);
