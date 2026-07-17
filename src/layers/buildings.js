@@ -4702,43 +4702,55 @@ setTimeout(function(){
   };
   var st = document.createElement("style");
   st.textContent = [
-    /* css26 GLASS (2026-07-17): chip + panel are hard-edged floating chrome —
-       they take the frosted-glass treatment (backdrop blur+saturate over a
-       REDUCED fill alpha so the world reads through) and the one white-alpha
-       hairline instead of a hand-picked edge. var() fallbacks keep the
-       atelier target safe if the shell tokens are absent there. */
+    /* css26 GLASS; d1 (ICS-28) MATERIAL/MOTION PASS: chip + panel are
+       text-carrying floating chrome — REGULAR glass tier (blur+saturate+
+       luminosity) over the 35% dim fill. Shape grammar: the panel is a fixed
+       --r-panel pane with the glass-rim edge anatomy (rim-light + hairline
+       ring + ambient) replacing the bare border; the chip is a CONTROL and
+       takes the capsule. Press feel: 0.96 pointer / 1.06 coarse on the
+       snappy spring. Secondary copy rides the vibrancy ink ladder (0.62).
+       var() fallbacks keep the legend safe if the shell tokens ever move;
+       both built targets share shell.html, so the a11y token flips
+       (reduced-transparency / contrast) arrive from :root for free. */
     "#lc-legend-chip{ position:fixed; top:66px; right:16px; z-index:11; pointer-events:auto; cursor:pointer;",
     "  font-family:var(--hud-font); font-size:0.56rem; font-weight:700; letter-spacing:2px; color:#fff;",
-    "  background:rgba(14,17,21,0.45); padding:4px 10px; border-radius:3px;",
+    "  background:var(--glass-dim, rgba(18,20,24,0.35)); padding:4px 10px;",
+    "  border-radius:var(--r-capsule, 999px);",
     "  border:1px solid var(--hairline, rgba(255,255,255,0.09));",
-    "  -webkit-backdrop-filter:var(--glass, blur(14px) saturate(1.4));",
-    "  backdrop-filter:var(--glass, blur(14px) saturate(1.4));",
-    "  text-shadow:var(--halo-dark); user-select:none; -webkit-user-select:none; }",
+    "  -webkit-backdrop-filter:var(--glass-regular, blur(14px) saturate(1.4) brightness(0.94));",
+    "  backdrop-filter:var(--glass-regular, blur(14px) saturate(1.4) brightness(0.94));",
+    "  text-shadow:var(--halo-dark); user-select:none; -webkit-user-select:none;",
+    "  transition:transform var(--dur-spring, 650ms) var(--spring-snappy, cubic-bezier(0.2,0.7,0.1,1)); }",
+    "#lc-legend-chip:active{ transform:scale(0.96); }",
+    "@media (pointer:coarse){ #lc-legend-chip:active{ transform:scale(1.06); } }",
     "#lc-legend-chip:hover{ background:rgba(14,17,21,0.72); }",
     "#lc-legend-chip.on{ background:rgba(14,17,21,0.72); }",
     "#lc-legend{ position:fixed; top:94px; right:16px; z-index:11; pointer-events:auto; display:none;",
-    "  font-family:var(--hud-font); color:#fff; background:rgba(13,15,19,0.62); border-radius:4px;",
-    "  border:1px solid var(--hairline, rgba(255,255,255,0.09));",
-    "  -webkit-backdrop-filter:var(--glass, blur(14px) saturate(1.4));",
-    "  backdrop-filter:var(--glass, blur(14px) saturate(1.4));",
+    "  font-family:var(--hud-font); color:#fff; background:var(--glass-dim, rgba(18,20,24,0.35));",
+    "  border-radius:var(--r-panel, 16px);",
+    "  box-shadow:var(--glass-rim, inset 0 1px 0 rgba(255,255,255,0.12), 0 0 0 1px rgba(255,255,255,0.09), 0 8px 24px rgba(0,0,0,0.35));",
+    "  -webkit-backdrop-filter:var(--glass-regular, blur(14px) saturate(1.4) brightness(0.94));",
+    "  backdrop-filter:var(--glass-regular, blur(14px) saturate(1.4) brightness(0.94));",
     "  padding:8px 10px 9px; width:236px; box-sizing:border-box;",
     "  max-height:calc(100vh - 150px); overflow-y:auto; }",
     "#lc-legend.open{ display:block; }",
-    /* css26 BLUR-IN REVEAL: the panel is display-toggled, so a short keyframe
-       entrance (opacity + translate + blur 6->0) on the chrome easing token;
-       reduced-motion users get the plain display flip. */
+    /* d1 REVEAL SPLIT: the rise (transform) rides the smooth spring, the
+       opacity+blur settle stays on the curve voice; reduced-motion users
+       get the plain display flip (whole block gated). */
     "@media (prefers-reduced-motion: no-preference){",
-    "  #lc-legend.open{ animation:lclReveal .22s var(--ease-out, cubic-bezier(0.2,0.7,0.1,1)) both; }",
+    "  #lc-legend.open{ animation:lclSlide var(--dur-spring, 650ms) var(--spring-smooth, cubic-bezier(0.2,0.7,0.1,1)) both,",
+    "    lclReveal .22s var(--ease-out, cubic-bezier(0.2,0.7,0.1,1)) both; }",
     "}",
-    "@keyframes lclReveal{ from{ opacity:0; transform:translateY(6px); filter:blur(6px); } }",
+    "@keyframes lclSlide{ from{ transform:translateY(6px); } }",
+    "@keyframes lclReveal{ from{ opacity:0; filter:blur(6px); } }",
     "#lc-legend .lcl-title{ font-size:0.54rem; font-weight:700; letter-spacing:2px; opacity:0.85; margin-bottom:6px; }",
     "#lc-legend .lcl-title .lcl-x{ float:right; cursor:pointer; opacity:0.7; font-size:0.7rem; line-height:0.7; padding:0 2px; }",
     "#lc-legend .lcl-title .lcl-x:hover{ opacity:1; }",
     "#lc-legend .lcl-row{ display:flex; align-items:center; margin:3px 0; }",
     "#lc-legend .lcl-row canvas{ width:40px; height:26px; flex:0 0 40px; margin-right:8px;",
-    "  border-radius:2px; background:rgba(255,255,255,0.06); }",
+    "  border-radius:6px; background:rgba(255,255,255,0.06); }", /* d1 concentric: panel 16px − 10px pad */
     "#lc-legend .lcl-lab{ display:block; font-size:0.54rem; font-weight:700; letter-spacing:1.2px; }",
-    "#lc-legend .lcl-note{ display:block; font-size:0.5rem; font-weight:500; opacity:0.72; line-height:1.3; }",
+    "#lc-legend .lcl-note{ display:block; font-size:0.5rem; font-weight:500; color:var(--ink-glass-2, rgba(255,255,255,0.62)); line-height:1.3; }", /* d1: secondary rung of the vibrancy ladder (was opacity .72) */
     "#lc-legend .lcl-dot{ display:inline-block; width:7px; height:7px; border-radius:1px; vertical-align:-1px; margin:0 2px 0 4px; }"
   ].join("\n");
   document.head.appendChild(st);

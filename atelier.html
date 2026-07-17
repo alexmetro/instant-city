@@ -90,12 +90,83 @@
        the tint (Chromium/WebKit clip the filtered backdrop by the element's
        mask — the progressive-blur idiom), so no blur rectangle ever reads
        as a plate. Era identity untouched: same inks, same fonts. */
-    --glass: blur(14px) saturate(1.4);
+    /* d1 (ICS-28) APPLE MATERIAL TIERS — research/design-apple-material-motion.md.
+       TWO glass tiers (HIG Materials): REGULAR carries text (ticker, scrubber
+       body+tab, legend, menu sheet, beat card) — blur + saturate + a luminosity
+       adjustment (brightness 0.94 is the regular variant's "adjusts luminosity"
+       trait, tuned for bright sand); CLEAR serves passive readouts over rich
+       map content (altitude pillow, masthead toggle) — lighter blur, no
+       luminosity shift. NEVER stack glass on glass: anything sitting ON a
+       glass surface uses flat fills (scr-chip, sp-seg states, legend rows). */
+    --glass-regular: blur(14px) saturate(1.4) brightness(0.94);
+    --glass-clear: blur(8px) saturate(1.25);
+    /* the 35% dim rule (HIG: "dark dimming layer of 35% opacity" over bright
+       content): text-carrying scrims fill to dark 0.35; the 0.22 tier serves
+       the clear-glass passive readouts (and would serve already-dark water) */
+    --glass-dim: rgba(18,20,24,0.35);
+    --glass-dim-light: rgba(18,20,24,0.22);
+    /* glass edge anatomy (top rim-light + hairline ring + soft ambient) for
+       HARD-EDGED floating panes only (legend panel, menu sheet, scrubber
+       tooltip chip) — the mask-faded scrims stay edgeless per the s64 law */
+    --glass-rim: inset 0 1px 0 rgba(255,255,255,0.12), 0 0 0 1px var(--hairline), 0 8px 24px rgba(0,0,0,0.35);
+    /* vibrancy ink ladder (white-alpha 1.0 / 0.62 / 0.40) for glass surfaces —
+       named --ink-glass-* because the era token --ink IS the parchment ink
+       and must not move (paper pane / inspect panel / menu sheet copy) */
+    --ink-glass: rgba(255,255,255,1);
+    --ink-glass-2: rgba(255,255,255,0.62);
+    --ink-glass-3: rgba(255,255,255,0.40);
+    /* shape grammar: fixed panel radius; concentric inner = container − padding;
+       capsules ONLY on controls (never on panels — instrument, not iOS cosplay) */
+    --r-panel: 16px;
+    --r-chip: calc(var(--r-panel) - 6px);
+    --r-capsule: 999px;
     /* one hairline voice for hard-edged floating panes (legend panel/chip,
        scrubber tooltip chip) — white-alpha, never a hand-picked grey */
     --hairline: rgba(255,255,255,0.09);
-    /* THE chrome easing token — every HUD transition/reveal rides this curve */
+    /* THE chrome easing token — the curve voice for OPACITY/COLOR fades */
     --ease-out: cubic-bezier(0.2, 0.7, 0.1, 1);
+    /* SPRINGS (Apple presets sampled as linear(): duration 0.5 s, mass 1,
+       stiffness=(2π/d)², damping=(1−bounce)·4π/d; bounce 0 / 0.15 / 0.3) —
+       the motion voice for anything that MOVES (transform); fades stay on
+       --ease-out. --spring-bouncy is defined but RESERVED (doc: >0.15 bounce
+       is banned on frequent interactions; keep it for rare celebratory
+       moments, currently none). */
+    --spring-smooth: linear(0, 0.0934, 0.272, 0.4527, 0.6053, 0.7233, 0.8101,
+      0.8717, 0.9144, 0.9435, 0.963, 0.9759, 0.9844, 0.99, 0.9936, 0.9959, 1);
+    --spring-snappy: linear(0, 0.0661, 0.2099, 0.3755, 0.5322, 0.666, 0.7724,
+      0.8525, 0.9101, 0.9495, 0.9751, 0.9909, 0.9999, 1.0043, 1.0061, 1.0062,
+      1.0055, 1.0046, 1.0035, 1.0026, 1);
+    --spring-bouncy: linear(0, 0.0718, 0.2332, 0.4233, 0.6045, 0.7571, 0.8737,
+      0.9551, 1.0063, 1.0339, 1.0449, 1.0451, 1.0393, 1.0309, 1.0222, 1.0145,
+      1.0083, 1.0038, 1.0007, 0.999, 0.9981, 0.9979, 0.998, 0.9984, 1);
+    --dur-spring: 650ms;         /* perceptual 0.5s + settle tail */
+    --dur-spring-bouncy: 800ms;
+  }
+  /* Apple's accessibility fallbacks come free on-platform but NOT on the web —
+     recreated here at the token level so every consumer flips at once. */
+  @media (prefers-reduced-transparency: reduce){
+    :root{
+      --glass-regular: blur(22px) saturate(1.2) brightness(0.85); /* "frostier, obscures more" */
+      --glass-clear: blur(22px) saturate(1.2) brightness(0.85);
+      --glass-dim: rgba(18,20,24,0.6);
+      --glass-dim-light: rgba(18,20,24,0.5);
+    }
+  }
+  @media (prefers-contrast: more){
+    :root{ /* near-solid fill + strong contrasting border */
+      --hairline: rgba(255,255,255,0.5);
+      --glass-dim: rgba(10,11,13,0.7);
+      --glass-dim-light: rgba(10,11,13,0.6);
+    }
+  }
+  @media (prefers-reduced-motion: reduce){
+    :root{ /* elasticity disabled: springs tighten to the chrome curve */
+      --spring-smooth: cubic-bezier(0.2, 0.7, 0.1, 1);
+      --spring-snappy: cubic-bezier(0.2, 0.7, 0.1, 1);
+      --spring-bouncy: cubic-bezier(0.2, 0.7, 0.1, 1);
+      --dur-spring: 250ms;
+      --dur-spring-bouncy: 250ms;
+    }
   }
   html,body{
     margin:0; padding:0; overflow:hidden; height:100%; background:#0a0a0a;
@@ -139,7 +210,9 @@
     box-shadow:0 1px 0 rgba(40,44,48,0.7);
   }
   #hud-title .sub{
-    display:block; font-size:0.62rem; letter-spacing:3px; opacity:0.85; margin-top:2px;
+    /* d1: 0.62rem (~9.9px) violated the 11pt type floor (HIG Typography) —
+       bumped to 0.6875rem (11px); tracking eased 3→2.5px to hold the width */
+    display:block; font-size:0.6875rem; letter-spacing:2.5px; opacity:0.85; margin-top:2px;
     font-weight:500; /* ics14e: upright 500, not italic — only upright Roboto 500/700 are embedded */
   }
   #hud-altitude{
@@ -149,10 +222,11 @@
   /* css26: soft glass pillow under the altitude readout — a low-alpha dark
      tint whose edge fade lives in the MASK, so tint and blur fade together
      (no hard blur rectangle). z-index:-1 keeps it under the text. */
+  /* d1: passive readout over rich map content = the CLEAR tier + light dim */
   #hud-altitude::before{
     content:""; position:absolute; inset:-10px -20px; z-index:-1;
-    background:rgba(18,20,24,0.3);
-    -webkit-backdrop-filter:var(--glass); backdrop-filter:var(--glass);
+    background:var(--glass-dim-light);
+    -webkit-backdrop-filter:var(--glass-clear); backdrop-filter:var(--glass-clear);
     -webkit-mask-image:radial-gradient(115% 140% at 50% 50%, #000 28%, transparent 90%);
             mask-image:radial-gradient(115% 140% at 50% 50%, #000 28%, transparent 90%);
   }
@@ -292,15 +366,23 @@
     left:50%; bottom:16px; transform:translateX(-50%);
     max-width:min(74vw,780px); min-width:280px;
     font-size:0.72rem; letter-spacing:0.4px; text-align:center;
-    padding:0.45em 1.4em; opacity:0; transition:opacity .6s var(--ease-out);
+    padding:0.45em 2.8em; opacity:0; transition:opacity .6s var(--ease-out);
     text-wrap:pretty; /* css26: inert while nowrap holds, correct if the ticker ever wraps */
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
     /* s64: no box — haloed text over a horizontal scrim that fades to
        nothing at both ends. ics14e: the scrim flips DARK — it now carries
        white street-voice ink, and a parchment tint would sit between the
-       white ink and the dark casing. */
-    background:linear-gradient(90deg, rgba(18,20,24,0) 0%, rgba(18,20,24,0.5) 14%,
-      rgba(18,20,24,0.5) 86%, rgba(18,20,24,0) 100%);
+       white ink and the dark casing.
+       d1 GLASS (regular tier + 35% dim): the gradient fill becomes a solid
+       dim + backdrop blur, end-faded by the element MASK (beat-card idiom —
+       glass must live on the ELEMENT because the ticker's animated 0→0.95
+       opacity would trap a pseudo's backdrop in the opacity group). The mask
+       plateau starts at 32px = inside the widened horizontal padding, so the
+       ellipsized copy never sits in the faded band. */
+    background:var(--glass-dim);
+    -webkit-backdrop-filter:var(--glass-regular); backdrop-filter:var(--glass-regular);
+    -webkit-mask-image:linear-gradient(90deg, transparent 0, #000 32px, #000 calc(100% - 32px), transparent 100%);
+            mask-image:linear-gradient(90deg, transparent 0, #000 32px, #000 calc(100% - 32px), transparent 100%);
   }
   #hud-ticker.on{ opacity:0.95; }
   #hud-ticker .tdate{ font-weight:700; letter-spacing:1px; margin-right:0.6em; }
@@ -320,8 +402,8 @@
      the blur region has no hard edge over the world */
   #paper-toggle::before{
     content:""; position:absolute; inset:-10px -20px; z-index:-1;
-    background:rgba(18,20,24,0.3);
-    -webkit-backdrop-filter:var(--glass); backdrop-filter:var(--glass);
+    background:var(--glass-dim-light); /* d1: passive readout = clear tier */
+    -webkit-backdrop-filter:var(--glass-clear); backdrop-filter:var(--glass-clear);
     -webkit-mask-image:radial-gradient(115% 140% at 50% 50%, #000 28%, transparent 90%);
             mask-image:radial-gradient(115% 140% at 50% 50%, #000 28%, transparent 90%);
   }
@@ -333,7 +415,7 @@
        outer frame softens (hairline instead of the 2px ink slab edge) */
     border-left:1px solid rgba(43,29,14,0.55);
     box-shadow:-10px 0 28px rgba(0,0,0,0.3);
-    transform:translateX(105%); transition:transform 0.4s var(--ease-out);
+    transform:translateX(105%); transition:transform var(--dur-spring) var(--spring-smooth); /* d1: slides ride the spring */
     z-index:8; pointer-events:auto; display:flex; flex-direction:column;
     font-family:'Fraunces', Georgia, serif; color:var(--ink);
   }
@@ -540,14 +622,16 @@
        the copy never sits in the faded band. backdrop-filter lives on the
        ELEMENT (not a pseudo) because the card's own opacity states would
        trap a pseudo's backdrop in the opacity group. */
-    background:rgba(18,20,24,0.44);
-    -webkit-backdrop-filter:var(--glass); backdrop-filter:var(--glass);
+    background:var(--glass-dim); /* d1: regular tier + the 35% dim (was 0.44) */
+    -webkit-backdrop-filter:var(--glass-regular); backdrop-filter:var(--glass-regular);
     -webkit-mask-image:linear-gradient(90deg, transparent 0, #000 30px, #000 calc(100% - 30px), transparent 100%);
             mask-image:linear-gradient(90deg, transparent 0, #000 30px, #000 calc(100% - 30px), transparent 100%);
     padding:11px 30px 10px;
     font-family:var(--hud-font); color:#ffffff;
     text-shadow:var(--halo-dark);
-    opacity:0; transition:opacity .5s var(--ease-out), transform .5s var(--ease-out); pointer-events:none;
+    /* d1 MOTION SPLIT: the rise (transform) rides the smooth spring; the
+       fade stays on the ease-out curve voice */
+    opacity:0; transition:opacity .5s var(--ease-out), transform var(--dur-spring) var(--spring-smooth); pointer-events:none;
   }
   #beat-card::before, #beat-card::after{
     content:""; position:absolute; left:0; right:0; height:1px;
@@ -577,7 +661,8 @@
        cancelling handle scrubs (its drag is pointermove-based). */
     pointer-events:none;
     padding:7px 18px 10px; user-select:none;
-    transition:opacity .3s var(--ease-out), transform .3s var(--ease-out);
+    /* d1: transform on the spring voice, opacity on the curve voice */
+    transition:opacity .3s var(--ease-out), transform var(--dur-spring) var(--spring-smooth);
     /* ics14e: the ribbon takes the HUD street voice — white ink/marks on a
        dark scrim (was ink marks on a parchment scrim) */
     font-family:var(--hud-font); color:#ffffff;
@@ -601,8 +686,8 @@
   }
   #hud-scrubber .scr-body::before{
     content:""; position:absolute; inset:0; z-index:-1;
-    background:rgba(18,20,24,0.42);
-    -webkit-backdrop-filter:var(--glass); backdrop-filter:var(--glass);
+    background:var(--glass-dim); /* d1: regular tier + 35% dim (was 0.42) */
+    -webkit-backdrop-filter:var(--glass-regular); backdrop-filter:var(--glass-regular);
     -webkit-mask-image:radial-gradient(102% 170% at 50% 58%, #000 52%, transparent 96%);
             mask-image:radial-gradient(102% 170% at 50% 58%, #000 52%, transparent 96%);
   }
@@ -617,13 +702,15 @@
   }
   #hud-scrubber .scr-tab::before{
     content:""; position:absolute; inset:0; z-index:-1;
-    background:rgba(18,20,24,0.46);
-    -webkit-backdrop-filter:var(--glass); backdrop-filter:var(--glass);
+    background:var(--glass-dim); /* d1: regular tier + 35% dim (was 0.46) */
+    -webkit-backdrop-filter:var(--glass-regular); backdrop-filter:var(--glass-regular);
     -webkit-mask-image:radial-gradient(120% 160% at 50% 60%, #000 30%, transparent 88%);
             mask-image:radial-gradient(120% 160% at 50% 60%, #000 30%, transparent 88%);
   }
   #hud-scrubber .scr-tab:hover{ color:#ffffff; }
-  #hud-scrubber .scr-years{ position:relative; height:12px; font-size:0.56rem; letter-spacing:1px; opacity:0.9; text-shadow:var(--halo-dark); }
+  /* d1: year labels 0.56rem (~9px) violated the 11pt floor — 0.6875rem (11px);
+     the row grows 12→14px to seat the taller line without touching the track */
+  #hud-scrubber .scr-years{ position:relative; height:14px; font-size:0.6875rem; letter-spacing:1px; opacity:0.9; text-shadow:var(--halo-dark); }
   #hud-scrubber .scr-year{ position:absolute; transform:translateX(-50%); white-space:nowrap; }
   #hud-scrubber .scr-track{
     position:relative; height:20px; margin-top:2px;
@@ -640,6 +727,7 @@
   #hud-scrubber .scr-handle{
     position:absolute; top:-4px; width:3px; height:24px; background:#ffffff;
     transform:translateX(-50%); cursor:ew-resize;
+    border-radius:var(--r-capsule); /* d1: controls take the capsule silhouette */
     box-shadow:0 0 0 1px rgba(40,44,48,0.8); /* ics14e: dark casing keyline for daytime sand */
   }
   #hud-scrubber .scr-handle::before{
@@ -648,17 +736,21 @@
     box-shadow:0 0 0 1px rgba(40,44,48,0.8);
   }
   #hud-scrubber .scr-chip{
-    position:absolute; bottom:100%; margin-bottom:6px; left:50%; transform:translateX(-50%);
+    position:absolute; bottom:100%; margin-bottom:6px; left:50%;
     background:rgba(20,16,10,0.82); color:#ffffff; font-size:0.62rem; letter-spacing:0.8px;
-    padding:4px 10px; white-space:nowrap; pointer-events:none; opacity:0; transition:opacity .12s var(--ease-out);
+    padding:4px 10px; white-space:nowrap; pointer-events:none;
     /* s64: border rectangle gone — the dark scrim's own color bleeds outward
        as a soft edge; light text needs no casing halo here.
-       css26: hard-edged floating panes take the one hairline voice. */
-    border:1px solid var(--hairline);
-    border-radius:2px; box-shadow:0 0 10px 5px rgba(20,16,10,0.82);
+       d1: concentric radius token + the glass-rim edge anatomy (rim-light +
+       hairline ring + ambient) replace the bare border/glow pair; the fill
+       stays FLAT (the chip floats over the scrubber's glass — no glass on
+       glass). Pop-in: transform on the snappy spring, fade on the curve. */
+    border-radius:var(--r-chip); box-shadow:var(--glass-rim);
+    opacity:0; transform:translateX(-50%) translateY(4px) scale(0.97);
+    transition:opacity .12s var(--ease-out), transform var(--dur-spring) var(--spring-snappy);
     text-shadow:none;
   }
-  #hud-scrubber .scr-chip.on{ opacity:0.97; }
+  #hud-scrubber .scr-chip.on{ opacity:0.97; transform:translateX(-50%) translateY(0) scale(1); }
   #hud-scrubber .scr-chip .sc-head{ display:block; font-weight:700; font-size:0.66rem; margin-top:1px; }
   #seed-reshuffle{ pointer-events:auto; cursor:pointer; margin-left:0.5em; opacity:0.75; }
   #seed-reshuffle:hover{ opacity:1; }
@@ -704,10 +796,19 @@
   }
   #hud-menu-sheet{
     display:none; position:fixed; bottom:64px; left:16px; width:248px; z-index:13; /* s69: 210->248px — the two-column controls reference needs the room */
-    /* s64: translucent, soft-faded top/bottom edges, hairline row rules kept */
-    background:linear-gradient(180deg, rgba(241,230,201,0.2) 0, rgba(241,230,201,0.9) 9px,
-      rgba(236,223,190,0.9) calc(100% - 9px), rgba(236,223,190,0.2) 100%);
-    box-shadow:0 2px 16px rgba(0,0,0,0.22); font-family:var(--hud-font);
+    /* s64: translucent, soft-faded top/bottom edges, hairline row rules kept.
+       d1 GLASS (regular tier): the sheet is a text-carrying floating pane —
+       backdrop blur behind a slightly-lowered parchment fill (0.9 -> 0.85;
+       the blur now does the "ink never fights world detail" work the extra
+       alpha bought in ics14e). Era identity holds: parchment + dark ink, the
+       35% DARK dim does not apply to a parchment-material surface — the
+       parchment fill IS its dimming layer. Panel radius + glass-rim edge
+       anatomy per the shape grammar (fixed radius — panels never capsule). */
+    background:linear-gradient(180deg, rgba(241,230,201,0.55) 0, rgba(241,230,201,0.85) 9px,
+      rgba(236,223,190,0.85) calc(100% - 9px), rgba(236,223,190,0.55) 100%);
+    -webkit-backdrop-filter:var(--glass-regular); backdrop-filter:var(--glass-regular);
+    border-radius:var(--r-panel);
+    box-shadow:var(--glass-rim), 0 2px 16px rgba(0,0,0,0.22); font-family:var(--hud-font);
     color:var(--ink); pointer-events:auto;
     /* ics14e: the sheet is a near-solid parchment surface — plain
        high-contrast ink, no halo needed (per the panel rule); body
@@ -784,8 +885,8 @@
        (not a pseudo) because the chrome-idle 0.6 opacity dim would trap a
        pseudo's backdrop in the opacity group; an element's OWN opacity
        composes fine with its own backdrop-filter. */
-    background:rgba(18,20,24,0.42);
-    -webkit-backdrop-filter:var(--glass); backdrop-filter:var(--glass);
+    background:var(--glass-dim); /* d1: regular tier + 35% dim (was 0.42) */
+    -webkit-backdrop-filter:var(--glass-regular); backdrop-filter:var(--glass-regular);
     -webkit-mask-image:linear-gradient(90deg, transparent 0, #000 12px, #000 calc(100% - 12px), transparent 100%);
             mask-image:linear-gradient(90deg, transparent 0, #000 12px, #000 calc(100% - 12px), transparent 100%);
     font-family:var(--hud-font); color:#ffffff;
@@ -806,8 +907,20 @@
   /* the transport is the single speed indicator everywhere now — the HUD
      clock's redundant speed line is hidden on every viewport (s66 decision) */
   #hud-clock .speed{ display:none; }
+  /* ---- d1 INTERACTIVE PRESS FEEL (HIG: glass "flexes" on touch, more on
+     touch than pointer): the chrome controls compress to 0.96 under a fine
+     pointer and EXPAND to 1.06 under a coarse one, settling on the snappy
+     spring. The scrubber tab keeps its centering translate in both states. */
+  #speed-pill .sp-seg{ transition:transform var(--dur-spring) var(--spring-snappy); }
+  #speed-pill .sp-seg:active{ transform:scale(0.96); }
+  #hud-scrubber .scr-tab{ transition:transform var(--dur-spring) var(--spring-snappy); }
+  #hud-scrubber .scr-tab:active{ transform:translateX(-50%) scale(0.96); }
+  #hud-menu-toggle:active{ transform:scale(0.96); }
   @media (pointer:coarse){
     #speed-pill .sp-seg{ min-width:44px; min-height:44px; } /* >=44px thumb targets */
+    #speed-pill .sp-seg:active{ transform:scale(1.06); }
+    #hud-scrubber .scr-tab:active{ transform:translateX(-50%) scale(1.06); }
+    #hud-menu-toggle:active{ transform:scale(1.06); }
   }
   /* follow-release chip (s54): shown inside the inspect panel while a
      person/documented figure is followed — the touch path for Esc. */
@@ -821,8 +934,9 @@
   #follow-release.on{ display:flex; }
   #follow-release:hover{ background:rgba(43,29,14,0.14); }
   /* idle chrome fade (s54): the touch controls dim to 60% after 4s of no
-     input, restore to full on any interaction (see pokeChrome()). */
-  #hud-menu-toggle{ transition:opacity .5s var(--ease-out); }
+     input, restore to full on any interaction (see pokeChrome()).
+     d1: + the press-feel transform on the snappy spring. */
+  #hud-menu-toggle{ transition:opacity .5s var(--ease-out), transform var(--dur-spring) var(--spring-snappy); }
   body.chrome-idle #speed-pill, body.chrome-idle #hud-menu-toggle{ opacity:0.6; }
 
   @media (max-width:520px), (pointer:coarse) and (max-height:440px){
@@ -848,7 +962,7 @@
       animation: hudTitleAutoHide 0.6s var(--ease-out) 4.4s forwards;
     }
     #hud-title h1{ font-size:0.8rem; letter-spacing:1px; }
-    #hud-title .sub{ font-size:0.44rem; letter-spacing:1px; margin-top:1px; }
+    #hud-title .sub{ font-size:0.6875rem; letter-spacing:0.5px; margin-top:1px; } /* d1: 11px type floor holds on mobile too; tracking tightened to fit 70vw */
     #hud-title.menu-forced{ display:block; animation:none; opacity:1; visibility:visible; pointer-events:auto; }
     #hud-seed.menu-forced{ display:block; top:8px; right:16px; left:auto; font-size:0.55rem; padding:0.25em 0.55em; }
     #hud-clock{ top:8px; left:16px; right:auto; min-width:0; font-size:0.66rem; text-align:left; padding:0.35em 0.85em;
@@ -921,25 +1035,33 @@
      preference the panels simply appear/slide as before. (The lifecycle
      legend's reveal lives with its own CSS in layers/buildings.js.) ---- */
   @media (prefers-reduced-motion: no-preference){
-    /* beat card: the existing rise-in gains a focus settle */
+    /* beat card: the existing rise-in gains a focus settle.
+       d1: transform on the smooth spring, opacity/blur on the curve voice. */
     #beat-card{
       filter:blur(6px);
-      transition:opacity .5s var(--ease-out), transform .5s var(--ease-out),
+      transition:opacity .5s var(--ease-out), transform var(--dur-spring) var(--spring-smooth),
         filter .24s var(--ease-out);
     }
     #beat-card.on{ filter:blur(0); }
-    /* paper pane: the slide-in sharpens as it lands */
+    /* paper pane: the slide-in sharpens as it lands (transform = spring) */
     #paper-pane{
       filter:blur(6px); opacity:0.65;
-      transition:transform 0.4s var(--ease-out), filter 0.3s var(--ease-out),
-        opacity 0.3s var(--ease-out);
+      transition:transform var(--dur-spring) var(--spring-smooth), filter .3s var(--ease-out),
+        opacity .3s var(--ease-out);
     }
     #paper-pane.open{ filter:none; opacity:1; }
-    /* ☰ menu sheet: display-toggled, so a keyframe entrance */
-    #hud-menu-sheet.open{ animation:chromeReveal .2s var(--ease-out) both; }
+    /* ☰ menu sheet: display-toggled, so a keyframe entrance — d1 SPLIT: the
+       slide (transform) rides the smooth spring, the fade/blur the curve */
+    #hud-menu-sheet.open{
+      animation:chromeSlide var(--dur-spring) var(--spring-smooth) both,
+                chromeReveal .2s var(--ease-out) both;
+    }
+  }
+  @keyframes chromeSlide{
+    from{ transform:translateY(6px); }
   }
   @keyframes chromeReveal{
-    from{ opacity:0; transform:translateY(6px); filter:blur(6px); }
+    from{ opacity:0; filter:blur(6px); }
   }
 </style>
 </head>
@@ -13498,43 +13620,55 @@ setTimeout(function(){
   };
   var st = document.createElement("style");
   st.textContent = [
-    /* css26 GLASS (2026-07-17): chip + panel are hard-edged floating chrome —
-       they take the frosted-glass treatment (backdrop blur+saturate over a
-       REDUCED fill alpha so the world reads through) and the one white-alpha
-       hairline instead of a hand-picked edge. var() fallbacks keep the
-       atelier target safe if the shell tokens are absent there. */
+    /* css26 GLASS; d1 (ICS-28) MATERIAL/MOTION PASS: chip + panel are
+       text-carrying floating chrome — REGULAR glass tier (blur+saturate+
+       luminosity) over the 35% dim fill. Shape grammar: the panel is a fixed
+       --r-panel pane with the glass-rim edge anatomy (rim-light + hairline
+       ring + ambient) replacing the bare border; the chip is a CONTROL and
+       takes the capsule. Press feel: 0.96 pointer / 1.06 coarse on the
+       snappy spring. Secondary copy rides the vibrancy ink ladder (0.62).
+       var() fallbacks keep the legend safe if the shell tokens ever move;
+       both built targets share shell.html, so the a11y token flips
+       (reduced-transparency / contrast) arrive from :root for free. */
     "#lc-legend-chip{ position:fixed; top:66px; right:16px; z-index:11; pointer-events:auto; cursor:pointer;",
     "  font-family:var(--hud-font); font-size:0.56rem; font-weight:700; letter-spacing:2px; color:#fff;",
-    "  background:rgba(14,17,21,0.45); padding:4px 10px; border-radius:3px;",
+    "  background:var(--glass-dim, rgba(18,20,24,0.35)); padding:4px 10px;",
+    "  border-radius:var(--r-capsule, 999px);",
     "  border:1px solid var(--hairline, rgba(255,255,255,0.09));",
-    "  -webkit-backdrop-filter:var(--glass, blur(14px) saturate(1.4));",
-    "  backdrop-filter:var(--glass, blur(14px) saturate(1.4));",
-    "  text-shadow:var(--halo-dark); user-select:none; -webkit-user-select:none; }",
+    "  -webkit-backdrop-filter:var(--glass-regular, blur(14px) saturate(1.4) brightness(0.94));",
+    "  backdrop-filter:var(--glass-regular, blur(14px) saturate(1.4) brightness(0.94));",
+    "  text-shadow:var(--halo-dark); user-select:none; -webkit-user-select:none;",
+    "  transition:transform var(--dur-spring, 650ms) var(--spring-snappy, cubic-bezier(0.2,0.7,0.1,1)); }",
+    "#lc-legend-chip:active{ transform:scale(0.96); }",
+    "@media (pointer:coarse){ #lc-legend-chip:active{ transform:scale(1.06); } }",
     "#lc-legend-chip:hover{ background:rgba(14,17,21,0.72); }",
     "#lc-legend-chip.on{ background:rgba(14,17,21,0.72); }",
     "#lc-legend{ position:fixed; top:94px; right:16px; z-index:11; pointer-events:auto; display:none;",
-    "  font-family:var(--hud-font); color:#fff; background:rgba(13,15,19,0.62); border-radius:4px;",
-    "  border:1px solid var(--hairline, rgba(255,255,255,0.09));",
-    "  -webkit-backdrop-filter:var(--glass, blur(14px) saturate(1.4));",
-    "  backdrop-filter:var(--glass, blur(14px) saturate(1.4));",
+    "  font-family:var(--hud-font); color:#fff; background:var(--glass-dim, rgba(18,20,24,0.35));",
+    "  border-radius:var(--r-panel, 16px);",
+    "  box-shadow:var(--glass-rim, inset 0 1px 0 rgba(255,255,255,0.12), 0 0 0 1px rgba(255,255,255,0.09), 0 8px 24px rgba(0,0,0,0.35));",
+    "  -webkit-backdrop-filter:var(--glass-regular, blur(14px) saturate(1.4) brightness(0.94));",
+    "  backdrop-filter:var(--glass-regular, blur(14px) saturate(1.4) brightness(0.94));",
     "  padding:8px 10px 9px; width:236px; box-sizing:border-box;",
     "  max-height:calc(100vh - 150px); overflow-y:auto; }",
     "#lc-legend.open{ display:block; }",
-    /* css26 BLUR-IN REVEAL: the panel is display-toggled, so a short keyframe
-       entrance (opacity + translate + blur 6->0) on the chrome easing token;
-       reduced-motion users get the plain display flip. */
+    /* d1 REVEAL SPLIT: the rise (transform) rides the smooth spring, the
+       opacity+blur settle stays on the curve voice; reduced-motion users
+       get the plain display flip (whole block gated). */
     "@media (prefers-reduced-motion: no-preference){",
-    "  #lc-legend.open{ animation:lclReveal .22s var(--ease-out, cubic-bezier(0.2,0.7,0.1,1)) both; }",
+    "  #lc-legend.open{ animation:lclSlide var(--dur-spring, 650ms) var(--spring-smooth, cubic-bezier(0.2,0.7,0.1,1)) both,",
+    "    lclReveal .22s var(--ease-out, cubic-bezier(0.2,0.7,0.1,1)) both; }",
     "}",
-    "@keyframes lclReveal{ from{ opacity:0; transform:translateY(6px); filter:blur(6px); } }",
+    "@keyframes lclSlide{ from{ transform:translateY(6px); } }",
+    "@keyframes lclReveal{ from{ opacity:0; filter:blur(6px); } }",
     "#lc-legend .lcl-title{ font-size:0.54rem; font-weight:700; letter-spacing:2px; opacity:0.85; margin-bottom:6px; }",
     "#lc-legend .lcl-title .lcl-x{ float:right; cursor:pointer; opacity:0.7; font-size:0.7rem; line-height:0.7; padding:0 2px; }",
     "#lc-legend .lcl-title .lcl-x:hover{ opacity:1; }",
     "#lc-legend .lcl-row{ display:flex; align-items:center; margin:3px 0; }",
     "#lc-legend .lcl-row canvas{ width:40px; height:26px; flex:0 0 40px; margin-right:8px;",
-    "  border-radius:2px; background:rgba(255,255,255,0.06); }",
+    "  border-radius:6px; background:rgba(255,255,255,0.06); }", /* d1 concentric: panel 16px − 10px pad */
     "#lc-legend .lcl-lab{ display:block; font-size:0.54rem; font-weight:700; letter-spacing:1.2px; }",
-    "#lc-legend .lcl-note{ display:block; font-size:0.5rem; font-weight:500; opacity:0.72; line-height:1.3; }",
+    "#lc-legend .lcl-note{ display:block; font-size:0.5rem; font-weight:500; color:var(--ink-glass-2, rgba(255,255,255,0.62)); line-height:1.3; }", /* d1: secondary rung of the vibrancy ladder (was opacity .72) */
     "#lc-legend .lcl-dot{ display:inline-block; width:7px; height:7px; border-radius:1px; vertical-align:-1px; margin:0 2px 0 4px; }"
   ].join("\n");
   document.head.appendChild(st);
@@ -20467,30 +20601,45 @@ function updateHud(alt){
   var wbStyle = document.createElement("style");
   wbStyle.textContent = [
     /* ICS-27 LIQUID-GLASS CHROME (dev-tool only — the release ships zero of
-       these bytes). ONE glass idiom: blur(14px) saturate(1.4) scrim + white-
-       alpha hairlines (--hairline) + ONE easing token (--ease-out) on every
-       transition + a consistent radius scale (--wb-r-lg/--wb-r/--wb-r-sm).
-       Palette is OKLCH hue-derived (--wb-hue) so the whole panel re-tints from
-       one number. Sections are NATIVE <details> accordions animated via
-       ::details-content (block-size 0 -> auto under interpolate-size,
-       content-visibility allow-discrete) with a 200ms blur-in on open; ALL
-       motion sits inside prefers-reduced-motion: no-preference. */
+       these bytes). ONE glass idiom: the REGULAR material tier (blur+saturate+
+       luminosity, d1) scrim + white-alpha hairlines (--hairline) + the curve
+       token (--ease-out) on every FADE + the snappy/smooth springs on every
+       TRANSFORM/size move + a CONCENTRIC radius scale (inner = panel radius −
+       padding). Surface palette stays OKLCH hue-derived (--wb-hue re-tints the
+       glass); the INKS now ride the vibrancy ladder (white-alpha 1.0/0.62/0.40
+       for label/secondary/disabled, d1) instead of hue-tinted greys. Sections
+       are NATIVE <details> accordions animated via ::details-content
+       (block-size 0 -> auto under interpolate-size, content-visibility
+       allow-discrete) with a 200ms blur-in on open; ALL motion sits inside
+       prefers-reduced-motion: no-preference. The pinned head is a NEAR-SOLID
+       hard scroll edge, not glass — never stack glass on glass (d1). */
     "#wb-panel{",
     "  --ease-out:cubic-bezier(0.2,0.7,0.1,1); --hairline:rgba(255,255,255,0.09);",
+    /* Apple spring presets sampled as linear() (duration 0.5s, bounce 0/0.15);
+       the workbench runs them at 300ms — a dev tool is pointer-driven, so
+       motion stays subdued (same curve shape, compressed beat). */
+    "  --wb-spring-smooth:linear(0, 0.0934, 0.272, 0.4527, 0.6053, 0.7233, 0.8101, 0.8717, 0.9144, 0.9435, 0.963, 0.9759, 0.9844, 0.99, 0.9936, 0.9959, 1);",
+    "  --wb-spring-snappy:linear(0, 0.0661, 0.2099, 0.3755, 0.5322, 0.666, 0.7724, 0.8525, 0.9101, 0.9495, 0.9751, 0.9909, 0.9999, 1.0043, 1.0061, 1.0062, 1.0055, 1.0046, 1.0035, 1.0026, 1);",
+    "  --wb-dur-spring:300ms;",
     "  --wb-hue:230;",
     "  --wb-bg:oklch(18% 0.015 var(--wb-hue) / 0.52);",
-    "  --wb-bg-head:oklch(21% 0.018 var(--wb-hue) / 0.9);",
+    "  --wb-bg-head:oklch(21% 0.018 var(--wb-hue) / 0.96);",
     "  --wb-well:oklch(13% 0.012 var(--wb-hue) / 0.55);",
     "  --wb-raise:rgba(255,255,255,0.05);",
-    "  --wb-ink:oklch(88% 0.01 var(--wb-hue)); --wb-dim:oklch(66% 0.018 var(--wb-hue));",
-    "  --wb-faint:oklch(52% 0.02 var(--wb-hue)); --wb-head:oklch(77% 0.05 var(--wb-hue));",
+    /* d1 vibrancy ink ladder: label / secondary / disabled (quaternary omitted
+       — too low-contrast on thin glass per HIG). --wb-head/--wb-parch stay as
+       the two ACCENT voices, not ladder rungs. */
+    "  --wb-ink:rgba(255,255,255,1); --wb-dim:rgba(255,255,255,0.62);",
+    "  --wb-faint:rgba(255,255,255,0.40); --wb-head:oklch(77% 0.05 var(--wb-hue));",
     "  --wb-parch:oklch(92% 0.025 95);",
     "  --wb-gold:#ffd75e; --wb-green:#7ee2a0; --wb-red:#ff7a6e; --wb-blue:#5aa0c8;",
-    "  --wb-r-lg:12px; --wb-r:7px; --wb-r-sm:5px;",
+    /* d1 concentric radii: inner = container radius − the 9px panel padding;
+       the small rung serves rows nested a step deeper. Controls take capsules. */
+    "  --wb-r-lg:12px; --wb-r:calc(var(--wb-r-lg) - 9px); --wb-r-sm:2px; --wb-r-capsule:999px;",
     "  position:fixed; left:8px; top:8px; bottom:8px; width:292px; z-index:99999;",
     "  overflow-y:auto; overscroll-behavior:contain; interpolate-size:allow-keywords;",
     "  background:var(--wb-bg);",
-    "  -webkit-backdrop-filter:blur(14px) saturate(1.4); backdrop-filter:blur(14px) saturate(1.4);",
+    "  -webkit-backdrop-filter:blur(14px) saturate(1.4) brightness(0.94); backdrop-filter:blur(14px) saturate(1.4) brightness(0.94);",
     "  color:var(--wb-ink); border:1px solid var(--hairline); border-radius:var(--wb-r-lg);",
     "  padding:0 9px 10px; font:11px/1.5 Consolas,Menlo,monospace;",
     "  -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;",
@@ -20498,11 +20647,12 @@ function updateHud(alt){
     "#wb-panel::-webkit-scrollbar{ width:9px; }",
     "#wb-panel::-webkit-scrollbar-track{ background:transparent; }",
     "#wb-panel::-webkit-scrollbar-thumb{ background:rgba(255,255,255,0.14); border-radius:5px; border:3px solid transparent; background-clip:content-box; }",
-    /* pinned head: title + the TYPE-TO-FILTER box (its own frosted layer so
-       rows scrolling beneath it stay legible through real glass) */
+    /* pinned head: title + the TYPE-TO-FILTER box. d1: the head is a HARD
+       SCROLL EDGE (near-solid fill + hairline rule), not a second glass layer
+       — its old backdrop-filter stacked glass on the panel's glass, which the
+       material system bans; text-dense pinned headers want opacity anyway. */
     "#wb-panel .wb-head{ position:sticky; top:0; z-index:3; margin:0 -9px 6px; padding:10px 9px 9px;",
-    "  background:var(--wb-bg-head);",
-    "  -webkit-backdrop-filter:blur(14px) saturate(1.4); backdrop-filter:blur(14px) saturate(1.4);",
+    "  background:linear-gradient(var(--wb-bg-head), oklch(21% 0.018 var(--wb-hue) / 0.9));",
     "  border-bottom:1px solid var(--hairline);",
     "  border-radius:calc(var(--wb-r-lg) - 1px) calc(var(--wb-r-lg) - 1px) 0 0; }",
     "#wb-panel .wb-title{ font-weight:bold; letter-spacing:1.5px; color:var(--wb-parch); font-size:12px; }",
@@ -20528,7 +20678,7 @@ function updateHud(alt){
     "#wb-panel summary.wb-sechdr:active{ background:rgba(255,255,255,0.08); }",
     "#wb-panel summary.wb-sechdr:focus-visible{ outline:1px solid rgba(255,215,94,0.6); outline-offset:-1px; }",
     "#wb-panel .wb-caret{ color:var(--wb-faint); font-size:8px; width:8px; text-align:center; flex:none;",
-    "  transition:transform 0.2s var(--ease-out); }",
+    "  transition:transform var(--wb-dur-spring) var(--wb-spring-snappy); }", /* d1: transforms ride springs */
     "#wb-panel details:not([open]) > summary .wb-caret{ transform:rotate(-90deg); }",
     "#wb-panel .wb-sectitle{ flex:1; min-width:0; color:var(--wb-head); font-size:10px; letter-spacing:1.1px; font-weight:bold;",
     "  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; transition:color 0.15s var(--ease-out); }",
@@ -20541,12 +20691,14 @@ function updateHud(alt){
     "#wb-panel details.wb-sub{ border-top:1px solid var(--hairline); }",
     "#wb-panel .wb-secbody > details.wb-sub:first-child{ border-top:none; }",
     "#wb-panel details.wb-sub > .wb-secbody{ border-left:1px solid var(--hairline); margin-left:3px; padding-left:8px; }",
-    /* accordion motion: height via ::details-content, plus a 200ms blur-in on
-       the revealed body. Filter typing suppresses all motion (.wb-filtering)
-       so live filtering stays instant and jank-free. */
+    /* accordion motion: height via ::details-content — d1: the size move
+       rides the smooth spring (the doc's one prescribed dev-panel spring) —
+       plus a 200ms blur-in on the revealed body (curve voice). Filter typing
+       suppresses all motion (.wb-filtering) so live filtering stays instant
+       and jank-free. */
     "@media (prefers-reduced-motion: no-preference){",
     "  #wb-panel details::details-content{ block-size:0; overflow-y:clip;",
-    "    transition:block-size 0.2s var(--ease-out), content-visibility 0.2s allow-discrete; }",
+    "    transition:block-size var(--wb-dur-spring) var(--wb-spring-smooth), content-visibility var(--wb-dur-spring) allow-discrete; }",
     "  #wb-panel details[open]::details-content{ block-size:auto; }",
     "  #wb-panel details[open] > .wb-secbody{ animation:wb-blur-in 0.2s var(--ease-out); }",
     "  #wb-panel .wb-secdesc.show, #wb-panel .wb-ov-legend.show, #wb-panel .wb-ov-grouphdr.show{ animation:wb-blur-in 0.2s var(--ease-out); }",
@@ -20557,9 +20709,9 @@ function updateHud(alt){
     /* the ? info chips + tucked-away descriptions */
     "#wb-panel .wb-info{ font:9px/12px Consolas,monospace; color:var(--wb-faint); border:1px solid var(--hairline); border-radius:50%;",
     "  width:13px; height:13px; text-align:center; cursor:pointer; flex:none;",
-    "  transition:color 0.15s var(--ease-out), border-color 0.15s var(--ease-out), transform 0.15s var(--ease-out); }",
+    "  transition:color 0.15s var(--ease-out), border-color 0.15s var(--ease-out), transform var(--wb-dur-spring) var(--wb-spring-snappy); }",
     "#wb-panel .wb-info:hover{ color:var(--wb-ink); border-color:rgba(255,255,255,0.28); }",
-    "#wb-panel .wb-info:active{ transform:scale(0.92); }",
+    "#wb-panel .wb-info:active{ transform:scale(0.96); }", /* d1: one press scale everywhere */
     "#wb-panel .wb-info.on{ color:var(--wb-gold); border-color:var(--wb-gold); }",
     "#wb-panel .wb-secdesc{ display:none; font-size:9px; line-height:1.45; color:var(--wb-dim); margin:1px 0 6px;",
     "  padding:5px 7px; background:rgba(255,255,255,0.03); border-left:2px solid var(--hairline); border-radius:0 var(--wb-r-sm) var(--wb-r-sm) 0; text-wrap:pretty; }",
@@ -20591,16 +20743,16 @@ function updateHud(alt){
     "  font:10px Consolas,monospace; padding:2px 4px; transition:border-color 0.15s var(--ease-out); }",
     "#wb-panel .wb-select:hover{ border-color:rgba(255,255,255,0.22); }",
     "#wb-panel .wb-solo{ background:transparent; color:var(--wb-faint); border:1px solid var(--hairline);",
-    "  border-radius:var(--wb-r-sm); font-size:10px; line-height:1; padding:2px 5px; cursor:pointer; flex:none;",
-    "  transition:color 0.15s var(--ease-out), border-color 0.15s var(--ease-out), transform 0.15s var(--ease-out); }",
+    "  border-radius:var(--wb-r-capsule); font-size:10px; line-height:1; padding:2px 6px; cursor:pointer; flex:none;", /* d1: controls take capsules */
+    "  transition:color 0.15s var(--ease-out), border-color 0.15s var(--ease-out), transform var(--wb-dur-spring) var(--wb-spring-snappy); }",
     "#wb-panel .wb-solo:hover{ color:var(--wb-ink); border-color:rgba(255,255,255,0.28); }",
-    "#wb-panel .wb-solo:active{ transform:scale(0.94); }",
+    "#wb-panel .wb-solo:active{ transform:scale(0.96); }",
     "#wb-panel .wb-solo.on{ color:var(--wb-gold); border-color:var(--wb-gold); }",
-    "#wb-panel .wb-btn{ background:var(--wb-raise); color:var(--wb-ink); border:1px solid var(--hairline); border-radius:var(--wb-r-sm);",
-    "  font:11px Consolas,monospace; padding:4px 9px; cursor:pointer; margin:3px 4px 3px 0;",
-    "  transition:background 0.15s var(--ease-out), color 0.15s var(--ease-out), border-color 0.15s var(--ease-out), transform 0.15s var(--ease-out); }",
+    "#wb-panel .wb-btn{ background:var(--wb-raise); color:var(--wb-ink); border:1px solid var(--hairline); border-radius:var(--wb-r-capsule);", /* d1: controls take capsules */
+    "  font:11px Consolas,monospace; padding:4px 10px; cursor:pointer; margin:3px 4px 3px 0;",
+    "  transition:background 0.15s var(--ease-out), color 0.15s var(--ease-out), border-color 0.15s var(--ease-out), transform var(--wb-dur-spring) var(--wb-spring-snappy); }",
     "#wb-panel .wb-btn:hover{ background:rgba(255,255,255,0.09); }",
-    "#wb-panel .wb-btn:active{ transform:scale(0.97); }",
+    "#wb-panel .wb-btn:active{ transform:scale(0.96); }",
     "#wb-panel .wb-btn.on{ color:var(--wb-green); border-color:var(--wb-green); }",
     "#wb-panel .wb-probe-out{ background:var(--wb-well); border:1px solid var(--hairline); border-radius:var(--wb-r);",
     "  padding:6px 7px; margin-top:4px; min-height:26px; max-height:230px; overflow-y:auto;",
@@ -20623,6 +20775,26 @@ function updateHud(alt){
     "#wb-panel .wb-fhide{ display:none !important; }",
     "#wb-panel .wb-row.wb-fhide + .wb-ov-legend{ display:none !important; }",
     "#wb-panel .wb-row.wb-fhide + .wb-ov-legend + .wb-ov-status{ display:none !important; }",
+    /* d1 press feel: coarse pointers get MORE emphasis (expand, not compress) */
+    "@media (pointer:coarse){",
+    "  #wb-panel .wb-info:active, #wb-panel .wb-solo:active, #wb-panel .wb-btn:active{ transform:scale(1.06); }",
+    "}",
+    /* d1 accessibility fallbacks (Apple gives these free on-platform; the web
+       must recreate them). The panel's tokens are locally scoped, so it
+       carries its own overrides: reduced transparency = frostier, near-opaque
+       glass; increased contrast = near-solid fill + strong border/hairlines.
+       Reduced-motion was already handled (all motion is inside the
+       no-preference gate above). */
+    "@media (prefers-reduced-transparency: reduce){",
+    "  #wb-panel{ --wb-bg:oklch(18% 0.015 var(--wb-hue) / 0.94);",
+    "    -webkit-backdrop-filter:blur(22px) saturate(1.2) brightness(0.85);",
+    "    backdrop-filter:blur(22px) saturate(1.2) brightness(0.85); }",
+    "}",
+    "@media (prefers-contrast: more){",
+    "  #wb-panel{ --hairline:rgba(255,255,255,0.5); --wb-bg:oklch(14% 0.01 var(--wb-hue) / 0.97);",
+    "    --wb-dim:rgba(255,255,255,0.78); --wb-faint:rgba(255,255,255,0.6);",
+    "    border-color:rgba(255,255,255,0.5); }",
+    "}",
     "body.wb-probe #c, body.wb-tl #c{ cursor:crosshair; }",
     "body.dev-labels-off .wlbl, body.dev-labels-off .street-label, body.dev-labels-off .biz-glyph{ display:none !important; }"
   ].join("\n");
