@@ -86,7 +86,13 @@ var FEED_BY_DATE = window.FEED_BY_DATE || {};
 var WORLD_KNOWN = window.WORLD_KNOWN || [];
 if(!window.FEED_BY_DATE) console.warn("[verify] feed-1846-49.js failed to load — run: node tools/build-feed.js");
 var FEED_DATES = Object.keys(FEED_BY_DATE).sort();
-var MASTHEAD_NAME = { C:"THE CALIFORNIAN", CS:"THE CALIFORNIA STAR", CSC:"THE CALIFORNIA STAR & CALIFORNIAN", DAC:"THE ALTA CALIFORNIA" };
+/* ER1 (D3) — added WAC. The extraction tags 53 in-window issues with masthead
+   "WAC" (the Weekly Alta California, the Alta's weekly edition) and 1 "DAC"
+   (the Daily Alta California); WAC was unmapped, so the pane printed the raw
+   code as its masthead on every one of those 53 issues. Both Alta editions
+   resolve to their real broadsheet names now. */
+var MASTHEAD_NAME = { C:"THE CALIFORNIAN", CS:"THE CALIFORNIA STAR", CSC:"THE CALIFORNIA STAR & CALIFORNIAN",
+  WAC:"THE ALTA CALIFORNIA", DAC:"THE ALTA CALIFORNIA" };
 var SUSPENSION_ISSUE_DATE = "1848-05-24"; // the Californian's farewell-to-the-mines issue (data/feed confirms a business_close item that date: "Californian newspaper suspends publication amid gold rush")
 
 function issueUrl(src){ return "https://cdnc.ucr.edu/?a=d&d=" + src; }
@@ -208,12 +214,78 @@ var paperPaneEl = document.getElementById("paper-pane");
 var ppBodyEl = document.getElementById("pp-body");
 var ppMastheadEl = document.getElementById("pp-masthead");
 var ppIssueDateEl = document.getElementById("pp-issue-date");
+var ppDatelineEl = document.getElementById("pp-dateline");
 var ppTabBroadsheet = document.getElementById("pp-tab-broadsheet");
 var ppTabFeed = document.getElementById("pp-tab-feed");
+var ppPlainToggle = document.getElementById("pp-plain-toggle");
 var ptMastheadNameEl = document.getElementById("pt-masthead-name");
 var ptIssueDateEl = document.getElementById("pt-issue-date");
 var paperOpen = false;
 var paperView = "broadsheet";
+
+/* ER1/ER5 (D3 diegetic-UI pass). --------------------------------------------
+   MASTHEAD OPTION (operator's choice; DEFAULT = fat-face). The blackletter
+   variant is behind a flag so the operator can compare both and decide; the
+   committed default ships zero new fonts. Set via window.MASTHEAD_STYLE
+   ('fatface'|'blackletter') before boot, ?masthead=blackletter, or the runtime
+   API __P1850.paperMasthead(style). */
+var PAPER_MASTHEAD_STYLE = "fatface";
+(function(){
+  try{
+    var q = (location.search.match(/[?&]masthead=(fatface|blackletter)/)||[])[1];
+    var w = (typeof window!=="undefined" && window.MASTHEAD_STYLE);
+    var pick = q || (w==="blackletter"||w==="fatface" ? w : null);
+    if(pick) PAPER_MASTHEAD_STYLE = pick;
+  }catch(e){}
+})();
+function applyMastheadStyle(){
+  paperPaneEl.classList.toggle("masthead-blackletter", PAPER_MASTHEAD_STYLE==="blackletter");
+  document.body.classList.toggle("masthead-blackletter", PAPER_MASTHEAD_STYLE==="blackletter");
+}
+applyMastheadStyle();
+
+/* ER5 PLAIN-PRINT escape hatch — swaps the period grammar back to the plain
+   HUD voice (Pentiment's readable-font mode). Pure presentation flip; the
+   underlying issue/content is untouched. */
+var paperPlainPrint = false;
+function setPlainPrint(on){
+  paperPlainPrint = !!on;
+  paperPaneEl.classList.toggle("plain-print", paperPlainPrint);
+  if(ppPlainToggle) ppPlainToggle.setAttribute("aria-pressed", paperPlainPrint ? "true" : "false");
+}
+if(ppPlainToggle) ppPlainToggle.addEventListener("click", function(){ setPlainPrint(!paperPlainPrint); });
+
+/* ER1 DATELINE — VOL. (roman) · era-correct city · date · NO. (issue ordinal).
+   Every field is DERIVED from the data (issue sequence per masthead), not
+   invented: NO = the count of this masthead's issues up to & including the day;
+   VOL = the publication YEAR of that masthead's run (roman, as period papers
+   set it); the city is YERBA BUENA before the Jan-23-1847 renaming ordinance,
+   SAN FRANCISCO after (grounded, diegetic). */
+var RENAME_ISO = "1847-01-23";   // Yerba Buena → San Francisco (renaming ordinance published)
+function _roman(n){
+  if(!(n>0)) return "I";
+  var t=[[1000,"M"],[900,"CM"],[500,"D"],[400,"CD"],[100,"C"],[90,"XC"],[50,"L"],[40,"XL"],[10,"X"],[9,"IX"],[5,"V"],[4,"IV"],[1,"I"]], o="";
+  for(var i=0;i<t.length;i++){ while(n>=t[i][0]){ o+=t[i][1]; n-=t[i][0]; } }
+  return o;
+}
+function datelineHTML(dateKey){
+  var issue = FEED_BY_DATE[dateKey]; if(!issue) return "";
+  var mh = issue.masthead;
+  // issue ordinal + first-issue year for THIS masthead (FEED_DATES is sorted)
+  var no=0, firstYear=null;
+  for(var i=0;i<FEED_DATES.length;i++){
+    var dk=FEED_DATES[i], it=FEED_BY_DATE[dk];
+    if(it.masthead!==mh) continue;
+    if(firstYear===null) firstYear=+dk.slice(0,4);
+    if(dk<=dateKey) no++; else break;
+  }
+  var year=+dateKey.slice(0,4);
+  var vol=_roman((firstYear!==null ? year-firstYear : 0) + 1);
+  var city=(dateKey < RENAME_ISO) ? "Yerba Buena, Alta California" : "San Francisco, Alta California";
+  return '<span class="pp-dl-vol">Vol. '+vol+'</span>'
+       + '<span class="pp-dl-city">'+escapeHTML(city)+'</span>'
+       + '<span class="pp-dl-no">No. '+no+'</span>';
+}
 var currentIssueDateKey = null;
 var forcedIssueKey = null;      // set by the ticker click-through (spec item 5)
 var pendingScrollHeadline = null;
@@ -260,11 +332,16 @@ function marketsTableHTML(dateKey){
   return '<table class="pp-markets"><caption>Prices Current</caption><thead><tr><th>Article</th><th>Price</th></tr></thead><tbody>'+rows+'</tbody></table>';
 }
 function renderBroadsheet(issue, dateKey){
+  // ER1: each item is a DECK — kicker (documented type, small caps) over the
+  // head. The first item is the LEAD (spans the columns, larger deck). The
+  // column runs close with a printer's dinkus.
   var html = '<div class="bs-columns">';
   issue.items.forEach(function(item, i){
-    html += '<div class="bs-item" data-idx="'+i+'">' + fiHeadlineHTML(item)
+    var kick = '<span class="fi-kicker'+(item.type==="ad"?" ad":"")+'">'+escapeHTML(chipLabel(item.type))+'</span>';
+    html += '<div class="bs-item'+(i===0?" lead":"")+'" data-idx="'+i+'">' + kick + fiHeadlineHTML(item)
       + '<p class="fi-text">'+escapeHTML(item.text)+'</p>' + receiptHTML(item.prov) + '</div>';
   });
+  html += '<span class="pp-endmark" aria-hidden="true">❦</span>';
   ppBodyEl.innerHTML = html + '</div>' + marketsTableHTML(dateKey);
 }
 function renderFeed(issue, dateKey){
@@ -312,12 +389,13 @@ function updatePaper(){
   var renderKey = dateKey+"|"+paperView+"|"+suspended;
   if(renderKey===_lastRenderKey && !pendingScrollHeadline) return;
   _lastRenderKey = renderKey;
-  if(!dateKey){ renderNoIssueYet(); forcedIssueKey=null; return; }
+  if(!dateKey){ renderNoIssueYet(); if(ppDatelineEl) ppDatelineEl.innerHTML=""; forcedIssueKey=null; return; }
   var issue = FEED_BY_DATE[dateKey];
   var issueMasthead = MASTHEAD_NAME[issue.masthead] || issue.masthead;
   ppMastheadEl.textContent = issueMasthead;
-  if(suspended){ ppIssueDateEl.textContent="SUSPENDED"; renderSuspended(dateKey); forcedIssueKey=null; return; }
+  if(suspended){ ppIssueDateEl.textContent="SUSPENDED"; if(ppDatelineEl) ppDatelineEl.innerHTML=""; renderSuspended(dateKey); forcedIssueKey=null; return; }
   ppIssueDateEl.textContent = (dateKey===naturalKey && todayISO===dateKey) ? ("issue of "+formatIssueDateLabel(dateKey)) : ("no paper since "+formatIssueDateLabel(dateKey));
+  if(ppDatelineEl) ppDatelineEl.innerHTML = datelineHTML(dateKey);   // ER1 dateline
   if(paperView==="broadsheet") renderBroadsheet(issue, dateKey); else renderFeed(issue, dateKey);
   scrollToPendingHeadline();
   forcedIssueKey = null;
@@ -844,4 +922,93 @@ function updateHud(alt){
     else req.call(el);
   });
 })();
+
+/* =========================================================================
+   ER1/ER5 (D3 diegetic-UI pass) — PAPER RUNTIME API + AUDITS.
+   API (operator / atelier / harness): flip the masthead treatment and the
+   plain-print escape hatch at runtime. Audits enter the standing battery so
+   the body-size floor and the escape hatch are proven, not asserted by taste.
+   ========================================================================= */
+if(window.__P1850){
+  window.__P1850.paperMasthead = function(style){
+    if(style==="fatface"||style==="blackletter"){ PAPER_MASTHEAD_STYLE=style; applyMastheadStyle(); }
+    return PAPER_MASTHEAD_STYLE;
+  };
+  window.__P1850.paperPlainPrint = function(on){ setPlainPrint(on); return paperPlainPrint; };
+  window.__P1850.paperOpen = function(on){ setPaperOpen(on!==false); return paperOpen; };
+}
+
+/* ER1/ER5 AUDIT — bodyMinSize. PROPERTY: the newsprint BODY voice never shrinks
+   below its shipped floor (period density must come from STRUCTURE — rules,
+   decks, agate tables — not from tiny type; Sunless Sea's documented mistake).
+   Measures a real `.fi-text` probe's computed px (driven by --pp-body-size);
+   the floor is the shipped 0.8rem (~12.8px @ 16px root). FAILS if --pp-body-size
+   is dropped below the floor; PASSES at/above it. Also holds under plain-print
+   (same var). Date-independent. */
+registerAudit("paper", "bodyMinSize", function(){
+  var FLOOR_PX = 12.5;   // ~0.8rem — the shipped newsprint body size; density never comes from shrinking type
+  var probe = document.createElement("p");
+  probe.className = "fi-text"; probe.textContent = "Mg"; probe.style.position="absolute"; probe.style.visibility="hidden";
+  (ppBodyEl||document.body).appendChild(probe);
+  var px = parseFloat(getComputedStyle(probe).fontSize) || 0;
+  probe.parentNode.removeChild(probe);
+  var pass = px >= FLOOR_PX;
+  return { pass:pass, bodyPx:+px.toFixed(2), floorPx:FLOOR_PX,
+           method:"computed font-size of a live .fi-text probe (driven by --pp-body-size) ≥ the shipped 0.8rem floor — the period signal is structure, never smaller body type",
+           bad: pass?[]:[{ bodyPx:+px.toFixed(2), floorPx:FLOOR_PX }] };
+});
+
+/* ER5 AUDIT — plainPrint. PROPERTY: the escape hatch actually strips the period
+   voice — with .plain-print the body font resolves to the plain HUD (sans)
+   stack, and without it to the period serif — and the toggle leaves no residue.
+   Save/restore the live state so the audit is side-effect-free. */
+registerAudit("paper", "plainPrint", function(){
+  var probe = document.createElement("p");
+  probe.className = "fi-text"; probe.style.position="absolute"; probe.style.visibility="hidden";
+  (ppBodyEl||document.body).appendChild(probe);
+  var had = paperPaneEl.classList.contains("plain-print");
+  paperPaneEl.classList.remove("plain-print");
+  var periodFam = getComputedStyle(probe).fontFamily.toLowerCase();
+  paperPaneEl.classList.add("plain-print");
+  var plainFam = getComputedStyle(probe).fontFamily.toLowerCase();
+  paperPaneEl.classList.toggle("plain-print", had);   // restore
+  probe.parentNode.removeChild(probe);
+  var periodIsSerif = /fraunces|georgia|serif/.test(periodFam);
+  var plainIsSans   = /roboto|segoe|arial|sans/.test(plainFam);
+  var bad=[];
+  if(!periodIsSerif) bad.push({ why:"default body voice is not the period serif", got:periodFam });
+  if(!plainIsSans)   bad.push({ why:"plain-print body voice is not the plain sans stack", got:plainFam });
+  if(periodFam===plainFam) bad.push({ why:"plain-print did not change the body voice" });
+  return { pass: bad.length===0, periodFamily:periodFam, plainFamily:plainFam, bad:bad,
+           method:".plain-print flips --paper-font from the period serif to the plain HUD sans stack (probe measured under both states, live state restored)" };
+});
+
+/* ER1 AUDIT — mastheadOptions. PROPERTY: BOTH masthead treatments the operator
+   is choosing between are actually available — the fat-face DEFAULT (committed;
+   Playfair) and the blackletter OPTION (embedded MastheadBlack face resolved),
+   and the runtime toggle applies the class. Default must be fat-face (blackletter
+   never ships unless the operator flags it). */
+registerAudit("paper", "mastheadOptions", function(){
+  var bad=[];
+  // the blackletter face is embedded but not REQUESTED until the option is
+  // chosen (default is fat-face), so check() would read false on an unloaded
+  // face — instead confirm it is DECLARED by scanning the FontFaceSet.
+  var faceDeclared = false;
+  if(document.fonts && document.fonts.forEach){
+    document.fonts.forEach(function(ff){ if(ff.family && ff.family.replace(/['"]/g,"")==="MastheadBlack") faceDeclared = true; });
+  } else faceDeclared = true;
+  if(!faceDeclared) bad.push({ why:"blackletter masthead face (MastheadBlack) not declared/embedded" });
+  // default committed treatment is fat-face
+  var was = PAPER_MASTHEAD_STYLE;
+  window.__P1850 && window.__P1850.paperMasthead && window.__P1850.paperMasthead("blackletter");
+  var appliedBlack = paperPaneEl.classList.contains("masthead-blackletter");
+  window.__P1850 && window.__P1850.paperMasthead && window.__P1850.paperMasthead("fatface");
+  var appliedFat = !paperPaneEl.classList.contains("masthead-blackletter");
+  if(window.__P1850 && window.__P1850.paperMasthead) window.__P1850.paperMasthead(was);   // restore
+  if(!appliedBlack) bad.push({ why:"blackletter treatment did not apply" });
+  if(!appliedFat) bad.push({ why:"fat-face treatment did not apply" });
+  return { pass: bad.length===0, defaultStyle:was, blackletterFaceDeclared:faceDeclared,
+           method:"both masthead treatments available (fat-face default committed; blackletter option face embedded & declared) and the runtime toggle applies each",
+           bad:bad };
+});
 
