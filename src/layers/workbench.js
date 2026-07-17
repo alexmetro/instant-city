@@ -77,6 +77,9 @@
     "#wb-panel .wb-ov-grouphdr{ display:none; font-size:9px; line-height:1.35; color:#7c828a; margin:1px 0 4px 22px; font-style:italic; }",
     "#wb-panel .wb-ov-grouphdr.show{ display:block; }",
     "#wb-panel .wb-ov-groupbody{ border-left:2px solid #2f343b; margin-left:6px; padding-left:6px; }",
+    "#wb-panel .wb-ov-group.collapsed .wb-ov-groupbody{ display:none; }",
+    "#wb-panel .wb-ov-group.collapsed .wb-ov-grouphdr{ display:none; }",
+    "#wb-panel .wb-ov-group.collapsed .wb-caret{ transform:rotate(-90deg); }",
     "#wb-panel .wb-ov-child .wb-lname{ color:#b8bdc4; }",
     "#wb-panel .wb-ov-flat{ margin-top:4px; }",
     "#wb-panel .wb-ov-status{ font-size:9px; line-height:1.35; color:#8fa77b; margin:-1px 0 5px 22px; }",
@@ -362,9 +365,12 @@
 
   /* ---- 3. RULE OVERLAYS — a HIERARCHY (Director addendum): THE GROUND PLAN
      survey-spine family (spine centerlines · rights-of-way · plat lots · named
-     parcels) under one tri-state master, then the flat law/diagnostic rows
-     (walk keep-out · ecology zones · audit failures). Copy is Director-authored
-     verbatim; each row is a name + a small legend line. ---- */
+     parcels) under one tri-state master, ICS-21: the ZONES family (zone law ·
+     encampment zones · ecology zones) under a second collapsible tri-state
+     master (the flat list read as noise — s109 declutter precedent), then the
+     remaining flat law/diagnostic rows (walk keep-out · wharves · audit
+     failures · lifecycle · dry-land edge). Copy is Director-authored verbatim;
+     each row is a name + a small legend line. ---- */
   beginSection("overlays","RULE OVERLAYS", { desc:"Overlays inspect the LAW and DATA behind the render — the survey spine, rights-of-way, plat lots, parcels, landmark reservations, walk keep-out mask, zones, and live audit failures. Each row's ? reveals its legend; active overlays are highlighted." });
   var overlayObjs = { spine:null, row:null, lots:null, parcels:null, reservations:null, wharf:null, keepout:null, zones:null, zonelaw:null, encamp:null, audits:null, dryland:null, lifecycle:null };
   var overlayRowEls = {};
@@ -373,6 +379,11 @@
   function refreshOverlayActive(){
     Object.keys(overlayRowEls).forEach(function(k){ overlayRowEls[k].row.classList.toggle("active", !!WB.overlays[k]); });
     markSectionActive("overlays", Object.keys(WB.overlays).some(function(k){ return WB.overlays[k]; }));
+    /* ICS-21: family masters mirror their children on EVERY overlay change,
+       including the __P1850_WBSETOVERLAY QA-hook path that bypasses the
+       checkbox change handlers (function declarations — hoisted, safe). */
+    syncGroupCheckbox();
+    syncZoneGroupCheckbox();
   }
 
   /* one toggle path: every overlay rebuilds fresh on enable (all are cheap
@@ -404,11 +415,23 @@
     return { row:row, cb:cb, name:name, legend:leg };
   }
 
+  /* ICS-21: overlay family headers COLLAPSE (caret + name click), the
+     beginSection idiom scaled down to a group — checkbox and ? untouched. */
+  function groupCollapsible(wrap, headRow, nameEl){
+    var caret = el("span","wb-caret","▾");
+    headRow.insertBefore(caret, headRow.firstChild);
+    function tog(ev){ ev.stopPropagation(); wrap.classList.toggle("collapsed"); }
+    caret.addEventListener("click", tog);
+    nameEl.addEventListener("click", tog);
+    nameEl.style.cursor = "pointer";
+  }
+
   /* --- PARENT GROUP: the survey spine (tri-state master) --- */
   var groupWrap = el("div","wb-ov-group");
   var groupHeadRow = el("div","wb-row wb-ov-parent", null, groupWrap);
   var groupCb = document.createElement("input"); groupCb.type="checkbox"; groupHeadRow.appendChild(groupCb);
-  el("span","wb-lname wb-ov-parent-name","THE GROUND PLAN — the survey spine",groupHeadRow);
+  var groupNameEl = el("span","wb-lname wb-ov-parent-name","THE GROUND PLAN — the survey spine",groupHeadRow);
+  groupCollapsible(groupWrap, groupHeadRow, groupNameEl);
   var groupHdr = el("div","wb-ov-grouphdr","Roads, lots, and zones are one dated system — toggle the family or break out a member.",groupWrap);
   (function(){ var q = el("span","wb-info","?", groupHeadRow); q.title="show/hide group note";
     q.addEventListener("click", function(ev){ ev.stopPropagation(); groupHdr.classList.toggle("show"); q.classList.toggle("on"); }); })();
@@ -461,7 +484,66 @@
     syncGroupCheckbox();
   });
 
-  /* --- FLAT ROWS: law + diagnostics (not the spine family) --- */
+  /* --- PARENT GROUP: ZONES (ICS-21) — the three zone-family overlays (land-use
+     law · documented encampments · ecology classification) under one collapsible
+     tri-state family, the GROUND PLAN pattern. The flat RULE OVERLAYS list read
+     as noise (operator feedback); this is the s109 declutter precedent applied
+     to the zone family. Outline-first styling rides along: boundaries carry the
+     read, tints are a faint wash so several zone overlays compose. --- */
+  var zoneGroupWrap = el("div","wb-ov-group");
+  var zoneHeadRow = el("div","wb-row wb-ov-parent", null, zoneGroupWrap);
+  var zoneGroupCb = document.createElement("input"); zoneGroupCb.type="checkbox"; zoneHeadRow.appendChild(zoneGroupCb);
+  var zoneNameEl = el("span","wb-lname wb-ov-parent-name","ZONES — law · camps · ecology",zoneHeadRow);
+  groupCollapsible(zoneGroupWrap, zoneHeadRow, zoneNameEl);
+  var zoneGroupHdr = el("div","wb-ov-grouphdr","Three zone reads of the same ground — the land-use LAW (the placement grammar), the documented encampment districts, and the ecology classification. Outline-first: zone BOUNDARIES draw strong; the tint is a faint interior wash so overlaid zones stay legible together.",zoneGroupWrap);
+  (function(){ var q = el("span","wb-info","?", zoneHeadRow); q.title="show/hide group note";
+    q.addEventListener("click", function(ev){ ev.stopPropagation(); zoneGroupHdr.classList.toggle("show"); q.classList.toggle("on"); }); })();
+  var zoneGroupBody = el("div","wb-ov-groupbody",null,zoneGroupWrap);
+
+  var ZONE_CHILDREN = ["zonelaw","encamp","zones"];
+  var zoneChildCbs = {};
+  var zoneEverUsed = false;
+  var zoneLast = { zonelaw:false, encamp:false, zones:false };
+  function syncZoneGroupCheckbox(){
+    var on = 0; ZONE_CHILDREN.forEach(function(k){ if(WB.overlays[k]) on++; });
+    zoneGroupCb.checked = on > 0;
+    zoneGroupCb.indeterminate = on > 0 && on < ZONE_CHILDREN.length;
+  }
+  function makeZoneChild(key, title, legend){
+    var r = overlayRow(zoneGroupBody, key, "wb-ov-child", title, legend);
+    zoneChildCbs[key] = r.cb;
+    overlayRowEls[key] = r;
+    r.cb.addEventListener("change", function(){
+      setOverlay(key, r.cb.checked);
+      if(r.cb.checked) zoneEverUsed = true;
+      syncZoneGroupCheckbox();
+    });
+    return r;
+  }
+  makeZoneChild("zonelaw", "ZONE LAW (land-use)",
+    "s91: the governing LAND-USE zone over the town + cove at the current date (cadZoneAt — the WHERE-per-class placement grammar canPlace reads). ICS-21 outline-first: zone BOUNDARY cells draw strong, interiors a faint wash. amber = commercial-core (plaza ring + downtown, GROWS outward by era — scrub 1846→1849 to watch it reach the waterfront) · slate = residential-band · brown = waterfront-working (piers + working shore) · blue = cove-water · oxblood = plaza · orange = camp (Happy Valley, born 1849) · violet = mission · green = presidio. Distinct from ECOLOGY ZONES (terrain/vegetation) below.");
+  makeZoneChild("encamp", "ENCAMPMENT ZONES (s106a/c)",
+    "The DOCUMENTED 1849 tent-encampment districts (ENCAMPMENT_ZONES, core/08) — the authored spawn ground the s106b tent explosion fills, s106c-amended with BLEED HALOS (deterministic seeded tents inside the rings + a smoothstep density-falloff band outside them; buildings.tentInZone is the zone+halo law). Date-gated: each zone shows only in its documented window (Little Chile from Aug 1848; Happy Valley + Pleasant Valley from the 1849 boom). orange = documented tent camp (✅ Happy Valley · Little Chile) · ochre = [FLAG] weakly-sourced (Pleasant Valley — named pocket of the camp belt, 1849 tents NOT directly attested) · DASHED boundary = approximate:true (the record names a district, never a surveyed camp line — presence-over-precision) · FAINTER dashed outer line = the bleed-halo extent (spawn falloff, not a documented line). Label: name + start + evidence tier. ICS-21: the interior tint faded (the boundary strokes were always the read).");
+  makeZoneChild("zones", "ECOLOGY ZONES",
+    "The zoneAt classification over the domain: which ground class governs placement and vegetation at each point. ICS-21 outline-first: class BOUNDARY cells draw strong, interiors a faint wash. Hydrology reconciliation pending — creek network incomplete.");
+
+  zoneGroupCb.addEventListener("change", function(){
+    var want = zoneGroupCb.checked;
+    zoneGroupCb.indeterminate = false;
+    if(want){
+      var anyRemembered = ZONE_CHILDREN.some(function(k){ return zoneLast[k]; });
+      ZONE_CHILDREN.forEach(function(k){
+        var on = (zoneEverUsed && anyRemembered) ? zoneLast[k] : true; // first use / nothing remembered = all three
+        zoneChildCbs[k].checked = on; setOverlay(k, on);
+      });
+      zoneEverUsed = true;
+    } else {
+      ZONE_CHILDREN.forEach(function(k){ zoneLast[k] = WB.overlays[k]; zoneChildCbs[k].checked = false; setOverlay(k, false); }); // snapshot then hide all
+    }
+    syncZoneGroupCheckbox();
+  });
+
+  /* --- FLAT ROWS: law + diagnostics (not the spine or zone families) --- */
   var flatWrap = el("div","wb-ov-flat");
   function makeFlat(key, title, legend){
     var r = overlayRow(flatWrap, key, null, title, legend);
@@ -474,12 +556,6 @@
   keepoutStatusEl = el("div","wb-ov-status","(toggle to sample the walk mask at this date)",flatWrap);
   makeFlat("wharf", "WHARVES (alignments + distances)",
     "s98: the AUTHORED wharf network as clear LINES — centerlines (PIERS_RUNTIME, era-gated to the active extent) + the deck-extent outline (pierDeckQuad), draped at deck height above the cove so they read against the cyan water-lot grid the corridor spans (the future-fill footprint — what the cove eventually becomes land). 100-ft distance ticks along each centerline + a cross at the bay end give the length read. gold = centerline · white = deck outline · cyan ticks = 100-ft stations. Scrub 1848→1849 to watch Central Wharf reach 300→800 ft. Only Broadway (1847) + Central (1849) are in-window; the 1850 city wharves appear past the sim end.");
-  makeFlat("zonelaw", "ZONE LAW (land-use)",
-    "s91: the governing LAND-USE zone tinted over the town + cove at the current date (cadZoneAt — the WHERE-per-class placement grammar canPlace reads). amber = commercial-core (plaza ring + downtown, GROWS outward by era — scrub 1846→1849 to watch it reach the waterfront) · slate = residential-band · brown = waterfront-working (piers + working shore) · blue = cove-water · oxblood = plaza · orange = camp (Happy Valley, born 1849) · violet = mission · green = presidio. Distinct from ECOLOGY ZONES (terrain/vegetation) below.");
-  makeFlat("encamp", "ENCAMPMENT ZONES (s106a/c)",
-    "The DOCUMENTED 1849 tent-encampment districts (ENCAMPMENT_ZONES, core/08) — the authored spawn ground the s106b tent explosion fills, s106c-amended with BLEED HALOS (deterministic seeded tents inside the rings + a smoothstep density-falloff band outside them; buildings.tentInZone is the zone+halo law). Date-gated: each zone shows only in its documented window (Little Chile from Aug 1848; Happy Valley + Pleasant Valley from the 1849 boom). orange = documented tent camp (✅ Happy Valley · Little Chile) · ochre = [FLAG] weakly-sourced (Pleasant Valley — named pocket of the camp belt, 1849 tents NOT directly attested) · DASHED boundary = approximate:true (the record names a district, never a surveyed camp line — presence-over-precision) · FAINTER dashed outer line = the bleed-halo extent (spawn falloff, not a documented line). Label: name + start + evidence tier.");
-  makeFlat("zones", "ECOLOGY ZONES",
-    "The zoneAt classification tinted over the domain: which ground class governs placement and vegetation at each point. Hydrology reconciliation pending — creek network incomplete.");
   makeFlat("audits", "AUDIT FAILURES",
     "Runs the full audit suite at the current date; a red marker at every violation coordinate. An empty overlay is the goal state.");
   makeFlat("lifecycle", "BUILDING LIFECYCLE (s108)",
@@ -986,17 +1062,41 @@
   var WB_ZONELAW_COL = { "plaza":[150,45,45], "waterfront-working":[140,95,70], "cove-water":[70,150,200],
     "commercial-core":[224,164,52], "camp":[232,112,60], "mission-cluster":[168,110,196],
     "presidio":[110,170,90], "residential-band":[118,196,168] /* distinct sea-green: not the amber core, not the cove's saturated blue */ };
+  /* ICS-21 OUTLINE-FIRST raster: sample the zone id ONCE per cell, then draw
+     BOUNDARY cells (any 4-neighbour with a different id, or the outside) at
+     full strength and interior cells as a faint wash. The boundary carries the
+     read — several zone overlays composed stay legible, the tint is
+     orientation only. Same one-shot sampling cost as the flat tint (each cell
+     classified once; edges found by grid lookup, no second classification). */
+  function sampleZoneEdgeOverlay(box, N, idFn, colFn, interiorA, edgeA){
+    var ids = new Array(N*N), i, j;
+    for(j=0;j<N;j++) for(i=0;i<N;i++){
+      ids[j*N+i] = idFn(box.xMin+(i+0.5)/N*(box.xMax-box.xMin), box.zMin+(j+0.5)/N*(box.zMax-box.zMin));
+    }
+    var W = box.xMax-box.xMin, H = box.zMax-box.zMin;
+    return samplePlaneOverlay(box, N, function(x,z){
+      var ci = Math.min(N-1, Math.max(0, Math.round((x-box.xMin)/W*N - 0.5)));
+      var cj = Math.min(N-1, Math.max(0, Math.round((z-box.zMin)/H*N - 0.5)));
+      var id = ids[cj*N+ci];
+      if(id==null) return null;
+      var c = colFn(id); if(!c) return null;
+      var edge = (ci>0   && ids[cj*N+ci-1]  !==id) || (ci<N-1 && ids[cj*N+ci+1]  !==id) ||
+                 (cj>0   && ids[(cj-1)*N+ci]!==id) || (cj<N-1 && ids[(cj+1)*N+ci]!==id);
+      return [c[0], c[1], c[2], edge ? edgeA : interiorA];
+    });
+  }
+
   function buildZoneLawOverlay(){
     _overlayDay = Math.floor(simDay);
     var pc = (typeof PLAZA_CENTER==="object"&&PLAZA_CENTER) ? PLAZA_CENTER : {x:0,z:0};
     var box = { xMin:pc.x-720, xMax:pc.x+1320, zMin:pc.z-760, zMax:pc.z+1240 };
     var day = simDay;
-    return samplePlaneOverlay(box, 208, function(x,z){
-      var id = (typeof landUseZoneAt==="function") ? landUseZoneAt(x,z,day) : null;
-      if(!id) return null;
-      var c = WB_ZONELAW_COL[id] || [150,150,150];
-      return [c[0], c[1], c[2], 150];
-    });
+    /* ICS-21 outline-first: boundaries strong (α 235), interior wash faded
+       from the old flat α 150 → 55 so composed zone overlays read together. */
+    return sampleZoneEdgeOverlay(box, 208,
+      function(x,z){ return (typeof landUseZoneAt==="function") ? (landUseZoneAt(x,z,day) || null) : null; },
+      function(id){ return WB_ZONELAW_COL[id] || [150,150,150]; },
+      55, 235);
   }
 
   /* s91 — LANDMARK RESERVATIONS: each reservation active at the current date
@@ -1123,7 +1223,9 @@
       var fg=new THREE.BufferGeometry();
       fg.setAttribute("position", new THREE.Float32BufferAttribute(fillPos,3));
       fg.setAttribute("color", new THREE.Float32BufferAttribute(fillCol,3));
-      var fm=new THREE.Mesh(fg, new THREE.MeshBasicMaterial({ vertexColors:true, transparent:true, opacity:0.30, depthTest:false, depthWrite:false, side:THREE.DoubleSide }));
+      /* ICS-21 outline-first: interior tint faded 0.30 → 0.12 — the dashed
+         boundary strokes were always the read; the wash is orientation only. */
+      var fm=new THREE.Mesh(fg, new THREE.MeshBasicMaterial({ vertexColors:true, transparent:true, opacity:0.12, depthTest:false, depthWrite:false, side:THREE.DoubleSide }));
       fm.renderOrder=997; fm.frustumCulled=false; grp.add(fm);
     }
     if(strokePos.length) grp.add(wbLineSegs(strokePos, strokeCol, 0.96, 1001));
@@ -1208,11 +1310,12 @@
   var WB_ZONE_COLS = { 1:[228,205,130], 2:[150,140,70], 3:[110,170,80], 4:[60,120,60], 5:[80,170,160], 6:[150,120,95] };
   function buildZonesOverlay(){
     var box = { xMin:WORLD.x0, xMax:WORLD.xMax, zMin:WORLD.z0, zMax:WORLD.zMax };
-    return samplePlaneOverlay(box, 256, function(x,z){
-      var zn = zoneAt(x,z);
-      var c = WB_ZONE_COLS[zn];
-      return c ? [c[0],c[1],c[2],95] : (zn>0 ? [200,60,200,95] : null);
-    });
+    /* ICS-21 outline-first: class boundaries strong (α 220), interior wash
+       faded from the old flat α 95 → 40 so composed zone overlays read. */
+    return sampleZoneEdgeOverlay(box, 256,
+      function(x,z){ var zn = zoneAt(x,z); return zn>0 ? zn : null; },
+      function(zn){ return WB_ZONE_COLS[zn] || [200,60,200]; },
+      40, 220);
   }
 
   function collectXZ(v, out, depth){
