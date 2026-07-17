@@ -8521,6 +8521,15 @@ var GP_TONE_ROAD  = "#6b5838"; // rgb(107,88,56) — luminance ~0.35, well under
 var GP_TONE_GHOST = "#5c4e33"; // the surveyor's line: darker still, drawn faint
 var GP_GHOST_ALPHA = 0.30;
 var GP_GHOST_WM = 1.6;         // ghost hairline width (m) — a thin scratch, never a class-width band
+/* CARTOGRAPHIC MIN-WIDTH FLOOR (operator 2026-07-17): a built road never PAINTS
+   thinner than this, so the 2 m trail class stops reading as a pencil line next
+   to the 21 m mains. The SURVEYED width (s.widthM — the ROW that lots, routing,
+   and placement read) is untouched TRUTH; this is a render-legibility floor on
+   the painted ribbon only, exactly as a real map draws a narrow footpath at a
+   visible minimum. Applies to established (cls 2) built roads; the S1 ghost
+   survey scratch keeps its own hairline weight. */
+var GP_MIN_PAINT_W = 5.5;
+function gpPaintWidthM(s){ return (s.cls === "pier") ? s.widthM : Math.max(s.widthM, GP_MIN_PAINT_W); }
 /* s84: PIER PLANK DECK tone. grounding.md §9 EXCEPTION — a planked surface (a
    wharf deck) is DOCUMENTED to read as WOOD, lawfully slightly LIGHTER than the
    terrain/road (the never-lighter-than-terrain floor applies to dirt roads, not
@@ -8842,7 +8851,7 @@ function renderGroundSplat(){
     var runA = 0;
     function flush(end){
       var c = cls[runA]; if(c === 0){ return; }
-      var run = wpts.slice(runA, end + 2); run._wM = s.widthM;
+      var run = wpts.slice(runA, end + 2); run._wM = gpPaintWidthM(s);
       _gpStrokeRun(run, c);
       if(c === 1) rec.ghostSegs += (end - runA + 1); else rec.wornSegs += (end - runA + 1);
       if(c === 2){ // record a mid-run station for the constantWidth audit
@@ -8874,7 +8883,7 @@ function renderGroundSplat(){
         var cdx = CP.x - CQ.x, cdz = CP.z - CQ.z, cdl = Math.hypot(cdx, cdz);
         if(cdl > 0.01){
           cdx /= cdl; cdz /= cdl;
-          var capL = Math.min(2.0, cdl), chw = s.widthM / 2, cnx = -cdz, cnz = cdx;
+          var capL = Math.min(2.0, cdl), chw = gpPaintWidthM(s) / 2, cnx = -cdz, cnz = cdx;
           _gpFillPoly([
             { x:CP.x + cnx*chw,            z:CP.z + cnz*chw },
             { x:CP.x - cnx*chw,            z:CP.z - cnz*chw },
@@ -9040,9 +9049,10 @@ registerAudit("ground-paint", "constantWidth", function(){
     if(!widths.length){ out.skipped.push(s.id); return; }
     if(s.cls === "pier") out.piersProbed++; else out.streetsProbed++;
     var mn = Math.min.apply(null, widths), mx = Math.max.apply(null, widths);
-    var tolAbs = Math.max(2.5, 0.35 * s.widthM);
-    if(widths.some(function(w){ return Math.abs(w - s.widthM) > tolAbs; }) || (mx - mn) > Math.max(2.0, 0.30 * s.widthM)){
-      out.pass = false; out.violations.push({ id:s.id, widthM:s.widthM, measured:widths });
+    var pw = gpPaintWidthM(s); // measure against the PAINTED width (surveyed ROW, floored for legibility)
+    var tolAbs = Math.max(2.5, 0.35 * pw);
+    if(widths.some(function(w){ return Math.abs(w - pw) > tolAbs; }) || (mx - mn) > Math.max(2.0, 0.30 * pw)){
+      out.pass = false; out.violations.push({ id:s.id, widthM:s.widthM, paintedTarget:+pw.toFixed(2), measured:widths });
     }
   });
   return out;
