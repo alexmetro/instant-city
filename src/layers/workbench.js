@@ -477,7 +477,7 @@
   makeFlat("zonelaw", "ZONE LAW (land-use)",
     "s91: the governing LAND-USE zone tinted over the town + cove at the current date (cadZoneAt — the WHERE-per-class placement grammar canPlace reads). amber = commercial-core (plaza ring + downtown, GROWS outward by era — scrub 1846→1849 to watch it reach the waterfront) · slate = residential-band · brown = waterfront-working (piers + working shore) · blue = cove-water · oxblood = plaza · orange = camp (Happy Valley, born 1849) · violet = mission · green = presidio. Distinct from ECOLOGY ZONES (terrain/vegetation) below.");
   makeFlat("encamp", "ENCAMPMENT ZONES (s106a)",
-    "The DOCUMENTED 1849 tent-encampment districts (ENCAMPMENT_ZONES, core/08) — the authored HARD SPAWN BOUNDARY the s106b tent explosion will fill; NO tents spawn from this overlay (zones-first gate). Date-gated: each zone shows only in its documented window (Little Chile from Aug 1848; Happy Valley + Pleasant Valley from the 1849 boom). orange = documented tent camp (✅ Happy Valley · Little Chile) · ochre = [FLAG] weakly-sourced (Pleasant Valley — named pocket of the camp belt, 1849 tents NOT directly attested) · DASHED boundary = approximate:true (the record names a district, never a surveyed camp line — presence-over-precision). Label: name + start + evidence tier.");
+    "The DOCUMENTED 1849 tent-encampment districts (ENCAMPMENT_ZONES, core/08) — the authored HARD SPAWN BOUNDARY the s106b tent explosion fills (deterministic seeded tents STRICTLY inside these rings; buildings.tentInZone is the law). Date-gated: each zone shows only in its documented window (Little Chile from Aug 1848; Happy Valley + Pleasant Valley from the 1849 boom). orange = documented tent camp (✅ Happy Valley · Little Chile) · ochre = [FLAG] weakly-sourced (Pleasant Valley — named pocket of the camp belt, 1849 tents NOT directly attested) · DASHED boundary = approximate:true (the record names a district, never a surveyed camp line — presence-over-precision). Label: name + start + evidence tier.");
   makeFlat("zones", "ECOLOGY ZONES",
     "The zoneAt classification tinted over the domain: which ground class governs placement and vegetation at each point. Hydrology reconciliation pending — creek network incomplete.");
   makeFlat("audits", "AUDIT FAILURES",
@@ -563,6 +563,25 @@
         deriveFillSet(simDay).forEach(function(e){
           if(e.phase === "absent" || e.phase === "gone") return;
           addEntry(e, (e.stories || 1) * 3.1);
+        });
+      /* s106b: TENTS compose with the lifecycle overlay too (a burning/torn
+         tent tints in the same state colours). Tint quads for ALL tents;
+         state GLYPHS only for the NON-complete states (a thousand "A"
+         sprites over Happy Valley would drown the read — the interesting
+         states are the raid teardown/clearing and any burn). */
+      if(typeof deriveTentSet === "function")
+        deriveTentSet(simDay).forEach(function(e){
+          if(e.phase === "absent" || e.phase === "gone") return;
+          var st = WB_LC_STYLE[e.phase]; if(!st) return;
+          var q = quadOf(e), c = new THREE.Color(st.col), before = fillPos.length;
+          wbPushDrapedTri(fillPos, q[0], q[1], q[2], 0.5, 1);
+          wbPushDrapedTri(fillPos, q[0], q[2], q[3], 0.5, 1);
+          for(var f = 0, added = (fillPos.length - before)/3; f < added; f++) fillCol.push(c.r, c.g, c.b);
+          if(e.phase !== "complete"){
+            var sp = wbGlyphSprite(st.glyph(e), st.col);
+            sp.position.set(e.cx, terrainHeight(e.cx, e.cz) + 2.5 + 5, e.cz);
+            grp.add(sp);
+          }
         });
     }catch(err){ console.warn("[wb] lifecycle overlay failed", err); }
     if(fillPos.length){

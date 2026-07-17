@@ -2103,6 +2103,16 @@ registerLayerVisibility("buildings-fill", function(v){ FILL_GROUP.visible = v; i
       out.push({ id: e.code + "#" + e.rank, kind: "fill", cx: e.cx, cz: e.cz,
                  events: lc.events, spans: lc.spans });
     });
+    /* s106b: TENTS are lifecycle citizens too — the ruins gate + the fire's
+       scope govern them (their raid teardown->rebuild arcs must clear first,
+       and a tent inside an authored fire perimeter must burn via it). */
+    if(typeof buildTentMaster === "function"){
+      buildTentMaster().forEach(function(e){
+        var lc = tentLifecycleOf(e);
+        out.push({ id: "TNT|" + e.zone + "#" + e.zoneRank, kind: "tent", cx: e.cx, cz: e.cz,
+                   events: lc.events, spans: lc.spans });
+      });
+    }
     return out;
   }
 
@@ -2206,6 +2216,537 @@ registerLayerVisibility("buildings-fill", function(v){ FILL_GROUP.visible = v; i
   });
 })();
 
+/* =====================================================================
+   ================  s106b (ICS-22) — THE 1849 TENT EXPLOSION  ==========
+   Part B of the encampment work: the DOCUMENTED tent boom spawned STRICTLY
+   inside the s106a ENCAMPMENT_ZONES registry (core/08) — the zones are the
+   HARD spawn boundary (operator law; every tent footprint corner must sit
+   inside its zone's rings at every date it stands).
+
+   WHAT (the catalog, not invented here): the tent subtype's 3 coded variants
+   from window.BUILDING_TYPES (building-types-spec §3 — codes now, art later):
+     TNT-1 wall tent          (bible §2 wall tents; photobook R7, 10x13 ft)
+     TNT-2 wedge/pup tent     (bible §2 wedge/A-tents; dims inferred, 8x10 ft)
+     TNT-3 framed cloth house (bible §2 canvas-over-frame semi-buildings —
+                               "reads as a building silhouette but the skin
+                               is fabric"; photobook GAPS #1; 12x16 ft)
+   Variant mix = the catalog's 1849 era-weight column (TNT-1:9 / TNT-2:7 /
+   TNT-3:6). Placeholder visuals only (Option-B): one neutral canvas-grey
+   material world, a DISTINCT silhouette per variant (walls+ridge / bare
+   wedge prism / building-height gable), front-face marker at the gable door.
+
+   WHEN/HOW MANY (per-zone density curves; fill:true tunables; the documented
+   anchors are in the curve comments):
+     • Little Chile — small from Aug 1848 (the Valparaiso wave; "many
+       dwellings tents" spring 1849); the July 15 1849 HOUNDS RAID is an
+       authored world event: tents "violently torn down" (Annals via
+       demographics-society §Hounds — torn down + plundered, NOT burned;
+       nothing invented) — a seeded documented-scale share tears down that
+       day, a share of those re-rise in the following weeks.
+     • Happy Valley — ramps from Aug 1849 (zone start; Taylor's eyewitness)
+       toward "perhaps a thousand" tents by late 1849 (Annals/FoundSF).
+       The DATA target is the documented number; the render draws every
+       placed tent as ONE merged geometry (~60 tris/tent), so no render cap
+       is needed — if placement starves under the physical laws the deficit
+       is REPORTED (console + audit detail), never silently capped.
+     • Pleasant Valley — [FLAG] tier (1849 tents NOT directly attested,
+       s106a): weighted DOWN — a small fraction of Happy Valley, and the
+       tentDensityWindow audit enforces the down-weighting as a law.
+
+   LIFECYCLE (s108): tents carry the SAME event-list/span schema through
+   buildingStateAt — construct (canvas: overnight lead), world-event fire
+   participation via lcFireHit (wired; no documented camp lies inside the
+   Dec 24 perimeter, so none burns via it today), the authored raid
+   (teardown -> cleared -> partial rebuild), and the ruins-gate/fireScope
+   audits govern tents too (tent timelines join lcAllTimelines).
+
+   DETERMINISM: a DEDICATED seeded stream ("p1850-tents-"+seed) consumed
+   ONLY at master build; the master is cached + pure; deriveTentSet(day) is
+   a pure filter; per-tent lifecycle params are lcHash seeded hashes. ZERO
+   dice at query time; rewind-exact; proven by buildings.tentDeterminism.
+   ===================================================================== */
+var TENT_ON_AT_RELEASE = true;
+
+/* the catalog rows (subtype "tent") — footprints/eras come from the DATA. */
+var TENT_TYPES = FILL_TYPES.filter(function(t){ return t.subtype === "tent" && !t.isGapMarker; });
+var TENT_TYPE_BY_CODE = {}; TENT_TYPES.forEach(function(t){ TENT_TYPE_BY_CODE[t.code] = t; });
+
+/* per-variant placeholder SILHOUETTE params (visual vocabulary only — the
+   footprint dims are the catalog's). Neutral canvas-grey tones a hair apart
+   (Option-B: silhouette is the identifier, not palette). */
+var TENT_VARIANTS = {
+  "TNT-1": { wallH: 1.0, ridgeH: 1.35, tone: 0xccc6b5 },   // wall tent: low vertical walls + ridge
+  "TNT-2": { wallH: 0.0, ridgeH: 1.50, tone: 0xc7c1b0 },   // wedge/pup: bare ground-to-ridge prism
+  "TNT-3": { wallH: 2.1, ridgeH: 0.90, tone: 0xbab8ab }    // framed cloth house: building-height walls + gable
+};
+var TENT_TONE_DEFAULT = 0xc9c3b2;
+
+/* per-zone DENSITY CURVES (fill:true tunables) — piecewise-linear day->count.
+   Documented anchors:
+     happy-valley: "perhaps a thousand" tents from 1849 (Annals 1855 via
+       FoundSF; s106a basis), settled from Aug 1849 (Taylor's eyewitness +
+       the camp-parcel birth); the tent corpus rate PEAKS 1849 at 27.73/100k
+       (density-mechanisms §1.2). Ramp Aug->Dec to 1000.
+     little-chile: the Valparaiso wave from Aug 1848 (~1,500 Chileans arrived
+       1848; most transited to the mines — the STANDING camp stays small);
+       "many dwellings tents" spring 1849; raid July 15 1849; held flat
+       after the raid (recovery is rebuild arcs, not new curve growth).
+     pleasant-valley: [FLAG] — included ONLY as a weakly-sourced pocket of
+       the camp belt (s106a); weighted hard DOWN vs Happy Valley. */
+var TENT_ZONE_CURVES = {
+  "happy-valley":    [["1849-08-01",0],["1849-08-20",120],["1849-09-15",350],["1849-10-15",600],["1849-12-01",900],["1849-12-20",1000]],
+  "little-chile":    [["1848-08-01",0],["1848-10-01",12],["1849-01-01",25],["1849-04-01",45],["1849-07-14",60]],
+  "pleasant-valley": [["1849-08-01",0],["1849-09-15",12],["1849-12-20",40]]
+};
+/* THE HOUNDS RAID (documented world event — timeline-part-1849 1849-07-15;
+   demographics-society §"Violence against Chileans": the Hounds "violently
+   tore down [tents], plundering them" — TORN DOWN, not burned; the fractions
+   are fill:true reasoned tunables, the record gives no count). */
+var TENT_RAID = { zone: "little-chile", dateISO: "1849-07-15", hitFrac: 0.55, rebuildFrac: 0.5 };
+var TENT_GAP_M = 1.0;          // side gap booked between tents (centre spacing = rA+rB+gap)
+var TENT_LEAD_DAYS = 1;        // canvas goes up overnight (Taylor: "as if by magic in a single night")
+
+/* QA knobs (per-system debug affordance, feedback-1850-placeholder-representation;
+   default OFF — the fail-before probes flip them):
+     ignoreZoneBoundary — placement samples the zone BBOX without the ring
+       containment test, so tents spill outside the documented zone and the
+       tentInZone audit goes RED (fail-before), then green with the knob off.
+     demoBurn — ONE seeded tent per zone takes a full law-abiding burn ->
+       ruins -> clear arc on 1849-09-01, so the burning-tent placeholder +
+       the lifecycle-overlay tint composition are verifiable on screen
+       (no documented tent burn exists in-window; this is a labeled QA
+       affordance, never world truth). */
+var TENT_QA = { ignoreZoneBoundary: false, demoBurn: false, version: 0 };
+
+/* piecewise-linear curve read (memoized day parse). ONE function used by the
+   spawner's appear-day assignment; the density AUDIT measures the derived
+   world against the DOCUMENTED bands, not against this curve. */
+var _tentCurveCache = {};
+function tentCurveAt(zoneId, day){
+  var c = _tentCurveCache[zoneId];
+  if(!c){
+    var src = TENT_ZONE_CURVES[zoneId] || [];
+    c = src.map(function(p){ return { day: eventDateToSimDay(p[0]), n: p[1] }; });
+    _tentCurveCache[zoneId] = c;
+  }
+  if(!c.length) return 0;
+  if(day <= c[0].day) return c[0].n;
+  for(var i = 1; i < c.length; i++){
+    if(day <= c[i].day) return lerp(c[i-1].n, c[i].n, (day - c[i-1].day) / (c[i].day - c[i-1].day));
+  }
+  return c[c.length-1].n;
+}
+function tentCurveMax(zoneId){
+  var src = TENT_ZONE_CURVES[zoneId] || [], m = 0;
+  src.forEach(function(p){ if(p[1] > m) m = p[1]; });
+  return m;
+}
+
+/* footprint corner points (centroid + 4 corners) for the STRICT boundary +
+   dry-land tests — the same OBB the renderer bakes (measurement law). */
+function tentCornerPts(cx, cz, w, d, yaw){
+  var nx = Math.sin(yaw), nz = Math.cos(yaw), tx = nz, tz = -nx, hw = w/2, hd = d/2;
+  return [ { x: cx, z: cz },
+           { x: cx - tx*hw - nx*hd, z: cz - tz*hw - nz*hd }, { x: cx + tx*hw - nx*hd, z: cz + tz*hw - nz*hd },
+           { x: cx + tx*hw + nx*hd, z: cz + tz*hw + nz*hd }, { x: cx - tx*hw + nx*hd, z: cz - tz*hw + nz*hd } ];
+}
+
+/* seeded weighted variant draw from the catalog's 1849 era-weight column
+   (the tent boom snapshot), era-valid at `day`. */
+function tentPickType(day, rng){
+  var pool = [], tot = 0;
+  for(var i = 0; i < TENT_TYPES.length; i++){
+    var t = TENT_TYPES[i];
+    if(!fillEraValid(t, day)) continue;
+    var w = fillWeight(t.code, "1849"); if(w <= 0) w = 1;
+    pool.push({ t: t, w: w }); tot += w;
+  }
+  if(!pool.length) return null;
+  var r = rng() * tot, acc = 0;
+  for(var k = 0; k < pool.length; k++){ acc += pool[k].w; if(r <= acc) return pool[k].t; }
+  return pool[pool.length-1].t;
+}
+
+/* =====================================================================
+   THE TENT MASTER — built ONCE per QA version (pure, cached, dedicated
+   seeded stream "p1850-tents-"+seed — never rngBuild/RNG_CALL_COUNT).
+   Per zone: seeded rejection sampling of candidate poses, each gated by
+     (1) the HARD ZONE BOUNDARY — centroid + all 4 footprint corners inside
+         the zone's clipped world rings (operator law; skipped ONLY under
+         the ignoreZoneBoundary fail-before knob);
+     (2) isDryLand at centroid + corners (s110a buildable surface);
+     (3) the EXISTING placement law — canPlace("tent",...) = the cadastre
+         zone gate (documented-camp override, core/08) + tent law row
+         (minY 2, slope <=12%, never intertidal, never ROW margin 2),
+         corner-level (footprintW/D passed);
+     (4) reserved ground — no overlap vs PLACEMENT_INDEX (the 51 landmark
+         footprints live there via lmRegisterOccupancy);
+     (5) the fill village — no overlap vs the FILL_MASTER footprints
+         (fill is deliberately NOT in PLACEMENT_INDEX — local check);
+     (6) other tents — bounding-circle spacing + TENT_GAP_M.
+   appearDay per zone-rank follows the zone's density curve (monotonic).
+   Placement starvation (fewer accepted than the documented target) is
+   REPORTED loudly — never silently capped. ============================ */
+var TENT_MASTER = null, _tentMasterVer = -1;
+function buildTentMaster(){
+  if(TENT_MASTER && _tentMasterVer === TENT_QA.version) return TENT_MASTER;
+  var sd = cyrb128("p1850-tents-" + (typeof seedStr !== "undefined" ? seedStr : "1846"));
+  var rng = sfc32(sd[0], sd[1], sd[2], sd[3]);              // DEDICATED stream
+  var fillM = buildFillMaster();
+  var master = [], report = [];
+  var zones = (typeof ENCAMPMENT_ZONES !== "undefined") ? ENCAMPMENT_ZONES : [];
+  zones.forEach(function(zone){
+    var targetMax = tentCurveMax(zone.id);
+    if(!targetMax || !zone.rings || !zone.rings.length) return;
+    var xLo = Infinity, xHi = -Infinity, zLo = Infinity, zHi = -Infinity;
+    zone.rings.forEach(function(r){ r.forEach(function(p){
+      if(p.x < xLo) xLo = p.x; if(p.x > xHi) xHi = p.x;
+      if(p.z < zLo) zLo = p.z; if(p.z > zHi) zHi = p.z; }); });
+    var placed = [], list = [], tries = 0, maxTries = targetMax * 40;
+    while(list.length < targetMax && tries < maxTries){
+      tries++;
+      var x = xLo + rng() * (xHi - xLo), z = zLo + rng() * (zHi - zLo);
+      var t = tentPickType(zone.startDay, rng); if(!t) break;
+      var yaw = rng() * Math.PI * 2;                        // scattered camp ("a scattering town of tents")
+      var wM = t.footprint.w * FILL_FT_M, dM = t.footprint.d * FILL_FT_M;
+      var rB = Math.hypot(wM, dM) / 2;
+      var pts = tentCornerPts(x, z, wM, dM, yaw), pi, bad = false;
+      // (1) THE HARD ZONE BOUNDARY (all 5 pts) — bbox-only under the QA knob
+      if(!TENT_QA.ignoreZoneBoundary){
+        for(pi = 0; pi < pts.length; pi++) if(!cadPointInRings(zone.rings, pts[pi].x, pts[pi].z)){ bad = true; break; }
+        if(bad) continue;
+      }
+      // (2) dry land (buildable/anchorable surface) at centroid + corners
+      for(pi = 0; pi < pts.length; pi++) if(!isDryLand(pts[pi].x, pts[pi].z, zone.startDay)){ bad = true; break; }
+      if(bad) continue;
+      // (3) the existing placement law (zone gate + tent law row, corner-level)
+      var cp = canPlace("tent", { x: x, z: z, yaw: yaw, footprint: rB, footprintW: wM, footprintD: dM }, { day: zone.startDay });
+      if(!cp.ok) continue;
+      // (4) reserved landmark ground
+      for(pi = 0; pi < PLACEMENT_INDEX.length; pi++){
+        var q = PLACEMENT_INDEX[pi], dx = x - q.x, dz = z - q.z, md = rB + q.r;
+        if(dx*dx + dz*dz < md*md){ bad = true; break; }
+      }
+      if(bad) continue;
+      // (5) the fill village (local master check — fill is not in PLACEMENT_INDEX)
+      for(pi = 0; pi < fillM.length; pi++){
+        var f = fillM[pi], fdx = x - f.cx, fdz = z - f.cz, fr = rB + Math.hypot(f.w, f.d)/2 + 0.5;
+        if(fdx*fdx + fdz*fdz < fr*fr){ bad = true; break; }
+      }
+      if(bad) continue;
+      // (6) other tents
+      if(fillOverlapsLocal(placed, x, z, rB + TENT_GAP_M)) continue;
+      placed.push({ x: x, z: z, r: rB });
+      list.push({ code: t.code, zone: zone.id, zoneStartDay: zone.startDay,
+                  cx: x, cz: z, w: wM, d: dM, yaw: yaw,
+                  zoneRank: list.length, appearDay: zone.startDay });
+    }
+    // appearDay per zone-rank from the density curve (monotonic; rewind-exact)
+    var prev = zone.startDay, k = 0;
+    for(var d = zone.startDay; d <= SIM_END_DAY + 0.5 && k < list.length; d += 1){
+      var want = Math.round(tentCurveAt(zone.id, d));
+      while(k < want && k < list.length){ var ad = Math.max(d, prev); list[k].appearDay = ad; prev = ad; k++; }
+    }
+    for(; k < list.length; k++) list[k].appearDay = SIM_END_DAY;   // starved past window end (never shown)
+    report.push({ zone: zone.id, placed: list.length, target: targetMax, tries: tries });
+    if(list.length < targetMax)
+      console.warn("[tents] PLACEMENT STARVED in " + zone.id + ": " + list.length + "/" + targetMax +
+                   " documented-target tents fit under the placement laws (reported, not silently capped).");
+    master.push.apply(master, list);
+  });
+  master.forEach(function(e, i){ e.rank = i; });
+  TENT_MASTER = master; _tentMasterVer = TENT_QA.version;
+  TENT_MASTER._report = report;
+  if(typeof console !== "undefined")
+    console.log("[verify] tent master:", report.map(function(r){ return r.zone + " " + r.placed + "/" + r.target; }).join(" · "));
+  return TENT_MASTER;
+}
+
+/* =====================================================================
+   THE TENT LIFECYCLE (s108 §4b applied to tents). Same event-list/span
+   schema + buildingStateAt engine as landmarks/fill; sources:
+     • construct — appearDay with the canvas overnight lead;
+     • WORLD-EVENT FIRE participation — lcFireHit (a tent inside an authored
+       fire perimeter burns -> ruins -> clear; canvas is not rebuilt by the
+       fire law — a burned tent is replaced, not rebuilt, building-types §3);
+     • THE HOUNDS RAID (little-chile, 1849-07-15) — a seeded hitFrac of
+       tents standing that day are TORN DOWN (the record's own verb) ->
+       cleared; a seeded rebuildFrac of those re-rise 1-5 weeks later;
+     • demoBurn QA arc (labeled debug affordance, default off).
+   All parameters are lcHash pure hashes of the tent identity — zero dice
+   at query time. Cached per entry, invalidated by either QA version. ===== */
+function tentQaKey(){ return LC_QA.version + "|" + TENT_QA.version; }
+function tentLifecycleOf(e){
+  var key = tentQaKey();
+  if(e._lc && e._lcVer === key) return e._lc;
+  var id = "TNT|" + e.zone + "#" + e.zoneRank;
+  var evs = [{ type: "construct", start: e.appearDay - TENT_LEAD_DAYS, on: e.appearDay,
+               form: { cls: "canvas", stories: 1 } }];
+  var fire = lcFireHit(e.cx, e.cz);
+  if(fire && fire.day >= e.appearDay){
+    evs.push({ type: "burn", start: fire.day, on: fire.day + LC_BURN_DAYS, via: fire.id });
+    var ruinsDays = 2 + Math.floor(lcHash(id, "ruins") * 5);
+    var clearStart = fire.day + LC_BURN_DAYS + ruinsDays;
+    evs.push({ type: "clear", start: clearStart, on: clearStart + 1 });
+  }
+  if(e.zone === TENT_RAID.zone){
+    var raidDay = eventDateToSimDay(TENT_RAID.dateISO);
+    if(e.appearDay < raidDay - 0.5 && lcHash(id, "raid") < TENT_RAID.hitFrac){
+      evs.push({ type: "teardown", start: raidDay, on: raidDay + 0.5 });   // torn down in the raid (documented verb)
+      if(lcHash(id, "raidRb") < TENT_RAID.rebuildFrac){
+        var rs = raidDay + 7 + Math.floor(lcHash(id, "raidLead") * 28);    // re-rise 1-5 weeks on (seeded)
+        evs.push({ type: "rebuild", start: rs, on: rs + TENT_LEAD_DAYS, form: { cls: "canvas", stories: 1 } });
+      }
+    }
+  }
+  if(TENT_QA.demoBurn && e.zoneRank === 0){                                // QA compose proof (one tent per zone)
+    var b = eventDateToSimDay("1849-09-01");
+    if(e.appearDay < b - 1){
+      evs.push({ type: "burn", start: b, on: b + LC_BURN_DAYS, via: "qa-demo-burn" });
+      evs.push({ type: "clear", start: b + LC_BURN_DAYS + 4, on: b + LC_BURN_DAYS + 6 });
+    }
+  }
+  evs.sort(function(a, b2){ return a.start - b2.start; });
+  e._lc = { events: evs, spans: lcBuildSpans(evs) };
+  e._lcVer = key;
+  return e._lc;
+}
+
+/* THE DERIVED SET — pure function of `day`; the ONE source read by the
+   renderer, the atelier lifecycle overlay, and every tent audit. */
+function deriveTentSet(day){
+  var m = buildTentMaster(), out = [];
+  for(var i = 0; i < m.length; i++){
+    var e = m[i];
+    if(day < e.appearDay - TENT_LEAD_DAYS - 0.5) continue;   // not yet begun (fast skip)
+    var st = buildingStateAt(tentLifecycleOf(e).spans, day);
+    if(st.phase === "absent" || st.phase === "gone") continue;
+    out.push({ code: e.code, zone: e.zone, cx: e.cx, cz: e.cz, w: e.w, d: e.d, yaw: e.yaw,
+               rank: e.rank, zoneRank: e.zoneRank, appearDay: e.appearDay, stories: 1,
+               phase: st.phase, state: st.state, hFrac: st.hFrac, agingT: st.agingT,
+               transition: st.transition });
+  }
+  return out;
+}
+function tentCountsByZoneAt(day){
+  var c = {};
+  deriveTentSet(day).forEach(function(e){
+    if(e.phase === "cleared" || e.phase === "clearing" || e.phase === "ruins") return;   // no canvas standing
+    c[e.zone] = (c[e.zone] || 0) + 1;
+  });
+  return c;
+}
+
+/* =====================================================================
+   THE TENT RENDERER — Option-B placeholder vocabulary, ONE merged mesh per
+   rebuild (a thousand instanced-by-merge placeholder tents ~60 tris each —
+   no render cap; the documented count draws in full). Grounding: the SAME
+   groundStructureAt auto-plinth as every structure (§3b universal rule).
+   Distinct silhouette per variant; front-face marker on the +z gable (the
+   door end, by construction); lifecycle states reuse the s108 legend
+   vocabulary (charcoal burn, rubble ruins, shrinking teardown). ========= */
+var TENT_GROUP = new THREE.Group(); TENT_GROUP.frustumCulled = false; TENT_GROUP.visible = TENT_ON_AT_RELEASE; scene.add(TENT_GROUP);
+var _tentLastDay = null;
+function tentPartsInto(parts, e){
+  var v = TENT_VARIANTS[e.code] || { wallH: 0.8, ridgeH: 1.2, tone: TENT_TONE_DEFAULT };
+  var g = groundStructureAt(e.cx, e.cz, e.w, e.d, e.yaw);
+  var y = g.floorY;
+  parts.push(groundPlinthGeo(g, new THREE.Color(LM_PLACEHOLDER.pad)));
+  var pad = makeBoxLocal(Math.max(e.w, 0.8), 0.12, Math.max(e.d, 0.8), new THREE.Color(LM_PLACEHOLDER.pad));
+  bake(pad, new THREE.Vector3(e.cx, y, e.cz), e.yaw);
+  parts.push(pad);
+  var phase = e.phase, prog = e.transition ? e.transition.progress : 0;
+  if(phase === "ruins"){ lcRubbleParts(parts, e, e.w, e.d, y, e.yaw, 0.5); return; }       // a torn/burnt tent leaves little
+  if(phase === "clearing"){ lcRubbleParts(parts, e, e.w, e.d, y, e.yaw, Math.max(0.5 * (1 - prog), 0.05)); return; }
+  if(phase === "cleared") return;                                                          // bare pad only
+  var hScale = 1;
+  if(phase === "constructing"){ if(e.state < 2) return; hScale = Math.max(e.hFrac, 0.35); }
+  else if(phase === "teardown"){ hScale = Math.max(1 - prog, 0.2); }
+  var burning = (phase === "burning");
+  var tone   = new THREE.Color(burning ? LC_TONES.charcoal : v.tone);
+  var roofTn = new THREE.Color(burning ? LC_TONES.charcoalRoof : v.tone).multiplyScalar(burning ? 1 : 0.93);
+  var wallH = v.wallH * hScale, ridgeH = Math.max(v.ridgeH * hScale, 0.3);
+  var wIn = Math.max(e.w - 0.12, 0.7), dIn = Math.max(e.d - 0.12, 0.7);
+  if(wallH > 0.05){
+    var walls = makeBoxLocal(wIn, wallH, dIn, tone);
+    bake(walls, new THREE.Vector3(e.cx, y + 0.1, e.cz), e.yaw);
+    parts.push(walls);
+  }
+  var roof = makeGableRoof(wIn, dIn, 0.05, ridgeH, roofTn);
+  bake(roof, new THREE.Vector3(e.cx, y + 0.1 + wallH, e.cz), e.yaw);
+  parts.push(roof);
+  // front-face marker: door stripe on the +z gable end (the front, by construction)
+  var mk = new THREE.Color(burning ? LC_TONES.ember : LM_PLACEHOLDER.marker);
+  var doorH = Math.max((wallH + ridgeH) * 0.55, 0.35);
+  var door = makeBoxLocal(0.3, doorH, 0.1, mk);
+  bake(door, new THREE.Vector3(e.cx + Math.sin(e.yaw) * (dIn/2 + 0.02), y + 0.1, e.cz + Math.cos(e.yaw) * (dIn/2 + 0.02)), e.yaw);
+  parts.push(door);
+}
+function tentClear(){
+  for(var i = TENT_GROUP.children.length - 1; i >= 0; i--){
+    var o = TENT_GROUP.children[i]; TENT_GROUP.remove(o); if(o.geometry) o.geometry.dispose();
+  }
+}
+function rebuildTents(){
+  tentClear();
+  var set = deriveTentSet(simDay), parts = [];
+  for(var i = 0; i < set.length; i++) tentPartsInto(parts, set[i]);
+  if(parts.length){
+    var mesh = new THREE.Mesh(mergeGeoms(parts), LM_MAT);
+    mesh.frustumCulled = false;
+    mesh.userData.tents = set.length;
+    TENT_GROUP.add(mesh);
+  }
+  _tentLastDay = Math.floor(simDay);
+}
+function updateTents(){
+  if(!TENT_GROUP.visible) return;
+  if(Math.floor(simDay) !== _tentLastDay) rebuildTents();
+}
+rebuildTents();
+var _tentPrevRender = renderer.render.bind(renderer);
+renderer.render = function(s, c){
+  try { updateTents(); } catch(e){ if(!updateTents._warned){ console.warn("[buildings.tents] update failed", e); updateTents._warned = true; } }
+  _tentPrevRender(s, c);
+};
+registerLayerVisibility("buildings-tents", function(v){ TENT_GROUP.visible = v; if(v){ _tentLastDay = null; updateTents(); } });
+
+/* =====================================================================
+   THE TENT AUDITS (rules-first — defects become standing rules with
+   fail-before/pass-after proofs, run by tools/verify/probe-s106b.js):
+     • tentInZone — NO tent stands outside an ACTIVE documented encampment
+       zone: centroid + all 4 footprint corners inside the zone's rings, at
+       every sampled date (the operator's hard-boundary law). Fail-before:
+       __P1850_TENT_QA({ignoreZoneBoundary:true}).
+     • tentDensityWindow — per-zone standing-tent counts inside the
+       documented plausibility bands at the noon dates; ZERO tents anywhere
+       before a zone is born (1846/47/48-04 — so the 1847 census ~79 and
+       the 1848-04 ~130 gates CANNOT be polluted; the census totals are
+       re-asserted here as a regression guard); Pleasant Valley (FLAG tier)
+       stays weighted DOWN vs Happy Valley as a LAW.
+     • tentDeterminism — two FRESH master derivations byte-identical to the
+       live master with ZERO shared-stream rng consumed; the derived-set
+       fingerprint is same-day identical and A->B->...->A rewind-exact. ===== */
+(function registerTentAudits(){
+  registerAudit("buildings", "tentInZone", function(){
+    var days = ["1848-10-01", "1849-06-01", "1849-09-15", "1849-12-20"].map(eventDateToSimDay);
+    if(typeof simDay === "number") days.push(simDay);
+    var viol = [], checked = 0;
+    days.forEach(function(day){
+      var byId = {};
+      encampmentZonesAt(day).forEach(function(z){ byId[z.id] = z; });
+      deriveTentSet(day).forEach(function(e){
+        checked++;
+        var zn = byId[e.zone];
+        if(!zn){ if(viol.length < 10) viol.push({ day: +day.toFixed(0), tent: e.zone + "#" + e.zoneRank, why: "zone-not-active" }); return; }
+        var pts = tentCornerPts(e.cx, e.cz, e.w, e.d, e.yaw);
+        for(var pi = 0; pi < pts.length; pi++){
+          if(!cadPointInRings(zn.rings, pts[pi].x, pts[pi].z)){
+            if(viol.length < 10) viol.push({ day: +day.toFixed(0), tent: e.zone + "#" + e.zoneRank,
+                                             why: pi === 0 ? "centroid-outside-zone" : "corner-outside-zone" });
+            return;
+          }
+        }
+      });
+    });
+    return { pass: viol.length === 0, law: "tentInZone", checked: checked,
+             violations: viol.length, sample: viol.slice(0, 8),
+             qaKnobs: { ignoreZoneBoundary: TENT_QA.ignoreZoneBoundary } };
+  });
+
+  registerAudit("buildings", "tentDensityWindow", function(){
+    var Z0 = { "happy-valley": [0, 0], "little-chile": [0, 0], "pleasant-valley": [0, 0] };
+    var checks = [
+      { iso: "1846-07-01", bands: Z0 },                       // no documented camp exists
+      { iso: "1847-04-01", bands: Z0 },                       // the census-79 gate date: zero tents
+      { iso: "1848-04-01", bands: Z0 },                       // pre-Valparaiso-wave: zero tents (Little Chile from Aug 1848)
+      { iso: "1849-09-15", bands: { "happy-valley": [150, 650], "little-chile": [15, 80], "pleasant-valley": [0, 60] } },
+      { iso: "1849-12-20", bands: { "happy-valley": [780, 1150], "little-chile": [10, 80], "pleasant-valley": [0, 80] } }
+    ];
+    var rows = [], problems = [];
+    checks.forEach(function(c){
+      var day = eventDateToSimDay(c.iso);
+      var counts = tentCountsByZoneAt(day), row = { date: c.iso, counts: counts };
+      Object.keys(c.bands).forEach(function(zid){
+        var n = counts[zid] || 0, b = c.bands[zid];
+        if(n < b[0] || n > b[1]) problems.push(c.iso + " " + zid + ": " + n + " outside [" + b[0] + "," + b[1] + "]");
+      });
+      // FLAG-tier down-weighting is a LAW: Pleasant Valley <= 15% of Happy Valley
+      var hv = counts["happy-valley"] || 0, pv = counts["pleasant-valley"] || 0;
+      if(hv > 0 && pv > 0.15 * hv) problems.push(c.iso + ": pleasant-valley (" + pv + ") not weighted down vs happy-valley (" + hv + ")");
+      rows.push(row);
+    });
+    // census-gate regression guard: the documented village gates stand untouched
+    var census = [];
+    [{ iso: "1847-04-01" }, { iso: "1848-04-01" }].forEach(function(c){
+      var day = eventDateToSimDay(c.iso);
+      var target = Math.round(fillTargetTotal(day));
+      var total = deriveFillSet(day).filter(function(e){ return e.counted; }).length + reservationsAt(day).length;
+      var dev = target > 0 ? Math.abs(total - target) / target : 0;
+      census.push({ date: c.iso, target: target, total: total, devPct: +(dev*100).toFixed(2) });
+      if(dev > 0.05) problems.push(c.iso + ": census total " + total + " regressed vs target " + target);
+    });
+    var rep = buildTentMaster()._report || [];
+    return { pass: problems.length === 0, law: "tentDensityWindow", perDate: rows,
+             censusGates: census, placementReport: rep, problems: problems.slice(0, 10) };
+  });
+
+  registerAudit("buildings", "tentDeterminism", function(){
+    function fpMaster(list){
+      return list.map(function(e){
+        return e.code + "|" + e.zone + "#" + e.zoneRank + "|" + e.cx.toFixed(3) + "," + e.cz.toFixed(3)
+             + "|" + e.yaw.toFixed(5) + "|" + e.appearDay.toFixed(2);
+      }).join("\n");
+    }
+    function fpSet(day){
+      return deriveTentSet(day).map(function(e){
+        return e.zone + "#" + e.zoneRank + "|" + e.phase + "|" + e.state + "|" + e.hFrac.toFixed(3)
+             + "|" + (e.transition ? e.transition.type + ":" + e.transition.progress.toFixed(5) : "-");
+      }).join("\n");
+    }
+    var before = (typeof RNG_CALL_COUNT === "number") ? RNG_CALL_COUNT : null;
+    var live = buildTentMaster(), fLive = fpMaster(live);
+    TENT_MASTER = null; var a = buildTentMaster();
+    TENT_MASTER = null; var b = buildTentMaster();
+    TENT_MASTER = live; _tentMasterVer = TENT_QA.version;             // restore the live cache
+    var after = (typeof RNG_CALL_COUNT === "number") ? RNG_CALL_COUNT : null;
+    var masterIdentical = (fpMaster(a) === fpMaster(b)) && (fpMaster(a) === fLive);
+    var rngConsumed = (before != null && after != null) ? (after - before) : null;
+    var days = ["1849-07-14", "1849-07-16", "1849-09-15", "1849-12-20"].map(eventDateToSimDay);
+    var first = days.map(fpSet), second = days.map(fpSet), rewound = fpSet(days[0]);
+    var sameDay = first.every(function(s, i){ return s === second[i]; });
+    var rewindExact = first[0] === rewound;
+    return { pass: masterIdentical && rngConsumed === 0 && sameDay && rewindExact,
+             law: "tentDeterminism", masterByteIdentical: masterIdentical, rngConsumed: rngConsumed,
+             sameDayIdentical: sameDay, rewindExact: rewindExact, tents: live.length };
+  });
+})();
+
+/* QA + driving hooks (dev/verify affordances — pure toggles, default off;
+   the version bump invalidates the master + every tent lifecycle cache so
+   the derived world is deterministic on either side of a toggle). */
+if(typeof window !== "undefined"){
+  window.__P1850_TENT_QA = function(opts){
+    opts = opts || {};
+    if(opts.ignoreZoneBoundary != null) TENT_QA.ignoreZoneBoundary = !!opts.ignoreZoneBoundary;
+    if(opts.demoBurn != null)           TENT_QA.demoBurn = !!opts.demoBurn;
+    TENT_QA.version++;
+    TENT_MASTER = null; _tentLastDay = null;
+    return { ignoreZoneBoundary: TENT_QA.ignoreZoneBoundary, demoBurn: TENT_QA.demoBurn, version: TENT_QA.version };
+  };
+}
+setTimeout(function(){
+  if(typeof window !== "undefined" && window.__P1850){
+    window.__P1850.tentsAt = function(day){ return deriveTentSet(day == null ? simDay : day); };
+    window.__P1850.tentCounts = function(iso){
+      var day = iso ? eventDateToSimDay(iso) : simDay;
+      return { date: iso || null, standing: tentCountsByZoneAt(day),
+               derived: deriveTentSet(day).length, master: buildTentMaster().length,
+               report: buildTentMaster()._report };
+    };
+  }
+}, 0);
+
 /* ---- s108 QA + probe hooks (dev/verify affordances; pure toggles, default
    off — a version bump invalidates every lifecycle cache so the derived world
    stays deterministic on either side of a toggle). ---- */
@@ -2216,7 +2757,7 @@ if(typeof window !== "undefined"){
     if(opts.disableWorldEvents != null) LC_QA.disableWorldEvents = !!opts.disableWorldEvents;
     LC_QA.version++;
     _lmSpanCache = {}; _lmSpanCacheVer = LC_QA.version;
-    _lmLastDay = null; _fillLastDay = null;                      // force a re-render at the current day
+    _lmLastDay = null; _fillLastDay = null; _tentLastDay = null; // force a re-render at the current day (tent caches key on LC_QA.version too)
     return { breakRuinsGate: LC_QA.breakRuinsGate, disableWorldEvents: LC_QA.disableWorldEvents, version: LC_QA.version };
   };
   /* every lifecycle event day (landmark + fill) — consumed by the atelier's

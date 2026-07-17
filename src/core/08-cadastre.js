@@ -1065,6 +1065,20 @@ function cadZoneAt(x, z, day){
    allowedClasses decide. */
 function cadZoneGate(cls, x, z, day){
   if(!CAD_ZONE_RELEVANT[cls]) return { ok:true, reason:"zone-agnostic", zone:null };
+  /* s106b — THE RECORD WINS (fill-density-model §0): an ACTIVE documented
+     encampment zone (ENCAMPMENT_ZONES, s106a) admits the CAMP classes on its
+     ground even where the derived era-grown commercial radius claims the
+     block. Little Chile stood ON a boom-core 50-vara block (Montgomery/
+     Kearny/Pacific/Jackson — plattedOverlapDocumented; "overlap IS the
+     record") — the documented camp registry outranks the commercial-reach
+     HEURISTIC for tents/shanties/encampment structures, and ONLY for those
+     classes; everything else keeps the general zone law. The zoneLaw audit's
+     tent-in-commercial-core rejection probe now self-locates OUTSIDE the
+     documented camps (it measures the general law where no camp is attested). */
+  if((cls==="tent" || cls==="shanty" || cls==="encampment") && typeof encampmentZoneAt==="function" && day!=null){
+    var ez = encampmentZoneAt(x, z, day);
+    if(ez) return { ok:true, reason:"encampment:"+ez.id, zone:"encampment:"+ez.id };
+  }
   var Z = cadZoneAt(x,z,day);
   if(!Z) return CAD_LOOSE_ALLOWED[cls] ? { ok:true, reason:"loose-ground", zone:null }
                                        : { ok:false, reason:"loose-ground-forbids:"+cls, zone:null };
@@ -1586,7 +1600,10 @@ function reservationById(id){ for(var i=0;i<GROUND_RESERVATIONS.length;i++) if(G
     // (4) gate probes — self-locate representative points on the lattice
     function findPoint(pred){ for(var gi=0; gi<side; gi++) for(var gj=0; gj<side; gj++){ var x=x0+(gi+0.5)/side*(x1-x0), z=z0+(gj+0.5)/side*(z1-z0); if(pred(x,z)) return {x:x,z:z}; } return null; }
     var pCamp = findPoint(function(x,z){ return landUseZoneAt(x,z,eventDateToSimDay("1849-09-01"))==="camp"; });
-    var pCore = findPoint(function(x,z){ return landUseZoneAt(x,z,day)==="commercial-core"; });
+    // s106b: the tent-rejection probe measures the GENERAL law — self-locate a
+    // core point OUTSIDE the documented encampment zones (on camp ground the
+    // record wins and tents are admitted; see cadZoneGate).
+    var pCore = findPoint(function(x,z){ return landUseZoneAt(x,z,day)==="commercial-core" && !(typeof encampmentZoneAt==="function" && encampmentZoneAt(x,z,day)); });
     var pMud  = findPoint(function(x,z){ return landUseZoneAt(x,z,day)==="waterfront-working" && cadIntertidalContains(x,z); });
     var pCove = findPoint(function(x,z){ return landUseZoneAt(x,z,day)==="cove-water"; });
     var probes=[], probeFail=0;
