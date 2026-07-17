@@ -4225,17 +4225,35 @@ setTimeout(function(){
   };
   var st = document.createElement("style");
   st.textContent = [
+    /* css26 GLASS (2026-07-17): chip + panel are hard-edged floating chrome —
+       they take the frosted-glass treatment (backdrop blur+saturate over a
+       REDUCED fill alpha so the world reads through) and the one white-alpha
+       hairline instead of a hand-picked edge. var() fallbacks keep the
+       atelier target safe if the shell tokens are absent there. */
     "#lc-legend-chip{ position:fixed; top:66px; right:16px; z-index:11; pointer-events:auto; cursor:pointer;",
     "  font-family:var(--hud-font); font-size:0.56rem; font-weight:700; letter-spacing:2px; color:#fff;",
-    "  background:rgba(14,17,21,0.68); padding:4px 10px; border-radius:3px;",
+    "  background:rgba(14,17,21,0.45); padding:4px 10px; border-radius:3px;",
+    "  border:1px solid var(--hairline, rgba(255,255,255,0.09));",
+    "  -webkit-backdrop-filter:var(--glass, blur(14px) saturate(1.4));",
+    "  backdrop-filter:var(--glass, blur(14px) saturate(1.4));",
     "  text-shadow:var(--halo-dark); user-select:none; -webkit-user-select:none; }",
-    "#lc-legend-chip:hover{ background:rgba(14,17,21,0.92); }",
-    "#lc-legend-chip.on{ background:rgba(14,17,21,0.92); }",
+    "#lc-legend-chip:hover{ background:rgba(14,17,21,0.72); }",
+    "#lc-legend-chip.on{ background:rgba(14,17,21,0.72); }",
     "#lc-legend{ position:fixed; top:94px; right:16px; z-index:11; pointer-events:auto; display:none;",
-    "  font-family:var(--hud-font); color:#fff; background:rgba(13,15,19,0.93); border-radius:4px;",
+    "  font-family:var(--hud-font); color:#fff; background:rgba(13,15,19,0.62); border-radius:4px;",
+    "  border:1px solid var(--hairline, rgba(255,255,255,0.09));",
+    "  -webkit-backdrop-filter:var(--glass, blur(14px) saturate(1.4));",
+    "  backdrop-filter:var(--glass, blur(14px) saturate(1.4));",
     "  padding:8px 10px 9px; width:236px; box-sizing:border-box;",
     "  max-height:calc(100vh - 150px); overflow-y:auto; }",
     "#lc-legend.open{ display:block; }",
+    /* css26 BLUR-IN REVEAL: the panel is display-toggled, so a short keyframe
+       entrance (opacity + translate + blur 6->0) on the chrome easing token;
+       reduced-motion users get the plain display flip. */
+    "@media (prefers-reduced-motion: no-preference){",
+    "  #lc-legend.open{ animation:lclReveal .22s var(--ease-out, cubic-bezier(0.2,0.7,0.1,1)) both; }",
+    "}",
+    "@keyframes lclReveal{ from{ opacity:0; transform:translateY(6px); filter:blur(6px); } }",
     "#lc-legend .lcl-title{ font-size:0.54rem; font-weight:700; letter-spacing:2px; opacity:0.85; margin-bottom:6px; }",
     "#lc-legend .lcl-title .lcl-x{ float:right; cursor:pointer; opacity:0.7; font-size:0.7rem; line-height:0.7; padding:0 2px; }",
     "#lc-legend .lcl-title .lcl-x:hover{ opacity:1; }",
