@@ -29,6 +29,15 @@
    so it lights up new transitions automatically as each system lands. Its
    siblings (land/buildable, grounding, terrain-morph) arrive WITH the morphing
    engine they visualize (s102/s103), not bundled ahead of it.
+
+   ICS-27 (2026-07-17) — IA + chrome modernization, PRESENTATION ONLY: the
+   rail is SIX native <details> accordions (INSPECT · LAYERS · TERRAIN ·
+   RULE OVERLAYS · TUNING KNOBS · AUDITS & EXPORT) under a pinned
+   type-to-filter box; liquid-glass chrome (blur+saturate scrim, white-alpha
+   hairlines, one --ease-out token, OKLCH hue-derived palette, ::details-content
+   height animation + 200ms blur-in, all motion behind prefers-reduced-motion).
+   Every toggle id, __P1850 QA hook, tri-state family and legend auto-open
+   behavior is preserved byte-for-byte in function.
    ===================================================================== */
 /* @P1850-CHUNK 75 — THE ATELIER dev workbench (atelier.html only; never in release) */
 (function(){
@@ -38,74 +47,163 @@
      stylesheet carries zero workbench bytes) ---------------- */
   var wbStyle = document.createElement("style");
   wbStyle.textContent = [
-    "#wb-panel{ position:fixed; left:8px; top:8px; bottom:8px; width:272px; z-index:99999;",
-    "  overflow-y:auto; background:rgba(13,14,16,0.94); color:#c9cdd2; border:1px solid #33373d;",
-    "  border-radius:6px; padding:8px 9px 10px; font:11px/1.45 Consolas,Menlo,monospace;",
-    "  box-shadow:0 4px 18px rgba(0,0,0,0.5); }",
-    "#wb-panel .wb-title{ font-weight:bold; letter-spacing:1.5px; color:#e8e3d5; font-size:12px; margin-bottom:6px; }",
-    "#wb-panel .wb-sub{ font-weight:normal; letter-spacing:0; color:#7c828a; font-size:10px; }",
-    "#wb-panel .wb-section{ border-top:1px solid #23272d; }",
-    "#wb-panel .wb-section:first-of-type{ border-top:none; }",
-    "#wb-panel .wb-sechdr{ display:flex; align-items:center; gap:6px; cursor:pointer; padding:6px 1px 5px; user-select:none; }",
-    "#wb-panel .wb-sechdr:hover{ background:rgba(255,255,255,0.025); }",
-    "#wb-panel .wb-caret{ color:#5b6066; font-size:8px; width:8px; text-align:center; transition:transform 0.12s; }",
-    "#wb-panel .wb-section.collapsed .wb-caret{ transform:rotate(-90deg); }",
-    "#wb-panel .wb-sectitle{ flex:1; color:#8fa7bd; font-size:10px; letter-spacing:1px; font-weight:bold; }",
-    "#wb-panel .wb-section.active .wb-sectitle{ color:#cdd8e2; }",
-    "#wb-panel .wb-secdot{ width:6px; height:6px; border-radius:50%; background:#7ee2a0; opacity:0; box-shadow:0 0 5px #7ee2a0; flex:none; }",
-    "#wb-panel .wb-section.active .wb-secdot{ opacity:1; }",
-    "#wb-panel .wb-secbody{ padding:0 0 5px; }",
-    "#wb-panel .wb-section.collapsed .wb-secbody{ display:none; }",
-    "#wb-panel .wb-info{ font:9px/12px Consolas,monospace; color:#6f757c; border:1px solid #3a3f46; border-radius:50%;",
-    "  width:13px; height:13px; text-align:center; cursor:pointer; flex:none; }",
-    "#wb-panel .wb-info:hover{ color:#c9cdd2; border-color:#5f676f; }",
-    "#wb-panel .wb-info.on{ color:#ffd75e; border-color:#ffd75e; }",
-    "#wb-panel .wb-secdesc{ display:none; font-size:9px; line-height:1.4; color:#7c828a; margin:1px 0 5px;",
-    "  padding:4px 6px; background:rgba(255,255,255,0.02); border-left:2px solid #3a3f46; border-radius:2px; }",
+    /* ICS-27 LIQUID-GLASS CHROME (dev-tool only — the release ships zero of
+       these bytes). ONE glass idiom: blur(14px) saturate(1.4) scrim + white-
+       alpha hairlines (--hairline) + ONE easing token (--ease-out) on every
+       transition + a consistent radius scale (--wb-r-lg/--wb-r/--wb-r-sm).
+       Palette is OKLCH hue-derived (--wb-hue) so the whole panel re-tints from
+       one number. Sections are NATIVE <details> accordions animated via
+       ::details-content (block-size 0 -> auto under interpolate-size,
+       content-visibility allow-discrete) with a 200ms blur-in on open; ALL
+       motion sits inside prefers-reduced-motion: no-preference. */
+    "#wb-panel{",
+    "  --ease-out:cubic-bezier(0.2,0.7,0.1,1); --hairline:rgba(255,255,255,0.09);",
+    "  --wb-hue:230;",
+    "  --wb-bg:oklch(18% 0.015 var(--wb-hue) / 0.52);",
+    "  --wb-bg-head:oklch(21% 0.018 var(--wb-hue) / 0.9);",
+    "  --wb-well:oklch(13% 0.012 var(--wb-hue) / 0.55);",
+    "  --wb-raise:rgba(255,255,255,0.05);",
+    "  --wb-ink:oklch(88% 0.01 var(--wb-hue)); --wb-dim:oklch(66% 0.018 var(--wb-hue));",
+    "  --wb-faint:oklch(52% 0.02 var(--wb-hue)); --wb-head:oklch(77% 0.05 var(--wb-hue));",
+    "  --wb-parch:oklch(92% 0.025 95);",
+    "  --wb-gold:#ffd75e; --wb-green:#7ee2a0; --wb-red:#ff7a6e; --wb-blue:#5aa0c8;",
+    "  --wb-r-lg:12px; --wb-r:7px; --wb-r-sm:5px;",
+    "  position:fixed; left:8px; top:8px; bottom:8px; width:292px; z-index:99999;",
+    "  overflow-y:auto; overscroll-behavior:contain; interpolate-size:allow-keywords;",
+    "  background:var(--wb-bg);",
+    "  -webkit-backdrop-filter:blur(14px) saturate(1.4); backdrop-filter:blur(14px) saturate(1.4);",
+    "  color:var(--wb-ink); border:1px solid var(--hairline); border-radius:var(--wb-r-lg);",
+    "  padding:0 9px 10px; font:11px/1.5 Consolas,Menlo,monospace;",
+    "  -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;",
+    "  box-shadow:0 12px 32px rgba(0,0,0,0.38), 0 2px 8px rgba(0,0,0,0.28); }",
+    "#wb-panel::-webkit-scrollbar{ width:9px; }",
+    "#wb-panel::-webkit-scrollbar-track{ background:transparent; }",
+    "#wb-panel::-webkit-scrollbar-thumb{ background:rgba(255,255,255,0.14); border-radius:5px; border:3px solid transparent; background-clip:content-box; }",
+    /* pinned head: title + the TYPE-TO-FILTER box (its own frosted layer so
+       rows scrolling beneath it stay legible through real glass) */
+    "#wb-panel .wb-head{ position:sticky; top:0; z-index:3; margin:0 -9px 6px; padding:10px 9px 9px;",
+    "  background:var(--wb-bg-head);",
+    "  -webkit-backdrop-filter:blur(14px) saturate(1.4); backdrop-filter:blur(14px) saturate(1.4);",
+    "  border-bottom:1px solid var(--hairline);",
+    "  border-radius:calc(var(--wb-r-lg) - 1px) calc(var(--wb-r-lg) - 1px) 0 0; }",
+    "#wb-panel .wb-title{ font-weight:bold; letter-spacing:1.5px; color:var(--wb-parch); font-size:12px; }",
+    "#wb-panel .wb-sub{ font-weight:normal; letter-spacing:0; color:var(--wb-dim); font-size:10px; }",
+    "#wb-panel .wb-filter{ display:block; width:100%; box-sizing:border-box; margin-top:8px;",
+    "  background:var(--wb-well); color:var(--wb-ink); border:1px solid var(--hairline);",
+    "  border-radius:var(--wb-r); padding:5px 9px; font:11px/1.4 Consolas,Menlo,monospace; outline:none;",
+    "  transition:border-color 0.2s var(--ease-out), background 0.2s var(--ease-out), box-shadow 0.2s var(--ease-out); }",
+    "#wb-panel .wb-filter::placeholder{ color:var(--wb-faint); }",
+    "#wb-panel .wb-filter::-webkit-search-cancel-button{ -webkit-appearance:none; }",
+    "#wb-panel .wb-filter:focus{ border-color:rgba(255,215,94,0.55); background:oklch(12% 0.012 var(--wb-hue) / 0.8);",
+    "  box-shadow:0 0 0 3px rgba(255,215,94,0.12); }",
+    /* SECTIONS: native <details>/<summary> — semantic keyboard toggling for
+       free; the caret is decorative only. Top-level = .wb-top, nested = .wb-sub. */
+    "#wb-panel > details.wb-top{ border-top:1px solid var(--hairline); }",
+    "#wb-panel > .wb-head + details.wb-top{ border-top:none; }",
+    "#wb-panel summary.wb-sechdr{ display:flex; align-items:center; gap:6px; cursor:pointer;",
+    "  padding:8px 2px 7px; user-select:none; list-style:none; border-radius:var(--wb-r-sm); margin:1px 0;",
+    "  transition:background 0.15s var(--ease-out); }",
+    "#wb-panel summary.wb-sechdr::-webkit-details-marker{ display:none; }",
+    "#wb-panel summary.wb-sechdr::marker{ content:none; }",
+    "#wb-panel summary.wb-sechdr:hover{ background:var(--wb-raise); }",
+    "#wb-panel summary.wb-sechdr:active{ background:rgba(255,255,255,0.08); }",
+    "#wb-panel summary.wb-sechdr:focus-visible{ outline:1px solid rgba(255,215,94,0.6); outline-offset:-1px; }",
+    "#wb-panel .wb-caret{ color:var(--wb-faint); font-size:8px; width:8px; text-align:center; flex:none;",
+    "  transition:transform 0.2s var(--ease-out); }",
+    "#wb-panel details:not([open]) > summary .wb-caret{ transform:rotate(-90deg); }",
+    "#wb-panel .wb-sectitle{ flex:1; min-width:0; color:var(--wb-head); font-size:10px; letter-spacing:1.1px; font-weight:bold;",
+    "  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; transition:color 0.15s var(--ease-out); }",
+    "#wb-panel details.wb-sub .wb-sectitle{ letter-spacing:0.6px; color:var(--wb-dim); }",
+    "#wb-panel .wb-section.active > summary .wb-sectitle{ color:oklch(88% 0.02 var(--wb-hue)); }",
+    "#wb-panel .wb-secdot{ width:6px; height:6px; border-radius:50%; background:var(--wb-green); opacity:0;",
+    "  box-shadow:0 0 6px var(--wb-green); flex:none; transition:opacity 0.2s var(--ease-out); }",
+    "#wb-panel .wb-section.active > summary .wb-secdot{ opacity:1; }",
+    "#wb-panel .wb-secbody{ padding:0 0 8px; }",
+    "#wb-panel details.wb-sub{ border-top:1px solid var(--hairline); }",
+    "#wb-panel .wb-secbody > details.wb-sub:first-child{ border-top:none; }",
+    "#wb-panel details.wb-sub > .wb-secbody{ border-left:1px solid var(--hairline); margin-left:3px; padding-left:8px; }",
+    /* accordion motion: height via ::details-content, plus a 200ms blur-in on
+       the revealed body. Filter typing suppresses all motion (.wb-filtering)
+       so live filtering stays instant and jank-free. */
+    "@media (prefers-reduced-motion: no-preference){",
+    "  #wb-panel details::details-content{ block-size:0; overflow-y:clip;",
+    "    transition:block-size 0.2s var(--ease-out), content-visibility 0.2s allow-discrete; }",
+    "  #wb-panel details[open]::details-content{ block-size:auto; }",
+    "  #wb-panel details[open] > .wb-secbody{ animation:wb-blur-in 0.2s var(--ease-out); }",
+    "  #wb-panel .wb-secdesc.show, #wb-panel .wb-ov-legend.show, #wb-panel .wb-ov-grouphdr.show{ animation:wb-blur-in 0.2s var(--ease-out); }",
+    "}",
+    "@keyframes wb-blur-in{ from{ opacity:0; filter:blur(6px); } to{ opacity:1; filter:none; } }",
+    "#wb-panel.wb-filtering *{ transition:none !important; animation:none !important; }",
+    "#wb-panel.wb-filtering details::details-content{ transition:none !important; }",
+    /* the ? info chips + tucked-away descriptions */
+    "#wb-panel .wb-info{ font:9px/12px Consolas,monospace; color:var(--wb-faint); border:1px solid var(--hairline); border-radius:50%;",
+    "  width:13px; height:13px; text-align:center; cursor:pointer; flex:none;",
+    "  transition:color 0.15s var(--ease-out), border-color 0.15s var(--ease-out), transform 0.15s var(--ease-out); }",
+    "#wb-panel .wb-info:hover{ color:var(--wb-ink); border-color:rgba(255,255,255,0.28); }",
+    "#wb-panel .wb-info:active{ transform:scale(0.92); }",
+    "#wb-panel .wb-info.on{ color:var(--wb-gold); border-color:var(--wb-gold); }",
+    "#wb-panel .wb-secdesc{ display:none; font-size:9px; line-height:1.45; color:var(--wb-dim); margin:1px 0 6px;",
+    "  padding:5px 7px; background:rgba(255,255,255,0.03); border-left:2px solid var(--hairline); border-radius:0 var(--wb-r-sm) var(--wb-r-sm) 0; text-wrap:pretty; }",
     "#wb-panel .wb-secdesc.show{ display:block; }",
-    "#wb-panel .wb-row{ display:flex; align-items:center; gap:6px; padding:1px 0; }",
-    "#wb-panel .wb-row input[type=checkbox]{ margin:0; accent-color:#5aa0c8; }",
-    "#wb-panel .wb-row.off .wb-lname{ color:#5b6066; text-decoration:line-through; }",
-    "#wb-panel .wb-lname{ flex:1; cursor:default; }",
-    "#wb-panel .wb-ov .wb-lname{ font-size:10px; color:#a9aeb5; letter-spacing:0.3px; }",
-    "#wb-panel .wb-row.active{ background:rgba(255,215,94,0.06); border-radius:2px; }",
+    /* ONE compact row idiom: checkbox · label · ? on a single line */
+    "#wb-panel .wb-row{ display:flex; align-items:center; gap:6px; padding:2px 0; min-height:17px; border-radius:var(--wb-r-sm); }",
+    "#wb-panel .wb-row input[type=checkbox]{ margin:0; flex:none; accent-color:var(--wb-blue); }",
+    "#wb-panel .wb-row.off .wb-lname{ color:var(--wb-faint); text-decoration:line-through; }",
+    "#wb-panel .wb-lname{ flex:1; min-width:0; cursor:default; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }",
+    "#wb-panel .wb-ov .wb-lname{ font-size:10px; color:oklch(74% 0.015 var(--wb-hue)); letter-spacing:0.3px; }",
+    "#wb-panel .wb-row.active{ background:rgba(255,215,94,0.07); }",
     "#wb-panel .wb-row.active .wb-lname{ color:#e6d9a8; }",
-    "#wb-panel .wb-ov-legend{ display:none; font-size:9px; line-height:1.35; color:#6f757c; margin:0 0 4px 22px; }",
+    "#wb-panel .wb-ov-legend{ display:none; font-size:9px; line-height:1.4; color:var(--wb-dim); margin:0 0 4px 22px; text-wrap:pretty; }",
     "#wb-panel .wb-ov-legend.show{ display:block; }",
-    "#wb-panel .wb-ov-group{ margin:5px 0 4px; border:1px solid #2a2e34; border-radius:4px; padding:3px 6px 4px; background:rgba(255,255,255,0.015); }",
+    /* tri-state FAMILY groups (ICS-21 collapse idiom preserved verbatim) */
+    "#wb-panel .wb-ov-group{ margin:6px 0 5px; border:1px solid var(--hairline); border-radius:var(--wb-r); padding:3px 6px 4px; background:rgba(255,255,255,0.02); }",
     "#wb-panel .wb-ov-parent-name{ font-weight:bold; color:#cdb98f; font-size:10px; letter-spacing:0.5px; }",
-    "#wb-panel .wb-ov-grouphdr{ display:none; font-size:9px; line-height:1.35; color:#7c828a; margin:1px 0 4px 22px; font-style:italic; }",
+    "#wb-panel .wb-ov-grouphdr{ display:none; font-size:9px; line-height:1.4; color:var(--wb-dim); margin:1px 0 4px 22px; font-style:italic; text-wrap:pretty; }",
     "#wb-panel .wb-ov-grouphdr.show{ display:block; }",
-    "#wb-panel .wb-ov-groupbody{ border-left:2px solid #2f343b; margin-left:6px; padding-left:6px; }",
+    "#wb-panel .wb-ov-groupbody{ border-left:2px solid rgba(255,255,255,0.12); margin-left:6px; padding-left:6px; }",
     "#wb-panel .wb-ov-group.collapsed .wb-ov-groupbody{ display:none; }",
     "#wb-panel .wb-ov-group.collapsed .wb-ov-grouphdr{ display:none; }",
     "#wb-panel .wb-ov-group.collapsed .wb-caret{ transform:rotate(-90deg); }",
-    "#wb-panel .wb-ov-child .wb-lname{ color:#b8bdc4; }",
+    "#wb-panel .wb-ov-child .wb-lname{ color:oklch(80% 0.012 var(--wb-hue)); }",
     "#wb-panel .wb-ov-flat{ margin-top:4px; }",
-    "#wb-panel .wb-ov-status{ font-size:9px; line-height:1.35; color:#8fa77b; margin:-1px 0 5px 22px; }",
-    "#wb-panel .wb-select{ flex:1; background:#1d2126; color:#c9cdd2; border:1px solid #3d4249; border-radius:3px;",
-    "  font:10px Consolas,monospace; padding:2px 4px; }",
-    "#wb-panel .wb-solo{ background:#1d2126; color:#6b7178; border:1px solid #33373d;",
-    "  border-radius:3px; font-size:10px; line-height:1; padding:2px 5px; cursor:pointer; }",
-    "#wb-panel .wb-solo.on{ color:#ffd75e; border-color:#ffd75e; }",
-    "#wb-panel .wb-btn{ background:#1d2126; color:#c9cdd2; border:1px solid #3d4249; border-radius:4px;",
-    "  font:11px Consolas,monospace; padding:4px 8px; cursor:pointer; margin:3px 4px 3px 0; }",
-    "#wb-panel .wb-btn.on{ color:#7ee2a0; border-color:#7ee2a0; }",
-    "#wb-panel .wb-probe-out{ background:#101215; border:1px solid #2a2e34; border-radius:4px;",
-    "  padding:6px; margin-top:4px; min-height:26px; max-height:230px; overflow-y:auto;",
-    "  font-size:10px; color:#aeb4bb; word-break:break-word; }",
-    "#wb-panel .wb-probe-out.live{ border-color:#ffd75e; box-shadow:0 0 0 1px rgba(255,215,94,0.25); background:#14140f; }",
+    "#wb-panel .wb-ov-status{ font-size:9px; line-height:1.4; color:#8fa77b; margin:-1px 0 5px 22px; text-wrap:pretty; }",
+    /* machined controls: precise targets, instant state, --ease-out softening */
+    "#wb-panel .wb-select{ flex:1; min-width:0; background:var(--wb-well); color:var(--wb-ink); border:1px solid var(--hairline); border-radius:var(--wb-r-sm);",
+    "  font:10px Consolas,monospace; padding:2px 4px; transition:border-color 0.15s var(--ease-out); }",
+    "#wb-panel .wb-select:hover{ border-color:rgba(255,255,255,0.22); }",
+    "#wb-panel .wb-solo{ background:transparent; color:var(--wb-faint); border:1px solid var(--hairline);",
+    "  border-radius:var(--wb-r-sm); font-size:10px; line-height:1; padding:2px 5px; cursor:pointer; flex:none;",
+    "  transition:color 0.15s var(--ease-out), border-color 0.15s var(--ease-out), transform 0.15s var(--ease-out); }",
+    "#wb-panel .wb-solo:hover{ color:var(--wb-ink); border-color:rgba(255,255,255,0.28); }",
+    "#wb-panel .wb-solo:active{ transform:scale(0.94); }",
+    "#wb-panel .wb-solo.on{ color:var(--wb-gold); border-color:var(--wb-gold); }",
+    "#wb-panel .wb-btn{ background:var(--wb-raise); color:var(--wb-ink); border:1px solid var(--hairline); border-radius:var(--wb-r-sm);",
+    "  font:11px Consolas,monospace; padding:4px 9px; cursor:pointer; margin:3px 4px 3px 0;",
+    "  transition:background 0.15s var(--ease-out), color 0.15s var(--ease-out), border-color 0.15s var(--ease-out), transform 0.15s var(--ease-out); }",
+    "#wb-panel .wb-btn:hover{ background:rgba(255,255,255,0.09); }",
+    "#wb-panel .wb-btn:active{ transform:scale(0.97); }",
+    "#wb-panel .wb-btn.on{ color:var(--wb-green); border-color:var(--wb-green); }",
+    "#wb-panel .wb-probe-out{ background:var(--wb-well); border:1px solid var(--hairline); border-radius:var(--wb-r);",
+    "  padding:6px 7px; margin-top:4px; min-height:26px; max-height:230px; overflow-y:auto;",
+    "  font-size:10px; color:oklch(78% 0.01 var(--wb-hue)); word-break:break-word; text-wrap:pretty; }",
+    "#wb-panel .wb-probe-out.live{ border-color:var(--wb-gold); box-shadow:0 0 0 1px rgba(255,215,94,0.25); background:rgba(38,32,12,0.5); }",
     "#wb-panel .wb-pl{ margin-bottom:3px; }",
-    "#wb-panel .wb-pl b{ color:#8fa7bd; }",
-    "#wb-panel .wb-knob{ display:flex; align-items:center; gap:5px; padding:1px 0; }",
-    "#wb-panel .wb-klabel{ flex:1; font-size:10px; color:#a9aeb5; }",
-    "#wb-panel .wb-knob input[type=range]{ width:86px; accent-color:#5aa0c8; }",
-    "#wb-panel .wb-kval{ font-style:normal; color:#e8e3d5; width:32px; text-align:right; }",
+    "#wb-panel .wb-pl b{ color:var(--wb-head); }",
+    "#wb-panel .wb-knob{ display:flex; align-items:center; gap:5px; padding:2px 0; min-height:17px; }",
+    "#wb-panel .wb-klabel{ flex:1; min-width:0; font-size:10px; color:oklch(74% 0.015 var(--wb-hue)); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }",
+    "#wb-panel .wb-knob input[type=range]{ width:86px; flex:none; accent-color:var(--wb-blue); }",
+    "#wb-panel .wb-kval{ font-style:normal; color:var(--wb-parch); width:32px; text-align:right; flex:none; }",
     "#wb-panel .wb-actions{ margin-top:6px; }",
-    "#wb-panel .wb-audit-status{ margin-top:4px; font-size:10px; color:#8a9098; }",
-    "#wb-panel .wb-audit-status.ok{ color:#7ee2a0; }",
-    "#wb-panel .wb-audit-status.bad{ color:#ff7a6e; }",
-    "#wb-panel .wb-foot{ margin-top:8px; color:#5b6066; font-size:9px; border-top:1px solid #2a2e34; padding-top:6px; }",
+    "#wb-panel .wb-audit-status{ margin-top:4px; font-size:10px; color:var(--wb-dim); text-wrap:pretty; }",
+    "#wb-panel .wb-audit-status.ok{ color:var(--wb-green); }",
+    "#wb-panel .wb-audit-status.bad{ color:var(--wb-red); }",
+    "#wb-panel .wb-foot{ margin-top:8px; color:var(--wb-faint); font-size:9px; border-top:1px solid var(--hairline); padding-top:6px; text-wrap:pretty; }",
+    /* type-to-filter mechanics: rows are hidden with a class (never detached —
+       every checkbox keeps its identity for the QA hooks); a hidden row also
+       hides its adjacent revealed legend. */
+    "#wb-panel .wb-fhide{ display:none !important; }",
+    "#wb-panel .wb-row.wb-fhide + .wb-ov-legend{ display:none !important; }",
+    "#wb-panel .wb-row.wb-fhide + .wb-ov-legend + .wb-ov-status{ display:none !important; }",
     "body.wb-probe #c, body.wb-tl #c{ cursor:crosshair; }",
     "body.dev-labels-off .wlbl, body.dev-labels-off .street-label, body.dev-labels-off .biz-glyph{ display:none !important; }"
   ].join("\n");
@@ -193,43 +291,93 @@
     (parent||curBody).appendChild(e);
     return e;
   }
-  var title = el("div","wb-title","THE ATELIER", panel);
-  el("span","wb-sub"," dev workbench — nothing here persists", title);
 
-  /* A SECTION is a titled, collapsible group: a header row (caret · title ·
-     active dot · optional ? that reveals a description) over a body. Opening a
-     section points curBody at its body. This is the scannability spine — the
-     rail reads as a list of section titles + their controls, with the prose
-     tucked behind the ? and the whole body collapsible from the header. */
-  var wbSections = {};
-  function beginSection(id, titleText, opts){
+  /* pinned head: title + the TYPE-TO-FILTER box (ICS-27). The filter input
+     swallows key events so the app's global bindings (space/1-4 sim speed,
+     n paper, v watch mode, WASD camera) never fire while typing a query. */
+  var wbHead = el("div","wb-head", null, panel);
+  var title = el("div","wb-title","THE ATELIER", wbHead);
+  el("span","wb-sub"," dev workbench — nothing here persists", title);
+  var wbFilterBox = document.createElement("input");
+  wbFilterBox.type = "search"; wbFilterBox.id = "wb-filter"; wbFilterBox.className = "wb-filter";
+  wbFilterBox.placeholder = "filter controls — try “zone” (Esc clears)";
+  wbFilterBox.setAttribute("aria-label","filter workbench controls");
+  wbFilterBox.autocomplete = "off"; wbFilterBox.spellcheck = false;
+  wbHead.appendChild(wbFilterBox);
+
+  /* A SECTION is a titled, collapsible group rendered as a NATIVE <details>
+     accordion (ICS-27): a <summary> header row (caret · title · active dot ·
+     optional ? that reveals a description) over a body — semantic keyboard
+     toggling for free, height animation via ::details-content in the CSS.
+     Top-level accordions (wb-top, closed by default) are created UPFRONT in
+     display order; the build blocks below flow into them via openSection()/
+     beginSub(), so each block keeps the plain el() calls it always used.
+     Nested sub-sections (wb-sub, open by default) live inside a top-level
+     accordion's body. This is the scannability spine — the rail reads as six
+     titles, with the prose tucked behind ? and every body collapsible. */
+  var wbSections = {};            // id -> { wrap, body, parent }
+  var wbActive = {};              // id -> bool (markSectionActive state, bubbled to parents)
+  function wbMakeSection(id, titleText, opts, parentBody, sub){
     opts = opts || {};
-    var wrap = el("section","wb-section", null, panel);
-    var hdr = el("div","wb-sechdr", null, wrap);
+    var wrap = el("details", "wb-section " + (sub ? "wb-sub" : "wb-top"), null, parentBody);
+    wrap.open = !!sub;            // top-level closed by default; nested open
+    var hdr = el("summary","wb-sechdr", null, wrap);
     el("span","wb-caret","▾", hdr);
-    el("span","wb-sectitle", titleText, hdr);
+    var st = el("span","wb-sectitle", titleText, hdr);
+    st.title = titleText;
     el("span","wb-secdot", null, hdr);
     var body = el("div","wb-secbody", null, wrap);
     if(opts.desc){
       var desc = el("div","wb-secdesc", opts.desc, body);
       var q = el("span","wb-info","?", hdr);
       q.title = "show/hide description";
-      q.addEventListener("click", function(ev){ ev.stopPropagation(); desc.classList.toggle("show"); q.classList.toggle("on"); });
+      q.addEventListener("click", function(ev){
+        ev.preventDefault(); ev.stopPropagation();   // never toggle the <details> itself
+        wrap.open = true;                            // the note lives in the body
+        desc.classList.toggle("show"); q.classList.toggle("on");
+      });
     }
-    hdr.addEventListener("click", function(){ wrap.classList.toggle("collapsed"); });
-    curBody = body;
-    wbSections[id] = { wrap:wrap, body:body };
+    wbSections[id] = { wrap:wrap, body:body, parent:null };
     return wbSections[id];
   }
-  function markSectionActive(id, on){ if(wbSections[id]) wbSections[id].wrap.classList.toggle("active", !!on); }
+  function beginTop(id, titleText, opts){ var s = wbMakeSection(id, titleText, opts, panel, false); curBody = s.body; return s; }
+  function beginSub(id, parentId, titleText, opts){
+    var s = wbMakeSection(id, titleText, opts, wbSections[parentId].body, true);
+    s.parent = parentId; curBody = s.body; return s;
+  }
+  function openSection(id){ curBody = wbSections[id].body; }
+  function markSectionActive(id, on){
+    if(!wbSections[id]) return;
+    wbActive[id] = !!on;
+    Object.keys(wbSections).forEach(function(k){
+      var act = !!wbActive[k];
+      Object.keys(wbSections).forEach(function(c){ if(wbSections[c].parent === k && wbActive[c]) act = true; });
+      wbSections[k].wrap.classList.toggle("active", act);
+    });
+  }
+
+  /* THE IA (ICS-27): six top-level accordions in reading order —
+       INSPECT          · the two click-inspectors (timeline · probe)
+       LAYERS           · render-layer mutes/solo + the LABELS family
+       TERRAIN          · diagnostic material modes + terrain morphing
+       RULE OVERLAYS    · the law/data overlays (families + flat rows)
+       TUNING KNOBS     · live lighting/detail multipliers
+       AUDITS & EXPORT  · audit runner + settings export */
+  beginTop("inspect","INSPECT");
+  beginTop("layers","LAYERS", { desc:"Mute a render layer with its checkbox, or solo one with the ◉ button (alt-click a row name = solo). Muted layers are re-asserted OFF every frame. The LABELS family below drives the labels layer's category sublayers as a tri-state (parent LABELS → LOTS / STREETS / ZONES & LANDMARKS / POI SYMBOLS)." });
+  beginTop("terrainacc","TERRAIN");
+  beginTop("overlays","RULE OVERLAYS", { desc:"Overlays inspect the LAW and DATA behind the render — the survey spine, rights-of-way, plat lots, parcels, landmark reservations, walk keep-out mask, zones, and live audit failures. Each row's ? reveals its legend; active overlays are highlighted." });
+  beginTop("knobs","TUNING KNOBS", { desc:"Live lighting and detail multipliers layered over whatever the sim wrote this frame. Nothing persists — reload resets every knob to its default." });
+  beginTop("actions","AUDITS & EXPORT");
 
   /* ---- 1. LAYER PANEL ---- */
-  beginSection("layers","LAYERS", { desc:"Mute a render layer with its checkbox, or solo one with the ◉ button (alt-click a row name = solo). Muted layers are re-asserted OFF every frame." });
+  openSection("layers");
   var rowEls = {};
   WB_LAYERS.forEach(function(name){
     var row = el("div","wb-row");
     var cb = document.createElement("input"); cb.type="checkbox"; cb.checked = true; row.appendChild(cb);
     var lab = el("span","wb-lname",name,row);
+    lab.title = name;
     var solo = el("button","wb-solo","◉",row);
     solo.title = "solo "+name;
     cb.addEventListener("change", function(){ WB.muted[name] = !cb.checked; applyVis(); });
@@ -254,12 +402,12 @@
      registry (__P1850_LAYER_VIS.labels). Present only when the labels layer is
      assembled in this build. ---- */
   if(typeof __P1850_LAYER_VIS.labels === "function" && typeof labelsSetSublayer === "function"){
-    beginSection("labels","LABELS", { desc:"The labels render-layer's category sublayers as a tri-state family (parent LABELS → LOTS / STREETS / ZONES & LANDMARKS / POI SYMBOLS). §11 zoom bands: regions own the high view; streets then lots fade in on descent; POI pins ride the town band." });
+    openSection("layers");                          // ICS-27: the family lives inside the LAYERS accordion (its own section wrapper was one nesting level of pure noise)
     var lblParentVisible = true;                    // the registry parent (LABELS layer present)
     var lblGroupWrap = el("div","wb-ov-group");
     var lblHeadRow = el("div","wb-row wb-ov-parent", null, lblGroupWrap);
     var lblParentCb = document.createElement("input"); lblParentCb.type="checkbox"; lblHeadRow.appendChild(lblParentCb);
-    el("span","wb-lname wb-ov-parent-name","LABELS — floating haloed world text",lblHeadRow);
+    el("span","wb-lname wb-ov-parent-name","LABELS — floating haloed world text",lblHeadRow).title = "LABELS — floating haloed world text";
     var lblGroupHdr = el("div","wb-ov-grouphdr","Lot ground-text · street names · zones & landmarks. §11 zoom bands: regions own the high view, streets then lots fade in on descent.",lblGroupWrap);
     (function(){ var q = el("span","wb-info","?", lblHeadRow); q.title="show/hide group note";
       q.addEventListener("click", function(ev){ ev.stopPropagation(); lblGroupHdr.classList.toggle("show"); q.classList.toggle("on"); }); })();
@@ -307,7 +455,7 @@
      the landform be read apart from its paint (the dune field is in the
      heightfield but illegible under textured noon light — CLAY is the answer).
      Materials are dev-only closures (atelier), built lazily on first use. ---- */
-  beginSection("terrain","TERRAIN VIEW", { desc:"Diagnostic material MODES override the terrain mesh material only (geometry, water and skin untouched; NORMAL restores). SLOPE: green flat → red 45%+ grade. ELEVATION: hypsometric ramp 0–120 m, contour every 10 m. Water surface unchanged in every mode. The geometry/skin structural split is scheduled for the terrain fidelity admission." });
+  beginSub("terrain","terrainacc","TERRAIN VIEW", { desc:"Diagnostic material MODES override the terrain mesh material only (geometry, water and skin untouched; NORMAL restores). SLOPE: green flat → red 45%+ grade. ELEVATION: hypsometric ramp 0–120 m, contour every 10 m. Water surface unchanged in every mode. The geometry/skin structural split is scheduled for the terrain fidelity admission." });
   /* diagnostic tints are per-VERTEX colours on a light geometry that SHARES
      the terrain's position/index buffers (no heavy clone) + an unlit
      MeshBasicMaterial — robust across renderers (a raw ShaderMaterial rendered
@@ -371,7 +519,7 @@
      remaining flat law/diagnostic rows (walk keep-out · wharves · audit
      failures · lifecycle · dry-land edge). Copy is Director-authored verbatim;
      each row is a name + a small legend line. ---- */
-  beginSection("overlays","RULE OVERLAYS", { desc:"Overlays inspect the LAW and DATA behind the render — the survey spine, rights-of-way, plat lots, parcels, landmark reservations, walk keep-out mask, zones, and live audit failures. Each row's ? reveals its legend; active overlays are highlighted." });
+  openSection("overlays");
   var overlayObjs = { spine:null, row:null, lots:null, parcels:null, reservations:null, wharf:null, keepout:null, zones:null, zonelaw:null, encamp:null, audits:null, dryland:null, lifecycle:null };
   var overlayRowEls = {};
   var auditStatusEl = null, keepoutStatusEl = null;
@@ -407,6 +555,7 @@
     var row = el("div","wb-row wb-ov"+(cls?" "+cls:""), null, parent);
     var cb = document.createElement("input"); cb.type="checkbox"; row.appendChild(cb);
     var name = el("span","wb-lname",title,row);
+    name.title = title;                               // full text on hover (rows are one-line, ellipsized)
     var leg = el("div","wb-ov-legend",legend,parent); // legend under the row, revealed by the row ?
     if(legend){
       var q = el("span","wb-info","?", row); q.title = "show/hide legend";
@@ -416,7 +565,7 @@
   }
 
   /* ICS-21: overlay family headers COLLAPSE (caret + name click), the
-     beginSection idiom scaled down to a group — checkbox and ? untouched. */
+     section-header idiom scaled down to a group — checkbox and ? untouched. */
   function groupCollapsible(wrap, headRow, nameEl){
     var caret = el("span","wb-caret","▾");
     headRow.insertBefore(caret, headRow.firstChild);
@@ -431,6 +580,7 @@
   var groupHeadRow = el("div","wb-row wb-ov-parent", null, groupWrap);
   var groupCb = document.createElement("input"); groupCb.type="checkbox"; groupHeadRow.appendChild(groupCb);
   var groupNameEl = el("span","wb-lname wb-ov-parent-name","THE GROUND PLAN — the survey spine",groupHeadRow);
+  groupNameEl.title = "THE GROUND PLAN — the survey spine";
   groupCollapsible(groupWrap, groupHeadRow, groupNameEl);
   var groupHdr = el("div","wb-ov-grouphdr","Roads, lots, and zones are one dated system — toggle the family or break out a member.",groupWrap);
   (function(){ var q = el("span","wb-info","?", groupHeadRow); q.title="show/hide group note";
@@ -494,6 +644,7 @@
   var zoneHeadRow = el("div","wb-row wb-ov-parent", null, zoneGroupWrap);
   var zoneGroupCb = document.createElement("input"); zoneGroupCb.type="checkbox"; zoneHeadRow.appendChild(zoneGroupCb);
   var zoneNameEl = el("span","wb-lname wb-ov-parent-name","ZONES — law · camps · ecology",zoneHeadRow);
+  zoneNameEl.title = "ZONES — law · camps · ecology";
   groupCollapsible(zoneGroupWrap, zoneHeadRow, zoneNameEl);
   var zoneGroupHdr = el("div","wb-ov-grouphdr","Three zone reads of the same ground — the land-use LAW (the placement grammar), the documented encampment districts, and the ecology classification. Outline-first: zone BOUNDARIES draw strong; the tint is a faint interior wash so overlaid zones stay legible together.",zoneGroupWrap);
   (function(){ var q = el("span","wb-info","?", zoneHeadRow); q.title="show/hide group note";
@@ -1449,7 +1600,7 @@
     m.position.set(x, terrainHeight(x, z), z); m.renderOrder = 2000; m.frustumCulled = false;
     wbTlMarkerObj = m; scene.add(m);
   }
-  beginSection("s101","TEMPORAL DEBUG-VIZ", { desc:"The coordinate timeline inspector (debug-viz-first, s101). Arm, then click any world point to read its state — water/land, block/lot, zone, ROW, parcels, reservation, pier, building — across the 1846–1849 window, unchanged spans collapsed. Pure reads of the date-parameterized world; static terrain until terrain-morphing (s102/s103)." });
+  beginSub("s101","inspect","COORDINATE TIMELINE", { desc:"The coordinate timeline inspector (debug-viz-first, s101). Arm, then click any world point to read its state — water/land, block/lot, zone, ROW, parcels, reservation, pier, building — across the 1846–1849 window, unchanged spans collapsed. Pure reads of the date-parameterized world; static terrain until terrain-morphing (s102/s103)." });
   var tlActions = el("div","wb-actions");
   var tlBtn = el("button","wb-btn","timeline: OFF — click to arm", tlActions);
   var tlClearBtn = el("button","wb-btn","clear pin", tlActions);
@@ -1664,7 +1815,7 @@
     wbMorphStatus();
   }
 
-  beginSection("s102","TERRAIN MORPHING", { desc:"The date-editable heightfield (s102) proven in the atelier. Arm the DEMO cove-fill op (atelier-only — the release op list stays empty) then scrub the timeline: the terrain-at-date PATCH re-meshes and fills water→land over its ramp, the MORPH REGION lights up (fill = blue, brighter as it completes) with the derived shoreline advancing, and the isLand/BUILDABLE overlay flips the filled cove from blue (water) to amber (new land). Reads the core terrainHeightAt / isLandAt — the same predicate the s101 inspector now uses." });
+  beginSub("s102","terrainacc","TERRAIN MORPHING", { desc:"The date-editable heightfield (s102) proven in the atelier. Arm the DEMO cove-fill op (atelier-only — the release op list stays empty) then scrub the timeline: the terrain-at-date PATCH re-meshes and fills water→land over its ramp, the MORPH REGION lights up (fill = blue, brighter as it completes) with the derived shoreline advancing, and the isLand/BUILDABLE overlay flips the filled cove from blue (water) to amber (new land). Reads the core terrainHeightAt / isLandAt — the same predicate the s101 inspector now uses." });
   var morphActions = el("div","wb-actions");
   var demoBtn = el("button","wb-btn","demo cove-fill op: OFF", morphActions);
   demoBtn.addEventListener("click", function(){
@@ -1677,7 +1828,7 @@
   function morphToggleRow(key, label){
     var row=el("div","wb-row");
     var cb=document.createElement("input"); cb.type="checkbox"; row.appendChild(cb);
-    el("span","wb-lname",label,row);
+    var nm=el("span","wb-lname",label,row); nm.title=label;
     cb.addEventListener("change", function(){ WB.morph[key]=cb.checked; wbRefreshMorph(); });
     return cb;
   }
@@ -1704,7 +1855,7 @@
   };
 
   /* ---- 2. PROVENANCE PROBE ---- */
-  beginSection("probe","PROVENANCE PROBE", { desc:"Arm, then click any world point for a full provenance card at the current date — terrain, ground-paint, cadastre lot/block/parcel/zone-law, landmark reservation, buildings, doodads, people, walk mask, and the real pick hit." });
+  beginSub("probe","inspect","PROVENANCE PROBE", { desc:"Arm, then click any world point for a full provenance card at the current date — terrain, ground-paint, cadastre lot/block/parcel/zone-law, landmark reservation, buildings, doodads, people, walk mask, and the real pick hit." });
   var probeBtn = el("button","wb-btn","probe: OFF — click to arm");
   var probeOut = el("div","wb-probe-out","(arm, then click any world point)");
   probeBtn.addEventListener("click", function(){
@@ -1902,7 +2053,7 @@
   }, true);
 
   /* ---- 4. TUNING KNOBS ---- */
-  beginSection("knobs","TUNING KNOBS", { desc:"Live lighting and detail multipliers layered over whatever the sim wrote this frame. Nothing persists — reload resets every knob to its default." });
+  openSection("knobs");
   var knobDefs = [
     { key:"sunMul",        label:"sun intensity ×",     min:0, max:2.5, step:0.05 },
     { key:"hemiMul",       label:"hemi intensity ×",    min:0, max:2.5, step:0.05 },
@@ -1924,7 +2075,7 @@
   }
   knobDefs.forEach(function(d){
     var row = el("div","wb-knob");
-    el("span","wb-klabel",d.label,row);
+    var kl = el("span","wb-klabel",d.label,row); kl.title = d.label;
     var input = document.createElement("input");
     input.type="range"; input.min=d.min; input.max=d.max; input.step=d.step; input.value=WB.knobs[d.key];
     row.appendChild(input);
@@ -1934,7 +2085,7 @@
   });
 
   /* ---- actions ---- */
-  beginSection("actions","AUDITS & EXPORT");
+  openSection("actions");
   var actions = el("div","wb-actions");
   var auditBtn = el("button","wb-btn","run audits",actions);
   var copyBtn = el("button","wb-btn","COPY SETTINGS",actions);
@@ -1957,11 +2108,93 @@
   el("div","wb-foot", "Overlays inspect the LAW and DATA; the Layers list above shows admitted RENDERERS — the spine has no renderer of its own by design (ground-paint derives from it).");
   el("div","wb-foot", WB_LAYERS.length+" layers registered · atelier.html only (never in the release build) · nothing persists");
 
-  /* SURFACE THE ACTIVE TOOLS: lift the two inspectors (timeline + probe) to the
-     top of the rail, right under the title, so a pinned readout is the first
-     thing seen instead of being buried beneath the overlay list. */
-  if(wbSections.s101 && wbSections.layers) panel.insertBefore(wbSections.s101.wrap, wbSections.layers.wrap);
-  if(wbSections.probe && wbSections.layers) panel.insertBefore(wbSections.probe.wrap, wbSections.layers.wrap);
+  /* =====================================================================
+     ICS-27 TYPE-TO-FILTER — the pinned box at the top live-filters every
+     control row; sections, sub-sections and families with a hit auto-open;
+     clearing the box (or Esc) restores the exact pre-filter open state.
+     PURE PRESENTATION: rows are hidden with a class, never detached, so
+     every checkbox keeps its identity for the QA hooks and the tri-state
+     family sync. A title hit (section or family name) reveals everything
+     beneath it, so "terrain" surfaces both TERRAIN sub-sections while
+     "zone" surfaces the ZONES family + every zone-named row.
+     (The old lift-the-inspectors reorder is gone: INSPECT is now the first
+     accordion by construction.)
+     ===================================================================== */
+  var wbFilterSnap = null;   // { open:{id:bool}, grp:[bool] } captured at the first keystroke
+  function wbApplyFilter(qs){
+    qs = (qs || "").trim().toLowerCase();
+    var units = Array.prototype.slice.call(panel.querySelectorAll(".wb-row, .wb-knob, .wb-actions"));
+    var groups = Array.prototype.slice.call(panel.querySelectorAll(".wb-ov-group"));
+    var secIds = Object.keys(wbSections);
+    var subs = secIds.filter(function(id){ return wbSections[id].parent; });
+    var tops = secIds.filter(function(id){ return !wbSections[id].parent; });
+    if(!qs){
+      panel.classList.remove("wb-filtering");
+      units.forEach(function(u){ u.classList.remove("wb-fhide"); });
+      groups.forEach(function(g){ g.classList.remove("wb-fhide"); });
+      secIds.forEach(function(id){ wbSections[id].wrap.classList.remove("wb-fhide"); });
+      if(wbFilterSnap){                       // restore the pre-filter open/collapsed state
+        secIds.forEach(function(id){ if(id in wbFilterSnap.open) wbSections[id].wrap.open = wbFilterSnap.open[id]; });
+        groups.forEach(function(g, i){ g.classList.toggle("collapsed", !!wbFilterSnap.grp[i]); });
+        wbFilterSnap = null;
+      }
+      return;
+    }
+    if(!wbFilterSnap){
+      wbFilterSnap = { open:{}, grp: groups.map(function(g){ return g.classList.contains("collapsed"); }) };
+      secIds.forEach(function(id){ wbFilterSnap.open[id] = wbSections[id].wrap.open; });
+    }
+    panel.classList.add("wb-filtering");       // suppress accordion motion while typing
+    function hit(t){ return String(t).toLowerCase().indexOf(qs) >= 0; }
+    var secTitleHit = {};
+    secIds.forEach(function(id){
+      var st = wbSections[id].wrap.querySelector(".wb-sectitle");
+      secTitleHit[id] = !!(st && hit(st.textContent));
+    });
+    function inTitleHitSection(elm){          // any enclosing section's title hit?
+      var d = elm.closest("details.wb-section");
+      while(d){
+        for(var i = 0; i < secIds.length; i++){ if(wbSections[secIds[i]].wrap === d && secTitleHit[secIds[i]]) return true; }
+        d = d.parentElement ? d.parentElement.closest("details.wb-section") : null;
+      }
+      return false;
+    }
+    units.forEach(function(u){
+      var g = u.closest(".wb-ov-group");
+      var gname = g ? g.querySelector(".wb-ov-parent-name") : null;
+      var shown = hit(u.textContent) || (gname && hit(gname.textContent)) || inTitleHitSection(u);
+      u.classList.toggle("wb-fhide", !shown);
+    });
+    groups.forEach(function(g){
+      var any = g.querySelectorAll(".wb-row:not(.wb-fhide)").length > 0;
+      g.classList.toggle("wb-fhide", !any);
+      if(any) g.classList.remove("collapsed"); // auto-open a matching family
+    });
+    function secHasVisible(id){
+      return wbSections[id].body.querySelectorAll(".wb-row:not(.wb-fhide), .wb-knob:not(.wb-fhide), .wb-actions:not(.wb-fhide)").length > 0;
+    }
+    subs.forEach(function(id){
+      var vis = secHasVisible(id) || secTitleHit[id];
+      wbSections[id].wrap.classList.toggle("wb-fhide", !vis);
+      if(vis) wbSections[id].wrap.open = true;
+    });
+    tops.forEach(function(id){
+      var vis = secHasVisible(id) || secTitleHit[id] ||
+        subs.some(function(s){ return wbSections[s].parent === id && !wbSections[s].wrap.classList.contains("wb-fhide"); });
+      wbSections[id].wrap.classList.toggle("wb-fhide", !vis);
+      wbSections[id].wrap.open = vis;          // auto-open matching sections
+    });
+  }
+  wbFilterBox.addEventListener("input", function(){ wbApplyFilter(wbFilterBox.value); });
+  /* the filter box owns its keys: the app's global bindings (space/1-4 sim
+     speed, n paper, v watch, WASD camera) listen on window in the bubble
+     phase, so stopping propagation here keeps typing from driving the sim. */
+  ["keydown","keyup","keypress"].forEach(function(t){
+    wbFilterBox.addEventListener(t, function(ev){
+      if(t === "keydown" && ev.key === "Escape"){ wbFilterBox.value = ""; wbApplyFilter(""); wbFilterBox.blur(); }
+      ev.stopPropagation();
+    });
+  });
 
   /* DEV CAPTURE (s81) — the atelier is dev-only, so a framebuffer grab lives
      here (not the release): render synchronously and read the whole drawing
