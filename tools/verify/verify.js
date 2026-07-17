@@ -16,6 +16,28 @@
        --headed       → show the browser (default: headless, GL via ANGLE
                         SwiftShader so WebGL boots without a GPU).
 
+   QUICK MODE (ICS-19) — the SMALL-CHANGE LANE:
+     --quick          → boot check + ONE noon date (default 1849-09-15)
+                        + ONE screenshot per target; measurement tables
+                        and the other noons are skipped.
+       --date <iso>       (quick only) pick the single noon date.
+       --audits <fam,...> (quick only) GATING filter: only the listed
+                          audit families (the `layer` field, e.g.
+                          buildings,ground-paint) gate the verdict; ALL
+                          audits still RUN and are REPORTED — non-listed
+                          families are report-only. Boot errors and new
+                          console errors ALWAYS gate.
+       --target index|atelier|both  (any mode) which served target(s) to
+                          verify; default both.
+
+   SMALL-CHANGE-LANE POLICY: --quick is for COSMETIC / HUD / LABEL-ONLY
+   changes — ink, overlays, HUD text, screenshot framing, copy. Anything
+   that touches WORLD LOGIC, GEOMETRY, or DETERMINISM (placement, terrain,
+   lifecycle, seeds, plat/paint math, audits themselves) MUST run the FULL
+   battery. The full battery stays the no-flag default; --quick never
+   changes what the flagless run does, and a quick GREEN is NOT a
+   substitute for the full gate before merging world-logic work.
+
    For EACH target it:
      1. installs error traps BEFORE load (pageerror + console[error]);
      2. asserts BOOT — the #hud-loading veil clears (07-main sets it to
@@ -88,6 +110,33 @@ const HEADED = args.includes("--headed");
 const URL_ARG = flag("--url");
 const FILE_ARG = flag("--file");
 
+/* ---- QUICK MODE flags (small-change lane; see header policy) ---- */
+const QUICK = args.includes("--quick");
+const DATE_ARG = flag("--date");
+const AUDITS_ARG = flag("--audits");
+const TARGET_ARG = flag("--target");
+
+if (!QUICK && (DATE_ARG || AUDITS_ARG)) {
+  console.log("NOTE: --date/--audits are quick-lane flags and are IGNORED without --quick (the full battery is never weakened).");
+}
+if (QUICK && typeof DATE_ARG === "string" && !/^\d{4}-\d{2}-\d{2}$/.test(DATE_ARG)) {
+  console.error(`--date must be an ISO date (YYYY-MM-DD), got: ${DATE_ARG}`);
+  process.exit(2);
+}
+const QUICK_DATE = QUICK ? (typeof DATE_ARG === "string" ? DATE_ARG : "1849-09-15") : null;
+// gating families (audit `layer` values). null → every family gates (full battery).
+const GATE_FAMS = (QUICK && typeof AUDITS_ARG === "string")
+  ? AUDITS_ARG.split(",").map((s) => s.trim()).filter(Boolean)
+  : null;
+const famGates = (fam) => !GATE_FAMS || GATE_FAMS.includes(fam);
+const TARGET_SEL = (typeof TARGET_ARG === "string") ? TARGET_ARG : "both";
+if (!["index", "atelier", "both"].includes(TARGET_SEL)) {
+  console.error(`--target must be index|atelier|both, got: ${TARGET_SEL}`);
+  process.exit(2);
+}
+// the dates this run drives; quick = ONE noon
+const RUN_DATES = QUICK ? [QUICK_DATE] : CANONICAL_DATES;
+
 function log(...a) { console.log(...a); }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -147,28 +196,45 @@ async function verifyTarget(browser, url, label) {
   // settle a few frames (CDP tabs may stall rAF — nudge via the manual tick hook)
   const settle = async (n = 30) => { await page.evaluate((k) => { for (let i = 0; i < k; i++) window.__P1850.tick && window.__P1850.tick(0.1); }, n); await sleep(120); };
 
-  // NOON PROTOCOL
-  for (const d of CANONICAL_DATES) {
+  // NOON PROTOCOL (quick mode: RUN_DATES is the ONE selected noon; all
+  // audits still run — GATE_FAMS only decides which failures/skips gate)
+  for (const d of RUN_DATES) {
     const before = t.errors.length;
     await page.evaluate((iso) => window.__P1850.jump(iso), d);
     await settle(40);
     const res = await page.evaluate(() => window.__P1850.audits.runAll());
     // only STRING skips are audit-level skips (array `skipped` is detail bookkeeping)
-    const allSkips = res.results.filter((r) => isStringSkip(r.skipped)).map((r) => ({ audit: r.layer + "." + r.audit, why: r.skipped }));
-    const unexpectedSkips = allSkips.filter((s) => !ALLOWED_SKIPS[s.audit]);
+    const allSkips = res.results.filter((r) => isStringSkip(r.skipped)).map((r) => ({ audit: r.layer + "." + r.audit, fam: r.layer, why: r.skipped }));
+    const unexpectedSkipsAll = allSkips.filter((s) => !ALLOWED_SKIPS[s.audit]);
+    const unexpectedSkips = unexpectedSkipsAll.filter((s) => famGates(s.fam));
+    const reportOnlySkips = unexpectedSkipsAll.filter((s) => !famGates(s.fam));
     const allowedSkips = allSkips.filter((s) => ALLOWED_SKIPS[s.audit]);
-    const failed = res.results.filter((r) => !r.pass).map((r) => ({ audit: r.layer + "." + r.audit, detail: r.detail }));
+    const failedAll = res.results.filter((r) => !r.pass).map((r) => ({ audit: r.layer + "." + r.audit, fam: r.layer, detail: r.detail }));
+    const failed = failedAll.filter((f) => famGates(f.fam));
+    const reportOnlyFailed = failedAll.filter((f) => !famGates(f.fam));
     const newErrors = t.errors.length - before;
-    const red = !res.pass || unexpectedSkips.length > 0 || newErrors > 0;
+    // full battery: red exactly as before. Filtered quick run: only gating
+    // families red the verdict; console errors ALWAYS gate.
+    const red = (GATE_FAMS ? failed.length > 0 : !res.pass) || unexpectedSkips.length > 0 || newErrors > 0;
     if (red) t.red = true;
     t.noon.push({ date: d, pass: res.pass, ran: res.ran, failed: res.failed, failedList: failed,
-      unexpectedSkips, allowedSkips, newConsoleErrors: newErrors, red });
-    log(`  NOON ${d}: ${red ? "RED" : "green"} — ${res.ran} audits, ${res.failed} failed, ${unexpectedSkips.length} unexpected-skip, ${allowedSkips.length} allowed-skip, ${newErrors} new errors`);
+      reportOnlyFailed, reportOnlySkips, unexpectedSkips, allowedSkips, newConsoleErrors: newErrors, red });
+    log(`  NOON ${d}: ${red ? "RED" : "green"} — ${res.ran} audits, ${res.failed} failed`
+      + (GATE_FAMS ? ` (${failed.length} gating, ${reportOnlyFailed.length} report-only)` : "")
+      + `, ${unexpectedSkips.length} unexpected-skip, ${allowedSkips.length} allowed-skip, ${newErrors} new errors`);
     if (failed.length) failed.slice(0, 6).forEach((f) => log(`     FAIL ${f.audit}`));
+    if (reportOnlyFailed.length) reportOnlyFailed.slice(0, 6).forEach((f) => log(`     FAIL(report-only) ${f.audit}`));
     if (unexpectedSkips.length) unexpectedSkips.forEach((s) => log(`     SKIP(unexpected) ${s.audit}: ${s.why}`));
+    if (reportOnlySkips.length) reportOnlySkips.forEach((s) => log(`     SKIP(report-only) ${s.audit}: ${s.why}`));
   }
 
-  // MEASUREMENT TABLES (verify hooks) — sampled at the mid canonical date
+  // MEASUREMENT TABLES (verify hooks) — sampled at the mid canonical date.
+  // Quick lane skips them (cosmetic changes don't move geodetic/paint/lot
+  // math; the full battery still gates them).
+  if (QUICK) {
+    t.measurements = { skippedQuick: true, red: false };
+    log("  MEASURE: skipped (--quick lane; full battery gates measurement tables)");
+  } else {
   await page.evaluate((iso) => window.__P1850.jump(iso), "1849-09-15");
   await settle(30);
   let measure = null;
@@ -189,10 +255,15 @@ async function verifyTarget(browser, url, label) {
     t.measurements = { geoOk, paintOk, lotOk, geodeticFit: g, paintAlignment: pa, lotFit: lf, red: mred };
     log(`  MEASURE: ${mred ? "RED" : "green"} — geo=${geoOk} paint=${paintOk} lot=${lotOk} (fitRMS ${g.datasetFitRms_m}m, e2eRMS ${g.canonicalEndToEndRms_m}m)`);
   } else { t.red = true; log("  MEASURE: RED (no __P1850.verify hooks)"); }
+  }
 
-  // SCREENSHOTS at canonical framings
+  // SCREENSHOTS at canonical framings (quick lane: ONE shot — the street
+  // band framing at the selected quick noon)
+  const runFramings = QUICK
+    ? [{ id: "quick-town-500m", alt: 500, date: QUICK_DATE, note: "quick-lane single shot (street band)" }]
+    : FRAMINGS;
   fs.mkdirSync(SHOT_DIR, { recursive: true });
-  for (const f of FRAMINGS) {
+  for (const f of runFramings) {
     await page.evaluate((iso) => window.__P1850.jump(iso), f.date);
     await page.evaluate((o) => { window.__P1850.camSet({ alt: o.alt, x: (o.x != null ? o.x : window.__P1850.plazaCenter.x), z: (o.z != null ? o.z : window.__P1850.plazaCenter.z), snap: true }); }, f);
     await settle(50);
@@ -233,8 +304,10 @@ async function main() {
     targets = [
       { url: `http://127.0.0.1:${srv.port}/index.html`, label: "index" },
       { url: `http://127.0.0.1:${srv.port}/atelier.html`, label: "atelier" }
-    ];
+    ].filter((tg) => TARGET_SEL === "both" || tg.label === TARGET_SEL);
   }
+
+  if (QUICK) log(`QUICK LANE: noon ${QUICK_DATE}, target ${TARGET_SEL}, gating families ${GATE_FAMS ? GATE_FAMS.join(",") : "ALL"} (others report-only)`);
 
   const browser = await chromium.launch({
     headless: !HEADED,
@@ -251,7 +324,12 @@ async function main() {
   const report = {
     generatedAt: new Date().toISOString(),
     appRoot: APP_ROOT,
+    mode: QUICK ? "quick" : "full",
+    quickDate: QUICK_DATE,
+    gatingFamilies: GATE_FAMS,
+    targetSelection: TARGET_SEL,
     canonicalDates: CANONICAL_DATES,
+    runDates: RUN_DATES,
     fixture: FIXTURE._meta.provenance,
     overall: overallRed ? "RED" : "GREEN",
     targets: results
@@ -269,7 +347,8 @@ function renderMarkdown(r) {
   L.push(``);
   L.push(`- Generated: ${r.generatedAt}`);
   L.push(`- Overall: **${r.overall}**`);
-  L.push(`- Canonical noon dates: ${r.canonicalDates.join(", ")}`);
+  L.push(`- Mode: **${r.mode || "full"}**${r.mode === "quick" ? ` (small-change lane — noon ${r.quickDate}, target ${r.targetSelection}, gating families ${r.gatingFamilies ? r.gatingFamilies.join(",") : "ALL"}; NOT a substitute for the full battery on world-logic changes)` : ""}`);
+  L.push(`- Noon dates driven: ${(r.runDates || r.canonicalDates).join(", ")} (canonical: ${r.canonicalDates.join(", ")})`);
   L.push(`- Geodesic fixture: ${r.fixture}`);
   L.push(``);
   for (const t of r.targets) {
@@ -286,11 +365,18 @@ function renderMarkdown(r) {
     L.push(``);
     const anyFail = t.noon.flatMap((n) => n.failedList.map((f) => `${n.date}: ${f.audit}`));
     if (anyFail.length) { L.push(`Failing audits (RED):`); anyFail.forEach((f) => L.push(`- ${f}`)); L.push(``); }
+    const anyRptFail = t.noon.flatMap((n) => (n.reportOnlyFailed || []).map((f) => `${n.date}: ${f.audit}`));
+    if (anyRptFail.length) { L.push(`Report-only failures (outside --audits gating families — NOT red here; the full battery gates them):`); anyRptFail.forEach((f) => L.push(`- ${f}`)); L.push(``); }
     const anyUnexp = t.noon.flatMap((n) => n.unexpectedSkips.map((s) => `${n.date}: ${s.audit} (${s.why})`));
     if (anyUnexp.length) { L.push(`Unexpected skips-at-noon (RED per protocol):`); anyUnexp.forEach((s) => L.push(`- ${s}`)); L.push(``); }
+    const anyRptSkip = t.noon.flatMap((n) => (n.reportOnlySkips || []).map((s) => `${n.date}: ${s.audit} (${s.why})`));
+    if (anyRptSkip.length) { L.push(`Report-only unexpected skips (outside gating families — NOT red here):`); anyRptSkip.forEach((s) => L.push(`- ${s}`)); L.push(``); }
     const allowed = [...new Set(t.noon.flatMap((n) => n.allowedSkips.map((s) => `${s.audit} — ${s.why}`)))];
     if (allowed.length) { L.push(`Allowed structural skips (foundation branch, not red):`); allowed.forEach((s) => L.push(`- ${s}`)); L.push(``); }
-    if (t.measurements) {
+    if (t.measurements && t.measurements.skippedQuick) {
+      L.push(`**Measurement tables:** skipped (--quick lane; the full battery gates them)`);
+      L.push(``);
+    } else if (t.measurements) {
       const m = t.measurements, g = m.geodeticFit;
       L.push(`**Measurement tables:** ${m.red ? "RED" : "green"} — geo=${m.geoOk} paint=${m.paintOk} lot=${m.lotOk}`);
       L.push(``);
