@@ -376,6 +376,36 @@ function renderGroundSplat(){
     }
     for(var k = 1; k < cls.length; k++){ if(cls[k] !== cls[runA]){ flush(k-1); runA = k; } }
     flush(cls.length - 1);
+    /* ICS-17 (operator flag, minor polish): CRISP TERMINAL CAP at the dry-land
+       trim boundary. A clamped run ends in a canvas stroke butt-cap whose
+       coverage-AA ramps alpha across ~a texel; magnified at the 40-150 m
+       framings (and mip-softened at oblique angles) that ramp reads as a
+       ragged fade / faint hover seam at the wharf foot (Broadway at Clark's
+       Point the exemplar). Re-lay the last ~2 m of the run as a FILLED
+       width-quad at full alpha — the s90 pier-deck lesson (symmetric
+       coverage AA about every polygon edge) — so the terminal is one clean
+       straight contour that the ICS-12 fwidth "sharp" reconstruction snaps
+       to a hard screen-space edge at the alpha≈0.675 contour. Paint-only:
+       same tone, same pass, same one-owner canvas, established (cls 2)
+       trimmed ends only; roadDrawnExtentAt / clamp logic untouched. */
+    if(ext.trimmedAt && cls.length >= 1){
+      var capEnd = (ext.landwardEnd === 0) ? wpts.length - 1 : 0;      // the SEAWARD (trimmed) terminus
+      var capSeg = (ext.landwardEnd === 0) ? cls.length - 1 : 0;
+      if(cls[capSeg] === 2){
+        var CP = wpts[capEnd], CQ = wpts[(ext.landwardEnd === 0) ? capEnd - 1 : 1];
+        var cdx = CP.x - CQ.x, cdz = CP.z - CQ.z, cdl = Math.hypot(cdx, cdz);
+        if(cdl > 0.01){
+          cdx /= cdl; cdz /= cdl;
+          var capL = Math.min(2.0, cdl), chw = s.widthM / 2, cnx = -cdz, cnz = cdx;
+          _gpFillPoly([
+            { x:CP.x + cnx*chw,            z:CP.z + cnz*chw },
+            { x:CP.x - cnx*chw,            z:CP.z - cnz*chw },
+            { x:CP.x - cdx*capL - cnx*chw, z:CP.z - cdz*capL - cnz*chw },
+            { x:CP.x - cdx*capL + cnx*chw, z:CP.z - cdz*capL + cnz*chw }
+          ], GP_TONE_ROAD);
+        }
+      }
+    }
     rec.painted = (rec.ghostSegs + rec.wornSegs) > 0;
   });
 
