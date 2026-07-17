@@ -10165,7 +10165,8 @@ function fillCensusCurve(){
        them are byte-unchanged by construction. */
     { day: eventDateToSimDay("1849-06-15"), n: 130 },  // hold the village through spring 1849
     { day: eventDateToSimDay("1849-09-15"), n: 520 },  // reasoned mid-point of the ~500-600 Sept interpolation
-    { day: eventDateToSimDay("1849-12-20"), n: 720 }   // reasoned mid-point of the ~700-750 Dec interpolation
+    { day: eventDateToSimDay("1849-12-20"), n: 765 }   // ics26 count flex INSIDE the s106c band [630,780] (was the 720 mid-point): the RES-4 measured coverage curve needs the extra ~45 units of footprint to reach the per-band aggregates; the interpolation itself allowed ~700-750+ and the gating plausibility band is unchanged
+
   ];
   return _fillCensusCurve;
 }
@@ -10218,8 +10219,11 @@ function fillPickCat(mix, counts){
    `day`, from the `snapKey` weight column (default "1847-04" — the v1 village;
    s106c passes "1849" for the in-town wave so tents dominate the shanty bucket;
    s106d passes tentOnly for the core-canvas sub-walk — the boom-window core
-   exception admits CANVAS, never the scrap-shanty tier). */
-function fillPickCode(cat, day, rng, snapKey, tentOnly){
+   exception admits CANVAS, never the scrap-shanty tier; ics26 passes areaBias
+   — the size-grading exponent (fill-density-model §7: dense core ground
+   weights medium/large codes; sparse fringe weights small): pick weight is
+   multiplied by (footprint_ft2/300)^areaBias, 0 = the historic behaviour). */
+function fillPickCode(cat, day, rng, snapKey, tentOnly, areaBias){
   var pool = [], tot = 0;
   for(var i = 0; i < FILL_TYPES.length; i++){
     var t = FILL_TYPES[i];
@@ -10230,6 +10234,7 @@ function fillPickCode(cat, day, rng, snapKey, tentOnly){
     if(!fillEraValid(t, day)) continue;
     var w = fillWeight(t.code, snapKey || "1847-04");
     if(w <= 0) w = 0.5;                                  // era-valid but zero-weighted at 1847 snapshot: a faint floor so later-era frame variety can still draw
+    if(areaBias) w *= Math.pow((t.footprint.w * t.footprint.d) / 300, areaBias);   // ics26 size grading
     pool.push({ t: t, w: w }); tot += w;
   }
   if(!pool.length) return null;
@@ -10285,6 +10290,11 @@ function fillFrontageSlots(capDay){
    landmarks) + a local inter-fill overlap check. Each accepted building carries a
    census category (tranche mix) and a construction appearDay. ===== */
 var FILL_MASTER = null, _fillMasterVer = -1;
+/* ics26 — THE YARD-FENCE REGISTRY (activates the placement.fences P6 stub):
+   FENCE_SEGS/FENCE_POSTS are the audit's data surface (06-debug reads these
+   module globals); FILL_FENCE_RENDER carries the per-lot render bundles
+   (appearDay-gated placeholder rails). Rebuilt with the fill master. */
+var FENCE_SEGS = [], FENCE_POSTS = [], FILL_FENCE_RENDER = [];
 /* s106c geometry gates the LAW_TABLES rows don't carry (module-level so the
    wave spawner and the inTownFill audit share ONE measure — measurement law):
    the "structure" row has no ROW clause (v1 stayed off streets by slot
@@ -10347,7 +10357,9 @@ function fillQuadCrossesRow(q, cx, cz){
    curb setback) so wave fill lands in streets/water/documented-camp ground
    and buildings.inTownFill goes RED; knob off → GREEN (the gates are real).
    The v1 1846-48 village build is NEVER touched by the knob. */
-var FILL_QA = { ignoreInTownGates: false, uncapCoreCanvas: false, ignoreSlotGates: false, version: 0 };
+var FILL_QA = { ignoreInTownGates: false, uncapCoreCanvas: false, ignoreSlotGates: false,
+                ignoreCoverageTargets: false,   // ics26: revert the wave to the flat plaza-radial fill (no hotspot fields / block budgets / size grading) — buildings.blockCoverage fail-before
+                version: 0 };
 /* s106c tunables — the in-town 1849 tent-first densification wave. */
 var FILL_1849_START_ISO = "1849-06-15";   // wave ramp start (operator: "ramping mid-1849 -> Dec 1849")
 var FILL_1849_CAP_ISO   = "1849-12-20";   // wave cap = the boom-peak canonical noon
@@ -10393,7 +10405,7 @@ var FILL_CVF_FRAC         = 0.35;         // seeded fraction of non-tent, non-co
 var FILL_TENT_HARDEN_FRAC = 0.30;         // seeded fraction of residential-band 1849-wave TENT fronts that HARDEN into frame on the band interval (fill-density-model §4: the tent->frame single-year replacement cycle, peak 1849 — the s106d core arc at band pace; the rest persist as canvas through the window)
 var FILL_RES_CONV_MIN_D   = 60;           // residential-band canvas->final hardening: earliest (~2 months after ITS spawn)
 var FILL_RES_CONV_MAX_D   = 240;          // ...latest (~8 months) — the residential band sheds canvas SLOWER than the core's 60-150d
-var FILL_REAR_FRAC        = 0.25;         // cap: rear-slot placements <= ceil(frac x shanty-bucket placements) (streaming, like the core-canvas cap)
+var FILL_REAR_FRAC        = 0.40;         // cap: rear-slot placements <= ceil(frac x shanty-bucket placements) (streaming, like the core-canvas cap; ics26 raised 0.25 -> 0.40 — denser rear courts carry the RES-4 interior texture, spread town-wide by the round-robin cursor)
 var FILL_REAR_GAP_M       = 1.5;          // front-occupant -> rear-occupant spacing inside a lot (tandem pitch)
 var FILL_REAR_CAP_WIDE_M  = 5.0;          // a front at least this wide anchors 2 rear slots; narrower lots host 1
 var FILL_REAR_MIN_STAND_D = 20;           // a consumed rear tent must have STOOD at least this long before its teardown
@@ -10401,6 +10413,227 @@ var FILL_EXP_FRAC         = 0.60;         // seeded fraction of eligible lots (f
 var FILL_EXP_DUR_D        = 25;           // annex construction duration (frame-annex scale work)
 var FILL_EXP_START_ISO    = "1849-10-01"; // expansion window (seeded within): consolidation follows the boom's fall money
 var FILL_EXP_END_ISO      = "1850-03-01";
+/* =====================================================================
+   ics26 (ICS-26) tunables — MEASURED BLOCK-COVERAGE TARGETS (RES-4,
+   research/block-coverage-1849-53.md §6). The Dec-1849 fill is tuned to the
+   measured per-band structure-coverage curve, via a HOTSPOT-FIELD model
+   (operator design): density grows around MULTIPLE seeded nuclei — the plaza
+   is one hotspot, each ACTIVE wharf-foot corridor is another (the RES-4
+   Sansome-Battery finding: density followed the wharves, not just the
+   plaza) — never one city-center radial gradient. A block's coverage TARGET
+   is drawn from the MEASURED in-band spread (core 30-65% etc.), seeded per
+   block, so blocks vary like the real chart; the audit gates the per-band
+   AGGREGATE + spread, never uniform values.
+
+   THE FIELD: each hotspot h radiates a decay field with its OWN reach
+   (coreR/midR — a wharf-foot colony is real but tighter than the plaza's);
+   a point's grade is the SUPERPOSITION (the strongest grade any nearby
+   hotspot grants — "bacterial colony" fronts merging), and demand order is
+   the normalized field coordinate min_h d(p,h)/coreR_h. Radii calibrated in
+   metres against RES-4's block-distance bands. */
+var FILL_COV_CORE_M    = 240;    // plaza hotspot: core-grade reach (RES-4 CORE = plaza-facing + ~1-2 blocks)
+var FILL_COV_MID_M     = 500;    // plaza hotspot: mid-grade reach (RES-4 MID ~2-4 blocks, ~250-500 m); beyond -> fringe
+var FILL_WF_CORE_M     = 170;    // wharf-foot hotspot: core-grade reach (the corridor-adjacent blocks — the M5 exception; = the audit's WATERFRONT radius)
+var FILL_WF_MID_M      = 280;    // wharf-foot hotspot: mid-grade reach (the colony shoulders, ~1 block beyond the corridor)
+/* per-band coverage RANGES (RES-4 measured spreads, Dec-1849 discounted) +
+   the skew that pins the sampled band MEAN at the recommended target:
+   E[lo + (hi-lo)*u^k] = lo + (hi-lo)/(k+1)  ->  core [0.30,0.65] k=6 => mean
+   0.35; mid [0.07,0.17] k=1 => 0.12; fringe [0.01,0.05] k=1 => 0.03. */
+var FILL_COV_RANGE = { core: [0.30, 0.65], mid: [0.07, 0.17], fringe: [0.01, 0.05] };
+var FILL_COV_SKEW  = { core: 6, mid: 1, fringe: 1 };
+var FILL_COV_TOL   = { core: 0.08, mid: 0.05, fringe: 0.02 };   // audit tolerance (RES-4 confidence tier C)
+var FILL_WF_RADIUS_M   = 170;    // audit band: a non-core block whose centroid is within this of an ACTIVE wharf foot is WATERFRONT-FILL (core-grade expected — the M5 exception; = FILL_WF_CORE_M)
+var FILL_COV_BUILD_MIN = 0.5;    // a block under half BUILDABLE at the wave start is not a coverage subject — its ground belongs to the cove/beach/hillside, and its density arrives with the 1850-51 fill (RES-4: M5 itself is measured on MADE land)
+/* size grading (fill-density-model §7: dense ground weights medium/large):
+   catalog-code pick weight *= (footprint_ft2 / 300)^bias per grade, and the
+   chosen footprint DEPTH is scaled into the block (RES-4: perimeter-first,
+   the built rim deepens where demand is hottest), capped absolutely. */
+var FILL_SIZE_BIAS   = { core: 1.4, mid: 0.3, fringe: -0.8 };
+var FILL_DEPTH_SCALE = { core: 1.60, mid: 1.20, fringe: 1.0 };
+var FILL_WIDTH_SCALE = { core: 1.25, mid: 1.10, fringe: 1.0 };
+var FILL_SCALE_DEPTH_MAX_M = 16.5;  // ~54 ft — an annexed-depth cap so scaled fronts never reach mid-block ROWs / rear courts
+var FILL_SCALE_WIDTH_MAX_M = 20.0;
+/* backyard texture — property-line fences (activates the placement.fences
+   stub): a seeded fraction of RESIDENTIAL-band wave lots ring their yard
+   with placeholder post-and-rail runs, appearing a seeded lag after the
+   lot's front building. */
+var FILL_FENCE_FRAC      = 0.35;
+var FILL_FENCE_LAG_MIN_D = 10, FILL_FENCE_LAG_MAX_D = 45;
+var FILL_FENCE_MARGIN_M  = 0.6;     // rail offset beyond the widest occupant's half-width
+var FILL_FENCE_POST_M    = 2.5;     // post pitch along a rail
+
+/* the ACTIVE hotspots at `day`: the plaza + every pier whose construction
+   checkpoint is reached (pierEdgesAt), each contributing its FOOT (innerEnd —
+   where the wharf meets the town: the corridor head Sansome-Battery densified
+   around). Derived from the pier record at query time — no hardcoded coords. */
+function fillHotspotsAt(day){
+  var H = [{ id: "plaza", x: PLAZA_CENTER.x, z: PLAZA_CENTER.z, coreR: FILL_COV_CORE_M, midR: FILL_COV_MID_M }];
+  var piers = (typeof PIERS_RUNTIME !== "undefined") ? PIERS_RUNTIME : [];
+  for(var i = 0; i < piers.length; i++){
+    var e = (typeof pierEdgesAt === "function") ? pierEdgesAt(piers[i], day) : null;
+    if(e && e.active && e.innerEnd) H.push({ id: piers[i].id, x: e.innerEnd.x, z: e.innerEnd.z, coreR: FILL_WF_CORE_M, midR: FILL_WF_MID_M });
+  }
+  return H;
+}
+/* the field's normalized level-set coordinate — min_h d(p,h)/coreR_h (demand
+   order: 1.0 = the edge of some hotspot's core-grade reach). */
+function fillEffDist(x, z, hots){
+  var best = Infinity;
+  for(var i = 0; i < hots.length; i++){
+    var h = hots[i], d = Math.hypot(x - h.x, z - h.z) / (h.coreR || 1);
+    if(d < best) best = d;
+  }
+  return best;
+}
+/* the SUPERPOSED grade — the strongest grade ANY hotspot grants the point. */
+function fillCovGradeAt(x, z, hots){
+  var g = 2;
+  for(var i = 0; i < hots.length; i++){
+    var h = hots[i], d = Math.hypot(x - h.x, z - h.z);
+    if(d <= h.coreR) return "core";
+    if(d <= h.midR && g > 1) g = 1;
+  }
+  return g === 1 ? "mid" : "fringe";
+}
+
+/* THE COVERAGE BLOCK TABLE — every fifty-vara block that is a coverage
+   subject at the wave cap: born, not the plaza common, majority-dry at the
+   wave start. Carries the block's world centroid, area, dry fraction
+   (8x6 interior grid vs isDryLand at the wave start), the audit BAND
+   (RES-4 measurement bands: plaza distance + the waterfront exception) and
+   the generator GRADE (hotspot field). Cached per FILL_QA.version. */
+var _fillCovBlocks = null, _fillCovBlocksVer = -1;
+function fillCovBlocks(){
+  if(_fillCovBlocks && _fillCovBlocksVer === FILL_QA.version) return _fillCovBlocks;
+  var capDay = eventDateToSimDay(FILL_1849_CAP_ISO), startDay = eventDateToSimDay(FILL_1849_START_ISO);
+  var hots = fillHotspotsAt(capDay);
+  var out = [], B = (typeof GROUND_PLAN !== "undefined") ? GROUND_PLAN.blocks : [];
+  for(var bi = 0; bi < B.length; bi++){
+    var b = B[bi];
+    if(b.district !== "fifty-vara" || b.publicReserve) continue;
+    if(b.birth > capDay) continue;
+    var wc = gridToWorldAt((b.uLo + b.uHi) / 2, (b.vLo + b.vHi) / 2, GRID_ROT_BASE);
+    /* BUILDABLE fraction — a 10x8 interior sample grid at the wave start,
+       against the SAME ground laws the structure placement row enforces
+       (LAW_TABLES.structure minY + slopeMaxPct + dry land): coverage is
+       measured over ground a structure can lawfully stand on — the beach
+       band and the steep hillside are not coverage subjects at this window
+       (their density arrives with the 1850-51 fill / grading; RES-4's M5
+       waterfront blocks are themselves measured on MADE land). */
+    var sLaw = (typeof LAW_TABLES !== "undefined" && LAW_TABLES.structure) ? LAW_TABLES.structure : { minY: 1, slopeMaxPct: 15 };
+    var dryN = 0, buildN = 0, tot = 0;
+    for(var a = 0; a < 10; a++) for(var c = 0; c < 8; c++){
+      var u = b.uLo + b.extU * (a + 0.5) / 10, v = b.vLo + b.extV * (c + 0.5) / 8;
+      var w = gridToWorldAt(u, v, GRID_ROT_BASE); tot++;
+      var dry = (typeof isDryLand !== "function" || isDryLand(w.x, w.z, startDay));
+      if(dry){
+        dryN++;
+        if(terrainHeight(w.x, w.z) > sLaw.minY &&
+           (typeof terrainSlopePct !== "function" || terrainSlopePct(w.x, w.z) <= sLaw.slopeMaxPct)) buildN++;
+      }
+    }
+    var dryFrac = tot ? dryN / tot : 0, buildFrac = tot ? buildN / tot : 0;
+    var plazaD = Math.hypot(wc.x - PLAZA_CENTER.x, wc.z - PLAZA_CENTER.z);
+    var wharfD = Infinity;
+    for(var hi = 1; hi < hots.length; hi++){                 // hots[0] is the plaza
+      var hd = Math.hypot(wc.x - hots[hi].x, wc.z - hots[hi].z);
+      if(hd < wharfD) wharfD = hd;
+    }
+    var band = plazaD <= FILL_COV_CORE_M ? "core"
+             : (wharfD <= FILL_WF_RADIUS_M ? "waterfront"
+             : (plazaD <= FILL_COV_MID_M ? "mid" : "fringe"));
+    out.push({ key: b.key, uLo: b.uLo, uHi: b.uHi, vLo: b.vLo, vHi: b.vHi,
+               cx: wc.x, cz: wc.z, areaM2: b.extU * b.extV,
+               dryFrac: +dryFrac.toFixed(3), buildFrac: +buildFrac.toFixed(3),
+               eligible: buildFrac >= FILL_COV_BUILD_MIN,
+               plazaD: +plazaD.toFixed(1), wharfD: isFinite(wharfD) ? +wharfD.toFixed(1) : null,
+               band: band, dEff: +fillEffDist(wc.x, wc.z, hots).toFixed(3),
+               grade: fillCovGradeAt(wc.x, wc.z, hots) });
+  }
+  _fillCovBlocks = out; _fillCovBlocksVer = FILL_QA.version;
+  return out;
+}
+/* which coverage block a world point sits in (uv rect test; null off-plat). */
+function fillCovBlockAt(blocks, x, z){
+  var g = cadWorldToGridAt(x, z, GRID_ROT_BASE);
+  for(var i = 0; i < blocks.length; i++){
+    var b = blocks[i];
+    if(g.u >= b.uLo && g.u <= b.uHi && g.v >= b.vLo && g.v <= b.vHi) return b;
+  }
+  return null;
+}
+/* THE SPAWNER LEDGER — per-block sampled coverage targets + a running placed-
+   area account. target = lo + (hi-lo) * hash^skew of the block's GRADE range
+   (seeded per block — the measured in-band spread, never one painted mean).
+   Seeded up-front with everything already standing at the cap (landmarks +
+   the v1 village), so the wave budgets the REMAINDER. */
+function fillCovLedger(capDay){
+  var blocks = fillCovBlocks(), byKey = {};
+  for(var i = 0; i < blocks.length; i++){
+    var b = blocks[i], r = FILL_COV_RANGE[b.grade], k = FILL_COV_SKEW[b.grade];
+    var u = lcHash("COV|" + b.key, "cov");
+    var target = r[0] + (r[1] - r[0]) * Math.pow(u, k);
+    byKey[b.key] = { b: b, target: target, budgetM2: target * b.areaM2 * Math.max(b.buildFrac, 0.05), placedM2: 0 };
+  }
+  function cell(x, z){ var b = fillCovBlockAt(blocks, x, z); return b ? byKey[b.key] : null; }
+  return {
+    blocks: blocks, byKey: byKey,
+    seed: function(cx, cz, areaM2){ var c = cell(cx, cz); if(c) c.placedM2 += areaM2; },
+    gradeAt: function(x, z){ var c = cell(x, z); return c ? c.b.grade : "fringe"; },
+    allow: function(x, z, areaM2){ var c = cell(x, z); return !c || c.placedM2 < c.budgetM2; },
+    book: function(x, z, areaM2){ var c = cell(x, z); if(c) c.placedM2 += areaM2; },
+    summary: function(){
+      var s = {};
+      for(var k2 in byKey){ var c = byKey[k2];
+        var band = c.b.band, g = s[band] || (s[band] = { blocks: 0, targetSum: 0, placedSum: 0, budgetSum: 0 });
+        g.blocks++; g.targetSum += c.target; g.placedSum += c.placedM2; g.budgetSum += c.budgetM2;
+      }
+      return s;
+    }
+  };
+}
+/* THE MEASURE (shared by the blockCoverage audit + the census hook —
+   measurement law: one measure, re-derived from the world, never the
+   spawner's ledger). Coverage of an eligible block at `day` = the summed
+   footprint area of every STANDING structure whose centroid lies in the
+   block (derived fill in a physical phase + the landmark set — the drawn
+   OBBs, expansion included) / the block's DRY area. */
+function fillBlockCoverageMeasure(day){
+  var blocks = fillCovBlocks();
+  var acc = {};
+  for(var i = 0; i < blocks.length; i++) acc[blocks[i].key] = 0;
+  function add(cx, cz, w, d){
+    var b = fillCovBlockAt(blocks, cx, cz);
+    if(b) acc[b.key] += w * d;
+  }
+  deriveFillSet(day).forEach(function(e){
+    if(e.phase === "absent" || e.phase === "gone" || e.phase === "cleared" ||
+       e.phase === "ruins" || e.phase === "clearing") return;
+    add(e.cx, e.cz, e.w, e.d);
+  });
+  deriveLandmarkSet(day).forEach(function(L){
+    if(L.phase === "absent" || L.phase === "gone" || L.phase === "cleared" ||
+       L.phase === "ruins" || L.phase === "clearing") return;
+    add(L.cx, L.cz, L.w, L.d);
+  });
+  var rows = [], bands = {};
+  for(var j = 0; j < blocks.length; j++){
+    var b = blocks[j];
+    if(!b.eligible) continue;
+    var cov = acc[b.key] / (b.areaM2 * b.buildFrac);
+    rows.push({ key: b.key, band: b.band, grade: b.grade, cov: +cov.toFixed(4),
+                x: +b.cx.toFixed(1), z: +b.cz.toFixed(1),
+                dryFrac: b.dryFrac, buildFrac: b.buildFrac, plazaD: b.plazaD, wharfD: b.wharfD, areaM2: +acc[b.key].toFixed(0) });
+    var g = bands[b.band] || (bands[b.band] = { n: 0, sum: 0, min: Infinity, max: -Infinity });
+    g.n++; g.sum += cov; if(cov < g.min) g.min = cov; if(cov > g.max) g.max = cov;
+  }
+  var perBand = {};
+  Object.keys(bands).forEach(function(k){
+    var g = bands[k];
+    perBand[k] = { n: g.n, mean: +(g.sum / g.n).toFixed(4), min: +g.min.toFixed(4), max: +g.max.toFixed(4) };
+  });
+  return { day: day, blocks: rows, perBand: perBand };
+}
 /* the canvas-first arc numbers for ONE entry — a pure lcHash function of the
    entry identity, used by BOTH fillLifecycleOf (the events) and the expansion
    post-pass in buildFillMaster (front-readiness), so the two never disagree
@@ -10540,12 +10773,51 @@ function buildFillMaster(){
   var rng2 = sfc32(sd2[0], sd2[1], sd2[2], sd2[3]);       // DEDICATED wave stream — never the v1 stream, never rngBuild
   var need2 = Math.max(0, Math.round(fillTargetTotal(waveCap)) - reservationsAt(waveCap).length - v1Len);
   var slots2 = fillFrontageSlots(waveCap);                // fifty-vara blocks born by the cap (incl. post-1848 births)
+  /* ics26 (ICS-26) — THE HOTSPOT-FIELD COVERAGE LEDGER. Per-block coverage
+     targets sampled from the RES-4 measured in-band spreads (fillCovLedger),
+     seeded with everything ALREADY standing at the cap (the v1 village + the
+     landmark registry) so the wave budgets the remainder. Demand order is the
+     FIELD's effective distance (plaza + active wharf-foot hotspots — the
+     Sansome-Battery finding), not a single plaza radius. QA knob
+     ignoreCoverageTargets reverts to the flat plaza-radial walk (the
+     blockCoverage fail-before). */
+  var cov26 = FILL_QA.ignoreCoverageTargets ? null : fillCovLedger(waveCap);
+  var hots26 = fillHotspotsAt(waveCap);
+  if(cov26){
+    for(var sv = 0; sv < v1Len; sv++) cov26.seed(master[sv].cx, master[sv].cz, master[sv].w * master[sv].d);
+    deriveLandmarkSet(waveCap).forEach(function(L){
+      if(L.phase === "absent" || L.phase === "gone" || L.phase === "cleared") return;
+      cov26.seed(L.cx, L.cz, L.w * L.d);
+    });
+  }
+  /* ics26 — WAVE PACKING IS OBB-EXACT. The v1 loop's circle-conservative
+     inter-fill check wasted whole frontage runs once footprints grew (a
+     16x9 m store's bounding circle "overlaps" neighbours its BOX clears by
+     metres). The wave proves detachment on the DRAWN BOX (SAT, the same
+     measure fillFootprintsOBB gates) behind a circle broadphase; the v1
+     build keeps its historic circle check untouched (byte-identical). */
+  var placedQ = [];
+  for(var pq0 = 0; pq0 < v1Len; pq0++){
+    var pe0 = master[pq0];
+    placedQ.push({ x: pe0.cx, z: pe0.cz, r: Math.hypot(pe0.w, pe0.d) / 2,
+                   q: fillPoseQuad(pe0.cx, pe0.cz, pe0.w, pe0.d, pe0.yaw) });
+  }
+  function waveOverlaps(cx, cz, r, quad){
+    for(var i = 0; i < placedQ.length; i++){
+      var p = placedQ[i], dx = cx - p.x, dz = cz - p.z, md = r + p.r;
+      if(dx * dx + dz * dz >= md * md) continue;
+      if(fillQuadPen(quad, p.q) > 0) return true;
+    }
+    return false;
+  }
   for(var s2 = 0; s2 < slots2.length; s2++){
-    slots2[s2].order = Math.hypot(slots2[s2].cx - PLAZA_CENTER.x, slots2[s2].cz - PLAZA_CENTER.z) + (rng2() - 0.5) * 10;
+    slots2[s2].order = cov26
+      ? fillEffDist(slots2[s2].cx, slots2[s2].cz, hots26) + (rng2() - 0.5) * 0.08          // normalized field coordinate + jitter
+      : Math.hypot(slots2[s2].cx - PLAZA_CENTER.x, slots2[s2].cz - PLAZA_CENTER.z) + (rng2() - 0.5) * 10;
   }
   slots2.sort(function(a, b){ return a.order - b.order; });
   var counts2 = { shanty: 0, frame: 0, adobe: 0 }, waveN = 0;
-  var rej2 = { edgeCap: 0, camp: 0, water: 0, zone: 0, law: 0, row: 0, reserved: 0, overlap: 0, noType: 0 };
+  var rej2 = { edgeCap: 0, camp: 0, water: 0, zone: 0, law: 0, row: 0, reserved: 0, overlap: 0, noType: 0, cov: 0 };
   /* THE WAVE WALK — largest-remainder category pick (the exact tranche-mix
      discipline v1 uses) with a PER-CATEGORY slot cursor over the ONE
      plaza-ward slot list. Each category walks the demand order and takes
@@ -10600,7 +10872,7 @@ function buildFillMaster(){
      tracks how deep the lot's tandem column has grown; slotBad memoizes a
      slot position whose gates can never pass (static geometry — a failed
      slot never un-fails). */
-  var lots = [], rearN = 0;
+  var lots = [], rearN = 0, rearCursor = 0;   // ics26: persistent round-robin cursor — rear slots spread town-wide (the s106e one-line cursor policy), never re-packing the plaza-nearest lots first
   while(waveN < need2){
     var cat2 = wavePickCat();
     if(!cat2) break;                                      // every category out of legal ground
@@ -10619,23 +10891,26 @@ function buildFillMaster(){
         var ccx = cs.ex + cs.tx * cJit + cs.inx * cSet;
         var ccz = cs.ez + cs.tz * cJit + cs.inz * cSet;
         if(!fillCoreBlockAt(ccx, ccz, waveCap)) continue;             // the posed centre must be core ground too (the audit's measure)
+        if(cov26 && !cov26.allow(ccx, ccz, cwM * cdM)) continue;      // ics26: the block is at its sampled coverage target
         var crB = Math.hypot(cwM, cdM) / 2;
         if(typeof encampmentZoneAt === "function" && encampmentZoneAt(ccx, ccz, waveCap)) continue;
         if(typeof isDryLand === "function" && !isDryLand(ccx, ccz, waveStart)) continue;
         var ccp = canPlace("tent", { x: ccx, z: ccz, yaw: cs.yaw, footprint: crB, footprintW: cwM, footprintD: cdM },
                            { day: waveCap, zoneClass: "tent", coreCanvasPermit: true });
         if(!ccp.ok) continue;
-        if(fillQuadCrossesRow(fillPoseQuad(ccx, ccz, cwM, cdM, cs.yaw), ccx, ccz)) continue;
+        var cQuad26 = fillPoseQuad(ccx, ccz, cwM, cdM, cs.yaw);
+        if(fillQuadCrossesRow(cQuad26, ccx, ccz)) continue;
         var cResBad = false;
         for(var cpi = 0; cpi < PLACEMENT_INDEX.length; cpi++){
           var cq = PLACEMENT_INDEX[cpi], cdx = ccx - cq.x, cdz = ccz - cq.z, cmd = crB + cq.r;
           if(cdx*cdx + cdz*cdz < cmd*cmd){ cResBad = true; break; }
         }
         if(cResBad) continue;
-        if(fillOverlapsLocal(placed, ccx, ccz, crB)) continue;
+        if(waveOverlaps(ccx, ccz, crB, cQuad26)) continue;
         counts2.shanty++; waveN++; coreWaveN++; coreCanvasN++;
+        if(cov26) cov26.book(ccx, ccz, cwM * cdM);
         edgeBuilt[cs.edgeId] = cBuilt + cwM + FILL_GAP_M;
-        placed.push({ x: ccx, z: ccz, r: crB });
+        placedQ.push({ x: ccx, z: ccz, r: crB, q: cQuad26 });
         master.push({ code: ct.code, cat: "shanty", material: ct.material, subtype: ct.subtype,
                       cx: ccx, cz: ccz, w: cwM, d: cdM, yaw: cs.yaw, nx: cs.outx, nz: cs.outz,
                       storyRange: ct.storyRange || [1, 1], edgeId: cs.edgeId, edgeLen: cs.edgeLen,
@@ -10668,7 +10943,8 @@ function buildFillMaster(){
        rearN + 1 <= Math.ceil(FILL_REAR_FRAC * (counts2.shanty + 1))){
       var rt = fillPickCode("shanty", waveCap, rng2, "1849", true);   // rear occupants are CANVAS
       var placedRear = false;
-      for(var li = 0; rt && li < lots.length && !placedRear; li++){
+      for(var li0 = 0; rt && li0 < lots.length && !placedRear; li0++){
+        var li = (rearCursor + li0) % lots.length;                    // ics26: round-robin over ALL lots
         var lot = lots[li];
         if(lot.rearUsed >= lot.rearCap) continue;
         var slotK = lot.rearUsed + 1;
@@ -10686,6 +10962,8 @@ function buildFillMaster(){
         var rcx = fe.cx + rDir * fe.nx * rBack + rtx * rLat;
         var rcz = fe.cz + rDir * fe.nz * rBack + rtz * rLat;
         var rB = Math.hypot(rw, rd) / 2, rBad = false;
+        var rQuad26 = fillPoseQuad(rcx, rcz, rw, rd, fe.yaw);
+        if(cov26 && !cov26.allow(rcx, rcz, rw * rd)){ lot.slotBad[slotK] = true; continue; }   // ics26: block at its coverage target (budgets only ever fill — a static fail)
         if(!FILL_QA.ignoreSlotGates){
           if(fillCoreBlockAt(rcx, rcz, waveCap)) rBad = true;                                        // rear tents are residential texture
           else if(typeof encampmentZoneAt === "function" && encampmentZoneAt(rcx, rcz, waveCap)) rBad = true;
@@ -10694,7 +10972,7 @@ function buildFillMaster(){
             var rcp = canPlace("tent", { x: rcx, z: rcz, yaw: fe.yaw, footprint: rB, footprintW: rw, footprintD: rd },
                                { day: waveCap, zoneClass: "tent" });
             if(!rcp.ok) rBad = true;
-            else if(fillQuadCrossesRow(fillPoseQuad(rcx, rcz, rw, rd, fe.yaw), rcx, rcz)) rBad = true;
+            else if(fillQuadCrossesRow(rQuad26, rcx, rcz)) rBad = true;
             else {
               for(var rpi = 0; rpi < PLACEMENT_INDEX.length; rpi++){
                 var rq = PLACEMENT_INDEX[rpi], rqx = rcx - rq.x, rqz = rcz - rq.z, rqm = rB + rq.r;
@@ -10704,9 +10982,10 @@ function buildFillMaster(){
           }
           if(rBad){ lot.slotBad[slotK] = true; continue; }   // static geometry — this slot never un-fails
         }
-        if(fillOverlapsLocal(placed, rcx, rcz, rB)){ lot.slotBad[slotK] = true; continue; }
+        if(waveOverlaps(rcx, rcz, rB, rQuad26)){ lot.slotBad[slotK] = true; continue; }
         counts2.shanty++; waveN++; rearN++;
-        placed.push({ x: rcx, z: rcz, r: rB });
+        if(cov26) cov26.book(rcx, rcz, rw * rd);
+        placedQ.push({ x: rcx, z: rcz, r: rB, q: rQuad26 });
         master.push({ code: rt.code, cat: "shanty", material: rt.material, subtype: rt.subtype,
                       cx: rcx, cz: rcz, w: rw, d: rd, yaw: fe.yaw, nx: fe.nx, nz: fe.nz,
                       storyRange: rt.storyRange || [1, 1], edgeId: fe.edgeId + "#rear", edgeLen: fe.edgeLen,
@@ -10716,15 +10995,28 @@ function buildFillMaster(){
         lot.rearUsed++; lot.rearIdxs.push(master.length - 1);
         lot.depthUsed = rBack + rd / 2;
         placedRear = true;
+        rearCursor = (li + 1) % lots.length;              // ics26: the next rear turn continues town-wide from here
       }
       if(placedRear) continue;                            // this shanty turn seated a rear-court tent
     }
     var placedOne = false, idx2 = cursors2[cat2];
     for(; idx2 < slots2.length; idx2++){
       var slot2 = slots2[idx2];
-      var t2 = fillPickCode(cat2, waveCap, rng2, "1849");
+      /* ics26 — SIZE GRADING by the slot's field grade (fill-density-model
+         §7): the code pick weights medium/large on core-grade ground and
+         small on the fringe (areaBias), and the chosen NON-TENT footprint is
+         depth-scaled into the block (RES-4's perimeter-first, deepened rim),
+         capped absolutely. The scaled dims feed EVERY placement gate below
+         (edge budget / canPlace / ROW / overlap), so legality is proven on
+         the drawn box. */
+      var g26 = cov26 ? cov26.gradeAt(slot2.cx, slot2.cz) : null;
+      var t2 = fillPickCode(cat2, waveCap, rng2, "1849", false, g26 ? FILL_SIZE_BIAS[g26] : 0);
       if(!t2){ rej2.noType++; idx2 = slots2.length; break; }
       var wM2 = t2.footprint.w * FILL_FT_M, dM2 = t2.footprint.d * FILL_FT_M;
+      if(g26 && t2.subtype !== "tent"){
+        wM2 = Math.min(wM2 * FILL_WIDTH_SCALE[g26], FILL_SCALE_WIDTH_MAX_M);
+        dM2 = Math.min(dM2 * FILL_DEPTH_SCALE[g26], FILL_SCALE_DEPTH_MAX_M);
+      }
       var built2 = edgeBuilt[slot2.edgeId] || 0;          // the v1 bookings CARRY — one shared per-edge budget
       if((built2 + wM2) / slot2.edgeLen > FILL_EDGE_CAP_1849){ rej2.edgeCap++; continue; }
       var jitter2 = (rng2() - 0.5) * Math.min(FILL_SLOT_STEP_M * 0.5, slot2.edgeLen * 0.15);
@@ -10732,6 +11024,8 @@ function buildFillMaster(){
       var cx2 = slot2.ex + slot2.tx * jitter2 + slot2.inx * setIn2;
       var cz2 = slot2.ez + slot2.tz * jitter2 + slot2.inz * setIn2;
       var rB2 = Math.hypot(wM2, dM2) / 2;
+      var quad26 = fillPoseQuad(cx2, cz2, wM2, dM2, slot2.yaw);
+      if(cov26 && !cov26.allow(cx2, cz2, wM2 * dM2)){ rej2.cov++; continue; }   // ics26: the block sits at its sampled coverage target
       if(!FILL_QA.ignoreInTownGates){
         // the record's camp ground belongs to the tent master — fill never crowds a documented encampment
         if(typeof encampmentZoneAt === "function" && encampmentZoneAt(cx2, cz2, waveCap)){ rej2.camp++; continue; }
@@ -10745,7 +11039,7 @@ function buildFillMaster(){
         // (Shubrick-class alleys cut through block interiors — the structure
         // row has no ROW clause) + reserved landmark ground for tents (the
         // tent row has no footprint clause).
-        if(fillQuadCrossesRow(fillPoseQuad(cx2, cz2, wM2, dM2, slot2.yaw), cx2, cz2)){ rej2.row++; continue; }
+        if(fillQuadCrossesRow(quad26, cx2, cz2)){ rej2.row++; continue; }
         var resBad2 = false;
         for(var pi2 = 0; pi2 < PLACEMENT_INDEX.length; pi2++){
           var q2 = PLACEMENT_INDEX[pi2], rdx2 = cx2 - q2.x, rdz2 = cz2 - q2.z, rmd2 = rB2 + q2.r;
@@ -10753,16 +11047,17 @@ function buildFillMaster(){
         }
         if(resBad2){ rej2.reserved++; continue; }
       }
-      if(fillOverlapsLocal(placed, cx2, cz2, rB2)){ rej2.overlap++; continue; }
+      if(waveOverlaps(cx2, cz2, rB2, quad26)){ rej2.overlap++; continue; }
       counts2[cat2]++; waveN++;
+      if(cov26) cov26.book(cx2, cz2, wM2 * dM2);
       var onCore2 = fillCoreBlockAt(cx2, cz2, waveCap);
       if(onCore2) coreWaveN++;   // s106d: core-block placements feed the streaming canvas cap (same ground measure as the audit)
       edgeBuilt[slot2.edgeId] = built2 + wM2 + FILL_GAP_M;
-      placed.push({ x: cx2, z: cz2, r: rB2 });
+      placedQ.push({ x: cx2, z: cz2, r: rB2, q: quad26 });
       master.push({ code: t2.code, cat: cat2, material: t2.material, subtype: t2.subtype,
                     cx: cx2, cz: cz2, w: wM2, d: dM2, yaw: slot2.yaw, nx: slot2.outx, nz: slot2.outz,
                     storyRange: t2.storyRange || [1, 1], edgeId: slot2.edgeId, edgeLen: slot2.edgeLen,
-                    overWater: !!t2.overWater, stilted: !!t2.stilted,
+                    overWater: !!t2.overWater, stilted: !!t2.stilted, covGrade: g26 || null,
                     rank: master.length, appearDay: waveCap, wave: 1849 });
       /* s106e — register the LOT this front anchors (non-core ground only:
          the rear-tent texture is residential; core blocks keep the s106d
@@ -10923,6 +11218,83 @@ function buildFillMaster(){
     expN++;
   }
 
+  /* ===================================================================
+     ics26 — PROPERTY-LINE YARD FENCES (backyard texture; activates the
+     placement.fences stub). A seeded fraction of RESIDENTIAL-band wave lots
+     ring their yard with placeholder post-and-rail runs: two side rails from
+     the front building's face reaching past the lot's rear court + a rear
+     cross rail. Every P6 clause holds BY CONSTRUCTION OR CHECK: rails are
+     parallel to the lot's own axes (the ± lateral/inward frames), posts are
+     grounded on terrainHeight (the audit's own measure), and each candidate
+     rail is DROPPED if any sample point sits on a right-of-way, inside any
+     other footprint, on reserved landmark ground, or crossing another lot's
+     accepted rail. Pure lcHash seeding — zero stream draws; deterministic. */
+  FENCE_SEGS = []; FENCE_POSTS = []; FILL_FENCE_RENDER = [];
+  (function buildYardFences(){
+    function segsCross26(ax,az,bx,bz,cx,cz,dx,dz){
+      function ccw(px,pz,qx,qz,rx,rz){ return (rz-pz)*(qx-px) > (qz-pz)*(rx-px); }
+      return (ccw(ax,az,cx,cz,dx,dz)!==ccw(bx,bz,cx,cz,dx,dz)) && (ccw(ax,az,bx,bz,cx,cz)!==ccw(ax,az,bx,bz,dx,dz));
+    }
+    for(var lx2 = 0; lx2 < lots.length; lx2++){
+      var L2 = lots[lx2], fe2 = master[L2.frontIdx];
+      if(fillCoreBlockAt(fe2.cx, fe2.cz, waveCap)) continue;          // residential band only
+      if(lcHash("FEN|" + fe2.rank, "on") >= FILL_FENCE_FRAC) continue;
+      var own = [L2.frontIdx].concat(L2.rearIdxs);
+      var ix2 = -fe2.nx, iz2 = -fe2.nz, ltx = fe2.nz, ltz = -fe2.nx;  // inward + lateral lot axes
+      var maxW2 = fe2.w;
+      for(var rj2 = 0; rj2 < L2.rearIdxs.length; rj2++) maxW2 = Math.max(maxW2, master[L2.rearIdxs[rj2]].w);
+      if(fe2.exp) maxW2 = Math.max(maxW2, fe2.w);
+      var halfW2 = maxW2 / 2 + FILL_FENCE_MARGIN_M;
+      var backD2 = Math.max(L2.depthUsed, fe2.exp ? (fe2.exp.dExp - fe2.d / 2) : 0, fe2.d / 2) + 1.8;
+      var frontS2 = -(fe2.d / 2);
+      function FP(s, t){ return { x: fe2.cx + ix2 * s + ltx * t, z: fe2.cz + iz2 * s + ltz * t }; }
+      var cand = [
+        { a: FP(frontS2, -halfW2), b: FP(backD2, -halfW2) },          // left rail
+        { a: FP(frontS2,  halfW2), b: FP(backD2,  halfW2) },          // right rail
+        { a: FP(backD2,  -halfW2), b: FP(backD2,  halfW2) }           // rear cross rail
+      ];
+      var lag2 = FILL_FENCE_LAG_MIN_D + lcHash("FEN|" + fe2.rank, "lag") * (FILL_FENCE_LAG_MAX_D - FILL_FENCE_LAG_MIN_D);
+      var bundle = { appearDay: fe2.appearDay + lag2, segs: [], posts: [] };
+      for(var ci4 = 0; ci4 < cand.length; ci4++){
+        var sg = cand[ci4], segLen = Math.hypot(sg.b.x - sg.a.x, sg.b.z - sg.a.z);
+        if(segLen < 1.2) continue;
+        var nSmp = Math.max(2, Math.ceil(segLen / 1.5) + 1), okSeg = true;
+        for(var si4 = 0; si4 < nSmp && okSeg; si4++){
+          var f4 = si4 / (nSmp - 1);
+          var px4 = sg.a.x + (sg.b.x - sg.a.x) * f4, pz4 = sg.a.z + (sg.b.z - sg.a.z) * f4;
+          if(nearAnyRoad(px4, pz4, 0.25)){ okSeg = false; break; }                        // P6: never on a right-of-way
+          for(var pi4 = 0; pi4 < PLACEMENT_INDEX.length && okSeg; pi4++){                 // reserved landmark ground
+            var q4 = PLACEMENT_INDEX[pi4], dx4 = px4 - q4.x, dz4 = pz4 - q4.z;
+            if(dx4*dx4 + dz4*dz4 < (q4.r + 0.3) * (q4.r + 0.3)) okSeg = false;
+          }
+          for(var mi4 = 0; mi4 < master.length && okSeg; mi4++){                          // no rail through ANY other footprint
+            if(own.indexOf(mi4) >= 0) continue;
+            var oE4 = master[mi4];
+            if(Math.abs(oE4.cx - px4) > 20 || Math.abs(oE4.cz - pz4) > 20) continue;
+            if(fillPointInQuad(fillPoseQuad(oE4.cx, oE4.cz, oE4.w + 0.4, oE4.d + 0.4, oE4.yaw), px4, pz4)) okSeg = false;
+          }
+        }
+        if(!okSeg) continue;
+        for(var fs4 = 0; fs4 < FENCE_SEGS.length && okSeg; fs4++){                        // P6: never cross another lot's rail
+          var F4 = FENCE_SEGS[fs4];
+          if(Math.abs((F4.x0 + F4.x1) / 2 - (sg.a.x + sg.b.x) / 2) > 40) continue;
+          if(segsCross26(sg.a.x, sg.a.z, sg.b.x, sg.b.z, F4.x0, F4.z0, F4.x1, F4.z1)) okSeg = false;
+        }
+        if(!okSeg) continue;
+        var rec4 = { x0: sg.a.x, z0: sg.a.z, x1: sg.b.x, z1: sg.b.z, yaw: fe2.yaw, spot: 100000 + fe2.rank, posts: [] };
+        FENCE_SEGS.push(rec4); bundle.segs.push(rec4);
+        var nPost = Math.max(2, Math.round(segLen / FILL_FENCE_POST_M) + 1);
+        for(var pp4 = 0; pp4 < nPost; pp4++){
+          var pf4 = pp4 / (nPost - 1);
+          var ppx = sg.a.x + (sg.b.x - sg.a.x) * pf4, ppz = sg.a.z + (sg.b.z - sg.a.z) * pf4;
+          var post4 = { x: ppx, y: terrainHeight(ppx, ppz), z: ppz };
+          FENCE_POSTS.push(post4); rec4.posts.push(post4); bundle.posts.push(post4);
+        }
+      }
+      if(bundle.segs.length) FILL_FENCE_RENDER.push(bundle);
+    }
+  })();
+
   master._wave = { v1: v1Len, placed: waveN, need: need2, startDay: waveStart, capDay: waveCap,
                    mix: counts2, rejects: rej2, slots: slots2.length, qaIgnoreGates: FILL_QA.ignoreInTownGates,
                    /* s106d — the boom-window core-canvas exception ledger */
@@ -10934,7 +11306,12 @@ function buildFillMaster(){
                    lots: lots.length, lotsWithRear: lotsWithRear, rearSlots: rearN,
                    rearCap: Math.ceil(FILL_REAR_FRAC * counts2.shanty),
                    canvasFirst: cvfN, tentHarden: thN, expansions: expN,
-                   qaIgnoreSlotGates: FILL_QA.ignoreSlotGates };
+                   qaIgnoreSlotGates: FILL_QA.ignoreSlotGates,
+                   /* ics26 — the hotspot-field coverage ledger (spawner-side; the audit re-measures) */
+                   hotspots: hots26.map(function(h){ return { id: h.id, x: +h.x.toFixed(1), z: +h.z.toFixed(1), coreR: h.coreR, midR: h.midR }; }),
+                   coverage: cov26 ? cov26.summary() : null,
+                   fencedLots: FILL_FENCE_RENDER.length, fenceSegs: FENCE_SEGS.length, fencePosts: FENCE_POSTS.length,
+                   qaIgnoreCoverageTargets: FILL_QA.ignoreCoverageTargets };
   if(waveN < need2 && typeof console !== "undefined")
     console.warn("[fill] 1849 WAVE PLACEMENT STARVED: " + waveN + "/" + need2 +
                  " owed units fit under the placement laws (reported, not silently capped).");
@@ -11278,6 +11655,38 @@ function rebuildFill(){
     tm.frustumCulled = false;
     tm.userData.fillTents = true;
     FILL_GROUP.add(tm);
+  }
+  /* ics26 — placeholder yard fences (post-and-rail): date-gated by each lot's
+     seeded fence day; posts grounded on terrainHeight (the P6 measure), rails
+     spanned post-to-post so runs follow the grade. One merged mesh. */
+  var fenceParts = [], FEN_COL = new THREE.Color(0x8f8271);
+  for(var fb = 0; fb < FILL_FENCE_RENDER.length; fb++){
+    var bun = FILL_FENCE_RENDER[fb];
+    if(bun.appearDay > simDay) continue;
+    for(var fsg = 0; fsg < bun.segs.length; fsg++){
+      var seg = bun.segs[fsg], P5 = seg.posts;
+      for(var fp5 = 0; fp5 < P5.length; fp5++){
+        var po = P5[fp5];
+        var postGeo = makeBoxLocal(0.09, 0.75, 0.09, FEN_COL);
+        bake(postGeo, new THREE.Vector3(po.x, po.y, po.z), seg.yaw);
+        fenceParts.push(postGeo);
+        if(fp5 > 0){
+          var pa = P5[fp5 - 1], span = Math.hypot(po.x - pa.x, po.z - pa.z);
+          if(span > 0.01){
+            var railGeo = makeBoxLocal(0.06, 0.05, span, FEN_COL);
+            var railYaw = Math.atan2(po.x - pa.x, po.z - pa.z);
+            bake(railGeo, new THREE.Vector3((pa.x + po.x) / 2, (pa.y + po.y) / 2 + 0.5, (pa.z + po.z) / 2), railYaw);
+            fenceParts.push(railGeo);
+          }
+        }
+      }
+    }
+  }
+  if(fenceParts.length){
+    var fm = new THREE.Mesh(mergeGeoms(fenceParts), LM_MAT);
+    fm.frustumCulled = false;
+    fm.userData.fillFences = true;
+    FILL_GROUP.add(fm);
   }
   _fillLastDay = Math.floor(simDay);
 }
@@ -11916,6 +12325,58 @@ registerLayerVisibility("buildings-fill", function(v){ FILL_GROUP.visible = v; i
              expansion: { violations: expViol, sample: expSample },
              problems: problems.slice(0, 10),
              qaKnobs: { ignoreSlotGates: FILL_QA.ignoreSlotGates } };
+  });
+
+  /* ---- blockCoverage (ics26, ICS-26) — THE MEASURED PER-BAND COVERAGE LAW
+     (RES-4, research/block-coverage-1849-53.md §6). The Dec-20 world is
+     measured per BLOCK — summed standing footprint area (derived fill in a
+     physical phase + landmarks, the drawn OBBs) over the block's DRY area —
+     and gated per MEASUREMENT BAND (the RES-4 definitions: plaza distance +
+     the wharf-corridor exception):
+       (1) CORE (plaza-facing + ~1-2 blocks): band mean within 35±8%, AND a
+           real per-block spread (blocks sample the measured 30-65% range —
+           never one painted mean);
+       (2) MID (~2-4 blocks): mean within 12±5%;
+       (3) FRINGE (beyond): mean within 3±2%;
+       (4) WATERFRONT-FILL (blocks on the ACTIVE wharf-foot corridors —
+           derived from the pier record, the Sansome-Battery finding): mean
+           at CORE grade (35±8%), despite mid-band distance;
+       (5) every gated band is REAL (enough eligible blocks to measure).
+     Sept-15 is reported informational. Fail-before:
+     __P1850_FILL_QA({ignoreCoverageTargets:true}) reverts the wave to the
+     flat plaza-radial fill (no field, no budgets, no size grading) — the
+     band aggregates drift and this audit goes RED; knob off -> GREEN. ---- */
+  registerAudit("buildings", "blockCoverage", function(){
+    var m = fillBlockCoverageMeasure(eventDateToSimDay("1849-12-20"));
+    var sep = fillBlockCoverageMeasure(eventDateToSimDay("1849-09-15"));
+    var problems = [];
+    var gates = [
+      { band: "core",       mean: 0.35, tol: FILL_COV_TOL.core,   minN: 3, spreadMin: 0.06 },
+      { band: "mid",        mean: 0.12, tol: FILL_COV_TOL.mid,    minN: 3 },
+      { band: "fringe",     mean: 0.03, tol: FILL_COV_TOL.fringe, minN: 3 },
+      { band: "waterfront", mean: 0.35, tol: FILL_COV_TOL.core,   minN: 1 }
+    ];
+    gates.forEach(function(g){
+      var row = m.perBand[g.band];
+      if(!row || row.n < g.minN){
+        problems.push(g.band + ": " + (row ? row.n : 0) + " eligible blocks (< " + g.minN + ") — the band is vacuous");
+        return;
+      }
+      if(Math.abs(row.mean - g.mean) > g.tol + 1e-9)
+        problems.push(g.band + ": mean coverage " + row.mean + " outside " + g.mean + " ± " + g.tol);
+      if(g.spreadMin != null && row.n >= 3 && (row.max - row.min) < g.spreadMin - 1e-9)
+        problems.push(g.band + ": per-block spread " + +(row.max - row.min).toFixed(3) + " < " + g.spreadMin +
+                      " (blocks must sample the measured in-band range, never one painted mean)");
+    });
+    var wv = buildFillMaster()._wave || {};
+    return { pass: problems.length === 0, law: "blockCoverage (RES-4 measured per-band coverage, ics26)",
+             date: "1849-12-20", perBand: m.perBand, sept15Informational: sep.perBand,
+             targets: { core: "0.35±" + FILL_COV_TOL.core + " + spread", mid: "0.12±" + FILL_COV_TOL.mid,
+                        fringe: "0.03±" + FILL_COV_TOL.fringe, waterfront: "core-grade (the RES-4 M5 wharf-corridor exception)" },
+             hotspots: wv.hotspots || [], ledger: wv.coverage || null,
+             eligibleBlocks: m.blocks.length, blocks: m.blocks,
+             problems: problems.slice(0, 10),
+             qaKnobs: { ignoreCoverageTargets: FILL_QA.ignoreCoverageTargets } };
   });
 })();
 
@@ -12853,10 +13314,12 @@ if(typeof window !== "undefined"){
     if(opts.ignoreInTownGates != null) FILL_QA.ignoreInTownGates = !!opts.ignoreInTownGates;
     if(opts.uncapCoreCanvas != null)   FILL_QA.uncapCoreCanvas = !!opts.uncapCoreCanvas;   // s106d: drop the core-canvas fraction cap (zoneCoreCanvas fail-before)
     if(opts.ignoreSlotGates != null)   FILL_QA.ignoreSlotGates = !!opts.ignoreSlotGates;   // s106e: rear tents posed street-side gateless + expansions without consumption teardowns (lotSlots fail-before)
+    if(opts.ignoreCoverageTargets != null) FILL_QA.ignoreCoverageTargets = !!opts.ignoreCoverageTargets;   // ics26: flat plaza-radial wave, no block budgets (blockCoverage fail-before)
     FILL_QA.version++;
     FILL_MASTER = null; TENT_MASTER = null; _fillLastDay = null; _tentLastDay = null;
     return { ignoreInTownGates: FILL_QA.ignoreInTownGates, uncapCoreCanvas: FILL_QA.uncapCoreCanvas,
-             ignoreSlotGates: FILL_QA.ignoreSlotGates, version: FILL_QA.version };
+             ignoreSlotGates: FILL_QA.ignoreSlotGates, ignoreCoverageTargets: FILL_QA.ignoreCoverageTargets,
+             version: FILL_QA.version };
   };
 }
 setTimeout(function(){
@@ -12977,6 +13440,20 @@ setTimeout(function(){
       var day = eventDateToSimDay(iso);
       var lm = reservationsAt(day).length, fill = window.__P1850.fillCount(day);
       return { date: iso, target: Math.round(fillTargetTotal(day)), landmarks: lm, fill: fill, total: fill + lm };
+    };
+    /* ics26 — the measured per-block coverage table (probe/screening evidence;
+       read-only over the shared measure the blockCoverage audit gates). */
+    window.__P1850.blockCoverage = function(iso){
+      var day = iso ? eventDateToSimDay(iso) : eventDateToSimDay("1849-12-20");
+      var m = fillBlockCoverageMeasure(day);
+      var wv = buildFillMaster()._wave || {};
+      return { date: iso || "1849-12-20", perBand: m.perBand, blocks: m.blocks,
+               hotspots: wv.hotspots || [], ledger: wv.coverage || null,
+               fencedLots: wv.fencedLots, fenceSegs: wv.fenceSegs,
+               fences: FILL_FENCE_RENDER.map(function(fb){
+                 return { x: +fb.segs[0].x0.toFixed(1), z: +fb.segs[0].z0.toFixed(1),
+                          segs: fb.segs.length, appearDay: +fb.appearDay.toFixed(1) };
+               }) };
     };
   }
 }, 0);
