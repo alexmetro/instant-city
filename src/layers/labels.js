@@ -281,7 +281,13 @@ function _lblRobotoVoices(setKey){
        already passes, so the measurement picked the floor. Rendered INTO
        THE SAME sprite texture as the name (labelTexture `sub` block) so
        the declutter sees ONE quad. */
-    poiSub:  _lblVoice(setKey+".poiSub", { weight:"500", letterSpacing:0.03, color:"rgba(255,255,255,0.85)", wrap:8 })
+    /* ICS-16 content enrichment: wrap 8 → 14 em — the subtitle LINE BUDGET.
+       The enriched forms ("Saloon — burned Dec 1849", "Store — Howard &
+       Mellus") are composed to fit ONE line under this budget by the SAME
+       _lblAdvances measure the wrap fn uses (_lblPoiSubText's fit ladder),
+       so an enriched subtitle never wraps; the bare kinds (longest:
+       "Newspaper office", ~8.6 em) sit far under it. */
+    poiSub:  _lblVoice(setKey+".poiSub", { weight:"500", letterSpacing:0.03, color:"rgba(255,255,255,0.85)", wrap:14 })
   };
 }
 /* R2 metrics: subtitle em ratio + the TIGHT two-line leading. 1.18 em sits in
@@ -906,6 +912,19 @@ var _poiKindById = (function(){
   });
   return map;
 })();
+/* ICS-16 subtitle ENRICHMENT sidecar — the registry fields the enriched
+   subtitle reads beyond the kind: the record's display name (owner extraction
+   below) and the documented burn date's ISO string (month-year display; the
+   GATING day comes from the cadastre's GROUND_RESERVATIONS rec.burned — the
+   SAME eventDateToSimDay conversion the buildings lifecycle reads). Read-only
+   from window.LANDMARK_RESERVATIONS, indexed once. */
+var _poiSubMetaById = (function(){
+  var map = {}, REG = (typeof window!=="undefined" && window.LANDMARK_RESERVATIONS) ? window.LANDMARK_RESERVATIONS : null;
+  if(REG && REG.reservations) REG.reservations.forEach(function(r){
+    map[r.landmarkId] = { name: r.name || "", burnedISO: (r.dates && r.dates.burned) || null };
+  });
+  return map;
+})();
 /* category of a live reservation record; null = unmapped kind (surfaced by
    the poiSymbols audit rather than silently bucketed). */
 function poiCategory(landmarkId){
@@ -915,8 +934,8 @@ function poiCategory(landmarkId){
 var POI_COLORS = { business:"#4285F4", residence:"#00897B", park:"#34A853", other:"#9AA0A6" };
 /* RES-3 R2 — the SUBTITLE text per registry kind (ICS-16's "4-star hotel"
    slot, ours is the business KIND from window.LANDMARK_RESERVATIONS). Plain
-   ASCII (ics14e charset covers it outright). An unmapped kind falls back to
-   the kind string humanized — never silently blank. */
+   ASCII + the em dash (both in the ics14e charset). An unmapped kind falls
+   back to the kind string humanized — never silently blank. */
 var LBL_POI_KIND_LABEL = {
   store:"Store", market:"Market", bank:"Bank", manufactory:"Manufactory",
   hotel:"Hotel", newspaper_office:"Newspaper office", tavern:"Tavern",
@@ -924,10 +943,78 @@ var LBL_POI_KIND_LABEL = {
   post_office:"Post office", residence:"Residence", dwelling:"Dwelling",
   park:"Park", plaza:"Plaza"
 };
-function _lblPoiSubText(landmarkId){
+/* =====================================================================
+   ICS-16 (reduced scope after RES-3) — SUBTITLE CONTENT ENRICHMENT.
+   Where the registry record carries era-grounded detail beyond the bare
+   kind, the subtitle line carries it too — deterministic, registry-read-
+   only, DATE-AWARE (the line reflects state at the current sim date):
+
+     [burn]  day ≥ the record's documented burn day (rec.burned on the
+             cadastre record — the SAME converted date the lifecycle
+             reads) ⇒ "Hotel — burned Dec 1849" (month-year from the
+             registry's own ISO string). Takes precedence over the owner
+             segment: the loss is the operative fact of the ground.
+     [owner] a documented proprietor extracted STRUCTURALLY from the
+             record's own name field (never guessed from prose):
+             "<Owner>('s) store" ⇒ the owner prefix, accepted only when
+             it reads as a person/firm (possessive form, "&", or a
+             period-initial like "W. H."), so "Tent Store" stays bare;
+             else a parenthetical proprietor with the same name signal
+             ("New York Store (C. L. Ross)" ⇒ "C. L. Ross").
+
+   ONE SHORT LINE (the RES-3 leave-alone law — NO ellipsis, ever): the
+   composed "Kind — Detail" is measured with the SAME _lblAdvances the
+   wrap fn uses against the poiSub voice's wrap budget; if over, the
+   detail is truncated at a natural boundary (first "/" or "," segment),
+   and failing that the line falls back to the bare kind. By construction
+   an enriched subtitle therefore never wraps past one line (audited). */
+var _LBL_MON_ABBR = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function _lblPoiMonYear(iso){
+  var m = /^(\d{4})-(\d{2})/.exec(iso || "");
+  if(!m) return null;
+  var mon = _LBL_MON_ABBR[parseInt(m[2],10)-1];
+  return mon ? (mon + " " + m[1]) : null;
+}
+function _lblPoiOwnerFromName(name){
+  if(!name) return null;
+  var base = name, paren = null;
+  var pm = /^(.*?)\s*\(([^)]+)\)\s*$/.exec(name);
+  if(pm){ base = pm[1]; paren = pm[2]; }
+  var nameSignal = function(s){ return /&/.test(s) || /\b[A-Z]\./.test(s); };
+  var m2 = /^(.+?)('s)?\s+store$/i.exec(base);
+  if(m2){
+    var owner = m2[1].trim();
+    if(m2[2] || nameSignal(owner)) return owner;   // possessive OR person/firm signal
+  }
+  if(paren && nameSignal(paren)) return paren.trim();
+  return null;
+}
+function _lblPoiSubText(landmarkId, day){
   var k = _poiKindById[landmarkId];
   if(!k) return null;
-  return LBL_POI_KIND_LABEL[k] || (k.charAt(0).toUpperCase() + k.slice(1).replace(/_/g, " "));
+  var kindLabel = LBL_POI_KIND_LABEL[k] || (k.charAt(0).toUpperCase() + k.slice(1).replace(/_/g, " "));
+  var meta = _poiSubMetaById[landmarkId] || null;
+  var detail = null;
+  if(meta && meta.burnedISO && day != null){
+    var rec = (typeof reservationById==="function") ? reservationById(landmarkId) : null;
+    if(rec && rec.burned != null && day >= rec.burned){
+      var my = _lblPoiMonYear(meta.burnedISO);
+      if(my) detail = "burned " + my;
+    }
+  }
+  if(!detail && meta) detail = _lblPoiOwnerFromName(meta.name);
+  if(!detail) return kindLabel;
+  var st = LBL_STYLE.poiSub, subPx = Math.round(LBL_FONT_PX*LBL_SUB_EM);
+  var budget = (st.wrap || 14) * subPx;
+  var fits = function(t){
+    var d = st.smallCaps ? t.toUpperCase() : t;
+    return _lblAdvances(d, st, subPx).total <= budget;
+  };
+  var cands = [ kindLabel + " — " + detail ];
+  var seg = detail.split(/\s*[\/,]\s*/)[0];                 // natural-boundary truncation, never "…"
+  if(seg && seg !== detail) cands.push(kindLabel + " — " + seg);
+  for(var ci=0; ci<cands.length; ci++) if(fits(cands[ci])) return cands[ci];
+  return kindLabel;
 }
 /* R2 reveal: CLOSEST ZOOM BAND ONLY — the subtitle joins the name texture when
    the settled altitude is at/below this (the report's ~150-220 m window, gated
@@ -1242,9 +1329,10 @@ function rebuildLabels(){
       });
     });
     /* s91 — LANDMARK RESERVATION NAMES join the LOTS sublayer, civic/commerce
-       voice (warm gold small-caps); era-gated (built ≤ day, before any
-       in-window burn) so the Dec 24 1849 Great Fire cluster fades as you
-       scrub past the fire.
+       voice (warm gold small-caps); era-gated (built ≤ day). ICS-16 amends
+       the s91 burn gate: the Dec 24 1849 Great Fire cluster no longer drops
+       its NAMES — they persist with the "burned Dec 1849" subtitle (the
+       annotation IS the record); only the EMBLEMS fade with the buildings.
        ics14 item 6.2 (operator's Maps orientation rule): building/landmark
        NAME TEXT is VIEWER-ORIENTED — these were flat ground-rotated quads
        (s91); they are now camera-facing sprites like the zone names (streets
@@ -1257,7 +1345,19 @@ function rebuildLabels(){
        illegible at real sizes"); 30 px puts the em at ≈11.4 px, the Maps
        POI-label size. */
     if(typeof reservationsAt==="function"){
-      reservationsAt(day).forEach(function(r){
+      /* ICS-16 content enrichment: a BURNED landmark KEEPS its name label
+         past the burn day — the close-zoom subtitle carries the date-aware
+         loss note ("Hotel — burned Dec 1849", gated on the same rec.burned
+         day the lifecycle reads), so the post-fire plaza reads as annotated
+         ground, not a hole. The set is still deterministic registry order
+         (built ≤ day; the burn no longer removes the NAME). Emblems below
+         stay standing-only (reservationsAt — the poiSymbols set-fidelity
+         law is untouched); an unpaired name places on its own, since the
+         R4 pairing gate binds only while a live emblem exists. */
+      var nameRecs = (typeof GROUND_RESERVATIONS!=="undefined" && GROUND_RESERVATIONS)
+        ? GROUND_RESERVATIONS.filter(function(rr){ return rr.resolved && rr.built<=day; })
+        : reservationsAt(day);
+      nameRecs.forEach(function(r){
         if(!r.footprint) return;
         var cx=r.footprint.cx, cz=r.footprint.cz;
         if(terrainHeight(cx,cz) <= 0.3) return;               // don't float a name over water
@@ -1268,7 +1368,8 @@ function rebuildLabels(){
         // RES-3 R2: the kind subtitle rides the SAME texture at the closest
         // zoom band (settle-gated swap; see _lblSetSub). subActive starts
         // false — the first settle applies the altitude predicate.
-        var subT = _lblPoiSubText(r.landmarkId);
+        // ICS-16: the text is composed DATE-AWARE (owner / burned segments).
+        var subT = _lblPoiSubText(r.landmarkId, day);
         if(subT) sp.userData.sub = { text:subT, style:LBL_STYLE.poiSub };
         sp.userData.subActive = false;
         var itN = _lblAdd(sp, LBL_BANDS.landmark, "lots", 34, 30, false);
@@ -1848,6 +1949,18 @@ setTimeout(function(){
                subActive:subs, subOn:_lblSubOn, pairGatesLastFrame:_lblPairGatesFrame,
                abbrEnabled:LBL_ABBR_ENABLED, poiSubEnabled:LBL_POISUB_ENABLED };
     };
+    /* ICS-16 — READ-ONLY subtitle census (probe/screening evidence): every
+       reservation-name sprite's live subtitle string + reveal/placement
+       state at the current built set. Pure read of the live items. */
+    window.__P1850.labelsSubtitles = function(){
+      var out = [];
+      for(var i=0;i<_lblItems.length;i++){ var it=_lblItems[i], ud=it.obj.userData;
+        if(!it.varAnchor || !ud.sub) continue;
+        out.push({ name:ud.text, sub:ud.sub.text, active:!!ud.subActive,
+                   placed:it._target>0.02, enriched:ud.sub.text.indexOf(" — ")>=0 });
+      }
+      return out;
+    };
   }
 }, 0);
 
@@ -2385,11 +2498,19 @@ registerAudit("labels", "poiPairing", function(){
          EVERY reservation-name sprite that has registry kind data carries its
          subtitle IN THE SAME TEXTURE (subActive, subLines ≥ 1); above the
          gate, NONE does (the subtitle is a closest-zoom read only);
-     [2] CONTENT — the subtitle text equals the kind display recomputed from
-         window.LANDMARK_RESERVATIONS via _lblPoiSubText (never invented);
+     [2] CONTENT — the subtitle text equals the ENRICHED display recomputed
+         from window.LANDMARK_RESERVATIONS via _lblPoiSubText at the built
+         set's own day (_lblLastDay) — ICS-16: the equality now covers the
+         owner segment ("Store — W. H. Davis") and the DATE-AWARE burn
+         segment ("Hotel — burned Dec 1849" only at/after rec.burned, the
+         same lifecycle-read day), never invented, never stale-dated;
      [3] LEGIBILITY FLOOR — at the sprite's on-screen box (ss × lines), the
          RENDERED em of BOTH the title and the subtitle lines clears ~11 px
-         (the ICS-14d minimum-legible-em rule, applied per line of the block).
+         (the ICS-14d minimum-legible-em rule, applied per line of the block);
+     [4] ONE SHORT LINE (ICS-16) — an ENRICHED subtitle (one that carries a
+         " — " detail segment) rasterized as EXACTLY one line: the fit ladder
+         (measure → natural-boundary truncation → bare-kind fallback, no
+         ellipsis ever) must have done its job, not the wrap fn.
    FAILS BEFORE R2 (__P1850.labelsSetPoiSub(false) reproduces the pre-RES-3
    close-zoom state: at a settled ≤200 m framing, [1] red — names carry no
    subtitle); PASSES after. Above the reveal altitude the audit still proves
@@ -2397,15 +2518,21 @@ registerAudit("labels", "poiPairing", function(){
 registerAudit("labels", "poiSubtitle", function(){
   var expectOn = _lblSettleAlt>0 && _lblSettleAlt <= LBL_POI_SUB_ALT_M;   // the property, NOT the mechanism flag
   var EM_GATE = 11;
-  var bad = [], names = 0, withSub = 0;
+  var bad = [], names = 0, withSub = 0, enriched = 0;
   for(var i=0;i<_lblItems.length;i++){
     var it = _lblItems[i], ud = it.obj.userData;
     if(!it.varAnchor) continue;   // reservation-name sprites
     names++;
-    var expected = _lblPoiSubText(ud.pairId);
+    // ICS-16: recompute at the day the built set used (rebuild is per-floor(day),
+    // so _lblLastDay IS the label set's date; built/burned days are integers).
+    var expected = _lblPoiSubText(ud.pairId, _lblLastDay);
     if(expectOn && expected){
       if(!ud.subActive || !(ud.subLines>=1)){ bad.push({ name:ud.text, why:"[1] no subtitle at the closest zoom band" }); continue; }
-      if(ud.sub.text !== expected){ bad.push({ name:ud.text, got:ud.sub.text, want:expected, why:"[2] subtitle != registry kind" }); continue; }
+      if(ud.sub.text !== expected){ bad.push({ name:ud.text, got:ud.sub.text, want:expected, why:"[2] subtitle != enriched registry display" }); continue; }
+      if(ud.sub.text.indexOf(" — ") >= 0){
+        enriched++;
+        if(ud.subLines !== 1){ bad.push({ name:ud.text, sub:ud.sub.text, subLines:ud.subLines, why:"[4] enriched subtitle wrapped past ONE line" }); continue; }
+      }
       var boxPx = it.ss * (ud.lines||1);
       var emT = boxPx * (ud.emTitleFrac||0), emS = boxPx * (ud.emSubFrac||0);
       if(emT < EM_GATE || emS < EM_GATE)
@@ -2415,9 +2542,9 @@ registerAudit("labels", "poiSubtitle", function(){
       bad.push({ name:ud.text, why:"[1] subtitle rendered above the reveal band (settled "+Math.round(_lblSettleAlt)+" m)" });
     }
   }
-  return { pass: bad.length===0, namesChecked:names, withSubtitle:withSub,
+  return { pass: bad.length===0, namesChecked:names, withSubtitle:withSub, enriched:enriched,
            settleAlt:Math.round(_lblSettleAlt), revealAltM:LBL_POI_SUB_ALT_M, expectOn:expectOn,
-           method:"settle-gated reveal (≤"+LBL_POI_SUB_ALT_M+" m): subtitle present+correct (registry kind via _lblPoiSubText) in the SAME texture, rendered em ≥ "+EM_GATE+"px per line (box × emFrac); above the gate: no subtitles",
+           method:"settle-gated reveal (≤"+LBL_POI_SUB_ALT_M+" m): subtitle present+correct (ENRICHED registry display via _lblPoiSubText at the set's day — owner / date-aware burned segments, ICS-16) in the SAME texture, enriched lines exactly 1 (no-ellipsis fit ladder), rendered em ≥ "+EM_GATE+"px per line (box × emFrac); above the gate: no subtitles",
            bad: bad.slice(0,8) };
 });
 
