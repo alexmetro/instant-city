@@ -368,7 +368,7 @@
   }
 
   #paper-pane{
-    position:fixed; top:0; right:0; bottom:0; width:min(430px,94vw);
+    position:fixed; top:0; right:0; bottom:0; width:min(452px,94vw);
     background:linear-gradient(180deg, rgba(241,230,201,0.97), rgba(228,214,178,0.97));
     /* s64: the pane IS a document and keeps its parchment body — only its
        outer frame softens (hairline instead of the 2px ink slab edge) */
@@ -409,13 +409,13 @@
       url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)' opacity='0.05'/></svg>");
     mix-blend-mode:multiply;
   }
-  .pp-head{ position:relative; padding:16px 18px 14px; text-align:center; border-bottom:2px solid var(--ink); }
+  .pp-head{ position:relative; padding:9px 16px 8px; text-align:center; border-bottom:2px solid var(--ink); }
   .pp-head::after{
     content:""; position:absolute; left:22px; right:22px; bottom:-5px; height:1px;
     background:rgba(43,29,14,0.45);
   }
   .pp-head h2{
-    margin:0; font-size:1.62rem; letter-spacing:1.5px; font-weight:900;
+    margin:0; font-size:1.42rem; letter-spacing:1px; font-weight:900;
     font-family:var(--paper-display); text-transform:uppercase;
     text-wrap:balance; /* css26 */
   }
@@ -425,15 +425,15 @@
      stays the fat-face above. */
   #paper-pane.masthead-blackletter .pp-head h2{
     font-family:var(--masthead-black); font-weight:400; letter-spacing:0;
-    font-size:1.9rem; text-transform:none;
+    font-size:1.62rem; text-transform:none;
   }
-  .pp-head .pp-issue-date{ display:block; font-size:0.66rem; letter-spacing:2px; opacity:0.75; margin-top:5px; font-variant:small-caps; }
+  .pp-head .pp-issue-date{ display:block; font-size:0.66rem; letter-spacing:2px; opacity:0.75; margin-top:3px; font-variant:small-caps; }
   /* ER1 DATELINE — the VOL./NO. — city — date banner a real broadsheet carried
      under its masthead, bracketed by hairline rules. Small caps, letterspaced.
      The city name is era-correct (YERBA BUENA before the Jan-1847 renaming). */
   .pp-dateline{
     display:flex; justify-content:space-between; align-items:baseline; gap:8px;
-    margin-top:9px; padding:4px 2px 0; font-size:0.54rem; letter-spacing:1.4px;
+    margin-top:5px; padding:3px 2px 0; font-size:0.54rem; letter-spacing:1.4px;
     font-variant:small-caps; opacity:0.8; text-align:left;
     border-top:1px solid rgba(43,29,14,0.45);
   }
@@ -446,12 +446,12 @@
   .pp-close:hover{ opacity:1; }
   .pp-tabs{ display:flex; border-bottom:1px solid rgba(43,29,14,0.35); flex:0 0 auto; }
   .pp-tab{
-    flex:1; padding:9px 4px; background:none; border:none; cursor:pointer;
+    flex:1; padding:6px 4px; background:none; border:none; cursor:pointer;
     font-family:var(--paper-font); letter-spacing:2.5px; font-size:0.62rem;
     font-variant:small-caps; color:var(--ink); opacity:0.55; border-bottom:3px solid transparent;
   }
   .pp-tab.active{ opacity:1; border-bottom-color:var(--ink); }
-  .pp-body{ flex:1 1 auto; overflow-y:auto; padding:14px 18px 24px; position:relative; }
+  .pp-body{ flex:1 1 auto; overflow-y:auto; padding:9px 14px 16px; position:relative; }
   .pp-noissue, .pp-suspended{
     margin-top:18%; text-align:center; font-style:italic; font-size:0.95rem;
     line-height:1.6; padding:0 8px;
@@ -463,22 +463,22 @@
   .pp-suspended .pp-s-line{ display:block; letter-spacing:1px; }
   .pp-suspended .pp-s-sub{ display:block; font-size:0.6rem; letter-spacing:2px; opacity:0.65; margin-top:14px; font-style:normal; }
 
-  .bs-columns{ column-count:2; column-gap:1.4em; column-rule:1px solid rgba(43,29,14,0.25); }
-  .bs-item{ break-inside:avoid; margin-bottom:1em; position:relative; }
+  .bs-columns{ column-count:2; column-gap:1em; column-rule:1px solid rgba(43,29,14,0.25); }
+  .bs-item{ break-inside:avoid; margin-bottom:0.55em; position:relative; }
   /* printer's ornament in place of a box rule between broadsheet items */
-  .bs-item + .bs-item{ margin-top:0.3em; padding-top:1.1em; }
+  .bs-item + .bs-item{ margin-top:0.2em; padding-top:0.7em; }
   .bs-item + .bs-item::before{
     content:"❧"; position:absolute; top:-0.15em; left:0; width:100%; text-align:center;
     font-size:0.72rem; opacity:0.45; line-height:1;
   }
   .feed-item{
-    break-inside:avoid; margin-bottom:14px; padding:10px 2px 12px; background:none;
+    break-inside:avoid; margin-bottom:8px; padding:6px 2px 7px; background:none;
     border:none; border-top:1px solid rgba(43,29,14,0.3);
   }
   .feed-item:first-child{ border-top:none; padding-top:0; }
   .fi-chip{
     display:block; font-size:0.58rem; letter-spacing:2px; font-weight:600;
-    font-variant:small-caps; opacity:0.72; margin-bottom:6px; border:none; padding:0;
+    font-variant:small-caps; opacity:0.72; margin-bottom:3px; border:none; padding:0;
   }
   .fi-chip.ad{ font-style:italic; opacity:0.9; }
   /* ER1 HEADLINE DECK — kicker (small-caps letterspaced label) over the head.
@@ -491,7 +491,7 @@
   }
   .fi-kicker.ad{ font-style:italic; opacity:0.8; }
   .fi-headline{
-    font-weight:700; margin:0 0 4px; font-size:0.92rem; line-height:1.3;
+    font-weight:700; margin:0 0 2px; font-size:0.92rem; line-height:1.22;
     font-variant:small-caps; letter-spacing:0.3px; text-align:center;
   }
   .fi-headline.flyable{ cursor:pointer; }
@@ -500,16 +500,16 @@
   /* ER1 LEAD item — the day's front headline gets a bigger deck (a real
      broadsheet's lead sat larger than the run of column items). */
   .bs-item.lead .fi-kicker{ font-size:0.56rem; letter-spacing:3px; }
-  .bs-item.lead .fi-headline{ font-size:1.18rem; line-height:1.18; letter-spacing:0.5px; margin-bottom:5px; }
-  .bs-item.lead{ column-span:all; border-bottom:1px solid rgba(43,29,14,0.28); padding-bottom:0.7em; margin-bottom:0.9em; }
-  .fi-text{ font-size:var(--pp-body-size); line-height:1.44; margin:0; text-align:justify; hyphens:auto; -webkit-hyphens:auto;
+  .bs-item.lead .fi-headline{ font-size:1.06rem; line-height:1.14; letter-spacing:0.5px; margin-bottom:3px; }
+  .bs-item.lead{ column-span:all; border-bottom:1px solid rgba(43,29,14,0.28); padding-bottom:0.5em; margin-bottom:0.6em; }
+  .fi-text{ font-size:var(--pp-body-size); line-height:1.34; margin:0; text-align:justify; hyphens:auto; -webkit-hyphens:auto;
     text-wrap:pretty; /* css26: no orphans/runts in the newsprint body copy */ }
   .pp-noissue{ text-wrap:pretty; } /* css26 */
   .bs-item:first-child .fi-text::first-letter, .feed-item:first-child .fi-text::first-letter{
     float:left; font-family:'Playfair Display',Georgia,serif; font-weight:900;
-    font-size:2.5em; line-height:0.82; padding:0.03em 0.07em 0 0;
+    font-size:2.0em; line-height:0.82; padding:0.03em 0.07em 0 0;
   }
-  .fi-receipt{ display:inline-block; margin-top:6px; font-size:0.6rem; letter-spacing:0.8px; opacity:0.7; color:var(--ink); }
+  .fi-receipt{ display:inline-block; margin-top:2px; font-size:0.6rem; letter-spacing:0.8px; opacity:0.7; color:var(--ink); }
   .fi-receipt:hover{ opacity:1; }
   .item-flash{ animation:ppFlash 1.4s ease 0s 2; }
   @keyframes ppFlash{ 0%,100%{ background:rgba(255,255,255,0.18);} 50%{ background:rgba(200,150,60,0.45);} }
@@ -518,7 +518,7 @@
      rules, thick-thin double rules top & bottom (span:all so it seats as a
      board across the broadsheet). Tabular-nums keep the figures on a grid. */
   .pp-markets{
-    width:100%; margin-top:18px; border-collapse:collapse; break-inside:avoid; column-span:all;
+    width:100%; margin-top:12px; border-collapse:collapse; break-inside:avoid; column-span:all;
     font-size:0.64rem; line-height:1.28; font-feature-settings:"tnum" 1; font-variant-numeric:tabular-nums;
     border-top:3px double rgba(43,29,14,0.62); border-bottom:3px double rgba(43,29,14,0.62);
   }
@@ -532,7 +532,7 @@
   .pp-markets td:last-child{ text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; }
   /* ER1 closing DINKUS — the printer's end-of-column ornament that closed a
      broadsheet's last item, so the reader knows the day's copy ends here. */
-  .pp-endmark{ display:block; text-align:center; margin:14px 0 2px; font-size:0.9rem; opacity:0.5; letter-spacing:6px; column-span:all; }
+  .pp-endmark{ display:block; text-align:center; margin:8px 0 2px; font-size:0.9rem; opacity:0.5; letter-spacing:6px; column-span:all; }
   /* ER5 PLAIN-PRINT toggle control — a small switch in the paper head. */
   .pp-plain-toggle{
     position:absolute; top:10px; left:12px; cursor:pointer; user-select:none;
