@@ -1261,8 +1261,11 @@ setTimeout(function(){
    residential-band + commercial-core ground -> census audit against the
    bible's HARD 1847-04 anchor -> Option-B placeholder render through the
    C0->C4 construction ramp. A modest ramp through 1848 under the same rules;
-   it STOPS at the 1848 village (the 1849 tent explosion is a later sprint,
-   post-1848 census is INFORMATIONAL/non-gating).
+   v1 STOPPED at the 1848 village. s106c (ICS-23) EXTENDS the master with the
+   1849 IN-TOWN TENT-FIRST DENSIFICATION WAVE (see the wave block inside
+   buildFillMaster + buildings.inTownFill); the v1 build itself is untouched
+   and byte-identical (own seeded stream). The 1847-04/1848-04 census gates
+   stay EXACT; the late-1849 totals are gated by the inTownFill band.
 
    THE TWO-TRACK LAW (fill-density-model §0): fill READS the cadastre/catalog;
    it never moves a lot/reservation and never overlaps a landmark. Determinism:
@@ -1350,7 +1353,23 @@ function fillCensusCurve(){
   _fillCensusCurve = [
     { day: eventDateToSimDay("1846-07-01"), n: 50 },   // documented ~50 (Swasey/Bosqui + demographics)
     { day: eventDateToSimDay("1847-04-01"), n: 79 },   // HARD ANCHOR (FoundSF survey, 28/39/33)
-    { day: eventDateToSimDay("1848-04-01"), n: 130 }   // reasoned: 1847 per-capita x pop(1848-04); fill:true
+    { day: eventDateToSimDay("1848-04-01"), n: 130 },  // reasoned: 1847 per-capita x pop(1848-04); fill:true
+    /* s106c (ICS-23) THE 1849 IN-TOWN DENSIFICATION NODES (fill:true reasoned —
+       the record gives NO town-wide structure tally for late 1849; it jumps to
+       fire-loss figures). Basis = the project's standing late-1849 interpolation
+       (legacy growthTargets calibration, carried into core/03-sim's density
+       notes): the 1850-05/06 fires each destroyed 150-300+ buildings in a
+       PARTIAL district without leveling the town ⇒ total in-town stock already
+       several hundred by early 1850 ⇒ Sept 1849 ~500-600 and Dec 1849 ~700-750
+       total structures. The curve holds the 1848 village flat through spring
+       1849 (the wave is the operator's mid-1849 ramp), then ramps to the band
+       midpoints. The 1851-panorama gradient (core packed → edges gap-toothed)
+       is the FAR anchor — 720 at Dec-20 stays well inside it. The 1847-04 (79)
+       and 1848-04 (130) gates are interpolation NODES: values at and before
+       them are byte-unchanged by construction. */
+    { day: eventDateToSimDay("1849-06-15"), n: 130 },  // hold the village through spring 1849
+    { day: eventDateToSimDay("1849-09-15"), n: 520 },  // reasoned mid-point of the ~500-600 Sept interpolation
+    { day: eventDateToSimDay("1849-12-20"), n: 720 }   // reasoned mid-point of the ~700-750 Dec interpolation
   ];
   return _fillCensusCurve;
 }
@@ -1381,6 +1400,14 @@ function fillCountAt(day){
    tranche proportions are hit exactly (never left to the rough weights). ===== */
 var FILL_MIX_1847 = { shanty: 0.28, frame: 0.39, adobe: 0.33 };
 var FILL_MIX_1848 = { shanty: 0.15, frame: 0.75, adobe: 0.10 };
+/* s106c (ICS-23) THE 1849 IN-TOWN WAVE MIX — tent-FIRST (fill-density-model §2:
+   "1849: tents/canvas dominate NEW construction — the single highest corpus
+   rate measured — + prefab/kit frame arrives at scale in parallel"; adobe
+   construction essentially stops after 1848, bible §1a). Category shares are
+   fill:true reasoned tunables grounded in §2; the CONCRETE code inside a
+   category is drawn from the catalog's "1849" era-weight column (so tents
+   dominate the shanty bucket: TNT-1 9 / TNT-2 7 / TNT-3 6 vs scrap 4). */
+var FILL_MIX_1849 = { shanty: 0.55, frame: 0.45, adobe: 0.00 };
 /* pick the category most behind its quota (streaming largest-remainder). */
 function fillPickCat(mix, counts){
   var placed = counts.shanty + counts.frame + counts.adobe;
@@ -1392,8 +1419,9 @@ function fillPickCat(mix, counts){
   return best;
 }
 /* seeded weighted draw of a concrete code within a census category, era-valid at
-   `day`, from the 1847-04 weight column (within-category variety only). */
-function fillPickCode(cat, day, rng){
+   `day`, from the `snapKey` weight column (default "1847-04" — the v1 village;
+   s106c passes "1849" for the in-town wave so tents dominate the shanty bucket). */
+function fillPickCode(cat, day, rng, snapKey){
   var pool = [], tot = 0;
   for(var i = 0; i < FILL_TYPES.length; i++){
     var t = FILL_TYPES[i];
@@ -1401,7 +1429,7 @@ function fillPickCode(cat, day, rng){
     if(!FILL_COUNTED_SUBTYPES[t.subtype]) continue;
     if(fillCensusCat(t) !== cat) continue;
     if(!fillEraValid(t, day)) continue;
-    var w = fillWeight(t.code, "1847-04");
+    var w = fillWeight(t.code, snapKey || "1847-04");
     if(w <= 0) w = 0.5;                                  // era-valid but zero-weighted at 1847 snapshot: a faint floor so later-era frame variety can still draw
     pool.push({ t: t, w: w }); tot += w;
   }
@@ -1457,7 +1485,55 @@ function fillFrontageSlots(capDay){
    built-fraction cap (gap-toothed) + canPlace (zone/terrain/slope/ROW/overlap-vs-
    landmarks) + a local inter-fill overlap check. Each accepted building carries a
    census category (tranche mix) and a construction appearDay. ===== */
-var FILL_MASTER = null;
+var FILL_MASTER = null, _fillMasterVer = -1;
+/* s106c geometry gates the LAW_TABLES rows don't carry (module-level so the
+   wave spawner and the inTownFill audit share ONE measure — measurement law):
+   the "structure" row has no ROW clause (v1 stayed off streets by slot
+   construction, but small mid-block streets like Shubrick cut through block
+   interiors) and the "tent" row has no footprint clause (the tent master
+   checks PLACEMENT_INDEX by hand — the wave must too). */
+function fillPoseQuad(cx, cz, w, d, yaw){
+  var nx = Math.sin(yaw), nz = Math.cos(yaw), tx = nz, tz = -nx, hw = w / 2, hd = d / 2;
+  function P(sw, sd){ return { x: cx + tx * sw + nx * sd, z: cz + tz * sw + nz * sd }; }
+  return [ P(-hw, -hd), P(hw, -hd), P(hw, hd), P(-hw, hd) ];
+}
+function fillPointInQuad(q, x, z){
+  var sign = 0;
+  for(var i = 0; i < 4; i++){ var a = q[i], b = q[(i+1)%4];
+    var cr = (b.x-a.x)*(z-a.z) - (b.z-a.z)*(x-a.x);
+    if(cr !== 0){ var s = cr > 0 ? 1 : -1; if(sign === 0) sign = s; else if(s !== sign) return false; }
+  }
+  return true;
+}
+function fillSegsIntersect(a, b, c, d){
+  function o(p, q, r){ return (q.x-p.x)*(r.z-p.z) - (q.z-p.z)*(r.x-p.x); }
+  var o1 = o(a,b,c), o2 = o(a,b,d), o3 = o(c,d,a), o4 = o(c,d,b);
+  return ((o1 > 0) !== (o2 > 0)) && ((o3 > 0) !== (o4 > 0));
+}
+function fillQuadCrossesRow(q, cx, cz){
+  var segs = (typeof PLACEMENT_STREET_SEGS !== "undefined") ? PLACEMENT_STREET_SEGS : [];
+  for(var j = 0; j < segs.length; j++){
+    var s = segs[j], mx = (s.x0 + s.x1) / 2, mz = (s.z0 + s.z1) / 2;
+    if(Math.hypot(mx - cx, mz - cz) > 90) continue;
+    var P0 = { x: s.x0, z: s.z0 }, P1 = { x: s.x1, z: s.z1 };
+    if(fillPointInQuad(q, P0.x, P0.z) || fillPointInQuad(q, P1.x, P1.z)) return true;
+    for(var i = 0; i < 4; i++) if(fillSegsIntersect(P0, P1, q[i], q[(i+1)%4])) return true;
+  }
+  return false;
+}
+/* s106c QA knob (per-system debug affordance; default OFF — the probe's
+   fail-before flips it): ignoreInTownGates makes the 1849 WAVE skip its
+   placement gates (encampment-ground rejection, dry-land, canPlace zone/law,
+   curb setback) so wave fill lands in streets/water/documented-camp ground
+   and buildings.inTownFill goes RED; knob off → GREEN (the gates are real).
+   The v1 1846-48 village build is NEVER touched by the knob. */
+var FILL_QA = { ignoreInTownGates: false, version: 0 };
+/* s106c tunables — the in-town 1849 tent-first densification wave. */
+var FILL_1849_START_ISO = "1849-06-15";   // wave ramp start (operator: "ramping mid-1849 -> Dec 1849")
+var FILL_1849_CAP_ISO   = "1849-12-20";   // wave cap = the boom-peak canonical noon
+var FILL_EDGE_CAP_1849  = 0.70;           // per-edge built-fraction cap for the wave (denser than the 0.55 village, still gap-toothed — the 1851 gradient is the FAR anchor, never fully packed)
+var FILL_1849_BAND      = [630, 780];     // gating plausibility band for the Dec-20 in-town total (see fillCensusCurve s106c note)
+var FILL_1849_BAND_SEP  = [380, 640];     // gating band for the Sept-15 in-town total (~500-600 interpolation, wide for placement reality)
 function fillOverlapsLocal(placed, x, z, r){
   for(var i = 0; i < placed.length; i++){
     var p = placed[i], dx = x - p.x, dz = z - p.z, md = r + p.r;
@@ -1466,7 +1542,7 @@ function fillOverlapsLocal(placed, x, z, r){
   return false;
 }
 function buildFillMaster(){
-  if(FILL_MASTER) return FILL_MASTER;
+  if(FILL_MASTER && _fillMasterVer === FILL_QA.version) return FILL_MASTER;
   var seedStrLocal = "p1850-fill-" + (typeof seedStr !== "undefined" ? seedStr : "1846");
   var sd = cyrb128(seedStrLocal), rng = sfc32(sd[0], sd[1], sd[2], sd[3]);   // DEDICATED stream — never rngBuild
   var capDay  = eventDateToSimDay(FILL_CAP_ISO);
@@ -1517,8 +1593,154 @@ function buildFillMaster(){
                   rank: rank, appearDay: capDay });
   }
   fillAssignAppearDays(master, capDay);
-  FILL_MASTER = master;
-  if(typeof console !== "undefined") console.log("[verify] fill master:", master.length, "of", need, "owed placed (fifty-vara born ground).");
+  var v1Len = master.length;
+
+  /* ===================================================================
+     s106c (ICS-23) — THE 1849 IN-TOWN TENT-FIRST DENSIFICATION WAVE
+     (operator change 2). Historically the whole town was threaded with
+     tents + shanties through 1849 (Taylor's "scattering town of tents");
+     fill v1 deliberately capped at the 1848 village, leaving the platted
+     blocks around Portsmouth Square / Dupont / Stockton empty. This wave
+     EXTENDS the master — the v1 1846-48 build above is UNTOUCHED (its own
+     stream, its own loop; byte-identical, proven by the determinism
+     fingerprints) — with new units on EMPTY platted fifty-vara ground,
+     appearing mid-1849 → Dec 1849 along the census-curve ramp.
+
+     EVERY existing gate holds (the operator's law):
+       • canPlace law rows — tents through the "tent" row (minY 2, slope
+         ≤12%, never ROW margin 2, never intertidal), everything else
+         through "structure"; corner-level (footprintW/D passed);
+       • zone law — evaluated at the WAVE CAP date (the era-grown
+         commercial core at its FULL boom reach, the strictest claim in
+         the window): the core admits frame only, so tents/shanties
+         thread the RESIDENTIAL band (fill-density-model §3: tents are
+         never wedged between the plaza's frame buildings) while frame
+         densifies the core blocks;
+       • cadastre reservations — PLACEMENT_INDEX overlap via canPlace
+         (the 51 landmark footprints) + the local inter-fill check;
+       • documented camp ground — the wave never places inside an
+         ENCAMPMENT_ZONES ring (the record's camps belong to the tent
+         master; fill must not crowd Little Chile's block);
+       • dry land — isDryLand at the wave start (s110a; dry ground only
+         grows later in the window);
+       • occupancy/spacing — the SAME per-edge built-fraction budget the
+         v1 loop booked (carried over in `edgeBuilt`), capped at the 1849
+         era cap, + FILL_GAP_M side yards + detached-overlap vs ALL fill.
+
+     Type mix: FILL_MIX_1849 categories (tent-first, §2) with concrete
+     codes drawn from the catalog's "1849" era-weight column. Dedicated
+     seeded stream ("p1850-fill1849-") so the v1 stream's consumption is
+     bit-identical to s96..s106b. Audited by buildings.inTownFill. ===== */
+  var waveStart = eventDateToSimDay(FILL_1849_START_ISO);
+  var waveCap   = eventDateToSimDay(FILL_1849_CAP_ISO);
+  var sd2 = cyrb128("p1850-fill1849-" + (typeof seedStr !== "undefined" ? seedStr : "1846"));
+  var rng2 = sfc32(sd2[0], sd2[1], sd2[2], sd2[3]);       // DEDICATED wave stream — never the v1 stream, never rngBuild
+  var need2 = Math.max(0, Math.round(fillTargetTotal(waveCap)) - reservationsAt(waveCap).length - v1Len);
+  var slots2 = fillFrontageSlots(waveCap);                // fifty-vara blocks born by the cap (incl. post-1848 births)
+  for(var s2 = 0; s2 < slots2.length; s2++){
+    slots2[s2].order = Math.hypot(slots2[s2].cx - PLAZA_CENTER.x, slots2[s2].cz - PLAZA_CENTER.z) + (rng2() - 0.5) * 10;
+  }
+  slots2.sort(function(a, b){ return a.order - b.order; });
+  var counts2 = { shanty: 0, frame: 0, adobe: 0 }, waveN = 0;
+  var rej2 = { edgeCap: 0, camp: 0, water: 0, zone: 0, law: 0, row: 0, reserved: 0, overlap: 0, noType: 0 };
+  /* THE WAVE WALK — largest-remainder category pick (the exact tranche-mix
+     discipline v1 uses) with a PER-CATEGORY slot cursor over the ONE
+     plaza-ward slot list. Each category walks the demand order and takes
+     the first slot ITS zone law admits: frame densifies the commercial
+     core; the shanty/tent bucket skips the core (the commercial front is
+     never tent ground — CAD_ZONE_TABLE) and threads the residential band
+     beyond it. One shared deficit walk keeps the 55/45 tent-first mix
+     exact while each class finds its own legal ground. (A naive per-slot
+     fallback was measured first: the core's slots ate the whole wave as
+     frame — 505/51 — because plaza-ward order reaches the core first.
+     A category with NO remaining legal slot is marked exhausted and its
+     share falls to the others — reported, never silently hidden.) */
+  var cursors2 = { shanty: 0, frame: 0, adobe: 0 }, exhausted2 = {};
+  function wavePickCat(){
+    var placedN = counts2.shanty + counts2.frame + counts2.adobe;
+    var best = null, bestDef = -Infinity;
+    ["shanty", "frame", "adobe"].forEach(function(c){
+      if(FILL_MIX_1849[c] <= 0 || exhausted2[c]) return;
+      var def = FILL_MIX_1849[c] * (placedN + 1) - counts2[c];
+      if(def > bestDef){ bestDef = def; best = c; }
+    });
+    return best;
+  }
+  while(waveN < need2){
+    var cat2 = wavePickCat();
+    if(!cat2) break;                                      // every category out of legal ground
+    var placedOne = false, idx2 = cursors2[cat2];
+    for(; idx2 < slots2.length; idx2++){
+      var slot2 = slots2[idx2];
+      var t2 = fillPickCode(cat2, waveCap, rng2, "1849");
+      if(!t2){ rej2.noType++; idx2 = slots2.length; break; }
+      var wM2 = t2.footprint.w * FILL_FT_M, dM2 = t2.footprint.d * FILL_FT_M;
+      var built2 = edgeBuilt[slot2.edgeId] || 0;          // the v1 bookings CARRY — one shared per-edge budget
+      if((built2 + wM2) / slot2.edgeLen > FILL_EDGE_CAP_1849){ rej2.edgeCap++; continue; }
+      var jitter2 = (rng2() - 0.5) * Math.min(FILL_SLOT_STEP_M * 0.5, slot2.edgeLen * 0.15);
+      var setIn2 = FILL_QA.ignoreInTownGates ? 0 : (FILL_SETBACK_M + dM2 / 2);   // knob: straddle the curb (ROW offense) for the fail-before proof
+      var cx2 = slot2.ex + slot2.tx * jitter2 + slot2.inx * setIn2;
+      var cz2 = slot2.ez + slot2.tz * jitter2 + slot2.inz * setIn2;
+      var rB2 = Math.hypot(wM2, dM2) / 2;
+      if(!FILL_QA.ignoreInTownGates){
+        // the record's camp ground belongs to the tent master — fill never crowds a documented encampment
+        if(typeof encampmentZoneAt === "function" && encampmentZoneAt(cx2, cz2, waveCap)){ rej2.camp++; continue; }
+        // buildable dry ground at the wave start (s110a; strictest — dry land only grows)
+        if(typeof isDryLand === "function" && !isDryLand(cx2, cz2, waveStart)){ rej2.water++; continue; }
+        var cls2 = t2.subtype === "tent" ? "tent" : "structure";
+        var cp2 = canPlace(cls2, { x: cx2, z: cz2, yaw: slot2.yaw, footprint: rB2, footprintW: wM2, footprintD: dM2 },
+                           { day: waveCap, zoneClass: t2.subtype === "tent" ? "tent" : fillZoneClass(t2) });
+        if(!cp2.ok){ if(/^zone/.test(cp2.reason || "")) rej2.zone++; else rej2.law++; continue; }
+        // explicit gates the LAW rows don't carry: mid-block rights-of-way
+        // (Shubrick-class alleys cut through block interiors — the structure
+        // row has no ROW clause) + reserved landmark ground for tents (the
+        // tent row has no footprint clause).
+        if(fillQuadCrossesRow(fillPoseQuad(cx2, cz2, wM2, dM2, slot2.yaw), cx2, cz2)){ rej2.row++; continue; }
+        var resBad2 = false;
+        for(var pi2 = 0; pi2 < PLACEMENT_INDEX.length; pi2++){
+          var q2 = PLACEMENT_INDEX[pi2], rdx2 = cx2 - q2.x, rdz2 = cz2 - q2.z, rmd2 = rB2 + q2.r;
+          if(rdx2*rdx2 + rdz2*rdz2 < rmd2*rmd2){ resBad2 = true; break; }
+        }
+        if(resBad2){ rej2.reserved++; continue; }
+      }
+      if(fillOverlapsLocal(placed, cx2, cz2, rB2)){ rej2.overlap++; continue; }
+      counts2[cat2]++; waveN++;
+      edgeBuilt[slot2.edgeId] = built2 + wM2 + FILL_GAP_M;
+      placed.push({ x: cx2, z: cz2, r: rB2 });
+      master.push({ code: t2.code, cat: cat2, material: t2.material, subtype: t2.subtype,
+                    cx: cx2, cz: cz2, w: wM2, d: dM2, yaw: slot2.yaw, nx: slot2.outx, nz: slot2.outz,
+                    storyRange: t2.storyRange || [1, 1], edgeId: slot2.edgeId, edgeLen: slot2.edgeLen,
+                    overWater: !!t2.overWater, stilted: !!t2.stilted,
+                    rank: master.length, appearDay: waveCap, wave: 1849 });
+      placedOne = true; idx2++;
+      break;
+    }
+    cursors2[cat2] = idx2;
+    if(!placedOne) exhausted2[cat2] = true;               // this category found no remaining legal slot
+  }
+  var exhaustedList2 = Object.keys(exhausted2);
+  if(exhaustedList2.length && typeof console !== "undefined")
+    console.warn("[fill] 1849 wave: category slot supply exhausted for " + exhaustedList2.join(",") +
+                 " — the mix audit (inTownFill) measures the drift.");
+  /* wave appearDays — the SAME monotonic walk as v1, over the 1849 ramp:
+     a wave rank appears the day the census-owed count first exceeds it.
+     Wave appearDays all ≥ waveStart > the v1 cap, so the whole master
+     stays appear-ordered by rank (the deriveFillSet early-exit law). */
+  var prev2 = waveStart, k2 = v1Len;
+  for(var d2 = waveStart; d2 <= waveCap + 0.5 && k2 < master.length; d2 += 1){
+    var fc2 = Math.round(fillTargetTotal(d2)) - reservationsAt(d2).length;
+    while(k2 < fc2 && k2 < master.length){ var ad2 = Math.max(d2, prev2); master[k2].appearDay = ad2; prev2 = ad2; k2++; }
+  }
+  for(; k2 < master.length; k2++) master[k2].appearDay = waveCap;
+  master._wave = { v1: v1Len, placed: waveN, need: need2, startDay: waveStart, capDay: waveCap,
+                   mix: counts2, rejects: rej2, slots: slots2.length, qaIgnoreGates: FILL_QA.ignoreInTownGates };
+  if(waveN < need2 && typeof console !== "undefined")
+    console.warn("[fill] 1849 WAVE PLACEMENT STARVED: " + waveN + "/" + need2 +
+                 " owed units fit under the placement laws (reported, not silently capped).");
+
+  FILL_MASTER = master; _fillMasterVer = FILL_QA.version;
+  if(typeof console !== "undefined") console.log("[verify] fill master:", v1Len, "of", need, "owed placed (fifty-vara born ground)",
+    "+ 1849 wave", waveN, "of", need2, "(tent-first in-town densification, s106c).");
   return FILL_MASTER;
 }
 /* appearDay per rank (plaza order == appear order): the day the raw fill-owed
@@ -1632,7 +1854,7 @@ function deriveFillSet(day){
     out.push({ code: e.code, cat: e.cat, cls: form.cls || e.cat, material: e.material, subtype: e.subtype,
                cx: e.cx, cz: e.cz, w: e.w, d: e.d, yaw: e.yaw, nx: e.nx, nz: e.nz,
                storyRange: e.storyRange, stories: form.stories || (e.storyRange && e.storyRange[1]) || 1,
-               edgeId: e.edgeId, edgeLen: e.edgeLen, rank: e.rank,
+               edgeId: e.edgeId, edgeLen: e.edgeLen, rank: e.rank, wave: e.wave || 0,
                overWater: !!e.overWater, stilted: !!e.stilted,
                appearDay: e.appearDay, state: st.state, hFrac: st.hFrac, counted: counted,
                phase: st.phase, transition: st.transition, agingT: st.agingT });
@@ -1721,10 +1943,23 @@ function fillClear(){
 }
 function rebuildFill(){
   fillClear();
-  var set = deriveFillSet(simDay);
+  var set = deriveFillSet(simDay), tentParts = [];
   for(var i = 0; i < set.length; i++){
     if(set[i].phase === "absent" || set[i].phase === "gone") continue;   // nothing on the lot to draw
+    /* s106c: in-town fill TENTS draw with the s106b tent placeholder
+       vocabulary (variant silhouettes + door marker), merged into ONE mesh
+       — never the box massing. TENT_VARIANTS lives in a later chunk; on the
+       very first (load-time) rebuild it is still undefined, so tents fall
+       back to boxes for that one pass and the s106b chunk re-arms the fill
+       renderer (_fillLastDay = null) once the tent vocabulary exists. */
+    if(set[i].subtype === "tent" && typeof TENT_VARIANTS !== "undefined"){ tentPartsInto(tentParts, set[i]); continue; }
     FILL_GROUP.add(fillBuildMesh(set[i]));
+  }
+  if(tentParts.length){
+    var tm = new THREE.Mesh(mergeGeoms(tentParts), LM_MAT);
+    tm.frustumCulled = false;
+    tm.userData.fillTents = true;
+    FILL_GROUP.add(tm);
   }
   _fillLastDay = Math.floor(simDay);
 }
@@ -1914,6 +2149,107 @@ registerLayerVisibility("buildings-fill", function(v){ FILL_GROUP.visible = v; i
     var sameDay = (a1 === a2), rewind = (a1 === aBack);
     return { pass: sameDay && rewind, sameDayIdentical: sameDay, rewindExact: rewind,
              countA: a1.split("\n").filter(Boolean).length, countB: bJump.split("\n").filter(Boolean).length };
+  });
+
+  /* ---- inTownFill (s106c, ICS-23) — THE 1849 IN-TOWN DENSIFICATION LAW.
+     The operator's rules made standing (rules-first):
+       (1) THE CENSUS GATES HOLD EXACTLY — counted total (fill + landmarks)
+           is 79 at 1847-04-01 and 130 at 1848-04-01, to the unit;
+       (2) THE EARLY ERAS ARE UNTOUCHED — zero 1849-wave entries stand (or
+           construct) at/before the 1848-04 gate;
+       (3) THE LATE-1849 TOTAL SITS IN THE MODEL'S BAND — counted in-town
+           total within FILL_1849_BAND_SEP @ Sept-15 and FILL_1849_BAND
+           @ Dec-20 (the ~500-600 / ~700-750 late-1849 interpolation);
+       (4) WAVE PLACEMENT LEGALITY — no wave entry on water (isDryLand at
+           the wave start), none crossing a street right-of-way, none
+           overlapping reserved landmark ground, none inside a documented
+           encampment zone's rings (the record's camp ground belongs to
+           the tent master);
+       (5) TENT-FIRST MIX — the wave's shanty-class share within ±10% of
+           FILL_MIX_1849, zero adobe, and tents ≥20% of the wave (canvas
+           dominates 1849 new construction, fill-density-model §2);
+       (6) NO RAMPARTS — per-edge built fraction (v1 + wave) stays under
+           the 1849 era cap at Dec-20.
+     Fail-before: __P1850_FILL_QA({ignoreInTownGates:true}) drops the wave's
+     gates + curb setback, so wave fill straddles streets / lands on camp
+     ground / water — (4) goes RED; knob off → GREEN. ---- */
+  registerAudit("buildings", "inTownFill", function(){
+    var master = buildFillMaster(), wv = master._wave || { v1: master.length, placed: 0 };
+    var problems = [], segs = (typeof PLACEMENT_STREET_SEGS !== "undefined") ? PLACEMENT_STREET_SEGS : [];
+    // (1) the census gates, EXACT
+    var gates = [];
+    [{ iso: "1847-04-01", n: 79 }, { iso: "1848-04-01", n: 130 }].forEach(function(c){
+      var day = eventDateToSimDay(c.iso);
+      var total = deriveFillSet(day).filter(function(e){ return e.counted; }).length + reservationsAt(day).length;
+      gates.push({ date: c.iso, documented: c.n, total: total });
+      if(total !== c.n) problems.push(c.iso + ": total " + total + " != documented " + c.n + " (EXACT gate)");
+    });
+    // (2) the early eras untouched: no wave entry present at the gate dates
+    ["1847-04-01", "1848-04-01"].forEach(function(iso){
+      var day = eventDateToSimDay(iso);
+      var n = deriveFillSet(day).filter(function(e){ return e.wave === 1849; }).length;
+      if(n > 0) problems.push(iso + ": " + n + " wave-1849 entries present pre-boom");
+    });
+    // (3) the late-1849 band
+    var lateRows = [];
+    [{ iso: "1849-09-15", band: FILL_1849_BAND_SEP }, { iso: FILL_1849_CAP_ISO, band: FILL_1849_BAND }].forEach(function(c){
+      var day = eventDateToSimDay(c.iso);
+      var total = deriveFillSet(day).filter(function(e){ return e.counted; }).length + reservationsAt(day).length;
+      lateRows.push({ date: c.iso, total: total, band: c.band });
+      if(total < c.band[0] || total > c.band[1])
+        problems.push(c.iso + ": in-town total " + total + " outside the model band [" + c.band[0] + "," + c.band[1] + "]");
+    });
+    // (4) wave placement legality — measured on the master (day-independent geometry)
+    var capDay = wv.capDay != null ? wv.capDay : eventDateToSimDay(FILL_1849_CAP_ISO);
+    var startDay = wv.startDay != null ? wv.startDay : eventDateToSimDay(FILL_1849_START_ISO);
+    var lmq = landmarkQuadsAt(capDay);
+    var rowViol = 0, wetViol = 0, campViol = 0, lmViol = 0, legality = [];
+    for(var i = wv.v1; i < master.length; i++){
+      var e = master[i], q = fillQuad(e);
+      if(typeof encampmentZoneAt === "function" && encampmentZoneAt(e.cx, e.cz, capDay)){
+        campViol++; if(legality.length < 8) legality.push({ rank: e.rank, code: e.code, why: "on-documented-camp-ground" });
+      }
+      if(typeof isDryLand === "function" && !isDryLand(e.cx, e.cz, startDay)){
+        wetViol++; if(legality.length < 8) legality.push({ rank: e.rank, code: e.code, why: "on-water" });
+      }
+      for(var j = 0; j < segs.length; j++){
+        var mx = (segs[j].x0 + segs[j].x1) / 2, mz = (segs[j].z0 + segs[j].z1) / 2;
+        if(Math.hypot(mx - e.cx, mz - e.cz) > 90) continue;
+        if(segCrossesQuad(q, segs[j])){ rowViol++; if(legality.length < 8) legality.push({ rank: e.rank, code: e.code, why: "crosses-row:" + segs[j].id }); break; }
+      }
+      for(var k = 0; k < lmq.length; k++){
+        if(penetration(q, lmq[k]) > 0.05){ lmViol++; if(legality.length < 8) legality.push({ rank: e.rank, code: e.code, why: "on-reserved-landmark-ground" }); break; }
+      }
+    }
+    if(rowViol + wetViol + campViol + lmViol > 0)
+      problems.push("wave legality: " + rowViol + " ROW / " + wetViol + " water / " + campViol + " camp-ground / " + lmViol + " reserved-ground violations");
+    // (5) tent-first mix over the wave
+    var mixCt = { shanty: 0, frame: 0, adobe: 0 }, tents = 0, waveTotal = master.length - wv.v1;
+    for(var m = wv.v1; m < master.length; m++){ mixCt[master[m].cat]++; if(master[m].subtype === "tent") tents++; }
+    var shFrac = waveTotal ? mixCt.shanty / waveTotal : 0, tentFrac = waveTotal ? tents / waveTotal : 0;
+    if(waveTotal > 0){
+      if(Math.abs(shFrac - FILL_MIX_1849.shanty) > 0.10) problems.push("wave shanty share " + shFrac.toFixed(3) + " off FILL_MIX_1849 " + FILL_MIX_1849.shanty + " by >0.10");
+      if(mixCt.adobe > 0) problems.push("wave placed " + mixCt.adobe + " adobe (1849 adobe construction has stopped)");
+      if(tentFrac < 0.20) problems.push("wave tent share " + tentFrac.toFixed(3) + " < 0.20 (not tent-first)");
+    } else problems.push("wave placed ZERO units (starved outright)");
+    // (6) no ramparts at the boom peak
+    var byEdge = {}, worstEdge = 0;
+    deriveFillSet(capDay).forEach(function(e){
+      var g = byEdge[e.edgeId] || (byEdge[e.edgeId] = { built: 0, len: e.edgeLen });
+      g.built += e.w;
+    });
+    Object.keys(byEdge).forEach(function(id){
+      var g = byEdge[id], frac = g.len > 0 ? g.built / g.len : 0;
+      if(frac > worstEdge) worstEdge = frac;
+    });
+    if(worstEdge > FILL_EDGE_CAP_1849 + 1e-6) problems.push("per-edge built fraction " + worstEdge.toFixed(3) + " over the 1849 cap " + FILL_EDGE_CAP_1849);
+    return { pass: problems.length === 0, law: "inTownFill (1849 tent-first densification, s106c)",
+             censusGates: gates, late1849: lateRows,
+             wave: { placed: waveTotal, need: wv.need, mix: mixCt, shantyFrac: +shFrac.toFixed(3),
+                     tents: tents, tentFrac: +tentFrac.toFixed(3), worstEdgeFrac: +worstEdge.toFixed(3) },
+             legality: { rowViol: rowViol, wetViol: wetViol, campViol: campViol, lmViol: lmViol, sample: legality },
+             problems: problems.slice(0, 10),
+             qaKnobs: { ignoreInTownGates: FILL_QA.ignoreInTownGates } };
   });
 })();
 
@@ -2306,11 +2642,54 @@ var TENT_RAID = { zone: "little-chile", dateISO: "1849-07-15", hitFrac: 0.55, re
 var TENT_GAP_M = 1.0;          // side gap booked between tents (centre spacing = rA+rB+gap)
 var TENT_LEAD_DAYS = 1;        // canvas goes up overnight (Taylor: "as if by magic in a single night")
 
+/* =====================================================================
+   s106c (ICS-23) — BLEED HALOS (operator change 1). The s106b hard zone
+   edge read artificial ("absolute tent city then open land"); the record's
+   boundaries are honest street-framed ENVELOPES (approximate:true), so a
+   camp's real edge feathered past them. Each zone gets a FALLOFF HALO BAND
+   outside its documented rings: tent placement density DECAYS with distance
+   past the boundary — seeded, deterministic acceptance probability
+   p = 1 - smoothstep(d / haloW) over the halo distance d (the WORST of the
+   footprint's centroid + 4 corners). Same per-zone TOTALS as s106b (the
+   documented anchors: HV 1000 @ Dec-1849 etc.) — tents spread WIDER, never
+   multiply. Halo candidates still pass EVERY placement gate (isDryLand +
+   canPlace tent law + ROW/reserved + spacing) — a halo bleeds toward the
+   town but a tent never sits in a street or on reserved ground; the zone
+   gate for halo ground is evaluated at the FULLY-GROWN commercial reach
+   (the strictest in-window claim), so a halo tent is never on ground the
+   boom core claims by Dec 1849. Widths are fill:true tunables: Happy
+   Valley 90 m (the big dune-swale camp feathers widest), Little Chile /
+   Pleasant Valley 60 m (small pockets). buildings.tentInZone is amended to
+   zone+halo (the ignore-boundary fail-before knob still goes RED: it
+   samples an over-inflated bbox with NO ring/halo test, so tents land far
+   beyond the halo). ==================================================== */
+var TENT_HALO_W = { "happy-valley": 90, "little-chile": 60, "pleasant-valley": 60 };
+function tentHaloW(zoneId){ return TENT_HALO_W[zoneId] != null ? TENT_HALO_W[zoneId] : 0; }
+/* distance a point stands OUTSIDE a zone's rings (0 = inside; else the min
+   distance to any ring segment). The halo law's one geometric measure —
+   shared by the spawner and the tentInZone audit (measurement law). */
+function tentRingsOutsideDist(rings, x, z){
+  if(cadPointInRings(rings, x, z)) return 0;
+  var best = Infinity;
+  for(var k = 0; k < rings.length; k++){
+    var pts = rings[k];
+    for(var i = 0; i < pts.length; i++){
+      var a = pts[i], b = pts[(i + 1) % pts.length];
+      var d = distToSegXZ(x, z, a.x, a.z, b.x, b.z);
+      if(d < best) best = d;
+    }
+  }
+  return best;
+}
+function tentHaloSmoothstep(t){ t = clamp(t, 0, 1); return t * t * (3 - 2 * t); }
+
 /* QA knobs (per-system debug affordance, feedback-1850-placeholder-representation;
    default OFF — the fail-before probes flip them):
-     ignoreZoneBoundary — placement samples the zone BBOX without the ring
-       containment test, so tents spill outside the documented zone and the
-       tentInZone audit goes RED (fail-before), then green with the knob off.
+     ignoreZoneBoundary — placement samples an OVER-INFLATED zone bbox
+       (rings + halo + 150 m) without the ring/halo containment test, so
+       tents spill far beyond the documented zone AND its s106c bleed halo
+       and the amended tentInZone audit goes RED (fail-before), then green
+       with the knob off.
      demoBurn — ONE seeded tent per zone takes a full law-abiding burn ->
        ruins -> clear arc on 1849-09-01, so the burning-tent placeholder +
        the lifecycle-overlay tint composition are verifiable on screen
@@ -2398,11 +2777,26 @@ function buildTentMaster(){
   zones.forEach(function(zone){
     var targetMax = tentCurveMax(zone.id);
     if(!targetMax || !zone.rings || !zone.rings.length) return;
+    var haloW = tentHaloW(zone.id);
+    /* zone-gate LAW DAY (s106c): a halo tent stands on ground OUTSIDE the
+       documented rings, where the general zone law (not the record-wins
+       override) governs — and the commercial core GROWS through the window.
+       Evaluating at the fully-grown reach (Apr 1849, CAD_COMM_R's last
+       checkpoint) is the strictest in-window claim, so an accepted halo
+       tent is legal at every date it stands. In-ring candidates are
+       unaffected (the documented-camp override admits them at any active
+       date). */
+    var lawDay = Math.max(zone.startDay, eventDateToSimDay("1849-04-01"));
     var xLo = Infinity, xHi = -Infinity, zLo = Infinity, zHi = -Infinity;
     zone.rings.forEach(function(r){ r.forEach(function(p){
       if(p.x < xLo) xLo = p.x; if(p.x > xHi) xHi = p.x;
       if(p.z < zLo) zLo = p.z; if(p.z > zHi) zHi = p.z; }); });
-    var placed = [], list = [], tries = 0, maxTries = targetMax * 40;
+    /* sample bbox: rings + the halo band. Under the ignoreZoneBoundary
+       fail-before knob the bbox is over-inflated well PAST the halo so the
+       amended zone+halo audit still goes RED (fail-before stays provable). */
+    var pad = TENT_QA.ignoreZoneBoundary ? haloW + 150 : haloW;
+    xLo -= pad; xHi += pad; zLo -= pad; zHi += pad;
+    var placed = [], list = [], tries = 0, maxTries = targetMax * 60;
     while(list.length < targetMax && tries < maxTries){
       tries++;
       var x = xLo + rng() * (xHi - xLo), z = zLo + rng() * (zHi - zLo);
@@ -2411,16 +2805,28 @@ function buildTentMaster(){
       var wM = t.footprint.w * FILL_FT_M, dM = t.footprint.d * FILL_FT_M;
       var rB = Math.hypot(wM, dM) / 2;
       var pts = tentCornerPts(x, z, wM, dM, yaw), pi, bad = false;
-      // (1) THE HARD ZONE BOUNDARY (all 5 pts) — bbox-only under the QA knob
+      // (1) THE ZONE BOUNDARY + BLEED HALO (all 5 pts) — inside the rings is
+      //     always admissible; past them the seeded smoothstep falloff decides
+      //     (density decays to zero at the halo edge). Skipped whole under the
+      //     QA knob (fail-before: tents spill far beyond the halo).
+      var haloDist = 0;
       if(!TENT_QA.ignoreZoneBoundary){
-        for(pi = 0; pi < pts.length; pi++) if(!cadPointInRings(zone.rings, pts[pi].x, pts[pi].z)){ bad = true; break; }
+        for(pi = 0; pi < pts.length; pi++){
+          var od = tentRingsOutsideDist(zone.rings, pts[pi].x, pts[pi].z);
+          if(od > haloW + 1e-6){ bad = true; break; }
+          if(od > haloDist) haloDist = od;
+        }
         if(bad) continue;
+        if(haloDist > 0){
+          if(haloW <= 0) continue;                          // no halo: the s106b hard boundary
+          if(rng() >= 1 - tentHaloSmoothstep(haloDist / haloW)) continue;   // seeded density falloff
+        }
       }
       // (2) dry land (buildable/anchorable surface) at centroid + corners
       for(pi = 0; pi < pts.length; pi++) if(!isDryLand(pts[pi].x, pts[pi].z, zone.startDay)){ bad = true; break; }
       if(bad) continue;
       // (3) the existing placement law (zone gate + tent law row, corner-level)
-      var cp = canPlace("tent", { x: x, z: z, yaw: yaw, footprint: rB, footprintW: wM, footprintD: dM }, { day: zone.startDay });
+      var cp = canPlace("tent", { x: x, z: z, yaw: yaw, footprint: rB, footprintW: wM, footprintD: dM }, { day: lawDay });
       if(!cp.ok) continue;
       // (4) reserved landmark ground
       for(pi = 0; pi < PLACEMENT_INDEX.length; pi++){
@@ -2438,7 +2844,7 @@ function buildTentMaster(){
       if(fillOverlapsLocal(placed, x, z, rB + TENT_GAP_M)) continue;
       placed.push({ x: x, z: z, r: rB });
       list.push({ code: t.code, zone: zone.id, zoneStartDay: zone.startDay,
-                  cx: x, cz: z, w: wM, d: dM, yaw: yaw,
+                  cx: x, cz: z, w: wM, d: dM, yaw: yaw, haloDist: +haloDist.toFixed(2),
                   zoneRank: list.length, appearDay: zone.startDay });
     }
     // appearDay per zone-rank from the density curve (monotonic; rewind-exact)
@@ -2448,7 +2854,10 @@ function buildTentMaster(){
       while(k < want && k < list.length){ var ad = Math.max(d, prev); list[k].appearDay = ad; prev = ad; k++; }
     }
     for(; k < list.length; k++) list[k].appearDay = SIM_END_DAY;   // starved past window end (never shown)
-    report.push({ zone: zone.id, placed: list.length, target: targetMax, tries: tries });
+    var haloCt = 0; list.forEach(function(e){ if(e.haloDist > 0) haloCt++; });   // s106c halo occupancy split
+    report.push({ zone: zone.id, placed: list.length, target: targetMax, tries: tries,
+                  haloW: haloW, core: list.length - haloCt, halo: haloCt,
+                  haloFrac: list.length ? +(haloCt / list.length).toFixed(3) : 0 });
     if(list.length < targetMax)
       console.warn("[tents] PLACEMENT STARVED in " + zone.id + ": " + list.length + "/" + targetMax +
                    " documented-target tents fit under the placement laws (reported, not silently capped).");
@@ -2523,6 +2932,7 @@ function deriveTentSet(day){
     if(st.phase === "absent" || st.phase === "gone") continue;
     out.push({ code: e.code, zone: e.zone, cx: e.cx, cz: e.cz, w: e.w, d: e.d, yaw: e.yaw,
                rank: e.rank, zoneRank: e.zoneRank, appearDay: e.appearDay, stories: 1,
+               haloDist: e.haloDist || 0,   // s106c: 0 = inside the documented rings; >0 = halo band
                phase: st.phase, state: st.state, hFrac: st.hFrac, agingT: st.agingT,
                transition: st.transition });
   }
@@ -2604,6 +3014,7 @@ function updateTents(){
   if(Math.floor(simDay) !== _tentLastDay) rebuildTents();
 }
 rebuildTents();
+_fillLastDay = null;   // s106c: re-arm the fill renderer — the tent vocabulary (TENT_VARIANTS) now exists, so in-town fill tents re-draw as tents on the next frame
 var _tentPrevRender = renderer.render.bind(renderer);
 renderer.render = function(s, c){
   try { updateTents(); } catch(e){ if(!updateTents._warned){ console.warn("[buildings.tents] update failed", e); updateTents._warned = true; } }
@@ -2614,10 +3025,14 @@ registerLayerVisibility("buildings-tents", function(v){ TENT_GROUP.visible = v; 
 /* =====================================================================
    THE TENT AUDITS (rules-first — defects become standing rules with
    fail-before/pass-after proofs, run by tools/verify/probe-s106b.js):
-     • tentInZone — NO tent stands outside an ACTIVE documented encampment
-       zone: centroid + all 4 footprint corners inside the zone's rings, at
-       every sampled date (the operator's hard-boundary law). Fail-before:
-       __P1850_TENT_QA({ignoreZoneBoundary:true}).
+     • tentInZone — s106c AMENDED: NO tent stands outside an ACTIVE
+       documented encampment zone's rings + its BLEED HALO band: centroid +
+       all 4 footprint corners inside the rings or within tentHaloW(zone)
+       of them, at every sampled date; the core/halo occupancy split is
+       reported. (The in-town 1849 fill tents are the FILL track's — they
+       are governed by buildings.inTownFill, not this law.) Fail-before:
+       __P1850_TENT_QA({ignoreZoneBoundary:true}) spills tents far beyond
+       the halo.
      • tentDensityWindow — per-zone standing-tent counts inside the
        documented plausibility bands at the noon dates; ZERO tents anywhere
        before a zone is born (1846/47/48-04 — so the 1847 census ~79 and
@@ -2629,9 +3044,17 @@ registerLayerVisibility("buildings-tents", function(v){ TENT_GROUP.visible = v; 
        fingerprint is same-day identical and A->B->...->A rewind-exact. ===== */
 (function registerTentAudits(){
   registerAudit("buildings", "tentInZone", function(){
+    /* s106c AMENDMENT (operator change 1): the law is now ZONE + BLEED HALO —
+       every tent's centroid + 4 footprint corners stand inside the documented
+       rings OR within the zone's halo width of them (tentRingsOutsideDist, the
+       same measure the spawner gates on — measurement law). The halo occupancy
+       split (core vs halo, per zone, across the sampled dates) is REPORTED.
+       Fail-before still works: the ignoreZoneBoundary knob samples an
+       over-inflated bbox with no ring/halo test, so tents land beyond the
+       halo and this audit goes RED. */
     var days = ["1848-10-01", "1849-06-01", "1849-09-15", "1849-12-20"].map(eventDateToSimDay);
     if(typeof simDay === "number") days.push(simDay);
-    var viol = [], checked = 0;
+    var viol = [], checked = 0, occ = {};
     days.forEach(function(day){
       var byId = {};
       encampmentZonesAt(day).forEach(function(z){ byId[z.id] = z; });
@@ -2639,17 +3062,29 @@ registerLayerVisibility("buildings-tents", function(v){ TENT_GROUP.visible = v; 
         checked++;
         var zn = byId[e.zone];
         if(!zn){ if(viol.length < 10) viol.push({ day: +day.toFixed(0), tent: e.zone + "#" + e.zoneRank, why: "zone-not-active" }); return; }
-        var pts = tentCornerPts(e.cx, e.cz, e.w, e.d, e.yaw);
+        var hw = tentHaloW(e.zone);
+        var pts = tentCornerPts(e.cx, e.cz, e.w, e.d, e.yaw), worst = 0;
         for(var pi = 0; pi < pts.length; pi++){
-          if(!cadPointInRings(zn.rings, pts[pi].x, pts[pi].z)){
+          var od = tentRingsOutsideDist(zn.rings, pts[pi].x, pts[pi].z);
+          if(od > worst) worst = od;
+          if(od > hw + 0.5){
             if(viol.length < 10) viol.push({ day: +day.toFixed(0), tent: e.zone + "#" + e.zoneRank,
-                                             why: pi === 0 ? "centroid-outside-zone" : "corner-outside-zone" });
+                                             why: (pi === 0 ? "centroid" : "corner") + "-outside-zone+halo",
+                                             beyondHaloM: +(od - hw).toFixed(1) });
             return;
           }
         }
+        var o = occ[e.zone] || (occ[e.zone] = { core: 0, halo: 0 });
+        if(worst > 0) o.halo++; else o.core++;
       });
     });
-    return { pass: viol.length === 0, law: "tentInZone", checked: checked,
+    var occupancy = {};
+    Object.keys(occ).forEach(function(zid){
+      var o = occ[zid], n = o.core + o.halo;
+      occupancy[zid] = { core: o.core, halo: o.halo, haloFrac: n ? +(o.halo / n).toFixed(3) : 0, haloW: tentHaloW(zid) };
+    });
+    return { pass: viol.length === 0, law: "tentInZone (zone + bleed halo, s106c)", checked: checked,
+             haloWidthsM: TENT_HALO_W, occupancy: occupancy,
              violations: viol.length, sample: viol.slice(0, 8),
              qaKnobs: { ignoreZoneBoundary: TENT_QA.ignoreZoneBoundary } };
   });
@@ -2734,6 +3169,17 @@ if(typeof window !== "undefined"){
     TENT_MASTER = null; _tentLastDay = null;
     return { ignoreZoneBoundary: TENT_QA.ignoreZoneBoundary, demoBurn: TENT_QA.demoBurn, version: TENT_QA.version };
   };
+  /* s106c — the in-town-wave QA knob (fail-before for buildings.inTownFill).
+     Invalidates the FILL master AND the tent master (tents avoid fill, so a
+     changed fill layout changes their avoid set) — deterministic on either
+     side of a toggle. */
+  window.__P1850_FILL_QA = function(opts){
+    opts = opts || {};
+    if(opts.ignoreInTownGates != null) FILL_QA.ignoreInTownGates = !!opts.ignoreInTownGates;
+    FILL_QA.version++;
+    FILL_MASTER = null; TENT_MASTER = null; _fillLastDay = null; _tentLastDay = null;
+    return { ignoreInTownGates: FILL_QA.ignoreInTownGates, version: FILL_QA.version };
+  };
 }
 setTimeout(function(){
   if(typeof window !== "undefined" && window.__P1850){
@@ -2814,6 +3260,7 @@ setTimeout(function(){
     window.__P1850.fillAt = function(day){ return deriveFillSet(day == null ? simDay : day); };
     window.__P1850.fillCount = function(day){ return deriveFillSet(day == null ? simDay : day).filter(function(e){ return e.counted; }).length; };
     window.__P1850.fillMasterSize = function(){ return buildFillMaster().length; };
+    window.__P1850.fillWave = function(){ return buildFillMaster()._wave; };   // s106c: the 1849 in-town wave report
     window.__P1850.fillCensus = function(iso){
       var day = eventDateToSimDay(iso);
       var lm = reservationsAt(day).length, fill = window.__P1850.fillCount(day);

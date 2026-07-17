@@ -476,8 +476,8 @@
     "s98: the AUTHORED wharf network as clear LINES — centerlines (PIERS_RUNTIME, era-gated to the active extent) + the deck-extent outline (pierDeckQuad), draped at deck height above the cove so they read against the cyan water-lot grid the corridor spans (the future-fill footprint — what the cove eventually becomes land). 100-ft distance ticks along each centerline + a cross at the bay end give the length read. gold = centerline · white = deck outline · cyan ticks = 100-ft stations. Scrub 1848→1849 to watch Central Wharf reach 300→800 ft. Only Broadway (1847) + Central (1849) are in-window; the 1850 city wharves appear past the sim end.");
   makeFlat("zonelaw", "ZONE LAW (land-use)",
     "s91: the governing LAND-USE zone tinted over the town + cove at the current date (cadZoneAt — the WHERE-per-class placement grammar canPlace reads). amber = commercial-core (plaza ring + downtown, GROWS outward by era — scrub 1846→1849 to watch it reach the waterfront) · slate = residential-band · brown = waterfront-working (piers + working shore) · blue = cove-water · oxblood = plaza · orange = camp (Happy Valley, born 1849) · violet = mission · green = presidio. Distinct from ECOLOGY ZONES (terrain/vegetation) below.");
-  makeFlat("encamp", "ENCAMPMENT ZONES (s106a)",
-    "The DOCUMENTED 1849 tent-encampment districts (ENCAMPMENT_ZONES, core/08) — the authored HARD SPAWN BOUNDARY the s106b tent explosion fills (deterministic seeded tents STRICTLY inside these rings; buildings.tentInZone is the law). Date-gated: each zone shows only in its documented window (Little Chile from Aug 1848; Happy Valley + Pleasant Valley from the 1849 boom). orange = documented tent camp (✅ Happy Valley · Little Chile) · ochre = [FLAG] weakly-sourced (Pleasant Valley — named pocket of the camp belt, 1849 tents NOT directly attested) · DASHED boundary = approximate:true (the record names a district, never a surveyed camp line — presence-over-precision). Label: name + start + evidence tier.");
+  makeFlat("encamp", "ENCAMPMENT ZONES (s106a/c)",
+    "The DOCUMENTED 1849 tent-encampment districts (ENCAMPMENT_ZONES, core/08) — the authored spawn ground the s106b tent explosion fills, s106c-amended with BLEED HALOS (deterministic seeded tents inside the rings + a smoothstep density-falloff band outside them; buildings.tentInZone is the zone+halo law). Date-gated: each zone shows only in its documented window (Little Chile from Aug 1848; Happy Valley + Pleasant Valley from the 1849 boom). orange = documented tent camp (✅ Happy Valley · Little Chile) · ochre = [FLAG] weakly-sourced (Pleasant Valley — named pocket of the camp belt, 1849 tents NOT directly attested) · DASHED boundary = approximate:true (the record names a district, never a surveyed camp line — presence-over-precision) · FAINTER dashed outer line = the bleed-halo extent (spawn falloff, not a documented line). Label: name + start + evidence tier.");
   makeFlat("zones", "ECOLOGY ZONES",
     "The zoneAt classification tinted over the domain: which ground class governs placement and vegetation at each point. Hydrology reconciliation pending — creek network incomplete.");
   makeFlat("audits", "AUDIT FAILURES",
@@ -1042,6 +1042,28 @@
      start date + tier. Date-gated (encampmentZonesAt) and rebuilt on day
      change like every overlay. READ-ONLY: no tents spawn here (s106b). */
   var WB_ENC_COLS = { primary:{ r:0.94, g:0.55, b:0.22 }, secondary:{ r:0.88, g:0.66, b:0.30 }, flag:{ r:0.78, g:0.66, b:0.30 } };
+  /* s106c — outward ring offset for the BLEED-HALO extent line: each vertex
+     pushed along its outward miter normal (average of the two adjacent edge
+     normals, winding-aware, miter clamped). An honest visual approximation of
+     the halo band's outer edge — the halo LAW itself is measured by
+     tentRingsOutsideDist in buildings.tentInZone, never by this render ring. */
+  function wbEncOffsetRing(ring, w){
+    var n = ring.length, area = 0, i;
+    for(i = 0; i < n; i++){ var a0 = ring[i], b0 = ring[(i+1)%n]; area += a0.x*b0.z - b0.x*a0.z; }
+    var sgn = area > 0 ? 1 : -1;
+    function nrm(p0, p1){ var dx = p1.x-p0.x, dz = p1.z-p0.z, l = Math.hypot(dx,dz)||1; return { x: sgn*dz/l, z: -sgn*dx/l }; }
+    var out = [];
+    for(i = 0; i < n; i++){
+      var p = ring[i], prev = ring[(i+n-1)%n], next = ring[(i+1)%n];
+      var n1 = nrm(prev, p), n2 = nrm(p, next);
+      var nx = n1.x + n2.x, nz = n1.z + n2.z, l = Math.hypot(nx, nz);
+      if(l < 1e-6){ nx = n2.x; nz = n2.z; l = 1; }
+      nx /= l; nz /= l;
+      var dot = Math.max(0.35, nx*n2.x + nz*n2.z);           // miter clamp at sharp clip corners
+      out.push({ x: p.x + nx*w/dot, z: p.z + nz*w/dot });
+    }
+    return out;
+  }
   var _wbEncLabelCache = {};
   function wbEncLabelSprite(zn){
     var tex = _wbEncLabelCache[zn.id];
@@ -1067,12 +1089,17 @@
     var zones = (typeof encampmentZonesAt==="function") ? encampmentZonesAt(simDay) : [];
     if(!zones.length) return null;                       // date-gated: nothing documented at this date
     var grp = new THREE.Group(); grp.frustumCulled = false;
-    var fillPos=[], fillCol=[], strokePos=[], strokeCol=[];
+    var fillPos=[], fillCol=[], strokePos=[], strokeCol=[], haloPos=[], haloCol=[];
     zones.forEach(function(zn){
       var c = WB_ENC_COLS[zn.tier] || WB_ENC_COLS.primary;
+      var haloW = (typeof tentHaloW === "function") ? tentHaloW(zn.id) : 0;   // s106c bleed-halo width (buildings layer tunable)
       (zn.rings||[]).forEach(function(ring){
         if(!ring || ring.length<3) return;
         wbPushDrapedRun(strokePos, strokeCol, ring.concat([ring[0]]), c, 0.6, !!zn.approximate, 9); // dashed = approximate boundary
+        if(haloW > 0){                                       // s106c: fainter dashed line = the bleed-halo outer extent
+          var hr = wbEncOffsetRing(ring, haloW);
+          wbPushDrapedRun(haloPos, haloCol, hr.concat([hr[0]]), c, 0.6, true, 12);
+        }
         wbEarClip(ring).forEach(function(t){
           var A=ring[t[0]], B=ring[t[1]], C=ring[t[2]];
           var span=Math.max(Math.hypot(B.x-A.x,B.z-A.z), Math.hypot(C.x-B.x,C.z-B.z), Math.hypot(A.x-C.x,A.z-C.z));
@@ -1100,6 +1127,7 @@
       fm.renderOrder=997; fm.frustumCulled=false; grp.add(fm);
     }
     if(strokePos.length) grp.add(wbLineSegs(strokePos, strokeCol, 0.96, 1001));
+    if(haloPos.length)   grp.add(wbLineSegs(haloPos,   haloCol,   0.40, 1000));   // s106c: halo extent — fainter than the core boundary
     return grp;
   }
 
