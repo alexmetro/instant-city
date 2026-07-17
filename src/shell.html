@@ -648,8 +648,9 @@
   #beat-card a{ font-size:0.6rem; color:rgba(255,255,255,0.92); letter-spacing:0.8px; }
 
   /* ---- THE SCRUBBER — bottom timeline ribbon, above the ticker.
-     jul 1846 -> dec 1849, drag/click to jump, diamond notches at the
-     top-priority spine beats, [ / ] step a month, collapsible tab. ---- */
+     jul 1846 -> dec 1849, drag/click to jump, [ / ] step a month,
+     collapsible tab. ics29: the spine-beat diamonds fold into the
+     FORECAST TRACK (one event lane — see .scr-fx below). ---- */
   #hud-scrubber{
     position:fixed; left:50%; bottom:56px; transform:translateX(-50%);
     width:min(78vw,860px); z-index:9; /* css26: transition curve tokenized below */
@@ -718,14 +719,53 @@
   }
   #hud-scrubber .scr-tick{ position:absolute; top:0; width:1px; height:5px; background:rgba(255,255,255,0.4); }
   #hud-scrubber .scr-tick.year{ height:9px; background:rgba(255,255,255,0.7); }
-  #hud-scrubber .scr-notch{
-    position:absolute; top:2px; width:7px; height:7px; transform:translateX(-50%) rotate(45deg);
-    background:#ffffff; opacity:0.85; cursor:pointer;
-    box-shadow:0 0 0 1px rgba(40,44,48,0.8); /* ics14e: dark casing keyline — the white diamond survives pale sand */
+  /* ---- ics29 FORECAST TRACK (D2 flagship — research/design-sim-rts-map-ui.md
+     pattern #3, Frostpunk's Weather Timeline): the sim is deterministic, so
+     the lane shows PAST AND FUTURE world events as small crisp icons on the
+     track — street/wharf checkpoint firings, the authored world events (the
+     Dec 24 1849 fire, the Hounds raid), encampment starts, landmark
+     births/burns, lifecycle transition days. One event lane: the old
+     spine-beat diamonds fold in as the fx-spine category. Hover = date +
+     one line (chrome voice); click = jump. Icons within ~8px cluster into
+     a count chip (glyph of the highest-priority member + count; tooltip
+     lists members). Distinct GLYPH per category + a restrained tint (data
+     ink, not decoration — the d1 white ink ladder stays the base voice);
+     dark casing drop-shadow so icons survive pale sand (ics14e rule).
+     Events behind the playhead dim to 0.45 — history already told; the
+     bright half of the lane IS the forecast. */
+  #hud-scrubber .scr-fx{
+    position:absolute; top:7px; width:11px; height:11px; z-index:1;
+    transform:translateX(-50%); cursor:pointer; color:#ffffff; opacity:0.9;
+    filter:drop-shadow(0 0 1px rgba(40,44,48,0.9)) drop-shadow(0 0 1px rgba(40,44,48,0.7));
+    transition:opacity .2s var(--ease-out), transform var(--dur-spring) var(--spring-snappy);
   }
-  #hud-scrubber .scr-notch:hover{ opacity:1; box-shadow:0 0 0 3px rgba(255,255,255,0.3); }
+  #hud-scrubber .scr-fx svg{ display:block; width:100%; height:100%; }
+  #hud-scrubber .scr-fx:hover{ opacity:1; transform:translateX(-50%) scale(1.35); }
+  #hud-scrubber .scr-fx.past{ opacity:0.45; }
+  #hud-scrubber .scr-fx.past:hover{ opacity:0.9; }
+  /* category tints — functional data ink over the white ladder */
+  #hud-scrubber .fx-fire{ color:#ffb27c; }
+  #hud-scrubber .fx-raid{ color:#ff9d9d; }
+  #hud-scrubber .fx-camp{ color:#ffd98f; }
+  #hud-scrubber .fx-wharf{ color:#93d9c8; }
+  #hud-scrubber .fx-street{ color:#a9d2ff; }
+  #hud-scrubber .fx-landmark{ color:#d8c6ff; }
+  #hud-scrubber .fx-spine{ color:#ffffff; }
+  #hud-scrubber .fx-lifecycle{ color:rgba(255,255,255,0.55); }
+  /* cluster count chip: capsule, FLAT fill (floats over the scrubber's own
+     glass — never glass on glass, d1 rule), 11px numeral (type floor) */
+  #hud-scrubber .scr-fxc{
+    width:auto; height:14px; top:5px; padding:0 4px;
+    display:flex; align-items:center; gap:2px;
+    border-radius:var(--r-capsule);
+    background:rgba(18,20,24,0.68);
+    box-shadow:0 0 0 1px rgba(255,255,255,0.28);
+    filter:none;
+  }
+  #hud-scrubber .scr-fxc svg{ width:8px; height:8px; flex:none; }
+  #hud-scrubber .scr-fxc .fxc-n{ font-size:0.6875rem; line-height:1; font-weight:600; color:#ffffff; }
   #hud-scrubber .scr-handle{
-    position:absolute; top:-4px; width:3px; height:24px; background:#ffffff;
+    position:absolute; top:-4px; width:3px; height:24px; background:#ffffff; z-index:2;
     transform:translateX(-50%); cursor:ew-resize;
     border-radius:var(--r-capsule); /* d1: controls take the capsule silhouette */
     box-shadow:0 0 0 1px rgba(40,44,48,0.8); /* ics14e: dark casing keyline for daytime sand */
@@ -748,10 +788,13 @@
     border-radius:var(--r-chip); box-shadow:var(--glass-rim);
     opacity:0; transform:translateX(-50%) translateY(4px) scale(0.97);
     transition:opacity .12s var(--ease-out), transform var(--dur-spring) var(--spring-snappy);
-    text-shadow:none;
+    text-shadow:none; z-index:3;
   }
   #hud-scrubber .scr-chip.on{ opacity:0.97; transform:translateX(-50%) translateY(0) scale(1); }
   #hud-scrubber .scr-chip .sc-head{ display:block; font-weight:700; font-size:0.66rem; margin-top:1px; }
+  /* ics29: cluster tooltip member lines (one per named event, lifecycle
+     summarized) — same tooltip type scale as the chip body */
+  #hud-scrubber .scr-chip .sc-line{ display:block; text-align:left; font-size:0.62rem; opacity:0.92; margin-top:1px; }
   #seed-reshuffle{ pointer-events:auto; cursor:pointer; margin-left:0.5em; opacity:0.75; }
   #seed-reshuffle:hover{ opacity:1; }
 

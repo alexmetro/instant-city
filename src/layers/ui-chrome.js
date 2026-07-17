@@ -366,7 +366,7 @@ function updateHorizonRing(alt){
 /* =========================================================================
    THE SCRUBBER — bottom timeline ribbon, full span 1846-07 -> 1849-12.
    jumpToDate() is the single entry point for every explicit jump (drag
-   release, track click, notch click, [ / ]): it sets simDay and rewrites
+   release, track click, forecast-icon click, [ / ]): it sets simDay and rewrites
    the URL's &d=. Every downstream system (population/ships/districts/fire)
    already reads simDay live each frame (confirmed via updateShips'
    "jumping straight to a URL date" handling and FIRE's day-compare state),
@@ -453,17 +453,222 @@ var SCRUB_NOTCHES = (function(){
     cursor = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth()+1, 1));
   }
 
-  // spine-event diamond notches — hover/tap tooltip is headline + date only,
-  // no editorializing (VOICE RULE)
-  SCRUB_NOTCHES.forEach(function(n){
-    var el = document.createElement("div");
-    el.className = "scr-notch";
-    el.style.left = pct(n.day);
-    el.addEventListener("mouseenter", function(){ showChip(n.dateISO, n.headline); });
-    el.addEventListener("mouseleave", function(){ if(!dragging) hideChip(); });
-    el.addEventListener("click", function(e){ e.stopPropagation(); jumpToDate(n.day); });
-    trackEl.appendChild(el);
-  });
+  /* =====================================================================
+     ics29 FORECAST TRACK (D2 flagship — research/design-sim-rts-map-ui.md
+     pattern #3, Frostpunk's Weather Timeline). The sim is deterministic,
+     so the lane shows the SCHEDULED FUTURE (and the told past) as icons
+     on the track. ONE event lane — the old spine-beat diamond loop is
+     folded in as the "spine" category. Sources (all read-only, pure of
+     the registries, zero dice):
+       fire      WORLD_EVENTS (buildings layer — the Dec 24 1849 fire)
+       raid      TENT_RAID (the Hounds raid, zone name from ENCAMPMENT_ZONES)
+       spine     SCRUB_NOTCHES (minus days a world event already claims)
+       street    STREETS_RUNTIME dated checkpoint firings, one event per
+                 distinct ERA_MAP_SIMDAY day (streets extend together)
+       wharf     PIERS_RUNTIME birthDay + dated deck checkpoints
+       camp      ENCAMPMENT_ZONES startDay (endDay if in window)
+       landmark  LANDMARK_RESERVATIONS built/burned dates (burns on a
+                 world-event fire day are the fire's own story — skipped)
+       lifecycle __P1850_LIFECYCLE_DAYS() whole-day dedupe (days already
+                 carrying a named event dropped)
+     Hover = tooltip, date + one line (Roboto chrome voice, VOICE RULE:
+     no editorializing). Click = jump via jumpToDate (clusters jump to
+     their earliest member). CLUSTERING: events within an 8px window of a
+     cluster's FIRST member merge into a count chip — bounded windows
+     (never gap-chained), so a chip can never swallow the whole lane;
+     the chip carries the highest-priority member's glyph + the count,
+     and its tooltip lists members (lifecycle summarized as one line).
+     Deterministic: pure function of (registries, track pixel width).
+     The lane builds DEFERRED (first rAF ticks — every registry exists by
+     then; ~1s in so __P1850_LIFECYCLE_DAYS' fill-master derive never
+     lands inside the boot frame) and rebuilds when the track width
+     moves (resize / collapse-expand), checked every 30th frame. ---- */
+  var FX_PRIO = { fire:0, raid:1, spine:2, camp:3, wharf:4, street:5, landmark:6, lifecycle:9 };
+  var FX_GLYPH = {
+    fire:      '<svg viewBox="0 0 10 10"><path fill="currentColor" d="M5 0C6.4 1.9 8.5 3.4 8.5 6A3.5 3.5 0 0 1 1.5 6C1.5 4.4 2.3 3.5 3.1 2.7C3.1 3.9 3.7 4.6 4.3 4.9C4.1 3 4.4 1.4 5 0Z"/></svg>',
+    raid:      '<svg viewBox="0 0 10 10"><path stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none" d="M1.5 1.5L8.5 8.5M8.5 1.5L1.5 8.5"/></svg>',
+    spine:     '<svg viewBox="0 0 10 10"><path fill="currentColor" d="M5 0.5L9.5 5L5 9.5L0.5 5Z"/></svg>',
+    camp:      '<svg viewBox="0 0 10 10"><path fill="currentColor" d="M5 0.8L9.6 9.2H6.6L5 6.4L3.4 9.2H0.4Z"/></svg>',
+    wharf:     '<svg viewBox="0 0 10 10"><path stroke="currentColor" stroke-width="1.5" fill="none" d="M0 3H10M2.2 3V9.2M5 3V9.2M7.8 3V9.2"/></svg>',
+    street:    '<svg viewBox="0 0 10 10"><path stroke="currentColor" stroke-width="1.6" fill="none" d="M5 0V10M0 5H10"/></svg>',
+    landmark:  '<svg viewBox="0 0 10 10"><path fill="currentColor" d="M5 0.4L9.4 3.8V9.5H0.6V3.8Z"/></svg>',
+    lifecycle: '<svg viewBox="0 0 10 10"><circle fill="currentColor" cx="5" cy="5" r="2.3"/></svg>'
+  };
+  var fxEvents = null, fxNodes = [], fxBuiltW = 0, fxFrame = 0, fxLastDay = null;
+  function fxInWin(d){ return d != null && isFinite(d) && d >= 0 && d <= SIM_END_DAY; }
+  function forecastEvents(){
+    if(fxEvents) return fxEvents;
+    var evs = [];
+    function add(day, dateISO, cat, label){
+      if(!fxInWin(day)) return;
+      evs.push({ day:day, dateISO: dateISO || simDateISO(dateFromSimDay(day)), cat:cat, label:label });
+    }
+    // fire — the authored world events (fold the matching spine headline in)
+    var worldDays = [];
+    if(typeof WORLD_EVENTS !== "undefined") WORLD_EVENTS.forEach(function(ev){
+      var d = eventDateToSimDay(ev.dateISO); worldDays.push(d);
+      var spine = null;
+      SCRUB_NOTCHES.forEach(function(n){ if(Math.abs(n.day - d) < 0.5) spine = n; });
+      add(d, ev.dateISO, "fire", (spine && spine.headline) ? spine.headline : "The Great Fire");
+    });
+    // raid — the Hounds (documented verb: tents torn down, not burned)
+    if(typeof TENT_RAID !== "undefined"){
+      var rz = null;
+      if(typeof ENCAMPMENT_ZONES !== "undefined") ENCAMPMENT_ZONES.forEach(function(z){ if(z.id === TENT_RAID.zone) rz = z; });
+      add(eventDateToSimDay(TENT_RAID.dateISO), TENT_RAID.dateISO, "raid", "The Hounds raid " + (rz ? rz.name : TENT_RAID.zone));
+    }
+    // spine beats (the old diamonds) — minus any day a world event claims
+    SCRUB_NOTCHES.forEach(function(n){
+      if(worldDays.some(function(d){ return Math.abs(d - n.day) < 0.5; })) return;
+      add(n.day, n.dateISO, "spine", n.headline);
+    });
+    // street checkpoint firings — one event per distinct in-window survey day
+    if(typeof STREETS_RUNTIME !== "undefined" && typeof ERA_MAP_SIMDAY !== "undefined"){
+      var mapName = { "ofarrell-1847":"O'Farrell survey", "eddy-1849":"Eddy re-survey", "coast-survey-1853":"Coast Survey chart" };
+      Object.keys(ERA_MAP_SIMDAY).forEach(function(k){
+        var d = ERA_MAP_SIMDAY[k];
+        if(!fxInWin(d)) return;
+        var n = 0;
+        STREETS_RUNTIME.forEach(function(s){ if(s.checkpoints.some(function(c){ return c.day === d; })) n++; });
+        if(n > 0) add(d, null, "street", (mapName[k] || k) + " checkpoint — " + n + " street" + (n === 1 ? " extends" : "s extend"));
+      });
+    }
+    // wharves — commencement + dated deck checkpoints
+    if(typeof PIERS_RUNTIME !== "undefined") PIERS_RUNTIME.forEach(function(p){
+      var nm = p.name.replace(/\s*\(.*\)\s*$/, "");
+      add(p.birthDay, null, "wharf", nm + " commenced");
+      p.checkpoints.forEach(function(c){
+        if(Math.abs(c.day - p.birthDay) < 0.5) return; // birth-day deck = the same story beat
+        add(c.day, null, "wharf", nm + (c.lengthFt ? " — deck reaches " + c.lengthFt + " ft" : " extended"));
+      });
+    });
+    // encampment zone starts (ends only if documented in-window)
+    if(typeof ENCAMPMENT_ZONES !== "undefined") ENCAMPMENT_ZONES.forEach(function(z){
+      add(z.startDay, z.startDate, "camp", z.name + " encampment begins" + (z.startApproximate ? " (date approximate)" : ""));
+      if(z.endDay != null) add(z.endDay, z.endDate, "camp", z.name + " encampment ends");
+    });
+    // landmark births/burns from the reservation registry
+    var REG = (typeof window !== "undefined" && window.LANDMARK_RESERVATIONS) ? window.LANDMARK_RESERVATIONS.reservations : null;
+    if(REG) REG.forEach(function(r){
+      var dt = r.dates || {};
+      if(dt.built) add(eventDateToSimDay(dt.built), dt.built, "landmark", r.name + " built");
+      if(dt.burned){
+        var bd = eventDateToSimDay(dt.burned);
+        if(!worldDays.some(function(d){ return Math.abs(d - bd) < 0.5; }))
+          add(bd, dt.burned, "landmark", r.name + " burns");
+      }
+    });
+    // lifecycle transition days — cheap whole-day dedupe, named days dropped
+    if(typeof window !== "undefined" && typeof window.__P1850_LIFECYCLE_DAYS === "function"){
+      try{
+        var named = {}, seen = {};
+        evs.forEach(function(e){ named[Math.round(e.day)] = true; });
+        window.__P1850_LIFECYCLE_DAYS().forEach(function(d){
+          var r = Math.round(d);
+          if(!fxInWin(r) || named[r] || seen[r]) return;
+          seen[r] = true;
+          add(r, null, "lifecycle", null);
+        });
+      }catch(err){}
+    }
+    evs.sort(function(a,b){ return a.day - b.day || FX_PRIO[a.cat] - FX_PRIO[b.cat]; });
+    fxEvents = evs;
+    return evs;
+  }
+  function fmtFxDate(iso, withYear){
+    return new Date(iso + "T00:00:00Z").toLocaleDateString("en-US",
+      withYear ? { month:"short", day:"numeric", year:"numeric", timeZone:"UTC" } : { month:"short", day:"numeric", timeZone:"UTC" });
+  }
+  function showFxChip(c){
+    if(c.members.length === 1){
+      var e = c.members[0];
+      showChip(e.dateISO, e.label || "Building lifecycle transition");
+      return;
+    }
+    var named = c.members.filter(function(e){ return e.cat !== "lifecycle"; });
+    var life = c.members.length - named.length;
+    var first = c.members[0], last = c.members[c.members.length - 1];
+    var html = escapeHTML(fmtFxDate(first.dateISO, true) + " – " + fmtFxDate(last.dateISO, true))
+             + '<span class="sc-head">' + c.members.length + " events</span>";
+    var lines = named.slice(0, 6).map(function(e){
+      return '<span class="sc-line">' + escapeHTML(fmtFxDate(e.dateISO, false) + " · " + e.label) + "</span>";
+    });
+    if(named.length > 6) lines.push('<span class="sc-line">+' + (named.length - 6) + " more</span>");
+    if(life > 0) lines.push('<span class="sc-line">' + life + " building lifecycle transition" + (life === 1 ? "" : "s") + "</span>");
+    chipEl.innerHTML = html + lines.join("");
+    chipEl.classList.add("on");
+  }
+  function buildForecastLane(){
+    var w = trackEl.clientWidth;
+    if(w < 60) return; // collapsed / not laid out yet — retried next check
+    var evs = forecastEvents();
+    fxNodes.forEach(function(n){ if(n.el.parentNode) n.el.parentNode.removeChild(n.el); });
+    fxNodes = [];
+    fxBuiltW = w;
+    var pxPerDay = w / SIM_END_DAY;
+    // PASS 1 — bounded-window clustering: a cluster spans at most 8px from
+    // its FIRST member (never gap-chained)
+    var clusters = [];
+    evs.forEach(function(e){
+      var px = e.day * pxPerDay;
+      var c = clusters[clusters.length - 1];
+      if(c && px - c.px0 < 8) c.members.push(e);
+      else clusters.push({ px0:px, members:[e] });
+    });
+    // PASS 2 — chip-collision merge: a COUNT CHIP is ~2x wider than the 8px
+    // window, so adjacent chips in the dense 1849 stretch would overlap into
+    // an unreadable sausage; merge any pair whose rendered extents collide.
+    // Dot-on-dot (and icon-on-icon) near-touching is EXEMPT — slight icon
+    // overlap is the lane's texture, chips are its signal.
+    function fxTopOf(c){ return c.members.slice().sort(function(a,b){ return FX_PRIO[a.cat] - FX_PRIO[b.cat] || a.day - b.day; })[0]; }
+    function fxIsChip(c){ return c.members.length > 1 && fxTopOf(c).cat !== "lifecycle"; }
+    function fxCenterPx(c){ return (c.members[0].day + c.members[c.members.length - 1].day) / 2 * pxPerDay; }
+    function fxWidthPx(c){ return fxIsChip(c) ? 14 + 7 * String(c.members.length).length : 11; }
+    var merged = [];
+    clusters.forEach(function(c){
+      for(;;){
+        var prev = merged[merged.length - 1];
+        if(!prev || !(fxIsChip(prev) || fxIsChip(c))) break;
+        if(fxCenterPx(c) - fxWidthPx(c) / 2 >= fxCenterPx(prev) + fxWidthPx(prev) / 2 + 2) break;
+        merged.pop();
+        prev.members = prev.members.concat(c.members);
+        c = prev;
+      }
+      merged.push(c);
+    });
+    merged.forEach(function(c){
+      var top = fxTopOf(c);
+      var el = document.createElement("div");
+      if(c.members.length === 1 || top.cat === "lifecycle"){
+        /* single event — OR a pure-lifecycle cluster: those render as ONE
+           quiet dot (hover reports the count), never a count chip. Without
+           this the dense 1849 lifecycle stretch becomes a wall-to-wall
+           chain of capsules that drowns the named events — the dots are
+           texture, the chips are signal. */
+        el.className = "scr-fx fx-" + top.cat;
+        el.innerHTML = FX_GLYPH[top.cat];
+      }else{
+        el.className = "scr-fx scr-fxc fx-" + top.cat;
+        el.innerHTML = FX_GLYPH[top.cat] + '<span class="fxc-n">' + c.members.length + "</span>";
+      }
+      el.style.left = pct((c.members[0].day + c.members[c.members.length - 1].day) / 2);
+      /* a cluster jumps to its TOP-PRIORITY member (the glyph the chip
+         carries — click the flame, land on the fire), not blindly to its
+         earliest; ties fall to the earliest by the sort above */
+      var jumpDay = top.day, lastDay = c.members[c.members.length - 1].day;
+      el.addEventListener("mouseenter", function(){ showFxChip(c); });
+      el.addEventListener("mouseleave", function(){ if(!dragging) hideChip(); });
+      el.addEventListener("click", function(e){ e.stopPropagation(); jumpToDate(jumpDay); });
+      trackEl.appendChild(el);
+      fxNodes.push({ el:el, day:lastDay });
+    });
+    fxLastDay = null; // force a fresh past/future pass
+  }
+  function updateFxPast(){
+    if(fxLastDay !== null && Math.abs(simDay - fxLastDay) < 0.25) return;
+    fxLastDay = simDay;
+    fxNodes.forEach(function(n){ n.el.classList.toggle("past", n.day < simDay); });
+  }
 
   function showChip(dateISO, headline){
     var d = new Date(dateISO+"T00:00:00Z");
@@ -523,6 +728,15 @@ var SCRUB_NOTCHES = (function(){
   var lastWatchOn = false;
   (function tick(){
     if(!dragging) updateHandle();
+    /* ics29: forecast lane — deferred first build (frame 60, ~1s in, so the
+       lifecycle derive never lands in the boot frame), then a width check
+       every 30th frame (resize / collapse-expand rebuild; clustering is a
+       function of pixel width). Past/future dim tracks the playhead. */
+    fxFrame++;
+    if(fxFrame >= 60 && fxFrame % 30 === 0 && !collapsed){
+      if(fxNodes.length === 0 || Math.abs(trackEl.clientWidth - fxBuiltW) > 2) buildForecastLane();
+    }
+    if(fxNodes.length) updateFxPast();
     if(WATCH.on !== lastWatchOn){
       lastWatchOn = WATCH.on;
       if(lastWatchOn){ autoCollapsedByWatch = !collapsed; if(autoCollapsedByWatch) setCollapsed(true); }
