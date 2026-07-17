@@ -278,6 +278,41 @@ function streetUConst(id){ return STREETS_RUNTIME_BY_ID[id].polyline[0].u; } // 
 function streetVConst(id){ return STREETS_RUNTIME_BY_ID[id].polyline[0].v; } // cardinal E-W streets only: constant v along the whole run
 
 /* =====================================================================
+   ROAD GRADED WIDTH (progressive widening — operator 2026-07-17). The
+   SURVEYED right-of-way (road.widthM) is the platted width and stays FIXED:
+   cadastre lots, setbacks, routing halfW, and building placement all keep
+   reading it unchanged. But a street was not GRADED to its full ROW the day
+   it was surveyed — the used roadway starts as a cleared wagon TRACK and
+   widens WITHIN the ROW through several stages as the corridor is worked up
+   (cleared -> a widening dirt street -> the full platted grade). The paint
+   pass renders this dated width so a road visibly matures instead of popping
+   in at "very large" — the coarse trail/lane/main/market buckets (2 / 10.7 /
+   21 / 36.6 m) no longer read as instant jumps. Pure f(day) => deterministic
+   + rewindable; monotonic non-decreasing; ALWAYS <= road.widthM. Tunable via
+   __P1850.roadGrade (ROAD_GRADE_QA). ===================================== */
+var ROAD_GRADE_QA = { on: 1, trackW: 3.0, stages: 6 };  // on=0 -> instant full width (fail-before / A-B)
+function roadGradeAnchorDay(road){
+  // grading begins when the corridor is first worked: surveyed, else first
+  // mentioned, else already-there at sim start (Vioget-1839 worn lanes).
+  if(road.surveyedDay != null) return road.surveyedDay;
+  if(road.firstMentionDay != null) return road.firstMentionDay;
+  return 0;
+}
+function roadGradedWidthAt(road, day){
+  var full = road.widthM;
+  if(!ROAD_GRADE_QA.on) return full;
+  if(road.cls === "pier") return full;                 // plank decks are BUILT to width — no dirt-grading ramp
+  if(!(full > ROAD_GRADE_QA.trackW + 0.5)) return full; // trails / narrow lanes are born at (near) full width
+  var start = roadGradeAnchorDay(road);
+  // wider ROWs take longer to grade out: ~1 yr per 12 m of ROW, clamped 1-3 yr
+  var span = Math.max(365, Math.min(1095, full / 12 * 365));
+  var t = clamp01((day - start) / span);
+  var eased = 1 - (1 - t) * (1 - t);                   // widen fast early, settle into the final grade
+  var stg = Math.round(eased * ROAD_GRADE_QA.stages) / ROAD_GRADE_QA.stages; // visible widening stages, not a pop
+  return ROAD_GRADE_QA.trackW + (full - ROAD_GRADE_QA.trackW) * stg;
+}
+
+/* =====================================================================
    PIER-CLASS SPINE MEMBERS (s84 — THE SPINE EXPANSION, road-master-spec.md
    SPINE MEMBERSHIP AMENDMENT). "A wharf is a street on piles." Each pier is a
    first-class spine member (class 'pier') with a CONSTANT surveyed width, DATED

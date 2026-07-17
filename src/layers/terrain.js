@@ -348,7 +348,7 @@ var TCV2_UNIFORMS = null;
           "  vec3 nB = tfbm(gp * 0.13);",              // broad mottle (~8 m)
           "  vec3 nF = tfbm(gp * 1.15);",              // fine grain (~0.9 m)
           "  float grain = nB.x*0.55 + nF.x*0.45;",
-          "  float sand=vTSurf.x, dirt=vTSurf.y, grass=vTSurf.z, mud=vTSurf.w;",
+          "  float sand=vTSurf.x, grass=vTSurf.y, dirt=vTSurf.z, mud=vTSurf.w;",  // aSurf law: [sand, grass/scrub, trodden dirt, mud]
           "  float amp = 0.09*sand + 0.13*dirt + 0.17*grass + 0.07*mud + 0.05;",
           "  float luma = dot(base, vec3(0.299,0.587,0.114));",
           "  v2 *= (1.0 + grain*amp*(0.4+0.6*fade)*uTDetail);",   // 1) grain kills the smear (zero-mean, value only)
@@ -357,7 +357,7 @@ var TCV2_UNIFORMS = null;
           "  float tl = mix(luma, ql, stepMix);",
           "  v2 *= (luma>0.001 ? tl/luma : 1.0);",
           "  vec3 gn = normalize(vec3(-(nB.y*0.5+nF.y), 1.2, -(nB.z*0.5+nF.z)));", // 3) detail-normal relief -> 3D
-          "  float ndl = clamp(dot(gn, normalize(vec3(-0.5,0.8,-0.35)))*0.5+0.5, 0.0, 1.0);",
+          "  float ndl = clamp(dot(gn, normalize(vec3(-0.55,0.62,-0.55)))*0.5+0.5, 0.0, 1.0);",  // match the baked hillshade LIGHT so micro/macro relief agree
           "  v2 *= mix(1.0, mix(0.86,1.13,ndl), 0.35+0.45*fade);",
           "  float veg = clamp(grass + 0.4*dirt, 0.0, 1.0);",     // 4) seasonal green<->golden (dynamic)
           "  vec3 season = mix(vec3(1.09,1.01,0.79), vec3(0.87,1.05,0.83), clamp(uTSeason,0.0,1.0));",
