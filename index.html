@@ -5080,6 +5080,32 @@ function cadBlockCommercial(b, day){
   if(b.cxWorld==null){ var w=gridToWorldAt((b.uLo+b.uHi)/2,(b.vLo+b.vHi)/2,GRID_ROT_BASE); b.cxWorld=w.x; b.czWorld=w.z; }
   return Math.hypot(b.cxWorld-PLAZA_CENTER.x, b.czWorld-PLAZA_CENTER.z) <= cadCommercialRadiusAt(day);
 }
+/* s106d (ICS-24) — THE BOOM-WINDOW CORE-CANVAS EXCEPTION (operator ruling;
+   careful by design). The standing law is that the commercial front is never
+   tent ground — but during the 1849 gold-rush building frenzy even the core
+   blocks briefly carried canvas among the frame (the record's marquee case is
+   AUTHORED already: the El Dorado's canvas phase ON the plaza before its
+   3-story frame expansion — LM_LIFECYCLE_ARCS, s108). So the zone law gains a
+   DATED, BOUNDED exception: during the boom window below, the commercial-core
+   zone admits a LIMITED canvas fraction of the 1849 in-town fill wave on core
+   blocks — and ONLY that wave (the placement rides an explicit
+   coreCanvasPermit; a bare tent query on core ground still rejects, so the
+   zoneLaw audit's general tent-in-core rejection probe holds unchanged).
+   Outside the window the core admits ZERO new canvas (the existing law).
+   The FRACTION cap is enforced by the wave spawner + the buildings.
+   zoneCoreCanvas audit against THIS one constant (measurement law); the
+   WINDOW is enforced right here in the gate. All three values are fill:true
+   tunables — the ~12% fraction is a CONSERVATIVE operator ruling pending
+   researcher evidence on how much canvas the core actually carried. */
+var CAD_CORE_CANVAS_START_ISO = "1849-06-15";   // window opens with the in-town wave ramp
+var CAD_CORE_CANVAS_END_ISO   = "1850-03-01";   // window closes: by spring 1850 the core sheds canvas for frame/brick
+var CAD_CORE_CANVAS_FRAC      = 0.12;           // cap: canvas <= ceil(frac x core-block wave placements) — conservative pending researcher evidence
+var _cadCoreCanvasWin = null;
+function cadCoreCanvasWindow(day){
+  if(day == null) return false;                  // undated queries get the standing law, never the exception
+  if(!_cadCoreCanvasWin) _cadCoreCanvasWin = { a: eventDateToSimDay(CAD_CORE_CANVAS_START_ISO), b: eventDateToSimDay(CAD_CORE_CANVAS_END_ISO) };
+  return day >= _cadCoreCanvasWin.a && day < _cadCoreCanvasWin.b;
+}
 /* THE ZONE TABLE — precedence-ordered. Each: { id, allowedClasses, densityTier,
    birth, exclusive, note, contains(x,z,day) }. exclusive zones claim the ground;
    a point outside every zone is LOOSE GROUND (only the unaddressed / scatter /
@@ -5098,7 +5124,7 @@ var CAD_ZONE_TABLE = [
     allowedClasses:["ship","storeship","mooring","boat","wharf"],
     contains:function(x,z,day){ return groundPlanParcelContains("yerba-buena-cove",x,z); } },
   { id:"commercial-core", densityTier:"dense", birth:CAD_DAY_ALWAYS, exclusive:true,
-    note:"plaza ring + downtown frontages, era-grown outward to the waterfront by the boom. Commercial/civic + addressed building tiers; NO tents/shanties (the commercial front is not tent ground at any era).",
+    note:"plaza ring + downtown frontages, era-grown outward to the waterfront by the boom. Commercial/civic + addressed building tiers; NO tents/shanties (the commercial front is not tent ground) — EXCEPT the s106d dated, bounded boom-window core-canvas exception (coreCanvasPermit, cadZoneGate).",
     allowedClasses:["commercial","civic","hotel","gambling-hall","store","warehouse","frame","kit-house","iron-house","brick","sign","landmark-civic","landmark-commerce"],
     contains:function(x,z,day){ return cadBlockCommercial(cadBlockAt(x,z,day), day); } },
   { id:"camp", densityTier:"loose", birth:eventDateToSimDay("1849-08-01"), exclusive:true,
@@ -5136,8 +5162,13 @@ function cadZoneAt(x, z, day){
 /* THE zone gate (building-spawn-spec §1: "the zone gate adds WHERE per class").
    {ok, reason, zone}. Zone-agnostic classes pass untouched; loose ground admits
    only the unaddressed/scatter/fauna set; otherwise the governing zone's
-   allowedClasses decide. */
-function cadZoneGate(cls, x, z, day){
+   allowedClasses decide. opts (s106d, optional): { coreCanvasPermit:true } —
+   the 1849 in-town wave's dated core-canvas placement permit (see the
+   CAD_CORE_CANVAS block above); honored ONLY for cls "tent" on commercial-core
+   ground WITHIN the boom window, rejected outside it, and never implied — a
+   bare query (every other caller, incl. the zoneLaw audit probes) gets the
+   standing law. */
+function cadZoneGate(cls, x, z, day, opts){
   if(!CAD_ZONE_RELEVANT[cls]) return { ok:true, reason:"zone-agnostic", zone:null };
   /* s106b — THE RECORD WINS (fill-density-model §0): an ACTIVE documented
      encampment zone (ENCAMPMENT_ZONES, s106a) admits the CAMP classes on its
@@ -5156,6 +5187,16 @@ function cadZoneGate(cls, x, z, day){
   var Z = cadZoneAt(x,z,day);
   if(!Z) return CAD_LOOSE_ALLOWED[cls] ? { ok:true, reason:"loose-ground", zone:null }
                                        : { ok:false, reason:"loose-ground-forbids:"+cls, zone:null };
+  /* s106d — THE BOOM-WINDOW CORE-CANVAS EXCEPTION (dated + bounded, see the
+     CAD_CORE_CANVAS block). Fires ONLY when the caller presents the wave's
+     explicit permit for a tent on commercial-core ground: inside the window
+     the placement is admitted (the fraction cap is the spawner's + the
+     zoneCoreCanvas audit's, against CAD_CORE_CANVAS_FRAC); outside the window
+     the permit is void and the standing no-canvas law rejects. */
+  if(Z.id === "commercial-core" && cls === "tent" && opts && opts.coreCanvasPermit){
+    if(cadCoreCanvasWindow(day)) return { ok:true, reason:"core-canvas-window", zone:Z.id };
+    return { ok:false, reason:"core-canvas-window-closed", zone:Z.id };
+  }
   for(var i=0;i<Z.allowedClasses.length;i++) if(Z.allowedClasses[i]===cls || Z.allowedClasses[i]==="*") return { ok:true, reason:"zone:"+Z.id, zone:Z.id };
   return { ok:false, reason:"zone:"+Z.id+"-forbids:"+cls, zone:Z.id };
 }
@@ -7999,7 +8040,8 @@ function canPlaceClass(cls, pose, ctx){
      cls stays "structure"; absent, the cls itself is used. Zone-agnostic classes
      pass untouched (SELECTIVE law). */
   if(typeof cadZoneGate==="function"){
-    var zg = cadZoneGate(ctx.zoneClass||cls, x, z, ctx.day!=null?ctx.day:(typeof simDay==="number"?simDay:null));
+    var zg = cadZoneGate(ctx.zoneClass||cls, x, z, ctx.day!=null?ctx.day:(typeof simDay==="number"?simDay:null),
+                         ctx.coreCanvasPermit ? { coreCanvasPermit:true } : null);   // s106d: the 1849 wave's dated core-canvas permit rides ctx (never implied)
     if(!zg.ok) return zg;
   }
   if(!law) return { ok:true, reason:"no-law:"+cls };   // unknown class: engine imposes nothing beyond the zone gate
@@ -10038,13 +10080,16 @@ function fillPickCat(mix, counts){
 }
 /* seeded weighted draw of a concrete code within a census category, era-valid at
    `day`, from the `snapKey` weight column (default "1847-04" — the v1 village;
-   s106c passes "1849" for the in-town wave so tents dominate the shanty bucket). */
-function fillPickCode(cat, day, rng, snapKey){
+   s106c passes "1849" for the in-town wave so tents dominate the shanty bucket;
+   s106d passes tentOnly for the core-canvas sub-walk — the boom-window core
+   exception admits CANVAS, never the scrap-shanty tier). */
+function fillPickCode(cat, day, rng, snapKey, tentOnly){
   var pool = [], tot = 0;
   for(var i = 0; i < FILL_TYPES.length; i++){
     var t = FILL_TYPES[i];
     if(t.isGapMarker) continue;
     if(!FILL_COUNTED_SUBTYPES[t.subtype]) continue;
+    if(tentOnly && t.subtype !== "tent") continue;
     if(fillCensusCat(t) !== cat) continue;
     if(!fillEraValid(t, day)) continue;
     var w = fillWeight(t.code, snapKey || "1847-04");
@@ -10145,13 +10190,30 @@ function fillQuadCrossesRow(q, cx, cz){
    curb setback) so wave fill lands in streets/water/documented-camp ground
    and buildings.inTownFill goes RED; knob off → GREEN (the gates are real).
    The v1 1846-48 village build is NEVER touched by the knob. */
-var FILL_QA = { ignoreInTownGates: false, version: 0 };
+var FILL_QA = { ignoreInTownGates: false, uncapCoreCanvas: false, version: 0 };
 /* s106c tunables — the in-town 1849 tent-first densification wave. */
 var FILL_1849_START_ISO = "1849-06-15";   // wave ramp start (operator: "ramping mid-1849 -> Dec 1849")
 var FILL_1849_CAP_ISO   = "1849-12-20";   // wave cap = the boom-peak canonical noon
 var FILL_EDGE_CAP_1849  = 0.70;           // per-edge built-fraction cap for the wave (denser than the 0.55 village, still gap-toothed — the 1851 gradient is the FAR anchor, never fully packed)
 var FILL_1849_BAND      = [630, 780];     // gating plausibility band for the Dec-20 in-town total (see fillCensusCurve s106c note)
 var FILL_1849_BAND_SEP  = [380, 640];     // gating band for the Sept-15 in-town total (~500-600 interpolation, wide for placement reality)
+/* s106d (ICS-24) tunables — THE BOOM-WINDOW CORE-CANVAS EXCEPTION. The zone
+   law's window + fraction live in core/08-cadastre (CAD_CORE_CANVAS_*, ONE
+   set of constants the gate, this spawner and the zoneCoreCanvas audit all
+   read — measurement law). Here: the SHORT lifecycle arc — a core tent is the
+   FIRST torn down and replaced by frame (the s108 teardown-replacement
+   machinery), seeded 2-5 months after its own spawn so the conversions spread
+   across late-1849 -> mid-1850 and scrubbing shows the core visibly shedding
+   canvas (fill:true reasoned; the record's precedent is the El Dorado's
+   authored canvas phase on the plaza, torn down for its frame expansion). */
+var FILL_CORE_CONV_MIN_D = 60;            // earliest seeded canvas->frame conversion after spawn (~2 months)
+var FILL_CORE_CONV_MAX_D = 150;           // latest (~5 months): a Dec-20 spawn is torn down by ~mid-May 1850 — zero core canvas stands by mid-1850
+/* s106d — ONE core-ground measure shared by the wave spawner and the
+   zoneCoreCanvas audit (measurement law): a point is CORE-BLOCK ground when
+   the cadastre's GOVERNING zone there is the era-grown commercial-core. */
+function fillCoreBlockAt(x, z, day){
+  return typeof landUseZoneAt === "function" && landUseZoneAt(x, z, day) === "commercial-core";
+}
 function fillOverlapsLocal(placed, x, z, r){
   for(var i = 0; i < placed.length; i++){
     var p = placed[i], dx = x - p.x, dz = z - p.z, md = r + p.r;
@@ -10230,10 +10292,12 @@ function buildFillMaster(){
          through "structure"; corner-level (footprintW/D passed);
        • zone law — evaluated at the WAVE CAP date (the era-grown
          commercial core at its FULL boom reach, the strictest claim in
-         the window): the core admits frame only, so tents/shanties
-         thread the RESIDENTIAL band (fill-density-model §3: tents are
-         never wedged between the plaza's frame buildings) while frame
-         densifies the core blocks;
+         the window): the core admits frame, so tents/shanties thread
+         the RESIDENTIAL band while frame densifies the core blocks —
+         EXCEPT the s106d dated, bounded core-canvas exception (a capped
+         ~12% canvas fraction of core-block wave placements rides the
+         zone gate's boom-window coreCanvasPermit; see the sub-walk
+         below + buildings.zoneCoreCanvas);
        • cadastre reservations — PLACEMENT_INDEX overlap via canPlace
          (the 51 landmark footprints) + the local inter-fill check;
        • documented camp ground — the wave never places inside an
@@ -10284,9 +10348,75 @@ function buildFillMaster(){
     });
     return best;
   }
+  /* s106d (ICS-24) — THE BOOM-WINDOW CORE-CANVAS EXCEPTION (operator ruling;
+     careful by design). The s106c law stood absolute: the commercial front is
+     never tent ground, so the whole shanty/tent bucket threaded the
+     residential band. The record's core carried SOME canvas among the frame
+     through the boom (the marquee authored case: the El Dorado's canvas
+     phase ON the plaza) — so the wave now routes a LIMITED canvas fraction
+     of its shanty bucket onto CORE blocks under the zone gate's dated
+     coreCanvasPermit (core/08 CAD_CORE_CANVAS_*): the streaming cap
+     coreCanvas+1 <= ceil(frac x (coreWave+1)) guarantees the final bound
+     coreCanvas <= ceil(frac x coreWave) at every step (the zoneCoreCanvas
+     audit re-measures it on the master with the SAME fillCoreBlockAt ground
+     measure). NOT open season: outside the window the gate voids the permit
+     (the existing law), and the placement is a RESHUFFLE of the shanty
+     bucket (counts2.shanty carries it — the 55/45 tent-first mix is exact,
+     never net-new count). A core tent takes the shanty turn INSTEAD of a
+     residential slot; every other wave gate below (camp / dry-land / law
+     rows / ROW / reserved / spacing / edge budget) holds identically. The
+     dedicated coreCursor walks core slots plaza-ward and burns only genuine
+     failures, so the quota reopening as frame densifies the core keeps
+     admitting canvas throughout the ramp. QA: uncapCoreCanvas drops the
+     fraction cap (fail-before for zoneCoreCanvas, probe-s106d). */
+  var coreWaveN = 0, coreCanvasN = 0, coreCursor = 0, coreCanvasDone = false;
   while(waveN < need2){
     var cat2 = wavePickCat();
     if(!cat2) break;                                      // every category out of legal ground
+    if(cat2 === "shanty" && !coreCanvasDone && !FILL_QA.ignoreInTownGates &&
+       (FILL_QA.uncapCoreCanvas || coreCanvasN + 1 <= Math.ceil(CAD_CORE_CANVAS_FRAC * (coreWaveN + 1)))){
+      var ct = fillPickCode("shanty", waveCap, rng2, "1849", true);   // CANVAS only — the exception never admits the scrap tier
+      var placedCore = false, ci = coreCursor;
+      for(; ct && ci < slots2.length; ci++){
+        var cs = slots2[ci];
+        if(!fillCoreBlockAt(cs.cx, cs.cz, waveCap)) continue;         // core-block ground only (probe point, pre-rng; re-proven at the final pose below)
+        var cwM = ct.footprint.w * FILL_FT_M, cdM = ct.footprint.d * FILL_FT_M;
+        var cBuilt = edgeBuilt[cs.edgeId] || 0;
+        if((cBuilt + cwM) / cs.edgeLen > FILL_EDGE_CAP_1849) continue;
+        var cJit = (rng2() - 0.5) * Math.min(FILL_SLOT_STEP_M * 0.5, cs.edgeLen * 0.15);
+        var cSet = FILL_SETBACK_M + cdM / 2;
+        var ccx = cs.ex + cs.tx * cJit + cs.inx * cSet;
+        var ccz = cs.ez + cs.tz * cJit + cs.inz * cSet;
+        if(!fillCoreBlockAt(ccx, ccz, waveCap)) continue;             // the posed centre must be core ground too (the audit's measure)
+        var crB = Math.hypot(cwM, cdM) / 2;
+        if(typeof encampmentZoneAt === "function" && encampmentZoneAt(ccx, ccz, waveCap)) continue;
+        if(typeof isDryLand === "function" && !isDryLand(ccx, ccz, waveStart)) continue;
+        var ccp = canPlace("tent", { x: ccx, z: ccz, yaw: cs.yaw, footprint: crB, footprintW: cwM, footprintD: cdM },
+                           { day: waveCap, zoneClass: "tent", coreCanvasPermit: true });
+        if(!ccp.ok) continue;
+        if(fillQuadCrossesRow(fillPoseQuad(ccx, ccz, cwM, cdM, cs.yaw), ccx, ccz)) continue;
+        var cResBad = false;
+        for(var cpi = 0; cpi < PLACEMENT_INDEX.length; cpi++){
+          var cq = PLACEMENT_INDEX[cpi], cdx = ccx - cq.x, cdz = ccz - cq.z, cmd = crB + cq.r;
+          if(cdx*cdx + cdz*cdz < cmd*cmd){ cResBad = true; break; }
+        }
+        if(cResBad) continue;
+        if(fillOverlapsLocal(placed, ccx, ccz, crB)) continue;
+        counts2.shanty++; waveN++; coreWaveN++; coreCanvasN++;
+        edgeBuilt[cs.edgeId] = cBuilt + cwM + FILL_GAP_M;
+        placed.push({ x: ccx, z: ccz, r: crB });
+        master.push({ code: ct.code, cat: "shanty", material: ct.material, subtype: ct.subtype,
+                      cx: ccx, cz: ccz, w: cwM, d: cdM, yaw: cs.yaw, nx: cs.outx, nz: cs.outz,
+                      storyRange: ct.storyRange || [1, 1], edgeId: cs.edgeId, edgeLen: cs.edgeLen,
+                      overWater: !!ct.overWater, stilted: !!ct.stilted,
+                      rank: master.length, appearDay: waveCap, wave: 1849, coreCanvas: 1 });
+        placedCore = true; ci++;
+        break;
+      }
+      coreCursor = ci;
+      if(ci >= slots2.length) coreCanvasDone = true;      // the core slot supply is spent — reported, never silently hidden
+      if(placedCore) continue;                            // this shanty turn went to the core under the window cap
+    }
     var placedOne = false, idx2 = cursors2[cat2];
     for(; idx2 < slots2.length; idx2++){
       var slot2 = slots2[idx2];
@@ -10323,6 +10453,7 @@ function buildFillMaster(){
       }
       if(fillOverlapsLocal(placed, cx2, cz2, rB2)){ rej2.overlap++; continue; }
       counts2[cat2]++; waveN++;
+      if(fillCoreBlockAt(cx2, cz2, waveCap)) coreWaveN++;   // s106d: core-block placements feed the streaming canvas cap (same ground measure as the audit)
       edgeBuilt[slot2.edgeId] = built2 + wM2 + FILL_GAP_M;
       placed.push({ x: cx2, z: cz2, r: rB2 });
       master.push({ code: t2.code, cat: cat2, material: t2.material, subtype: t2.subtype,
@@ -10351,7 +10482,12 @@ function buildFillMaster(){
   }
   for(; k2 < master.length; k2++) master[k2].appearDay = waveCap;
   master._wave = { v1: v1Len, placed: waveN, need: need2, startDay: waveStart, capDay: waveCap,
-                   mix: counts2, rejects: rej2, slots: slots2.length, qaIgnoreGates: FILL_QA.ignoreInTownGates };
+                   mix: counts2, rejects: rej2, slots: slots2.length, qaIgnoreGates: FILL_QA.ignoreInTownGates,
+                   /* s106d — the boom-window core-canvas exception ledger */
+                   coreWave: coreWaveN, coreCanvas: coreCanvasN,
+                   coreCanvasCap: Math.ceil(CAD_CORE_CANVAS_FRAC * coreWaveN),
+                   coreCanvasFrac: coreWaveN ? +(coreCanvasN / coreWaveN).toFixed(3) : 0,
+                   qaUncapCoreCanvas: FILL_QA.uncapCoreCanvas };
   if(waveN < need2 && typeof console !== "undefined")
     console.warn("[fill] 1849 WAVE PLACEMENT STARVED: " + waveN + "/" + need2 +
                  " owed units fit under the placement laws (reported, not silently capped).");
@@ -10413,7 +10549,31 @@ function fillLifecycleOf(e){
   evs.push({ type: "construct", start: e.appearDay - lead, on: e.appearDay,
              form: { cls: e.cat, stories: (e.storyRange && e.storyRange[1]) || 1 } });
   var fire = lcFireHit(e.cx, e.cz);
-  if(!fire && e.cat === "shanty" && lcHash(id, "upg") < 0.30){
+  /* s106d (ICS-24) — THE CORE-CANVAS SHORT ARC. A boom-window core tent is
+     the FIRST torn down and replaced by FRAME on the same lot (the existing
+     s108 teardown-replacement machinery — the record's precedent is the
+     El Dorado's authored canvas phase on the plaza, shed for its frame
+     expansion). Conversion is seeded per tent 2-5 months after ITS spawn
+     (FILL_CORE_CONV_MIN/MAX_D), so the arcs spread across late-1849 ->
+     mid-1850: scrubbing shows core tents appearing mid-1849, some already
+     converting by Dec, and the core trending to zero canvas by the window
+     close. A core tent standing in the Dec-24 fire perimeter whose
+     conversion would not COMPLETE before the fire skips the arc — the fire
+     IS its teardown (burn -> ruins -> clear -> the seeded frame rebuild);
+     one that converted early burns as the frame it became. Core tents get
+     THIS arc, never the generic ~30% shanty upgrade wave below. */
+  if(e.coreCanvas){
+    var cv0 = e.appearDay + FILL_CORE_CONV_MIN_D + lcHash(id, "corecnv") * (FILL_CORE_CONV_MAX_D - FILL_CORE_CONV_MIN_D);
+    var cvOn = cv0 + LC_TEARDOWN_DAYS;
+    var cvLead = 14 + Math.floor(lcHash(id, "corerb") * 10);
+    if(!fire || cvOn + 2 + cvLead < fire.day - 1){
+      var cvrS = cvOn + 2;
+      if(LC_QA.breakRuinsGate) cvrS = cv0 + 0.5;          // QA: rebuild before the lot is cleared (ruins-gate fail-before)
+      evs.push({ type: "teardown", start: cv0, on: cvOn });
+      evs.push({ type: "rebuild", start: cvrS, on: cvrS + cvLead,
+                 form: { cls: "frame", stories: (e.storyRange && e.storyRange[1]) || 1 } });
+    }
+  } else if(!fire && e.cat === "shanty" && lcHash(id, "upg") < 0.30){
     var t0 = eventDateToSimDay("1849-03-01") + Math.floor(lcHash(id, "upgday") * 180);   // Mar-Aug 1849
     if(t0 > e.appearDay + 30){
       var tOn = t0 + LC_TEARDOWN_DAYS;
@@ -10473,6 +10633,7 @@ function deriveFillSet(day){
                cx: e.cx, cz: e.cz, w: e.w, d: e.d, yaw: e.yaw, nx: e.nx, nz: e.nz,
                storyRange: e.storyRange, stories: form.stories || (e.storyRange && e.storyRange[1]) || 1,
                edgeId: e.edgeId, edgeLen: e.edgeLen, rank: e.rank, wave: e.wave || 0,
+               coreCanvas: e.coreCanvas || 0,             // s106d: boom-window core-canvas exception entry
                overWater: !!e.overWater, stilted: !!e.stilted,
                appearDay: e.appearDay, state: st.state, hFrac: st.hFrac, counted: counted,
                phase: st.phase, transition: st.transition, agingT: st.agingT });
@@ -10570,7 +10731,11 @@ function rebuildFill(){
        very first (load-time) rebuild it is still undefined, so tents fall
        back to boxes for that one pass and the s106b chunk re-arms the fill
        renderer (_fillLastDay = null) once the tent vocabulary exists. */
-    if(set[i].subtype === "tent" && typeof TENT_VARIANTS !== "undefined"){ tentPartsInto(tentParts, set[i]); continue; }
+    /* s106d: a tent whose CURRENT lifecycle form has become frame (the
+       core-canvas conversion rebuild, or any tent->frame arc) draws as the
+       box massing of what now stands, not as canvas — the tent vocabulary
+       covers only the canvas phases (construct/stand/teardown/cleared). */
+    if(set[i].subtype === "tent" && set[i].cls !== "frame" && typeof TENT_VARIANTS !== "undefined"){ tentPartsInto(tentParts, set[i]); continue; }
     FILL_GROUP.add(fillBuildMesh(set[i]));
   }
   if(tentParts.length){
@@ -10868,6 +11033,131 @@ registerLayerVisibility("buildings-fill", function(v){ FILL_GROUP.visible = v; i
              legality: { rowViol: rowViol, wetViol: wetViol, campViol: campViol, lmViol: lmViol, sample: legality },
              problems: problems.slice(0, 10),
              qaKnobs: { ignoreInTownGates: FILL_QA.ignoreInTownGates } };
+  });
+
+  /* ---- zoneCoreCanvas (s106d, ICS-24) — THE BOOM-WINDOW CORE-CANVAS LAW.
+     The operator's dated, bounded exception made standing (rules-first):
+       (1) THE CAP — canvas standing on core-block ground among the WAVE
+           placements never exceeds ceil(CAD_CORE_CANVAS_FRAC x core-block
+           wave placements), and the exception is REAL (>= 1 core tent
+           placed). Measured on the master with fillCoreBlockAt — the SAME
+           ground measure the spawner gated on (measurement law).
+       (2) THE WINDOW — every core-canvas entry is born INSIDE
+           [CAD_CORE_CANVAS_START_ISO, CAD_CORE_CANVAS_END_ISO); ZERO core
+           canvas stands at any pre-window date (the 1847/48 census gates +
+           the pre-boom spring); zero NEW canvas is admitted outside it.
+       (3) THE GATE IS LAWFUL — cadZoneGate probes at a real core-canvas
+           point: permit+in-window ADMITS; permit outside the window (before
+           AND after) REJECTS (the permit is void, not a bypass); no permit
+           in-window REJECTS (the standing law — the zoneLaw audit's general
+           probe unchanged). The encampment record-wins path is DISTINCT:
+           this law governs only the in-town wave on core blocks.
+       (4) THE SHORT ARC — every core tent either converts (s108 teardown ->
+           frame rebuild seeded FILL_CORE_CONV_MIN..MAX_D days after ITS
+           spawn — the core sheds canvas across late-1849 -> mid-1850, some
+           conversions already visible by Dec) or stands in the authored
+           Dec-24 fire perimeter (the fire is its teardown); ZERO core canvas
+           still stands by 1850-06-01.
+     Fail-before: __P1850_FILL_QA({uncapCoreCanvas:true}) drops the fraction
+     cap — canvas floods the core slots and (1) goes RED; knob off -> GREEN
+     (proven in probe-s106d). ---- */
+  registerAudit("buildings", "zoneCoreCanvas", function(){
+    var master = buildFillMaster(), wv = master._wave || { v1: master.length };
+    var capDay = wv.capDay != null ? wv.capDay : eventDateToSimDay(FILL_1849_CAP_ISO);
+    var winA = eventDateToSimDay(CAD_CORE_CANVAS_START_ISO), winB = eventDateToSimDay(CAD_CORE_CANVAS_END_ISO);
+    var problems = [];
+    // (1) the cap, re-measured on the master (never trusting the spawner's ledger)
+    var coreWave = 0, coreCanvas = 0, canvasEntries = [];
+    for(var i = (wv.v1 || 0); i < master.length; i++){
+      var e = master[i];
+      if(!fillCoreBlockAt(e.cx, e.cz, capDay)) continue;
+      coreWave++;
+      if(e.subtype === "tent"){ coreCanvas++; canvasEntries.push(e); }
+    }
+    var cap = Math.ceil(CAD_CORE_CANVAS_FRAC * coreWave);
+    if(coreCanvas > cap) problems.push("core canvas " + coreCanvas + " over the bounded cap ceil(" + CAD_CORE_CANVAS_FRAC + " x " + coreWave + ") = " + cap);
+    if(coreCanvas < 1) problems.push("ZERO core canvas placed — the dated exception is vacuous");
+    // (2) the window: births inside it; zero canvas standing pre-window
+    canvasEntries.forEach(function(ce){
+      if(ce.appearDay < winA - 1e-6 || ce.appearDay >= winB)
+        problems.push("core tent " + ce.code + "#" + ce.rank + " born outside the boom window (day " + ce.appearDay.toFixed(1) + ")");
+    });
+    /* NOTE the scope: this law governs the WAVE's canvas on core blocks. The
+       v1 village legally holds a couple of 1847-era tents whose ground the
+       era-GROWN core swallowed later (they were residential-band ground on
+       their build day — era growth is not a retroactive eviction), and the
+       encampment-zone tents are governed by THEIR record-wins law. Neither
+       is this exception's subject. */
+    var preWindow = [];
+    ["1847-04-01", "1848-04-01", "1849-06-01"].forEach(function(iso){
+      var day = eventDateToSimDay(iso);
+      var n = deriveFillSet(day).filter(function(f){ return f.wave === 1849 && f.subtype === "tent" && fillCoreBlockAt(f.cx, f.cz, capDay); }).length;
+      preWindow.push({ date: iso, waveCoreCanvasStanding: n });
+      if(n > 0) problems.push(iso + ": " + n + " wave core canvas standing before the window opens");
+    });
+    // (3) the gate probes at a REAL core-canvas point (guaranteed core ground
+    // outside any documented camp; the point must also read commercial-core at
+    // the out-of-window dates so the probe isolates the WINDOW, not zone drift)
+    var dayIn = eventDateToSimDay("1849-09-15"), dayPre = eventDateToSimDay("1849-05-01"), dayPost = eventDateToSimDay("1850-04-01");
+    var pt = null;
+    for(var ci = 0; ci < canvasEntries.length; ci++){
+      var c = canvasEntries[ci];
+      if(fillCoreBlockAt(c.cx, c.cz, dayPre) && fillCoreBlockAt(c.cx, c.cz, dayPost)){ pt = { x: c.cx, z: c.cz }; break; }
+    }
+    var probes = [], probeFail = 0;
+    function gateProbe(name, day, opts, wantOk){
+      if(!pt){ probes.push({ probe: name, located: false }); probeFail++; return; }
+      var g = cadZoneGate("tent", pt.x, pt.z, day, opts);
+      var ok = (g.ok === wantOk);
+      if(!ok) probeFail++;
+      probes.push({ probe: name, located: true, gotOk: g.ok, reason: g.reason, pass: ok });
+    }
+    gateProbe("permit-in-window-admits",    dayIn,   { coreCanvasPermit: true }, true);
+    gateProbe("permit-before-window-rejects", dayPre, { coreCanvasPermit: true }, false);
+    gateProbe("permit-after-window-rejects",  dayPost, { coreCanvasPermit: true }, false);
+    gateProbe("no-permit-in-window-rejects",  dayIn,   null,                      false);
+    if(probeFail) problems.push(probeFail + " gate probes failed (the window law is not real at the gate)");
+    // (4) the short arcs + the core trending to zero
+    var convDays = [], convByDec20 = 0, fireConsumed = 0, dec20 = eventDateToSimDay("1849-12-20");
+    canvasEntries.forEach(function(ce){
+      var id = ce.code + "#" + ce.rank;
+      var fire = lcFireHit(ce.cx, ce.cz);
+      var evs = fillLifecycleOf(ce).events, td = null, rb = null;
+      for(var k = 0; k < evs.length; k++){
+        if(evs[k].type === "teardown" && !td) td = evs[k];
+        if(evs[k].type === "rebuild" && td && !rb) rb = evs[k];
+      }
+      if(!td){
+        if(fire){ fireConsumed++; return; }               // the Dec-24 fire is its teardown
+        problems.push("core tent " + id + " has NO conversion arc and is not in the fire perimeter");
+        return;
+      }
+      var dly = td.start - ce.appearDay;
+      convDays.push(+dly.toFixed(1));
+      if(dly < FILL_CORE_CONV_MIN_D - 0.5 || dly > FILL_CORE_CONV_MAX_D + 0.5)
+        problems.push("core tent " + id + " conversion delay " + dly.toFixed(1) + "d outside [" + FILL_CORE_CONV_MIN_D + "," + FILL_CORE_CONV_MAX_D + "]");
+      if(!rb || !rb.form || rb.form.cls !== "frame")
+        problems.push("core tent " + id + " teardown not followed by a FRAME rebuild (teardown-for-replacement law)");
+      if(td.start <= dec20) convByDec20++;
+    });
+    if(canvasEntries.length > 0 && convByDec20 + fireConsumed < 1)
+      problems.push("no core tent converts (or burns) by Dec-20 — the in-window shedding is invisible");
+    var standingMid1850 = deriveFillSet(eventDateToSimDay("1850-06-01")).filter(function(f){
+      return f.wave === 1849 && f.subtype === "tent" && f.cls !== "frame" && fillCoreBlockAt(f.cx, f.cz, capDay) &&
+             (f.phase === "complete" || f.phase === "constructing" || f.phase === "expanding");
+    }).length;
+    if(standingMid1850 > 0) problems.push(standingMid1850 + " wave core canvas still standing at 1850-06-01 (the core never shed it)");
+    return { pass: problems.length === 0, law: "zoneCoreCanvas (boom-window core-canvas exception, s106d)",
+             windowISO: [CAD_CORE_CANVAS_START_ISO, CAD_CORE_CANVAS_END_ISO], frac: CAD_CORE_CANVAS_FRAC,
+             coreWave: coreWave, coreCanvas: coreCanvas, cap: cap,
+             measuredFrac: coreWave ? +(coreCanvas / coreWave).toFixed(3) : 0,
+             preWindow: preWindow, gate: { failures: probeFail, probes: probes },
+             arcs: { conversions: convDays.length, fireConsumed: fireConsumed, convertedByDec20: convByDec20,
+                     delaysD: { min: convDays.length ? Math.min.apply(null, convDays) : null,
+                                max: convDays.length ? Math.max.apply(null, convDays) : null },
+                     standingAt1850_06: standingMid1850 },
+             problems: problems.slice(0, 10),
+             qaKnobs: { uncapCoreCanvas: FILL_QA.uncapCoreCanvas } };
   });
 })();
 
@@ -11794,9 +12084,10 @@ if(typeof window !== "undefined"){
   window.__P1850_FILL_QA = function(opts){
     opts = opts || {};
     if(opts.ignoreInTownGates != null) FILL_QA.ignoreInTownGates = !!opts.ignoreInTownGates;
+    if(opts.uncapCoreCanvas != null)   FILL_QA.uncapCoreCanvas = !!opts.uncapCoreCanvas;   // s106d: drop the core-canvas fraction cap (zoneCoreCanvas fail-before)
     FILL_QA.version++;
     FILL_MASTER = null; TENT_MASTER = null; _fillLastDay = null; _tentLastDay = null;
-    return { ignoreInTownGates: FILL_QA.ignoreInTownGates, version: FILL_QA.version };
+    return { ignoreInTownGates: FILL_QA.ignoreInTownGates, uncapCoreCanvas: FILL_QA.uncapCoreCanvas, version: FILL_QA.version };
   };
 }
 setTimeout(function(){
@@ -11879,6 +12170,19 @@ setTimeout(function(){
     window.__P1850.fillCount = function(day){ return deriveFillSet(day == null ? simDay : day).filter(function(e){ return e.counted; }).length; };
     window.__P1850.fillMasterSize = function(){ return buildFillMaster().length; };
     window.__P1850.fillWave = function(){ return buildFillMaster()._wave; };   // s106c: the 1849 in-town wave report
+    /* s106d — the boom-window core-canvas exception, machine-readable (probes/shots). */
+    window.__P1850.coreCanvas = function(){
+      var m = buildFillMaster(), wv = m._wave || {};
+      var list = [];
+      for(var i = (wv.v1 || 0); i < m.length; i++){
+        var e = m[i]; if(!e.coreCanvas) continue;
+        list.push({ id: e.code + "#" + e.rank, x: +e.cx.toFixed(1), z: +e.cz.toFixed(1),
+                    appearDay: +e.appearDay.toFixed(1),
+                    events: fillLifecycleOf(e).events.map(function(ev){ return ev.type + "@" + ev.start.toFixed(1); }) });
+      }
+      return { frac: CAD_CORE_CANVAS_FRAC, windowISO: [CAD_CORE_CANVAS_START_ISO, CAD_CORE_CANVAS_END_ISO],
+               coreWave: wv.coreWave, coreCanvas: wv.coreCanvas, cap: wv.coreCanvasCap, entries: list };
+    };
     window.__P1850.fillCensus = function(iso){
       var day = eventDateToSimDay(iso);
       var lm = reservationsAt(day).length, fill = window.__P1850.fillCount(day);

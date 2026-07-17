@@ -474,7 +474,8 @@ function canPlaceClass(cls, pose, ctx){
      cls stays "structure"; absent, the cls itself is used. Zone-agnostic classes
      pass untouched (SELECTIVE law). */
   if(typeof cadZoneGate==="function"){
-    var zg = cadZoneGate(ctx.zoneClass||cls, x, z, ctx.day!=null?ctx.day:(typeof simDay==="number"?simDay:null));
+    var zg = cadZoneGate(ctx.zoneClass||cls, x, z, ctx.day!=null?ctx.day:(typeof simDay==="number"?simDay:null),
+                         ctx.coreCanvasPermit ? { coreCanvasPermit:true } : null);   // s106d: the 1849 wave's dated core-canvas permit rides ctx (never implied)
     if(!zg.ok) return zg;
   }
   if(!law) return { ok:true, reason:"no-law:"+cls };   // unknown class: engine imposes nothing beyond the zone gate

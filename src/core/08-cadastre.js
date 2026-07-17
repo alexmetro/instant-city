@@ -1006,6 +1006,32 @@ function cadBlockCommercial(b, day){
   if(b.cxWorld==null){ var w=gridToWorldAt((b.uLo+b.uHi)/2,(b.vLo+b.vHi)/2,GRID_ROT_BASE); b.cxWorld=w.x; b.czWorld=w.z; }
   return Math.hypot(b.cxWorld-PLAZA_CENTER.x, b.czWorld-PLAZA_CENTER.z) <= cadCommercialRadiusAt(day);
 }
+/* s106d (ICS-24) — THE BOOM-WINDOW CORE-CANVAS EXCEPTION (operator ruling;
+   careful by design). The standing law is that the commercial front is never
+   tent ground — but during the 1849 gold-rush building frenzy even the core
+   blocks briefly carried canvas among the frame (the record's marquee case is
+   AUTHORED already: the El Dorado's canvas phase ON the plaza before its
+   3-story frame expansion — LM_LIFECYCLE_ARCS, s108). So the zone law gains a
+   DATED, BOUNDED exception: during the boom window below, the commercial-core
+   zone admits a LIMITED canvas fraction of the 1849 in-town fill wave on core
+   blocks — and ONLY that wave (the placement rides an explicit
+   coreCanvasPermit; a bare tent query on core ground still rejects, so the
+   zoneLaw audit's general tent-in-core rejection probe holds unchanged).
+   Outside the window the core admits ZERO new canvas (the existing law).
+   The FRACTION cap is enforced by the wave spawner + the buildings.
+   zoneCoreCanvas audit against THIS one constant (measurement law); the
+   WINDOW is enforced right here in the gate. All three values are fill:true
+   tunables — the ~12% fraction is a CONSERVATIVE operator ruling pending
+   researcher evidence on how much canvas the core actually carried. */
+var CAD_CORE_CANVAS_START_ISO = "1849-06-15";   // window opens with the in-town wave ramp
+var CAD_CORE_CANVAS_END_ISO   = "1850-03-01";   // window closes: by spring 1850 the core sheds canvas for frame/brick
+var CAD_CORE_CANVAS_FRAC      = 0.12;           // cap: canvas <= ceil(frac x core-block wave placements) — conservative pending researcher evidence
+var _cadCoreCanvasWin = null;
+function cadCoreCanvasWindow(day){
+  if(day == null) return false;                  // undated queries get the standing law, never the exception
+  if(!_cadCoreCanvasWin) _cadCoreCanvasWin = { a: eventDateToSimDay(CAD_CORE_CANVAS_START_ISO), b: eventDateToSimDay(CAD_CORE_CANVAS_END_ISO) };
+  return day >= _cadCoreCanvasWin.a && day < _cadCoreCanvasWin.b;
+}
 /* THE ZONE TABLE — precedence-ordered. Each: { id, allowedClasses, densityTier,
    birth, exclusive, note, contains(x,z,day) }. exclusive zones claim the ground;
    a point outside every zone is LOOSE GROUND (only the unaddressed / scatter /
@@ -1024,7 +1050,7 @@ var CAD_ZONE_TABLE = [
     allowedClasses:["ship","storeship","mooring","boat","wharf"],
     contains:function(x,z,day){ return groundPlanParcelContains("yerba-buena-cove",x,z); } },
   { id:"commercial-core", densityTier:"dense", birth:CAD_DAY_ALWAYS, exclusive:true,
-    note:"plaza ring + downtown frontages, era-grown outward to the waterfront by the boom. Commercial/civic + addressed building tiers; NO tents/shanties (the commercial front is not tent ground at any era).",
+    note:"plaza ring + downtown frontages, era-grown outward to the waterfront by the boom. Commercial/civic + addressed building tiers; NO tents/shanties (the commercial front is not tent ground) — EXCEPT the s106d dated, bounded boom-window core-canvas exception (coreCanvasPermit, cadZoneGate).",
     allowedClasses:["commercial","civic","hotel","gambling-hall","store","warehouse","frame","kit-house","iron-house","brick","sign","landmark-civic","landmark-commerce"],
     contains:function(x,z,day){ return cadBlockCommercial(cadBlockAt(x,z,day), day); } },
   { id:"camp", densityTier:"loose", birth:eventDateToSimDay("1849-08-01"), exclusive:true,
@@ -1062,8 +1088,13 @@ function cadZoneAt(x, z, day){
 /* THE zone gate (building-spawn-spec §1: "the zone gate adds WHERE per class").
    {ok, reason, zone}. Zone-agnostic classes pass untouched; loose ground admits
    only the unaddressed/scatter/fauna set; otherwise the governing zone's
-   allowedClasses decide. */
-function cadZoneGate(cls, x, z, day){
+   allowedClasses decide. opts (s106d, optional): { coreCanvasPermit:true } —
+   the 1849 in-town wave's dated core-canvas placement permit (see the
+   CAD_CORE_CANVAS block above); honored ONLY for cls "tent" on commercial-core
+   ground WITHIN the boom window, rejected outside it, and never implied — a
+   bare query (every other caller, incl. the zoneLaw audit probes) gets the
+   standing law. */
+function cadZoneGate(cls, x, z, day, opts){
   if(!CAD_ZONE_RELEVANT[cls]) return { ok:true, reason:"zone-agnostic", zone:null };
   /* s106b — THE RECORD WINS (fill-density-model §0): an ACTIVE documented
      encampment zone (ENCAMPMENT_ZONES, s106a) admits the CAMP classes on its
@@ -1082,6 +1113,16 @@ function cadZoneGate(cls, x, z, day){
   var Z = cadZoneAt(x,z,day);
   if(!Z) return CAD_LOOSE_ALLOWED[cls] ? { ok:true, reason:"loose-ground", zone:null }
                                        : { ok:false, reason:"loose-ground-forbids:"+cls, zone:null };
+  /* s106d — THE BOOM-WINDOW CORE-CANVAS EXCEPTION (dated + bounded, see the
+     CAD_CORE_CANVAS block). Fires ONLY when the caller presents the wave's
+     explicit permit for a tent on commercial-core ground: inside the window
+     the placement is admitted (the fraction cap is the spawner's + the
+     zoneCoreCanvas audit's, against CAD_CORE_CANVAS_FRAC); outside the window
+     the permit is void and the standing no-canvas law rejects. */
+  if(Z.id === "commercial-core" && cls === "tent" && opts && opts.coreCanvasPermit){
+    if(cadCoreCanvasWindow(day)) return { ok:true, reason:"core-canvas-window", zone:Z.id };
+    return { ok:false, reason:"core-canvas-window-closed", zone:Z.id };
+  }
   for(var i=0;i<Z.allowedClasses.length;i++) if(Z.allowedClasses[i]===cls || Z.allowedClasses[i]==="*") return { ok:true, reason:"zone:"+Z.id, zone:Z.id };
   return { ok:false, reason:"zone:"+Z.id+"-forbids:"+cls, zone:Z.id };
 }
