@@ -16891,7 +16891,34 @@ registerAudit("labels", "anchorsInside", function(){
    FAILS BEFORE ics14d on the OLD styles (dark sepia civic ink vs its light
    casing was the read; under this model the old water dual-halo styles are
    simply absent); PASSES after: worst case ≈3.47 (water on rocky, carried
-   by the casing rim). */
+   by the casing rim).
+   D2b ICS-30 — DIMMED-HOST GATE (the atelier MAP-MODE world dimming): while a
+   map mode is active the atelier desaturates + darkens the LIT base map so the
+   overlay data owns saturation (the CS-lineage chroma monopoly). Labels ride ON
+   that dimmed ground, so their contrast must be MEASURED against the dimmed
+   host, not assumed. LBL_MODE_DIM is the CANONICAL presentation-dim spec: the
+   workbench shader (atelier-only) applies EXACTLY this transform to the lit
+   base-map fragment (post-colorspace, i.e. sRGB — the same space this palette
+   lives in), so mirroring it here is a faithful model of what is painted, not a
+   guess. Each earth/roof/water background gets a DIMMED twin (name+"·dim"); the
+   ≥3.0 gate runs over the full 2× palette. Dimming darkens hosts toward mid-grey,
+   which on our white-ink/dark-casing voices RAISES the ink-vs-host carrier on
+   the bright hosts (the sand/roof brights become mid-tones the white ink clears)
+   while the already-dark hosts are unchanged in character — so the dimmed gate
+   passes at the same worst case, now proven rather than presumed. */
+/* CANONICAL WORLD-DIM SPEC (D2b): desat = fraction mixed toward the fragment's
+   own luma (chroma removal); dark = fraction of brightness removed. Applied as
+   rgb' = mix(rgb, vec3(luma(rgb)), desat) * (1 - dark). The atelier's base-map
+   shader uniform (layers/workbench.js WB_DIM) uses these SAME two numbers — one
+   source of truth for the dim so the audit and the render can never drift. */
+var LBL_MODE_DIM = { desat: 0.66, dark: 0.30 };
+function _lblDimBg(rgb){
+  // sRGB-space luma (matches the shader, which dims post-colorspace) + darken.
+  var y = 0.2126*rgb[0] + 0.7152*rgb[1] + 0.0722*rgb[2], D = LBL_MODE_DIM;
+  return [ (rgb[0]*(1-D.desat)+y*D.desat)*(1-D.dark),
+           (rgb[1]*(1-D.desat)+y*D.desat)*(1-D.dark),
+           (rgb[2]*(1-D.desat)+y*D.desat)*(1-D.dark) ];
+}
 function _lblSrgbToLin(c){ c/=255; return c<=0.03928 ? c/12.92 : Math.pow((c+0.055)/1.055, 2.4); }
 function _lblRelLum(rgb){ return 0.2126*_lblSrgbToLin(rgb[0]) + 0.7152*_lblSrgbToLin(rgb[1]) + 0.0722*_lblSrgbToLin(rgb[2]); }
 function _lblContrast(a,b){ var la=_lblRelLum(a), lb=_lblRelLum(b), hi=Math.max(la,lb), lo=Math.min(la,lb); return (hi+0.05)/(lo+0.05); }
@@ -16922,6 +16949,12 @@ registerAudit("labels", "contrast", function(){
     { name:"waterLo",    fam:"water", rgb:_lblHex(0x8fc2c9) },  // bright shallow (cove label)
     { name:"waterHi",    fam:"water", rgb:_lblHex(0x2a5570) }
   ];
+  // D2b ICS-30: the DIMMED-HOST twins — every background as it reads under the
+  // atelier map-mode world dim (LBL_MODE_DIM). Same family/host tags; gated at
+  // the same ≥3.0 floor so label readability under a mode is measured, not
+  // assumed. The undimmed set stays (labels also render with no mode active).
+  var BG_LIT = BG.slice();
+  BG_LIT.forEach(function(b){ BG.push({ name:b.name+"·dim", fam:b.fam, rgb:_lblDimBg(b.rgb), dimmed:true }); });
   // ics14 — the surface families each voice is HOSTED on (retained for the
   // per-host reporting; every voice now shares the same white-ink/dark-casing
   // pairing, so hosts inform the REPORT rather than choose an ink).
@@ -16948,7 +16981,7 @@ registerAudit("labels", "contrast", function(){
       var carrier = Math.max(casingVsBg, inkVsBg);
       var here = Math.min(inkVsCasing, carrier);
       var isHost = hostFams !== null && hostFams.indexOf(b.fam) >= 0;
-      perBg.push({ bg:b.name, host:isHost, inkVsCasing:+inkVsCasing.toFixed(2),
+      perBg.push({ bg:b.name, host:isHost, dimmed:!!b.dimmed, inkVsCasing:+inkVsCasing.toFixed(2),
                    casingVsBg:+casingVsBg.toFixed(2), inkVsBg:+inkVsBg.toFixed(2), score:+here.toFixed(2) });
       if(here < sMin){ sMin = here; sBg = b.name; }
       if(isHost && here < hMin){ hMin = here; hBg = b.name; }
@@ -16961,9 +16994,13 @@ registerAudit("labels", "contrast", function(){
   // hosts; the palette-wide min is the stronger, honest gate) — the per-host
   // minima are reported alongside for the operator's record.
   var bad = styles.filter(function(s){ return s.minRatio < GATE || (s.hostMin !== null && s.hostMin < GATE); });
+  // D2b: the worst case AMONG dimmed hosts alone (the map-mode reading condition)
+  // reported separately so the mode gate is legible at a glance.
+  var dimWorst = { style:null, bg:null, ratio:1e9 };
+  styles.forEach(function(s){ s.perBg.forEach(function(p){ if(p.dimmed && p.score < dimWorst.ratio) dimWorst = { style:s.style, bg:p.bg, ratio:p.score }; }); });
   return { pass: bad.length===0, gate:GATE,
-           method:"ics14d uniform Maps-satellite model, every voice: score(bg)=min(inkVsCasing, max(casingVsBg, inkVsBg)) ≥3.0 over the FULL earth+roof palette; on light hosts the dark casing rim carries (casingVsBg ≥3.0 there — the operator's white-on-light rule, literal); on dark hosts the white ink is the boundary (a dark rim cannot clear a dark host — stated, not hidden); per-background tables reported for every voice; street Bold shares Medium colors (one measurement, both weights)",
-           minContrastRatio: worst.ratio, worstCase: worst, styles: styles, bad: bad };
+           method:"ics14d uniform Maps-satellite model, every voice: score(bg)=min(inkVsCasing, max(casingVsBg, inkVsBg)) ≥3.0 over the FULL earth+roof palette AND its D2b DIMMED-HOST twins (LBL_MODE_DIM desat "+LBL_MODE_DIM.desat+" dark "+LBL_MODE_DIM.dark+" — the atelier map-mode world dim, mirrored from the workbench base-map shader so audit≡render); on light hosts the dark casing rim carries (casingVsBg ≥3.0 there — the operator's white-on-light rule, literal); on dark hosts the white ink is the boundary (a dark rim cannot clear a dark host — stated, not hidden); per-background tables reported for every voice incl. dimmed; street Bold shares Medium colors (one measurement, both weights)",
+           minContrastRatio: worst.ratio, worstCase: worst, dimmedWorstCase: dimWorst, modeDim: LBL_MODE_DIM, styles: styles, bad: bad };
 });
 
 /* ---- AUDIT 4 — crispness (s93 item 1, user finding: "text blurry at altitude").
@@ -21053,7 +21090,49 @@ function updateHud(alt){
     "    border-color:rgba(255,255,255,0.5); }",
     "}",
     "body.wb-probe #c, body.wb-tl #c{ cursor:crosshair; }",
-    "body.dev-labels-off .wlbl, body.dev-labels-off .street-label, body.dev-labels-off .biz-glyph{ display:none !important; }"
+    "body.dev-labels-off .wlbl, body.dev-labels-off .street-label, body.dev-labels-off .biz-glyph{ display:none !important; }",
+    /* D2b ICS-30 — RADIO MAP MODES bar (CK3): a persistent 5-button strip in the
+       pinned head. Exactly one mode arms at a time (keys 1-5); its button lights
+       gold. This is the primary overlay navigation; the accordion checkboxes stay
+       the fine-grained controls INSIDE a mode (one state machine — both drive the
+       same WB.overlays registry). */
+    "#wb-panel .wb-modebar{ display:flex; gap:4px; margin-top:8px; }",
+    "#wb-panel .wb-modebtn{ flex:1; display:flex; flex-direction:column; align-items:center; gap:2px;",
+    "  background:var(--wb-well); color:var(--wb-dim); border:1px solid var(--hairline); border-radius:var(--wb-r);",
+    "  padding:5px 2px 4px; cursor:pointer; font:inherit; line-height:1;",
+    "  transition:color 0.2s var(--ease-out), border-color 0.2s var(--ease-out), background 0.2s var(--ease-out); }",
+    "#wb-panel .wb-modebtn:hover{ color:var(--wb-ink); border-color:rgba(255,255,255,0.24); }",
+    "#wb-panel .wb-modebtn:active{ transform:scale(0.96); }",
+    "#wb-panel .wb-modebtn .wb-mk{ font-size:11px; font-weight:bold; color:var(--wb-faint); }",
+    "#wb-panel .wb-modebtn .wb-mn{ font-size:7.5px; letter-spacing:0.4px; text-align:center; }",
+    "#wb-panel .wb-modebtn.on{ color:var(--wb-gold); border-color:var(--wb-gold); background:oklch(32% 0.06 85 / 0.35); }",
+    "#wb-panel .wb-modebtn.on .wb-mk{ color:var(--wb-gold); }",
+    /* D2b — LEGEND-AS-CONTROL panel (CS2): activating a mode opens ONE compact
+       floating legend; each row IS the toggle for its sub-layer (wired to the
+       same WB.overlays registry the checkboxes drive). Lives OUTSIDE #wb-panel
+       (on body) so it inherits the shell's D1 GLASS tokens — the regular material
+       tier, the panel radius, the vibrancy ink ladder, the curve token. */
+    "#wb-mlegend{ position:fixed; right:14px; bottom:14px; z-index:99998; width:206px; box-sizing:border-box;",
+    "  background:var(--glass-dim); -webkit-backdrop-filter:var(--glass-regular); backdrop-filter:var(--glass-regular);",
+    "  border:1px solid var(--hairline); border-radius:var(--r-panel); box-shadow:var(--glass-rim);",
+    "  color:var(--ink-glass); font:11px/1.4 Consolas,Menlo,monospace; padding:11px 13px;",
+    "  -webkit-font-smoothing:antialiased; opacity:0; transform:translateY(6px); pointer-events:none;",
+    "  transition:opacity 0.2s var(--ease-out), transform 0.2s var(--ease-out); }",
+    "#wb-mlegend.show{ opacity:1; transform:none; pointer-events:auto; }",
+    "#wb-mlegend .wb-ml-title{ font-size:10px; letter-spacing:1.3px; font-weight:bold; color:var(--ink-glass);",
+    "  text-transform:uppercase; margin-bottom:8px; display:flex; align-items:baseline; gap:6px; }",
+    "#wb-mlegend .wb-ml-title small{ color:var(--ink-glass-3); font-weight:normal; letter-spacing:0.4px; text-transform:none; }",
+    "#wb-mlegend .wb-ml-row{ display:flex; align-items:center; gap:8px; padding:4px 6px; margin:1px -6px;",
+    "  border-radius:8px; cursor:pointer; transition:background 0.15s var(--ease-out), opacity 0.15s var(--ease-out); }",
+    "#wb-mlegend .wb-ml-row:hover{ background:rgba(255,255,255,0.09); }",
+    "#wb-mlegend .wb-ml-sw{ width:12px; height:12px; border-radius:3px; flex:none;",
+    "  box-shadow:inset 0 0 0 1px rgba(0,0,0,0.45); }",
+    "#wb-mlegend .wb-ml-lab{ flex:1; min-width:0; color:var(--ink-glass); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }",
+    "#wb-mlegend .wb-ml-row.off{ opacity:0.42; }",
+    "#wb-mlegend .wb-ml-row.off .wb-ml-sw{ background:transparent !important; box-shadow:inset 0 0 0 1px var(--hairline); }",
+    "#wb-mlegend .wb-ml-hint{ margin-top:9px; color:var(--ink-glass-3); font-size:9px; letter-spacing:0.3px; text-wrap:pretty; }",
+    "@media (prefers-reduced-motion: reduce){ #wb-panel .wb-modebtn:active{ transform:none; }",
+    "  #wb-mlegend{ transition:opacity 0.2s var(--ease-out); transform:none; } }"
   ].join("\n");
   document.head.appendChild(wbStyle);
 
@@ -21064,10 +21143,69 @@ function updateHud(alt){
     probe: false,
     overlays: { spine:false, row:false, lots:false, parcels:false, wharf:false, keepout:false, zones:false, encamp:false, audits:false, dryland:false, lifecycle:false },
     tl: false,            // coordinate timeline inspector armed
+    mode: null,           // D2b: the armed RADIO MAP MODE (1..5) or null (CK3 exclusive model)
     morph: { demo:false, patch:false, regions:false, island:false }, // s102 terrain-morph viz toggles
     knobs: { sunMul:1, hemiMul:1, ambientMul:1, nightLift:0, detailAmp:null, doodadMul:1, streetAlphaMul:1 }
   };
   var WB_MORPH = WB.morph;   // short alias (the isLandAt seam + the s102 viz read it)
+  var wbOnOverlayChange = null;  // D2b late-bound hook: refreshOverlayActive fires it so the mode legend/bar re-sync on ANY overlay change (checkbox, QA hook, mode arm)
+
+  /* ---------------- D2b WORLD DIMMING (chroma monopoly, CS lineage) ----------
+     While a map mode is active the LIT base map desaturates + darkens so the
+     overlay data owns saturation. THE CHEAPEST CORRECT HOOK: one SHARED uniform
+     injected via onBeforeCompile into the base-map's LIT MeshPhong SINGLETONS —
+     terrainMat · the ground-paint splat mats · LM_MAT (every building/tent/fence)
+     · WHARF_MAT. These are module-level materials shared by every present AND
+     future mesh, so the dim reaches late-spawned buildings for free — no scene
+     traversal, no per-frame cost beyond one uniform write. It is CORRECT (not
+     just cheap) because the atelier's overlays are UNLIT MeshBasic and are never
+     patched, so the data layer keeps full saturation by construction — the
+     chroma monopoly falls out of the material split. The dim runs in the
+     fragment shader post-colorspace (sRGB) with EXACTLY labels.js LBL_MODE_DIM
+     (desat toward luma, then darken) — one source of truth shared with the
+     contrast audit, so audit≡render. value 0 = identity (OFF restores exactly).
+     NOT dimmed (honest gap): the bay-water ShaderMaterial + foam/tule (custom /
+     already-desaturated cyan; peripheral at overlay framings). ---- */
+  var WB_DIM = { value: 0 };                 // 0..1 — the live dim amount (THREE reads .value)
+  WB_DIM._target = 0; WB_DIM._from = 0; WB_DIM._t0 = 0; WB_DIM._dur = 200;
+  var _wbDimD = (typeof LBL_MODE_DIM === "object" && LBL_MODE_DIM) ? LBL_MODE_DIM : { desat:0.66, dark:0.30 };
+  function wbInstallDim(mat){
+    if(!mat || mat.__wbDimmed) return; mat.__wbDimmed = true;
+    var prev = mat.onBeforeCompile;
+    mat.onBeforeCompile = function(shader){
+      if(typeof prev === "function") prev.call(this, shader);
+      shader.uniforms.uWbDim = WB_DIM;       // SAME object across all mats — one write dims everything
+      if(shader.fragmentShader.indexOf("uWbDim") === -1 && shader.fragmentShader.indexOf("#include <dithering_fragment>") !== -1){
+        shader.fragmentShader = "uniform float uWbDim;\n" + shader.fragmentShader.replace(
+          "#include <dithering_fragment>",
+          "{ float _wy = dot(gl_FragColor.rgb, vec3(0.2126,0.7152,0.0722));"
+          + " gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(_wy), uWbDim*" + _wbDimD.desat.toFixed(3) + ")"
+          + " * (1.0 - uWbDim*" + _wbDimD.dark.toFixed(3) + "); }\n#include <dithering_fragment>");
+      }
+    };
+    mat.needsUpdate = true;                   // force a recompile so the patch takes on the already-built material
+  }
+  [ (typeof terrainMat!=="undefined"?terrainMat:null),
+    (typeof splatWorldMat!=="undefined"?splatWorldMat:null),
+    (typeof splatTownMat!=="undefined"?splatTownMat:null),
+    (typeof LM_MAT!=="undefined"?LM_MAT:null),
+    (typeof WHARF_MAT!=="undefined"?WHARF_MAT:null) ].forEach(wbInstallDim);
+  function wbSetDim(on){
+    var t = on ? 1 : 0;
+    if(t === WB_DIM._target) return;
+    WB_DIM._from = WB_DIM.value; WB_DIM._target = t; WB_DIM._t0 = (typeof performance!=="undefined"?performance.now():Date.now());
+    // reduced-motion: snap (no transition)
+    try{ if(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches){ WB_DIM.value = t; WB_DIM._from = t; } }catch(e){}
+  }
+  function wbTickDim(){
+    if(WB_DIM.value === WB_DIM._target) return;
+    var now = (typeof performance!=="undefined"?performance.now():Date.now());
+    var k = WB_DIM._dur > 0 ? (now - WB_DIM._t0) / WB_DIM._dur : 1;
+    if(k >= 1){ WB_DIM.value = WB_DIM._target; return; }
+    if(k < 0) k = 0;
+    var e = 1 - Math.pow(1 - k, 3);            // ease-out cubic (matches the --ease-out voice)
+    WB_DIM.value = WB_DIM._from + (WB_DIM._target - WB_DIM._from) * e;
+  }
   var WB_ORDER = ["terrain","ground-paint","zones-tint","buildings","wharves","doodads","people","ships","fauna","effects","labels"];
   // labels is presented as its own tri-state FAMILY below (parent + 3 sublayers),
   // not a flat mute row — exclude it here so it is not doubled.
@@ -21091,6 +21229,7 @@ function updateHud(alt){
   var _wbRender = renderer.render.bind(renderer);
   var WB_LIGHTS = [ {o:sun, key:"sunMul", night:false}, {o:hemi, key:"hemiMul", night:true}, {o:ambient, key:"ambientMul", night:true} ];
   function wbFrame(){
+    wbTickDim();  // D2b: advance the world-dim transition (200ms ease-out) before this frame draws
     // mutes: re-assert OFF only (never force-on — the sim owns reveals)
     WB_LAYERS.forEach(function(n){ if(!wbLayerOn(n)){ try{ __P1850_LAYER_VIS[n](false); }catch(e){} } });
     // light knobs: multiplier over whatever the sim wrote this frame,
@@ -21380,6 +21519,9 @@ function updateHud(alt){
        checkbox change handlers (function declarations — hoisted, safe). */
     syncGroupCheckbox();
     syncZoneGroupCheckbox();
+    // D2b: the mode legend + modebar mirror the SAME registry — re-sync on every
+    // overlay change (checkbox, QA hook, or mode arm), the single-state rule.
+    if(wbOnOverlayChange) wbOnOverlayChange();
   }
 
   /* one toggle path: every overlay rebuilds fresh on enable (all are cheap
@@ -23178,7 +23320,143 @@ function updateHud(alt){
     return cv.toDataURL("image/png");
   };
 
+  /* ================================================================= D2b
+     ICS-30 — RADIO MAP MODES (CK3) + LEGEND-AS-CONTROL (CS2) + WORLD DIMMING.
+     Collapses the ~13 rule overlays into 5 EXCLUSIVE base modes on keys 1-5.
+     Selecting a mode arms its overlay FAMILY and disarms the previous mode; the
+     two PINS (audit failures · walk keep-out) are additive and stack on any mode.
+     ONE STATE MACHINE (the Manor Lords warning): mode selection drives the SAME
+     WB.overlays registry the accordion checkboxes and the legend rows drive —
+     there is no parallel overlay state. WB.mode records only WHICH mode the
+     operator armed (for the legend + the bar highlight + the world dim); what is
+     actually rendered is always WB.overlays. Manual accordion checkboxes remain
+     the fine-grained control INSIDE a mode (expert reach-across is allowed and
+     honest — the bar shows the selection, the accordion active-dots show truth).
+     TERRAIN-DEBUG material modes (slope/elev/wire) stay MANUAL in the TERRAIN
+     accordion — deliberately kept OUT of the mode machine to avoid a second
+     state target (mode 4 arms the dry-land RULE overlay, the terrain-edge debug). */
+  var WB_MODES = [ null,
+    { n:1, name:"ZONES",       sub:[ ["zonelaw","#d9a441","land-use law"], ["encamp","#e0862c","encampments"], ["zones","#6f8b4e","ecology"] ] },
+    { n:2, name:"GROUND PLAN", sub:[ ["spine","#ffd75e","master spine"], ["row","#57cfe0","rights-of-way"], ["lots","#f2f2f2","plat lots"], ["parcels","#9c5a4a","named parcels"], ["reservations","#e0b34a","reservations"] ] },
+    { n:3, name:"LIFECYCLE",   sub:[ ["lifecycle","#7ee2a0","building state"] ] },
+    { n:4, name:"DRY-LAND",    sub:[ ["dryland","#ff8a3a","edge + road clamp"] ] },
+    { n:5, name:"WHARVES",     sub:[ ["wharf","#ffd75e","alignments + ticks"] ] }
+  ];
+  var WB_MODE_SHORT = { 1:"ZONES", 2:"SPINE", 3:"LIFE", 4:"DRY", 5:"WHARF" };
+  var WB_PINS = ["audits","keepout"];   // additive garnish — never disarmed by a mode switch
+
+  // arm/disarm one overlay through the SAME path the checkbox uses (checkbox
+  // reflect + setOverlay + family/legend re-sync). Mode arming + legend rows go
+  // through here so all three surfaces stay one state.
+  function wbArmOverlay(key, on){
+    if(overlayRowEls[key]) overlayRowEls[key].cb.checked = !!on;
+    setOverlay(key, !!on);
+  }
+
+  /* --- the modebar (persistent 5-button radio strip in the pinned head) --- */
+  var wbModeBar = el("div","wb-modebar", null, wbHead);
+  var wbModeBtns = {};
+  [1,2,3,4,5].forEach(function(n){
+    var b = el("button","wb-modebtn", null, wbModeBar);
+    b.type = "button";
+    el("span","wb-mk", String(n), b);
+    el("span","wb-mn", WB_MODE_SHORT[n], b);
+    b.title = "MODE "+n+": "+WB_MODES[n].name+" (key "+n+" — press again to clear)";
+    b.addEventListener("click", function(){ setMode(n); });
+    wbModeBtns[n] = b;
+  });
+
+  /* --- the LEGEND-AS-CONTROL floating panel (CS2): one compact glass panel that
+     is simultaneously the mode's key AND its switchboard — each row is a swatch +
+     label that TOGGLES its sub-layer. Wired to wbArmOverlay → the same registry. */
+  var wbMLegend = document.createElement("div");
+  wbMLegend.id = "wb-mlegend";
+  document.body.appendChild(wbMLegend);
+  var wbMLTitle = el("div","wb-ml-title", null, wbMLegend);
+  var wbMLName = el("span", null, "", wbMLTitle);
+  el("small", null, "map mode", wbMLTitle);
+  var wbMLRows = el("div","wb-ml-rows", null, wbMLegend);
+  el("div","wb-ml-hint","Each row toggles its sub-layer. Keys 1-5 switch modes; press the active key again to clear. Audit + keep-out pins stack on any mode.", wbMLegend);
+  var wbMLRowEls = [];   // rebuilt when the mode changes
+
+  function wbBuildLegend(n){
+    wbMLRows.textContent = "";
+    wbMLRowEls = [];
+    if(!n) return;
+    var m = WB_MODES[n];
+    wbMLName.textContent = m.name;
+    m.sub.forEach(function(s){
+      var key = s[0];
+      var row = el("div","wb-ml-row", null, wbMLRows);
+      var sw = el("span","wb-ml-sw", null, row); sw.style.background = s[1];
+      el("span","wb-ml-lab", s[2], row);
+      row.title = "toggle "+s[2];
+      row.addEventListener("click", function(){ wbArmOverlay(key, !WB.overlays[key]); });
+      wbMLRowEls.push({ key:key, row:row });
+    });
+  }
+  // reflect live overlay truth into the open legend (the single-state mirror).
+  function wbSyncModeLegend(){
+    [1,2,3,4,5].forEach(function(n){ if(wbModeBtns[n]) wbModeBtns[n].classList.toggle("on", WB.mode===n); });
+    if(WB.mode){
+      wbMLRowEls.forEach(function(r){ r.row.classList.toggle("off", !WB.overlays[r.key]); });
+      wbMLegend.classList.add("show");
+    } else {
+      wbMLegend.classList.remove("show");
+    }
+  }
+  wbOnOverlayChange = wbSyncModeLegend;   // wire the late-bound hook (refreshOverlayActive calls it)
+
+  function setMode(n){
+    if(n !== null){ n = +n; if(!(n>=1 && n<=5)) n = null; }
+    var prev = WB.mode;
+    if(n === prev) n = null;    // re-press the active mode = clear (exclusive toggle)
+    // disarm the previous mode's overlays that the new mode does not also want
+    if(prev){
+      WB_MODES[prev].sub.forEach(function(s){
+        var keep = n && WB_MODES[n].sub.some(function(t){ return t[0]===s[0]; });
+        if(!keep) wbArmOverlay(s[0], false);
+      });
+    }
+    WB.mode = n;
+    wbBuildLegend(n);          // fresh legend rows BEFORE arming, so the arm re-syncs land on them
+    if(n){ WB_MODES[n].sub.forEach(function(s){ wbArmOverlay(s[0], true); }); }
+    wbSetDim(!!n);             // world dim on iff a mode is armed (pins alone never dim)
+    wbSyncModeLegend();        // (also fired by the overlay arms above, but explicit for the n===prev→null no-arm path)
+  }
+
+  /* HOTKEYS 1-5 (CK3). The atelier is dev-only; here the number keys drive MAP
+     MODES, not sim speed — a deliberate CK3 adoption (sim speed stays on Space
+     for pause/live and the clickable speed pill). We steal them cleanly via a
+     CAPTURE-phase window listener that runs BEFORE the bubble-phase sim-speed
+     binding (camera-input chunk 27) and stops the event, so 1-4 never reach it.
+     Typing in the filter is exempt (the query keeps its digits). `0` / backtick
+     clear the mode. */
+  function wbIsTyping(t){
+    if(typeof isTypingTarget === "function"){ try{ return isTypingTarget(t); }catch(e){} }
+    return !!t && (t.tagName==="INPUT" || t.tagName==="TEXTAREA" || t.tagName==="SELECT" || t.isContentEditable);
+  }
+  window.addEventListener("keydown", function(e){
+    if(e.altKey || e.ctrlKey || e.metaKey) return;   // leave modified combos alone
+    if(wbIsTyping(e.target)) return;                 // the filter (and any field) keeps its keys
+    var k = e.key;
+    if(k>="1" && k<="5"){ e.preventDefault(); e.stopPropagation(); setMode(+k); }
+    else if(k==="0" || k==="`"){ if(WB.mode!==null){ e.preventDefault(); e.stopPropagation(); setMode(null); } }
+  }, true);   // CAPTURE — preempt the sim-speed listener
+
+  /* QA hook (atelier-only): read or set the armed map mode. __P1850_WBMODE() reads
+     {mode,name,overlays}; __P1850_WBMODE(n) sets mode n (0/null clears) and
+     returns the same shape. Mirrors the checkbox/hotkey path exactly. */
+  window.__P1850_WBMODE = function(n){
+    if(arguments.length){ setMode(n===0 ? null : n); }
+    var m = WB.mode ? WB_MODES[WB.mode] : null;
+    return { mode: WB.mode, name: m ? m.name : null,
+             overlays: m ? m.sub.map(function(s){ return s[0]; }).filter(function(k){ return WB.overlays[k]; }) : [],
+             dim: +WB_DIM.value.toFixed(3), dimTarget: WB_DIM._target, pins: WB_PINS.filter(function(k){ return WB.overlays[k]; }) };
+  };
+
   applyVis();
+  wbSyncModeLegend();   // initial state: no mode, legend hidden, bar unlit
   console.log("[workbench] THE ATELIER armed — "+WB_LAYERS.length+" layer visibility registrations: "+WB_LAYERS.join(", "));
 })();
 /* =====================================================================

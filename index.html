@@ -16891,7 +16891,34 @@ registerAudit("labels", "anchorsInside", function(){
    FAILS BEFORE ics14d on the OLD styles (dark sepia civic ink vs its light
    casing was the read; under this model the old water dual-halo styles are
    simply absent); PASSES after: worst case ≈3.47 (water on rocky, carried
-   by the casing rim). */
+   by the casing rim).
+   D2b ICS-30 — DIMMED-HOST GATE (the atelier MAP-MODE world dimming): while a
+   map mode is active the atelier desaturates + darkens the LIT base map so the
+   overlay data owns saturation (the CS-lineage chroma monopoly). Labels ride ON
+   that dimmed ground, so their contrast must be MEASURED against the dimmed
+   host, not assumed. LBL_MODE_DIM is the CANONICAL presentation-dim spec: the
+   workbench shader (atelier-only) applies EXACTLY this transform to the lit
+   base-map fragment (post-colorspace, i.e. sRGB — the same space this palette
+   lives in), so mirroring it here is a faithful model of what is painted, not a
+   guess. Each earth/roof/water background gets a DIMMED twin (name+"·dim"); the
+   ≥3.0 gate runs over the full 2× palette. Dimming darkens hosts toward mid-grey,
+   which on our white-ink/dark-casing voices RAISES the ink-vs-host carrier on
+   the bright hosts (the sand/roof brights become mid-tones the white ink clears)
+   while the already-dark hosts are unchanged in character — so the dimmed gate
+   passes at the same worst case, now proven rather than presumed. */
+/* CANONICAL WORLD-DIM SPEC (D2b): desat = fraction mixed toward the fragment's
+   own luma (chroma removal); dark = fraction of brightness removed. Applied as
+   rgb' = mix(rgb, vec3(luma(rgb)), desat) * (1 - dark). The atelier's base-map
+   shader uniform (layers/workbench.js WB_DIM) uses these SAME two numbers — one
+   source of truth for the dim so the audit and the render can never drift. */
+var LBL_MODE_DIM = { desat: 0.66, dark: 0.30 };
+function _lblDimBg(rgb){
+  // sRGB-space luma (matches the shader, which dims post-colorspace) + darken.
+  var y = 0.2126*rgb[0] + 0.7152*rgb[1] + 0.0722*rgb[2], D = LBL_MODE_DIM;
+  return [ (rgb[0]*(1-D.desat)+y*D.desat)*(1-D.dark),
+           (rgb[1]*(1-D.desat)+y*D.desat)*(1-D.dark),
+           (rgb[2]*(1-D.desat)+y*D.desat)*(1-D.dark) ];
+}
 function _lblSrgbToLin(c){ c/=255; return c<=0.03928 ? c/12.92 : Math.pow((c+0.055)/1.055, 2.4); }
 function _lblRelLum(rgb){ return 0.2126*_lblSrgbToLin(rgb[0]) + 0.7152*_lblSrgbToLin(rgb[1]) + 0.0722*_lblSrgbToLin(rgb[2]); }
 function _lblContrast(a,b){ var la=_lblRelLum(a), lb=_lblRelLum(b), hi=Math.max(la,lb), lo=Math.min(la,lb); return (hi+0.05)/(lo+0.05); }
@@ -16922,6 +16949,12 @@ registerAudit("labels", "contrast", function(){
     { name:"waterLo",    fam:"water", rgb:_lblHex(0x8fc2c9) },  // bright shallow (cove label)
     { name:"waterHi",    fam:"water", rgb:_lblHex(0x2a5570) }
   ];
+  // D2b ICS-30: the DIMMED-HOST twins — every background as it reads under the
+  // atelier map-mode world dim (LBL_MODE_DIM). Same family/host tags; gated at
+  // the same ≥3.0 floor so label readability under a mode is measured, not
+  // assumed. The undimmed set stays (labels also render with no mode active).
+  var BG_LIT = BG.slice();
+  BG_LIT.forEach(function(b){ BG.push({ name:b.name+"·dim", fam:b.fam, rgb:_lblDimBg(b.rgb), dimmed:true }); });
   // ics14 — the surface families each voice is HOSTED on (retained for the
   // per-host reporting; every voice now shares the same white-ink/dark-casing
   // pairing, so hosts inform the REPORT rather than choose an ink).
@@ -16948,7 +16981,7 @@ registerAudit("labels", "contrast", function(){
       var carrier = Math.max(casingVsBg, inkVsBg);
       var here = Math.min(inkVsCasing, carrier);
       var isHost = hostFams !== null && hostFams.indexOf(b.fam) >= 0;
-      perBg.push({ bg:b.name, host:isHost, inkVsCasing:+inkVsCasing.toFixed(2),
+      perBg.push({ bg:b.name, host:isHost, dimmed:!!b.dimmed, inkVsCasing:+inkVsCasing.toFixed(2),
                    casingVsBg:+casingVsBg.toFixed(2), inkVsBg:+inkVsBg.toFixed(2), score:+here.toFixed(2) });
       if(here < sMin){ sMin = here; sBg = b.name; }
       if(isHost && here < hMin){ hMin = here; hBg = b.name; }
@@ -16961,9 +16994,13 @@ registerAudit("labels", "contrast", function(){
   // hosts; the palette-wide min is the stronger, honest gate) — the per-host
   // minima are reported alongside for the operator's record.
   var bad = styles.filter(function(s){ return s.minRatio < GATE || (s.hostMin !== null && s.hostMin < GATE); });
+  // D2b: the worst case AMONG dimmed hosts alone (the map-mode reading condition)
+  // reported separately so the mode gate is legible at a glance.
+  var dimWorst = { style:null, bg:null, ratio:1e9 };
+  styles.forEach(function(s){ s.perBg.forEach(function(p){ if(p.dimmed && p.score < dimWorst.ratio) dimWorst = { style:s.style, bg:p.bg, ratio:p.score }; }); });
   return { pass: bad.length===0, gate:GATE,
-           method:"ics14d uniform Maps-satellite model, every voice: score(bg)=min(inkVsCasing, max(casingVsBg, inkVsBg)) ≥3.0 over the FULL earth+roof palette; on light hosts the dark casing rim carries (casingVsBg ≥3.0 there — the operator's white-on-light rule, literal); on dark hosts the white ink is the boundary (a dark rim cannot clear a dark host — stated, not hidden); per-background tables reported for every voice; street Bold shares Medium colors (one measurement, both weights)",
-           minContrastRatio: worst.ratio, worstCase: worst, styles: styles, bad: bad };
+           method:"ics14d uniform Maps-satellite model, every voice: score(bg)=min(inkVsCasing, max(casingVsBg, inkVsBg)) ≥3.0 over the FULL earth+roof palette AND its D2b DIMMED-HOST twins (LBL_MODE_DIM desat "+LBL_MODE_DIM.desat+" dark "+LBL_MODE_DIM.dark+" — the atelier map-mode world dim, mirrored from the workbench base-map shader so audit≡render); on light hosts the dark casing rim carries (casingVsBg ≥3.0 there — the operator's white-on-light rule, literal); on dark hosts the white ink is the boundary (a dark rim cannot clear a dark host — stated, not hidden); per-background tables reported for every voice incl. dimmed; street Bold shares Medium colors (one measurement, both weights)",
+           minContrastRatio: worst.ratio, worstCase: worst, dimmedWorstCase: dimWorst, modeDim: LBL_MODE_DIM, styles: styles, bad: bad };
 });
 
 /* ---- AUDIT 4 — crispness (s93 item 1, user finding: "text blurry at altitude").
