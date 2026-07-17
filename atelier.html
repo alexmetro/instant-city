@@ -3543,41 +3543,6 @@ function streetUConst(id){ return STREETS_RUNTIME_BY_ID[id].polyline[0].u; } // 
 function streetVConst(id){ return STREETS_RUNTIME_BY_ID[id].polyline[0].v; } // cardinal E-W streets only: constant v along the whole run
 
 /* =====================================================================
-   ROAD GRADED WIDTH (progressive widening — operator 2026-07-17). The
-   SURVEYED right-of-way (road.widthM) is the platted width and stays FIXED:
-   cadastre lots, setbacks, routing halfW, and building placement all keep
-   reading it unchanged. But a street was not GRADED to its full ROW the day
-   it was surveyed — the used roadway starts as a cleared wagon TRACK and
-   widens WITHIN the ROW through several stages as the corridor is worked up
-   (cleared -> a widening dirt street -> the full platted grade). The paint
-   pass renders this dated width so a road visibly matures instead of popping
-   in at "very large" — the coarse trail/lane/main/market buckets (2 / 10.7 /
-   21 / 36.6 m) no longer read as instant jumps. Pure f(day) => deterministic
-   + rewindable; monotonic non-decreasing; ALWAYS <= road.widthM. Tunable via
-   __P1850.roadGrade (ROAD_GRADE_QA). ===================================== */
-var ROAD_GRADE_QA = { on: 1, trackW: 3.0, stages: 6 };  // on=0 -> instant full width (fail-before / A-B)
-function roadGradeAnchorDay(road){
-  // grading begins when the corridor is first worked: surveyed, else first
-  // mentioned, else already-there at sim start (Vioget-1839 worn lanes).
-  if(road.surveyedDay != null) return road.surveyedDay;
-  if(road.firstMentionDay != null) return road.firstMentionDay;
-  return 0;
-}
-function roadGradedWidthAt(road, day){
-  var full = road.widthM;
-  if(!ROAD_GRADE_QA.on) return full;
-  if(road.cls === "pier") return full;                 // plank decks are BUILT to width — no dirt-grading ramp
-  if(!(full > ROAD_GRADE_QA.trackW + 0.5)) return full; // trails / narrow lanes are born at (near) full width
-  var start = roadGradeAnchorDay(road);
-  // wider ROWs take longer to grade out: ~1 yr per 12 m of ROW, clamped 1-3 yr
-  var span = Math.max(365, Math.min(1095, full / 12 * 365));
-  var t = clamp01((day - start) / span);
-  var eased = 1 - (1 - t) * (1 - t);                   // widen fast early, settle into the final grade
-  var stg = Math.round(eased * ROAD_GRADE_QA.stages) / ROAD_GRADE_QA.stages; // visible widening stages, not a pop
-  return ROAD_GRADE_QA.trackW + (full - ROAD_GRADE_QA.trackW) * stg;
-}
-
-/* =====================================================================
    PIER-CLASS SPINE MEMBERS (s84 — THE SPINE EXPANSION, road-master-spec.md
    SPINE MEMBERSHIP AMENDMENT). "A wharf is a street on piles." Each pier is a
    first-class spine member (class 'pier') with a CONSTANT surveyed width, DATED
@@ -8852,8 +8817,6 @@ function renderGroundSplat(){
     var wpts = ext.clamped;
     if(wpts.length < 2) return; // wholly seaward of the coast: nothing built to paint (the plat still shows the survey line over the water)
     rec.worldPoly = wpts;
-    var gwM = roadGradedWidthAt(s, simDay); // progressive graded width (<= surveyed ROW s.widthM); the plat/lots still use the full ROW
-    rec.gradedWM = gwM;
 
     // classify each segment: 0 = none (S0 / wet water-lot), 1 = ghost (S1), 2 = established (S2+)
     var cls = new Array(wpts.length - 1);
@@ -8879,7 +8842,7 @@ function renderGroundSplat(){
     var runA = 0;
     function flush(end){
       var c = cls[runA]; if(c === 0){ return; }
-      var run = wpts.slice(runA, end + 2); run._wM = gwM;
+      var run = wpts.slice(runA, end + 2); run._wM = s.widthM;
       _gpStrokeRun(run, c);
       if(c === 1) rec.ghostSegs += (end - runA + 1); else rec.wornSegs += (end - runA + 1);
       if(c === 2){ // record a mid-run station for the constantWidth audit
@@ -8911,7 +8874,7 @@ function renderGroundSplat(){
         var cdx = CP.x - CQ.x, cdz = CP.z - CQ.z, cdl = Math.hypot(cdx, cdz);
         if(cdl > 0.01){
           cdx /= cdl; cdz /= cdl;
-          var capL = Math.min(2.0, cdl), chw = gwM / 2, cnx = -cdz, cnz = cdx;
+          var capL = Math.min(2.0, cdl), chw = s.widthM / 2, cnx = -cdz, cnz = cdx;
           _gpFillPoly([
             { x:CP.x + cnx*chw,            z:CP.z + cnz*chw },
             { x:CP.x - cnx*chw,            z:CP.z - cnz*chw },
@@ -9056,7 +9019,6 @@ registerAudit("ground-paint", "constantWidth", function(){
   var _members = STREETS_RUNTIME.concat(typeof PIERS_RUNTIME !== "undefined" ? PIERS_RUNTIME : []);
   _members.forEach(function(s){
     var rec = SPLAT_LAST_STATS.streets[s.id]; if(!rec || !rec.stations.length) return;
-    var gw = roadGradedWidthAt(s, simDay); // paint renders the dated GRADED width, so the constant-width law is measured against it (not the full ROW)
     var widths = [], _anchorId = (s.cls === "pier" ? s.anchorStreet : null);
     for(var k = 0; k < rec.stations.length; k++){
       var st = rec.stations[k];
@@ -9078,37 +9040,11 @@ registerAudit("ground-paint", "constantWidth", function(){
     if(!widths.length){ out.skipped.push(s.id); return; }
     if(s.cls === "pier") out.piersProbed++; else out.streetsProbed++;
     var mn = Math.min.apply(null, widths), mx = Math.max.apply(null, widths);
-    var tolAbs = Math.max(2.5, 0.35 * gw);
-    if(widths.some(function(w){ return Math.abs(w - gw) > tolAbs; }) || (mx - mn) > Math.max(2.0, 0.30 * gw)){
-      out.pass = false; out.violations.push({ id:s.id, widthM:s.widthM, gradedW:+gw.toFixed(2), measured:widths });
+    var tolAbs = Math.max(2.5, 0.35 * s.widthM);
+    if(widths.some(function(w){ return Math.abs(w - s.widthM) > tolAbs; }) || (mx - mn) > Math.max(2.0, 0.30 * s.widthM)){
+      out.pass = false; out.violations.push({ id:s.id, widthM:s.widthM, measured:widths });
     }
   });
-  return out;
-});
-
-/* AUDIT 2b — roadGradeProgression (progressive widening, operator 2026-07-17).
-   The graded paint width of a wide street must GROW monotonically from a track
-   toward — never beyond — its surveyed ROW across the sim window, and at least
-   one main must actually widen (proving roads are not all born full-width).
-   Measures the new property directly; skips when the A/B toggle is off. */
-registerAudit("ground-paint", "roadGradeProgression", function(){
-  if(!ROAD_GRADE_QA.on) return { pass:true, skipped:"road grade QA off (instant width)" };
-  var out = { pass:true, checked:0, samples:[], violations:[] };
-  var days = [200, 600, 1000, 1279]; // 1847-early .. 1849-end
-  STREETS_RUNTIME.forEach(function(s){
-    if(s.cls === "pier" || !(s.widthM > ROAD_GRADE_QA.trackW + 0.5)) return;
-    var prev = -1, mono = true, w = [];
-    for(var i = 0; i < days.length; i++){
-      var gw = roadGradedWidthAt(s, days[i]); w.push(+gw.toFixed(2));
-      if(gw < prev - 0.01 || gw > s.widthM + 0.01) mono = false; prev = gw;
-    }
-    out.checked++;
-    if(!mono){ out.pass = false; out.violations.push({ id:s.id, ROW:s.widthM, w:w }); }
-    if(out.samples.length < 5) out.samples.push({ id:s.id, ROW:s.widthM, w:w });
-  });
-  if(out.checked > 0 && !out.samples.some(function(x){ return x.w[x.w.length-1] - x.w[0] > 1.0; })){
-    out.pass = false; out.note = "no sampled street widened over 1847-1849";
-  }
   return out;
 });
 
@@ -19179,12 +19115,6 @@ window.__P1850 = {
   set terrainDetail(v){ TERRAIN_QA.detail = +v; },
   get terrainSeason(){ return TERRAIN_QA.season; },
   set terrainSeason(v){ TERRAIN_QA.season = (v == null ? -1 : +v); },
-  // ROAD GRADE (progressive width) QA: on 0/1 (0 => instant full width, A/B),
-  // trackW (initial track metres), stages (number of visible widening steps).
-  get roadGrade(){ return { on:ROAD_GRADE_QA.on, trackW:ROAD_GRADE_QA.trackW, stages:ROAD_GRADE_QA.stages }; },
-  set roadGrade(o){ o = o || {}; if(o.on != null) ROAD_GRADE_QA.on = o.on ? 1 : 0;
-    if(o.trackW != null) ROAD_GRADE_QA.trackW = +o.trackW; if(o.stages != null) ROAD_GRADE_QA.stages = Math.max(1, +o.stages);
-    if(typeof invalidateGroundPaint === "function") invalidateGroundPaint(); },
   // s60 PAINTERLY GROUND KIT QA hooks: tile-kit census, doodad-ring census,
   // and a wet override (forces the mud-winter wet state for closeup QA
   // regardless of the current weatherState — null returns it to weather)

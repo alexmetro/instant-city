@@ -84,12 +84,6 @@ window.__P1850 = {
   set terrainDetail(v){ TERRAIN_QA.detail = +v; },
   get terrainSeason(){ return TERRAIN_QA.season; },
   set terrainSeason(v){ TERRAIN_QA.season = (v == null ? -1 : +v); },
-  // ROAD GRADE (progressive width) QA: on 0/1 (0 => instant full width, A/B),
-  // trackW (initial track metres), stages (number of visible widening steps).
-  get roadGrade(){ return { on:ROAD_GRADE_QA.on, trackW:ROAD_GRADE_QA.trackW, stages:ROAD_GRADE_QA.stages }; },
-  set roadGrade(o){ o = o || {}; if(o.on != null) ROAD_GRADE_QA.on = o.on ? 1 : 0;
-    if(o.trackW != null) ROAD_GRADE_QA.trackW = +o.trackW; if(o.stages != null) ROAD_GRADE_QA.stages = Math.max(1, +o.stages);
-    if(typeof invalidateGroundPaint === "function") invalidateGroundPaint(); },
   // s60 PAINTERLY GROUND KIT QA hooks: tile-kit census, doodad-ring census,
   // and a wet override (forces the mud-winter wet state for closeup QA
   // regardless of the current weatherState — null returns it to weather)

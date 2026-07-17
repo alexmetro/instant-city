@@ -339,8 +339,6 @@ function renderGroundSplat(){
     var wpts = ext.clamped;
     if(wpts.length < 2) return; // wholly seaward of the coast: nothing built to paint (the plat still shows the survey line over the water)
     rec.worldPoly = wpts;
-    var gwM = roadGradedWidthAt(s, simDay); // progressive graded width (<= surveyed ROW s.widthM); the plat/lots still use the full ROW
-    rec.gradedWM = gwM;
 
     // classify each segment: 0 = none (S0 / wet water-lot), 1 = ghost (S1), 2 = established (S2+)
     var cls = new Array(wpts.length - 1);
@@ -366,7 +364,7 @@ function renderGroundSplat(){
     var runA = 0;
     function flush(end){
       var c = cls[runA]; if(c === 0){ return; }
-      var run = wpts.slice(runA, end + 2); run._wM = gwM;
+      var run = wpts.slice(runA, end + 2); run._wM = s.widthM;
       _gpStrokeRun(run, c);
       if(c === 1) rec.ghostSegs += (end - runA + 1); else rec.wornSegs += (end - runA + 1);
       if(c === 2){ // record a mid-run station for the constantWidth audit
@@ -398,7 +396,7 @@ function renderGroundSplat(){
         var cdx = CP.x - CQ.x, cdz = CP.z - CQ.z, cdl = Math.hypot(cdx, cdz);
         if(cdl > 0.01){
           cdx /= cdl; cdz /= cdl;
-          var capL = Math.min(2.0, cdl), chw = gwM / 2, cnx = -cdz, cnz = cdx;
+          var capL = Math.min(2.0, cdl), chw = s.widthM / 2, cnx = -cdz, cnz = cdx;
           _gpFillPoly([
             { x:CP.x + cnx*chw,            z:CP.z + cnz*chw },
             { x:CP.x - cnx*chw,            z:CP.z - cnz*chw },
@@ -543,7 +541,6 @@ registerAudit("ground-paint", "constantWidth", function(){
   var _members = STREETS_RUNTIME.concat(typeof PIERS_RUNTIME !== "undefined" ? PIERS_RUNTIME : []);
   _members.forEach(function(s){
     var rec = SPLAT_LAST_STATS.streets[s.id]; if(!rec || !rec.stations.length) return;
-    var gw = roadGradedWidthAt(s, simDay); // paint renders the dated GRADED width, so the constant-width law is measured against it (not the full ROW)
     var widths = [], _anchorId = (s.cls === "pier" ? s.anchorStreet : null);
     for(var k = 0; k < rec.stations.length; k++){
       var st = rec.stations[k];
@@ -565,37 +562,11 @@ registerAudit("ground-paint", "constantWidth", function(){
     if(!widths.length){ out.skipped.push(s.id); return; }
     if(s.cls === "pier") out.piersProbed++; else out.streetsProbed++;
     var mn = Math.min.apply(null, widths), mx = Math.max.apply(null, widths);
-    var tolAbs = Math.max(2.5, 0.35 * gw);
-    if(widths.some(function(w){ return Math.abs(w - gw) > tolAbs; }) || (mx - mn) > Math.max(2.0, 0.30 * gw)){
-      out.pass = false; out.violations.push({ id:s.id, widthM:s.widthM, gradedW:+gw.toFixed(2), measured:widths });
+    var tolAbs = Math.max(2.5, 0.35 * s.widthM);
+    if(widths.some(function(w){ return Math.abs(w - s.widthM) > tolAbs; }) || (mx - mn) > Math.max(2.0, 0.30 * s.widthM)){
+      out.pass = false; out.violations.push({ id:s.id, widthM:s.widthM, measured:widths });
     }
   });
-  return out;
-});
-
-/* AUDIT 2b — roadGradeProgression (progressive widening, operator 2026-07-17).
-   The graded paint width of a wide street must GROW monotonically from a track
-   toward — never beyond — its surveyed ROW across the sim window, and at least
-   one main must actually widen (proving roads are not all born full-width).
-   Measures the new property directly; skips when the A/B toggle is off. */
-registerAudit("ground-paint", "roadGradeProgression", function(){
-  if(!ROAD_GRADE_QA.on) return { pass:true, skipped:"road grade QA off (instant width)" };
-  var out = { pass:true, checked:0, samples:[], violations:[] };
-  var days = [200, 600, 1000, 1279]; // 1847-early .. 1849-end
-  STREETS_RUNTIME.forEach(function(s){
-    if(s.cls === "pier" || !(s.widthM > ROAD_GRADE_QA.trackW + 0.5)) return;
-    var prev = -1, mono = true, w = [];
-    for(var i = 0; i < days.length; i++){
-      var gw = roadGradedWidthAt(s, days[i]); w.push(+gw.toFixed(2));
-      if(gw < prev - 0.01 || gw > s.widthM + 0.01) mono = false; prev = gw;
-    }
-    out.checked++;
-    if(!mono){ out.pass = false; out.violations.push({ id:s.id, ROW:s.widthM, w:w }); }
-    if(out.samples.length < 5) out.samples.push({ id:s.id, ROW:s.widthM, w:w });
-  });
-  if(out.checked > 0 && !out.samples.some(function(x){ return x.w[x.w.length-1] - x.w[0] > 1.0; })){
-    out.pass = false; out.note = "no sampled street widened over 1847-1849";
-  }
   return out;
 });
 
