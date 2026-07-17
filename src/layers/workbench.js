@@ -113,7 +113,7 @@
     muted: {},            // layerName -> true when hidden
     solo: null,           // layerName | null
     probe: false,
-    overlays: { spine:false, row:false, lots:false, parcels:false, wharf:false, keepout:false, zones:false, audits:false, dryland:false, lifecycle:false },
+    overlays: { spine:false, row:false, lots:false, parcels:false, wharf:false, keepout:false, zones:false, encamp:false, audits:false, dryland:false, lifecycle:false },
     tl: false,            // coordinate timeline inspector armed
     morph: { demo:false, patch:false, regions:false, island:false }, // s102 terrain-morph viz toggles
     knobs: { sunMul:1, hemiMul:1, ambientMul:1, nightLift:0, detailAmp:null, doodadMul:1, streetAlphaMul:1 }
@@ -160,7 +160,7 @@
     // frame — there is one frame; only the date-gated birth/extent changes.
     if(Math.floor(simDay)!==_overlayDay){
       _overlayDay = Math.floor(simDay);
-      ["spine","row","lots","parcels","reservations","wharf","keepout","zonelaw","dryland","lifecycle"].forEach(function(key){
+      ["spine","row","lots","parcels","reservations","wharf","keepout","zonelaw","encamp","dryland","lifecycle"].forEach(function(key){
         if(!WB.overlays[key]) return;
         if(overlayObjs[key]){ scene.remove(overlayObjs[key]); }
         overlayObjs[key] = buildOverlay(key);
@@ -366,7 +366,7 @@
      (walk keep-out · ecology zones · audit failures). Copy is Director-authored
      verbatim; each row is a name + a small legend line. ---- */
   beginSection("overlays","RULE OVERLAYS", { desc:"Overlays inspect the LAW and DATA behind the render — the survey spine, rights-of-way, plat lots, parcels, landmark reservations, walk keep-out mask, zones, and live audit failures. Each row's ? reveals its legend; active overlays are highlighted." });
-  var overlayObjs = { spine:null, row:null, lots:null, parcels:null, reservations:null, wharf:null, keepout:null, zones:null, zonelaw:null, audits:null, dryland:null, lifecycle:null };
+  var overlayObjs = { spine:null, row:null, lots:null, parcels:null, reservations:null, wharf:null, keepout:null, zones:null, zonelaw:null, encamp:null, audits:null, dryland:null, lifecycle:null };
   var overlayRowEls = {};
   var auditStatusEl = null, keepoutStatusEl = null;
 
@@ -476,6 +476,8 @@
     "s98: the AUTHORED wharf network as clear LINES — centerlines (PIERS_RUNTIME, era-gated to the active extent) + the deck-extent outline (pierDeckQuad), draped at deck height above the cove so they read against the cyan water-lot grid the corridor spans (the future-fill footprint — what the cove eventually becomes land). 100-ft distance ticks along each centerline + a cross at the bay end give the length read. gold = centerline · white = deck outline · cyan ticks = 100-ft stations. Scrub 1848→1849 to watch Central Wharf reach 300→800 ft. Only Broadway (1847) + Central (1849) are in-window; the 1850 city wharves appear past the sim end.");
   makeFlat("zonelaw", "ZONE LAW (land-use)",
     "s91: the governing LAND-USE zone tinted over the town + cove at the current date (cadZoneAt — the WHERE-per-class placement grammar canPlace reads). amber = commercial-core (plaza ring + downtown, GROWS outward by era — scrub 1846→1849 to watch it reach the waterfront) · slate = residential-band · brown = waterfront-working (piers + working shore) · blue = cove-water · oxblood = plaza · orange = camp (Happy Valley, born 1849) · violet = mission · green = presidio. Distinct from ECOLOGY ZONES (terrain/vegetation) below.");
+  makeFlat("encamp", "ENCAMPMENT ZONES (s106a)",
+    "The DOCUMENTED 1849 tent-encampment districts (ENCAMPMENT_ZONES, core/08) — the authored HARD SPAWN BOUNDARY the s106b tent explosion will fill; NO tents spawn from this overlay (zones-first gate). Date-gated: each zone shows only in its documented window (Little Chile from Aug 1848; Happy Valley + Pleasant Valley from the 1849 boom). orange = documented tent camp (✅ Happy Valley · Little Chile) · ochre = [FLAG] weakly-sourced (Pleasant Valley — named pocket of the camp belt, 1849 tents NOT directly attested) · DASHED boundary = approximate:true (the record names a district, never a surveyed camp line — presence-over-precision). Label: name + start + evidence tier.");
   makeFlat("zones", "ECOLOGY ZONES",
     "The zoneAt classification tinted over the domain: which ground class governs placement and vegetation at each point. Hydrology reconciliation pending — creek network incomplete.");
   makeFlat("audits", "AUDIT FAILURES",
@@ -491,6 +493,7 @@
     if(key==="keepout") return buildKeepoutOverlay();
     if(key==="zones") return buildZonesOverlay();
     if(key==="zonelaw") return buildZoneLawOverlay();
+    if(key==="encamp") return buildEncampOverlay();
     if(key==="audits") return buildAuditOverlay();
     if(key==="lots") return buildLotOverlay();
     if(key==="parcels") return buildParcelOverlay();
@@ -1007,6 +1010,77 @@
     }
     if(strokePos.length) grp.add(wbLineSegs(strokePos, strokeCol, 0.98, 1001));
     if(glyphPos.length)  grp.add(wbLineSegs(glyphPos,  glyphCol,  1.0,  1002));
+    return grp;
+  }
+
+  /* s106a — ENCAMPMENT ZONES: the documented 1849 tent-encampment districts
+     (ENCAMPMENT_ZONES, core/08), drawn like the named parcels — triangulated
+     draped tint + boundary stroke — with two honesty cues baked into the
+     rendering itself: the boundary is DASHED wherever approximate:true (every
+     zone today — the record names districts, not surveyed camp lines), and
+     the [FLAG] evidence tier gets its own ochre so a weakly-sourced zone can
+     never pass for a documented one. A floating name sprite carries name +
+     start date + tier. Date-gated (encampmentZonesAt) and rebuilt on day
+     change like every overlay. READ-ONLY: no tents spawn here (s106b). */
+  var WB_ENC_COLS = { primary:{ r:0.94, g:0.55, b:0.22 }, secondary:{ r:0.88, g:0.66, b:0.30 }, flag:{ r:0.78, g:0.66, b:0.30 } };
+  var _wbEncLabelCache = {};
+  function wbEncLabelSprite(zn){
+    var tex = _wbEncLabelCache[zn.id];
+    if(!tex){
+      var cv = document.createElement("canvas"); cv.width = 512; cv.height = 128;
+      var ctx = cv.getContext("2d");
+      ctx.fillStyle = "rgba(8,8,10,0.78)"; ctx.fillRect(2, 2, 508, 124);
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.font = "bold 44px monospace";
+      ctx.fillStyle = zn.tier==="flag" ? "#d8c063" : "#f0913c";
+      ctx.fillText(zn.name.toUpperCase(), 256, 42);
+      ctx.font = "26px monospace"; ctx.fillStyle = "#cfd6dc";
+      ctx.fillText(zn.startDate + " · " + zn.tier.toUpperCase() + (zn.approximate ? " · APPROX" : ""), 256, 94);
+      tex = new THREE.CanvasTexture(cv);
+      _wbEncLabelCache[zn.id] = tex;
+    }
+    var sp = new THREE.Sprite(new THREE.SpriteMaterial({ map:tex, depthTest:false, transparent:true }));
+    sp.scale.set(150, 37.5, 1); sp.renderOrder = 1006; sp.frustumCulled = false;
+    return sp;
+  }
+  function buildEncampOverlay(){
+    _overlayDay = Math.floor(simDay);
+    var zones = (typeof encampmentZonesAt==="function") ? encampmentZonesAt(simDay) : [];
+    if(!zones.length) return null;                       // date-gated: nothing documented at this date
+    var grp = new THREE.Group(); grp.frustumCulled = false;
+    var fillPos=[], fillCol=[], strokePos=[], strokeCol=[];
+    zones.forEach(function(zn){
+      var c = WB_ENC_COLS[zn.tier] || WB_ENC_COLS.primary;
+      (zn.rings||[]).forEach(function(ring){
+        if(!ring || ring.length<3) return;
+        wbPushDrapedRun(strokePos, strokeCol, ring.concat([ring[0]]), c, 0.6, !!zn.approximate, 9); // dashed = approximate boundary
+        wbEarClip(ring).forEach(function(t){
+          var A=ring[t[0]], B=ring[t[1]], C=ring[t[2]];
+          var span=Math.max(Math.hypot(B.x-A.x,B.z-A.z), Math.hypot(C.x-B.x,C.z-B.z), Math.hypot(A.x-C.x,A.z-C.z));
+          var depth=Math.max(1, Math.min(5, Math.round(Math.log2(Math.max(span,1)/40)))); // ~40 m drape cells (parcel overlay's resolution)
+          var before=fillPos.length;
+          wbPushDrapedTri(fillPos, A, B, C, 0.42, depth);
+          for(var q=0, added=(fillPos.length-before)/3; q<added; q++) fillCol.push(c.r, c.g, c.b);
+        });
+      });
+      var ring0 = zn.poly || (zn.rings && zn.rings[0]);   // label at the largest ring's centroid
+      if(ring0 && ring0.length){
+        var cx=0, cz=0;
+        ring0.forEach(function(p){ cx+=p.x; cz+=p.z; });
+        cx/=ring0.length; cz/=ring0.length;
+        var sp = wbEncLabelSprite(zn);
+        sp.position.set(cx, terrainHeight(cx,cz)+36, cz);
+        grp.add(sp);
+      }
+    });
+    if(fillPos.length){
+      var fg=new THREE.BufferGeometry();
+      fg.setAttribute("position", new THREE.Float32BufferAttribute(fillPos,3));
+      fg.setAttribute("color", new THREE.Float32BufferAttribute(fillCol,3));
+      var fm=new THREE.Mesh(fg, new THREE.MeshBasicMaterial({ vertexColors:true, transparent:true, opacity:0.30, depthTest:false, depthWrite:false, side:THREE.DoubleSide }));
+      fm.renderOrder=997; fm.frustumCulled=false; grp.add(fm);
+    }
+    if(strokePos.length) grp.add(wbLineSegs(strokePos, strokeCol, 0.96, 1001));
     return grp;
   }
 

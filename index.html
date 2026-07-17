@@ -4815,6 +4815,143 @@ function blocksAt(day){ return GROUND_PLAN.blocks.filter(function(b){ return day
 function parcelByName(name){ return GROUND_PARCELS_BY_NAME[name] || null; }
 
 /* =====================================================================
+   s106a (ICS-18) — ENCAMPMENT ZONES: the DOCUMENTED 1849 tent-encampment
+   districts, authored as a STATIC registry. This registry is the HARD
+   SPAWN BOUNDARY the s106b tent explosion will fill — NO spawning behavior
+   exists in this pass; the only consumer today is the atelier's
+   "ENCAMPMENT ZONES" rule overlay (zones-first-then-tents, the operator's
+   debug-viz-first gate) plus the placement.encampment* audits.
+
+   PROVENANCE DISCIPLINE (the project's skepticism tiers):
+     tier "primary"   = ✅ directly documented tent encampment (period
+                        witness / Annals-derived district record + corpus);
+     tier "secondary" = [SECONDARY] single-lineage secondary claim;
+     tier "flag"      = [FLAG] weakly sourced — included with the flag,
+                        never silently promoted.
+   Every boundary here is approximate:true — the record names DISTRICTS
+   (street-frame descriptions), never a surveyed camp perimeter, so each
+   polygon is an honest street-bounded envelope (presence-over-precision
+   precedent) derived from the SAME street spine the town renders
+   (STREETS_RUNTIME) and clipped to the 1849 natural high-water land ring
+   (the s87 clip machinery — a camp cannot stand in the cove).
+
+   ZONES CONSIDERED AND REJECTED (do-not-invent-camps; honest gaps):
+     • North Beach "transient tent camps" — implied only, by contrast
+       ("Genuine settlement (as opposed to transient tent camps) began in
+       the 1850s", demographics-society.md §3 North Beach): no boundary,
+       no dates — nothing to author.
+     • Sydney-Town (base of Telegraph Hill, from Apr 1849) — documented as
+       STRUCTURES ("three city blocks of gambling rooms, brothels, and
+       other dens"), no tent attestation in the research.
+     • Mission Dolores weekend tents ("pitched tents in a variety of
+       colors ... weekends") — the post-Plank-Road resort era, 1851+,
+       outside the sim window (SIM_END_DAY = 1849-12-31).
+     • A general W/SW dune-swale camp belt beyond Happy Valley — the only
+       support is data/dune-field-1846.json's own AUTHORED note ("tents/
+       paths find the hollows"), which is an authoring rationale, not
+       period evidence; Bayard Taylor's Aug 1849 "scattering town of tents"
+       is citywide-margin and unbounded. No polygon can be honest here.
+     • Single-tent events (Asa White's Powell St revival tent, May 1849;
+       the Hounds' "Tammany Hall" tent) — events, not encampment zones.
+   ===================================================================== */
+/* infinite street line in (u,v) from a STREETS_RUNTIME polyline (first+last
+   vertex — every bounding street used below is straight in uv). */
+function encStreetLineUV(id){
+  var s = STREETS_RUNTIME_BY_ID[id];
+  if(!s || !s.polyline || s.polyline.length<2) return null;
+  var a = s.polyline[0], b = s.polyline[s.polyline.length-1];
+  return { p:{ u:a.u, v:a.v }, d:{ u:b.u-a.u, v:b.v-a.v }, id:id };
+}
+function encIsectUV(A, B){ // infinite-line intersection (2x2 solve); null = parallel
+  if(!A || !B) return null;
+  var det = A.d.u*B.d.v - A.d.v*B.d.u;
+  if(Math.abs(det) < 1e-9) return null;
+  var rU = B.p.u - A.p.u, rV = B.p.v - A.p.v;
+  var t = (rU*B.d.v - rV*B.d.u)/det;
+  return { u:A.p.u + t*A.d.u, v:A.p.v + t*A.d.v };
+}
+/* street-bounded quad: 4 street ids in ring order (each consecutive pair —
+   wrapping — intersects at a corner). Returns a WORLD ring or null. */
+function encStreetQuadWorld(ids){
+  var lines = ids.map(encStreetLineUV);
+  var ring = [];
+  for(var i=0;i<4;i++){
+    var c = encIsectUV(lines[i], lines[(i+1)%4]);
+    if(!c) return null;
+    var w = gridToWorld(c.u, c.v);
+    ring.push({ x:w.x, z:w.z });
+  }
+  return ring;
+}
+/* PURE derivation (called twice by the determinism audit): street spine +
+   the fixed land ring in, world-ring zones out. Zero dice, zero clock. */
+function deriveEncampmentZones(){
+  var defs = [
+    { id:"happy-valley", name:"Happy Valley", tier:"primary", approximate:true,
+      startDate:"1849-08-01", startApproximate:true, endDate:null,
+      boundedBy:["market","numbered-streets-first-eighth:Third","hundred-vara-district-streets:Howard","numbered-streets-first-eighth:First"],
+      basis:"THE documented 1849 tent city: 'along Mission Street roughly from First to Third Street', settled from 1849 by 'perhaps a thousand' gold-rush arrivals pitching tents in the dune swales (sunshine, wind shelter, scrub oaks, spring water); W.D.M. Howard erected some of his 25 Boston prefabs here in 1849; by winter 1849-50 scourged by dysentery and cholera. Boundary = the Mission-St spine First-to-Third, one documented block each side (Market to Howard), clipped to the 1849 shore. Start month is NOT in the record ('settled from 1849'); 1849-08-01 matches the cadastre's happy-valley-camp parcel birth AND Bayard Taylor's Aug 1849 tent-town eyewitness.",
+      sources:["research/demographics-society.md §3 Happy Valley (Annals 1855 via FoundSF) ✅",
+               "research/density-mechanisms-1846-51.md §2 tent-first mechanism — corpus `tent` rate peaks 1849 at 27.73/100k ✅; Bayard Taylor Aug 1849 'a scattering town of tents and canvas houses' [SECONDARY]",
+               "corpus DAC18500127 (Happy Valley lot-302 subdivision notice — earliest corpus receipt of the district name, Jan 1850) ✅"],
+      plattedOverlapDocumented:true,
+      overlapNote:"The camp sat ON the surveyed 100-vara district (tents first, frame/prefab replacement 1850-51 — density-mechanisms §2); overlap with platted blocks is what the record says happened." },
+    { id:"little-chile", name:"Little Chile", tier:"primary", approximate:true,
+      startDate:"1848-08-01", startApproximate:true, endDate:null,
+      boundedBy:["kearny","pacific","montgomery","jackson"],
+      basis:"'Tent encampment Little Chile/Chilecito on the block bounded by Montgomery, Kearny, Pacific and Jackson' near Telegraph Hill; ~1,500 Chileans arrived 1848, 49 vessels from Valparaiso Aug 1848-Jun 1849; 'many dwellings tents' (spring 1849); the Hounds' armed raid on 'the Chilean immigrant encampment' July 15 1849 destroyed tents. TENSION flagged: timeline-part-1849 places the raid 'at Clark's Point' (~2 blocks E of the named block) — the boundary follows the NAMED block; hence approximate. Start = first month of the documented Valparaiso arrival wave (approximate).",
+      sources:["research/_parts/chileans-sonorans-australians.md (named block + tent encampment) ✅",
+               "research/demographics-society.md §3 Little Chile (Chilecito) ✅",
+               "research/timeline-part-1849.md 1849-07-15 Hounds raid — 'destroy tents' (FoundSF: The Hounds 1849) ✅"],
+      plattedOverlapDocumented:true,
+      overlapNote:"The record puts the encampment ON a named platted 50-vara block (Montgomery/Kearny/Pacific/Jackson) — overlap IS the record." },
+    { id:"pleasant-valley", name:"Pleasant Valley", tier:"flag", approximate:true,
+      startDate:"1849-08-01", startApproximate:true, endDate:null,
+      boundedBy:["numbered-streets-first-eighth:First","hundred-vara-district-streets:Howard","numbered-streets-first-eighth:Second","hundred-vara-district-streets:Harrison"],
+      basis:"[FLAG] A named 'distinct pocket of the same SoMa district, a few blocks over' from Happy Valley, 'near First and Folsom Streets'. 1849 TENT CAMPING HERE IS NOT DIRECTLY ATTESTED in the project research — the clearest documented occupant is institutional and later (the 1851 orphan asylum); the earliest direct corpus receipt of the name is Feb 1850 (DAC18500215, J.M. Burdsall's ad 'in Pleasant Valley'). Included ONLY as a flagged pocket of the documented 1849 camp belt; start date inferred from the same boom window as Happy Valley. s106b MUST weight this zone accordingly or demand better evidence before spawning here.",
+      sources:["research/demographics-society.md §3 Pleasant Valley (named pocket near First & Folsom) [SECONDARY]",
+               "corpus-filtered DAC18500215/17/20 (Feb 1850 ads addressed 'in Pleasant Valley' — post-window name receipts) [FLAG]"],
+      plattedOverlapDocumented:true,
+      overlapNote:"Same 100-vara district ground as Happy Valley — the camp-belt-on-the-plat pattern (tents first)." }
+  ];
+  var out = [];
+  defs.forEach(function(d){
+    var raw = encStreetQuadWorld(d.boundedBy);
+    var zn = {
+      id:d.id, name:d.name, tier:d.tier, approximate:d.approximate,
+      startDate:d.startDate, startDay:eventDateToSimDay(d.startDate),
+      startApproximate:!!d.startApproximate,
+      endDate:d.endDate, endDay:(d.endDate!=null ? eventDateToSimDay(d.endDate) : null), // null = standing through the sim window (documented decline is post-window)
+      boundedBy:d.boundedBy, basis:d.basis, sources:d.sources,
+      plattedOverlapDocumented:!!d.plattedOverlapDocumented, overlapNote:d.overlapNote,
+      rings:[], poly:null
+    };
+    if(raw){
+      var r = cadClipParcelRing(raw, "world", CAD_LAND_RING, null); // camps stand on land, never in the cove (s87 clip)
+      zn.rings = r.rings;
+      zn.poly = r.rings.length ? r.rings.reduce(function(a,b){ return cadRingArea(a)>=cadRingArea(b)?a:b; }) : null;
+    }
+    out.push(zn);
+  });
+  return out;
+}
+var ENCAMPMENT_ZONES = deriveEncampmentZones();
+/* THE API the s106b spawner + the overlay consume: which zones are active
+   at `day`, and which zone (if any) contains a world point at `day`. */
+function encampmentZonesAt(day){
+  return ENCAMPMENT_ZONES.filter(function(zn){
+    return day!=null && day>=zn.startDay && (zn.endDay==null || day<=zn.endDay);
+  });
+}
+function encampmentZoneAt(x, z, day){
+  var zs = encampmentZonesAt(day);
+  for(var i=0;i<zs.length;i++){ if(zs[i].rings.length && cadPointInRings(zs[i].rings, x, z)) return zs[i]; }
+  return null;
+}
+/* QA hook (both targets) — the shots/probe drivers read the registry. */
+window.__P1850_ENCAMP = { zones:ENCAMPMENT_ZONES, at:encampmentZonesAt, zoneAt:encampmentZoneAt };
+
+/* =====================================================================
    PIER DECK-EDGE / MOORING SURFACE (s84 — THE SPINE EXPANSION, road-master-spec
    SPINE MEMBERSHIP AMENDMENT). A pier is UNIQUELY double-sided: its deck edges
    (centerline +/- width/2) are BOTH the walk-path boundary AND the mooring /
@@ -5602,6 +5739,81 @@ function reservationById(id){ for(var i=0;i<GROUND_RESERVATIONS.length;i++) if(G
              list:GROUND_RESERVATIONS.map(function(r){ return { id:r.landmarkId, name:r.name, kind:r.kind, block:r.block,
                built:(r.built<=CAD_DAY_ALWAYS?"pre-sim":r.built), burned:r.burned, confidence:r.confidence, resolved:r.resolved,
                cx:r.footprint?+r.footprint.cx.toFixed(0):null, cz:r.footprint?+r.footprint.cz.toFixed(0):null }; }) };
+  });
+
+  /* encampmentZones (s106a ICS-18) — the documented-camp registry obeys its
+     own laws at the CURRENT date (framing-independent; runs at every noon):
+       (1) STRUCTURE (date-independent): every zone carries id/name/basis/
+           sources/tier (primary|secondary|flag)/approximate/parseable start,
+           closed world rings (>=3 pts), and is born inside the sim window.
+       (2) DRY LAND: every zone ACTIVE at the current date lies on dry land —
+           a fixed interior lattice over its rings must be >=90% isDryLand
+           (the land-ring clip already removed the cove; the residual <10%
+           allowance is the beach/tide fringe along the clipped shore edge).
+       (3) PLAT OVERLAP HONESTY: if an active zone's interior intersects any
+           BORN platted block, the zone must carry plattedOverlapDocumented
+           (the record explicitly puts these camps ON platted ground —
+           tents-first; an undocumented overlap is a red flag, not a patch).
+     Zero dice, zero clock — pure of (registry, terrain, plat, simDay). */
+  registerAudit("placement", "encampmentZones", function(){
+    var problems=[], perZone=[], TIERS={ primary:1, secondary:1, flag:1 };
+    ENCAMPMENT_ZONES.forEach(function(zn){
+      if(!zn.id || !zn.name || !zn.basis || !zn.sources || !zn.sources.length) problems.push((zn.id||"?")+": missing provenance fields");
+      if(!TIERS[zn.tier]) problems.push(zn.id+": bad tier '"+zn.tier+"'");
+      if(typeof zn.approximate!=="boolean") problems.push(zn.id+": approximate flag missing");
+      if(!isFinite(zn.startDay)) problems.push(zn.id+": unparseable start date");
+      else if(zn.startDay > SIM_END_DAY) problems.push(zn.id+": born after the sim window");
+      if(!zn.rings || !zn.rings.length) problems.push(zn.id+": no world rings (street-quad derivation failed?)");
+      else zn.rings.forEach(function(r,ri){ if(r.length<3) problems.push(zn.id+"#"+ri+": open ring ("+r.length+" pts)"); });
+    });
+    var ops = morphAuditOps();
+    encampmentZonesAt(simDay).forEach(function(zn){
+      if(!zn.rings.length) return;
+      var xLo=Infinity,xHi=-Infinity,zLo=Infinity,zHi=-Infinity;
+      zn.rings.forEach(function(r){ r.forEach(function(p){
+        if(p.x<xLo)xLo=p.x; if(p.x>xHi)xHi=p.x; if(p.z<zLo)zLo=p.z; if(p.z>zHi)zHi=p.z; }); });
+      var side=24, inside=0, dry=0, platted=0;
+      for(var gi=0; gi<side; gi++) for(var gj=0; gj<side; gj++){
+        var px=xLo+(gi+0.5)/side*(xHi-xLo), pz=zLo+(gj+0.5)/side*(zHi-zLo);
+        if(!cadPointInRings(zn.rings, px, pz)) continue;
+        inside++;
+        if(isDryLand(px, pz, simDay, ops)) dry++;
+        if(cadBlockAt(px, pz, simDay)) platted++;
+      }
+      var dryFrac = inside ? dry/inside : 0, platFrac = inside ? platted/inside : 0;
+      if(!inside) problems.push(zn.id+": zero interior samples (degenerate polygon)");
+      else if(dryFrac < 0.90) problems.push(zn.id+": only "+(100*dryFrac).toFixed(1)+"% dry land");
+      if(platted>0 && !zn.plattedOverlapDocumented) problems.push(zn.id+": overlaps born platted blocks with NO documented basis");
+      perZone.push({ id:zn.id, tier:zn.tier, approximate:zn.approximate, start:zn.startDate,
+                     interiorSamples:inside, dryFrac:+dryFrac.toFixed(3), plattedFrac:+platFrac.toFixed(3),
+                     plattedOverlapDocumented:zn.plattedOverlapDocumented });
+    });
+    return { pass:problems.length===0, law:"encampmentZones",
+             zones:ENCAMPMENT_ZONES.length, activeAtDate:encampmentZonesAt(simDay).length,
+             perZone:perZone, problems:problems.slice(0,12) };
+  });
+
+  /* encampmentDeterminism (s106a) — the registry is a PURE function of the
+     street spine + the fixed land ring: two fresh derivations byte-identical
+     to each other AND to the live registry, with ZERO seeded dice consumed
+     (same standard as lotDeterminism). The spawn boundary s106b reads must
+     never drift between builds/frames. */
+  registerAudit("placement", "encampmentDeterminism", function(){
+    function fp(list){
+      return list.map(function(zn){
+        return zn.id+"@"+zn.startDay+"-"+zn.endDay+"|"+zn.tier+"|"+zn.rings.map(function(r){
+          return r.map(function(p){ return p.x.toFixed(3)+","+p.z.toFixed(3); }).join(";");
+        }).join("/");
+      }).join("\n");
+    }
+    var before = (typeof RNG_CALL_COUNT==="number") ? RNG_CALL_COUNT : null;
+    var a = deriveEncampmentZones(), b = deriveEncampmentZones();
+    var after = (typeof RNG_CALL_COUNT==="number") ? RNG_CALL_COUNT : null;
+    var fa=fp(a), fb=fp(b), fLive=fp(ENCAMPMENT_ZONES);
+    var identical = (fa===fb) && (fa===fLive);
+    var rngConsumed = (before!=null && after!=null) ? (after-before) : null;
+    return { pass: identical && rngConsumed===0, law:"encampmentDeterminism",
+             byteIdentical:identical, rngConsumed:rngConsumed, zones:a.length };
   });
 })();
 
