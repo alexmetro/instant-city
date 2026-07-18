@@ -92,6 +92,15 @@ window.__P1850 = {
   get wetOverride(){ return WET_OVERRIDE; },
   set wetOverride(v){ WET_OVERRIDE = (v==null ? null : +v); updateWetTint(); },
   render: function(){ renderer.render(scene, camera); },
+  // QA REPRESENTATION PROBE (QA-2): the backend S0-S4 lifecycle state of a
+  // street at a world point, so a QA agent can MEASURE render-vs-state (prove
+  // the lifecycle-tone collapse) instead of eyeballing it. Returns 0-4 or null.
+  roadStateAt: function(id, x, z){
+    var s = (typeof STREETS_RUNTIME_BY_ID !== "undefined") ? STREETS_RUNTIME_BY_ID[id] : null;
+    if(!s || typeof roadPieceState !== "function") return null;
+    var vf = (s.surveyedDay != null && s.surveyedDay <= 0);
+    try { return roadPieceState(s, x, z, simDay, vf).st; } catch(e){ return null; }
+  },
   tick: function(dt){ return applyCameraRig(dt||0.1); }, // manual frame-advance — CDP-automated tabs can report
                                                           // document.hidden=true and never fire rAF at all, so QA
                                                           // scripts can call this directly to advance the camera
